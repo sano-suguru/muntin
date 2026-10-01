@@ -130,6 +130,8 @@ Explore and verify, in roughly this order:
 
 Each public API addition should be demonstrated by a small canonical example in `docs/DX.md` and executable tests.
 
+M2-001, the first slice: `app.get["/users/{id}"](get_user)` with `def get_user(id: Int) -> String` on the production `App`, alongside existing `def() -> String` routes. `GET /users/42` calls the handler with `Int(42)`; a non-integer segment returns 400 without calling it; non-matching paths and methods return 404. The same `App` gives the same status and body through `TestClient` and a real loopback request through Flare, with routing and conversion in Muntin only. Out of scope: multiple or non-`Int` parameters, query/body extraction, other return types, raw handlers, middleware, `app.run()`. Acceptance is in `feature_list.json`.
+
 ## M3 — composition and production ergonomics
 
 Potential work after M2 is stable:

@@ -1,5 +1,6 @@
 # M0.5 handler-model feasibility spike. Not production code: it lives in tests/
-# so CI keeps it compiling, and it is replaced by the real router in M2.
+# so CI keeps it compiling. The production router (M2-001, src/muntin/app.mojo)
+# did not adopt this unsafe storage; it uses a Variant of thin function types.
 #
 # Question: can one Muntin app store and dispatch handlers of different shapes,
 #   def root() -> String

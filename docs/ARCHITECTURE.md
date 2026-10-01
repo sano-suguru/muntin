@@ -117,7 +117,7 @@ Do not design the final middleware, schema, DI, async, or streaming system durin
 ```text
 src/muntin/__init__.mojo   public exports: App, Request, Response
 src/muntin/http.mojo       Request(method, path, body), Response(status, body)
-src/muntin/app.mojo        App: route table, get[path](handler), handle(Request) -> Response
+src/muntin/app.mojo        App: route table, get[path](handler) for () -> String and (Int) -> String, handle(Request) -> Response
 src/muntin/testing.mojo    TestClient: in-memory backend, imports only muntin modules
 ```
 
@@ -149,9 +149,24 @@ HttpClient --TCP 127.0.0.1:<ephemeral>--> HttpServer.serve -> MuntinHandler.serv
 
 `adapters/flare/test_localhost_roundtrip.mojo` is the proof. Its server lifecycle is test fixture code, not a Muntin API: `HttpServer.serve` owns its thread, so the test binds in the parent (`bind` already listens, so readiness is `bind` returning), forks a child that serves `MuntinHandler`, drives Flare's `HttpClient` with connect/read timeouts, and SIGKILLs and reaps the child in `finally`; the child also arms a 30-second `alarm(2)`. No `app.run()`, runtime, or shutdown API was added to Muntin, and the adapter itself is unchanged.
 
-### Handler storage prototype (M0.5, provisional)
+### Routing and handler storage (M2-001)
 
-The M0.5 spike's working prototype stores heterogeneous handlers as a function pointer (thin function value erased to its address bits) plus a trampoline instantiated for the same type, and converts results through a Muntin-owned `ToResponse` trait. It is not adopted: it proves feasibility, and the storage design is decided in M2. Because it is unsafe machinery, under the decision threshold below it could enter `src/muntin` only as a private implementation detail: never in a public signature, with the erase/restore pair inside one generic function, and with the `size_of` guard. The safe fallback (handler as a compile-time parameter) is recorded in `docs/DX.md`. `App.handle(Request) -> Response` is the smallest seam that works for M0; streaming or async may change it later.
+`App` stores each route as method, route literal, and a `Variant[def() thin -> String, def(Int) thin -> String]`. `App.get` is overloaded on those two shapes, so `app.get["/hello"](hello)` and `app.get["/users/{id}"](get_user)` are the same call syntax and both take the handler as a runtime value. `App.handle` scans routes in registration order; the first route whose method and segments match handles the request (later matches are not tried, even if conversion fails). A static segment matches by byte equality; a `{name}` segment matches one non-empty segment. For the `Int` arm, Muntin converts the captured segment (optional `-`, ASCII digits, `Int` range) before calling the handler; anything else returns 400 `Bad Request` and the handler is not called. No match is 404. Routing and extraction run only inside `App.handle`: `TestClient` and the Flare adapter pass the request target through unchanged and have no knowledge of `{name}`. Matching uses `Request.path` as delivered, which is still the raw request target including any query (M1 policy): `/users/42?x=1` is 400 and `/hello?x=1` is 404 until query separation is decided with query extraction. Percent-encoded segments are not decoded.
+
+`App.get` checks the route literal at compile time with the same segment classifier the runtime matcher uses (`_is_param`): a malformed literal, or a parameter count that differs from the handler's arity (0 or 1), fails to compile at the registration call. Because both use one classifier, an `Int` route always captures exactly one segment at runtime.
+
+Storage choice, compared on Mojo 1.1.0:
+
+| Mechanism | Unsafe | Heterogeneous shapes | Cost |
+|---|---|---|---|
+| `Variant` of thin function types (chosen) | no | closed set; each shape is one arm, checked with `isa`/`[]` | new handler shapes or return types each need an arm; `-> String` only today |
+| Address-bits erasure + trampoline (M0.5 prototype) | yes (`Pointer.unsafe_bitcast` of a function value to `Int`) | open over return types | relies on undocumented function-value representation; not adopted |
+| Handler as compile-time parameter | no | open | public syntax becomes `app.get["/users/{id}", get_user]()` |
+| Capturing closures, `rebind`, non-`thin` function fields | — | do not compile (diagnostics in `docs/DX.md`) | — |
+
+The `Variant` holds plain function values: no heap context, no captured state, no lifetime tied to the `App` beyond the `List` that owns the routes. Moving an `App` moves its route list; copying a route copies its function value; nothing is reinterpreted. The M0.5 unsafe storage therefore did not enter `src/muntin`; it remains only in `tests/test_spike_handler_model.mojo` as the record of the comparison. Supporting typed return values (`-> User`) or more parameter types will grow the closed set; if that becomes unmanageable, revisit erasure with the threshold below (private, paired erase/restore, size guard, ADR).
+
+`App.handle(Request) -> Response` is unchanged and remains the backend seam; streaming or async may change it later.
 
 ## Request/Response ownership
 
