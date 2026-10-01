@@ -57,3 +57,12 @@ Once bootstrap creates them, prefer:
 - `git diff --check` for patch/whitespace sanity.
 
 If these scripts do not exist yet, creating minimal reliable versions is part of M0.
+
+## Pull requests
+PR descriptions minimize the reviewer's decision cost and follow `.github/pull_request_template.md`. Unless it materially affects the review, do not include:
+- commit-by-commit summaries;
+- tool or model provenance (such as "Generated with Claude Code"); attribution belongs in commit trailers;
+- compiler output already recorded in the docs;
+- narration of effort or process.
+
+Do not fill template sections mechanically: Decision, Changes and Verification are required; delete optional sections that add no review-relevant information.
