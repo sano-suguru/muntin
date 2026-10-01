@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Canonical static/build checks for Muntin. Exits nonzero on any failure.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+EXPECTED_MOJO="Mojo 1.1.0"
+MOJO=(pixi run --frozen mojo)
+
+step() { printf '\n== %s\n' "$*"; }
+
+step "toolchain"
+version="$("${MOJO[@]}" --version)"
+echo "$version"
+if [[ "$version" != "$EXPECTED_MOJO "* ]]; then
+    echo "error: expected $EXPECTED_MOJO, found: $version" >&2
+    exit 1
+fi
+
+step "format"
+sources=(src tests main.mojo)
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+cp -R "${sources[@]}" "$tmp/"
+"${MOJO[@]}" format --quiet "$tmp/src" "$tmp/tests" "$tmp/main.mojo"
+for s in "${sources[@]}"; do
+    if ! diff -ru "$s" "$tmp/$s"; then
+        echo "error: $s is not formatted; run: pixi run format" >&2
+        exit 1
+    fi
+done
+echo "ok"
+
+step "architecture boundary"
+./scripts/check_boundaries.sh src/muntin
+
+step "build package"
+mkdir -p build
+"${MOJO[@]}" precompile --Werror src/muntin -o build/muntin.mojoc
+echo "ok"
+
+step "build tests"
+for t in tests/test_*.mojo; do
+    "${MOJO[@]}" build --Werror -I src "$t" -o "$tmp/$(basename "$t" .mojo)"
+done
+echo "ok"
+
+step "build example"
+"${MOJO[@]}" build --Werror -I src main.mojo -o build/muntin
+echo "ok"
