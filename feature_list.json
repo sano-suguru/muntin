@@ -309,6 +309,28 @@
         "Planted mutations, each red: box copy/clone sharing and double drop (crash), missing drop and move-without-free (count oracle), removed Variant dispatch branch (compile error), new Variant shape without an arm (no matching get). Decision and sources in docs/ARCHITECTURE.md.",
         "Fresh-context review: no material issue; its findings (deciding-fact wording, body-type evidence, unsafe count, move mutation, fixture count) were applied."
       ]
+    },
+    {
+      "id": "M2-004",
+      "priority": 204,
+      "category": "core",
+      "description": "Migrate production handler storage from the closed Variant to the M2-003 typed box, behavior-preserving, with no new handler shape.",
+      "acceptance": [
+        "Production App no longer stores handlers in Variant[def() thin -> String, def(Int) thin -> String]; the M2-003 typed box with pointer erasure, or a strictly smaller equivalent, is the only production handler storage, and App.handle has no per-shape branch.",
+        "Public API unchanged: app.get[route](handler) syntax, Request/Response, App.handle(Request) -> Response; exactly the non-raising () -> String and (Int) -> String handlers are accepted; no new extraction, return-conversion or raising-handler API, and the box type is not exported or in any public signature.",
+        "The erased value is a pointer to storage allocated for the handler type F, never reinterpreted function-value bits; the pointer and its invoke/drop functions are produced together from the same F by the internal constructor, and a mismatched trampoline fails to compile (executable fixture).",
+        "Each stored handler has one owner; moving App or its route list keeps every route working and each allocation is freed exactly once, shown by an ownership oracle on the production storage type and an App move test with both shapes. Copy/clone support is removed unless a production need is shown.",
+        "Unsafe operations live in one internal module with a documented MutUntrackedOrigin invariant, and a canonical check fails if they appear elsewhere in src/muntin or if the module is exported.",
+        "Route matching, query extraction, 400/404 behavior, all tests/compile_fail fixtures, test_app, the spikes, the adapter tests and the real Flare loopback parity test are unchanged and green; planted ownership/pairing mutations turn checks red.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass locally, CI verify + flare pass on Ubuntu and macOS, and a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": true,
+      "evidence": [
+        "src/muntin/_handler_storage.mojo (private, not exported): move-only _Erased whose only field is a ThinAllocation[_Header]; the header holds the erased OwnedPointer[F] pointer with _unsafe_invoke_box/_unsafe_drop_box instantiated for the same F; no clone/copy. app.mojo: the two App.get overloads box the handler with _call_none/_call_int; App.handle makes one invoke; no Variant. scripts/check_unsafe.sh (in check.sh) confines unsafe operations, box fields and helper imports to that module.",
+        "./scripts/check.sh -> exit 0 (13 compile_fail, 12 spike_fail, 10 storage_fail: mismatched adapter, _Erased.copy(), raising/String/two-parameter/-> Response/Request handlers, and downstream writes of _drop, a copied handle, a moved handle). ./scripts/test.sh -> exit 0 (test_app 23/23 unchanged; test_handler_storage 6/6: ArcPointer count oracle on _Erased, list growth/move, App with both shapes moved five ways). ./scripts/check_flare.sh -> exit 0 (adapter 7/7, loopback 2/2; adapters/ unchanged). git diff --check clean.",
+        "17 planted mutations each red (list in docs/ARCHITECTURE.md): missing/wrong-type/double drop, move freeing its source, wrong-type invoke, mismatched adapter, Copyable box, a _drop field put back on _Erased, handle aliasing, stray unsafe or helper import, export, wrong Int, extraction bypass, stale args, raising overload, Variant app.mojo restored.",
+        "Two fresh-context reviews: no material issue; differentials vs main byte-identical (192 and 40 requests); downstream-corruption finding from PR review fixed and its residual stdlib reach recorded. CI verify + flare green on ubuntu-latest (ubuntu24) and macos-latest (macos26)."
+      ]
     }
   ]
 }

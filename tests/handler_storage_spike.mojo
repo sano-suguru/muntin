@@ -3,8 +3,9 @@
 # application module (tests/test_spike_handler_storage.mojo) that registers
 # handlers, so app-defined types cross a module boundary as they would in a
 # real application. check.sh builds it through that test (--Werror) and
-# test.sh runs it; src/muntin is unchanged. Decision and evidence:
-# docs/ARCHITECTURE.md, "Handler storage decision (M2)".
+# test.sh runs it. Decision and evidence: docs/ARCHITECTURE.md, "Handler
+# storage decision (M2)". The production box (M2-004) is the smaller,
+# move-only src/muntin/_handler_storage.mojo; this file stays as evidence.
 
 from std.builtin.rebind import downcast
 from std.memory import MutOpaquePointer, OwnedPointer

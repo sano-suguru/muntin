@@ -136,6 +136,8 @@ M2-002, typed query extraction, first slice: Muntin core separates the request t
 
 M2-003, handler-storage decision gate: before any new handler shape, decide with pinned-compiler evidence how production `App` stores handlers. Candidates (closed `Variant`, safe concrete erasure, typed trampoline/erasure, compile-time specialization) are compared in isolated spikes that store representative mixed shapes, including an application-defined return type, in one route list behind one `handle(Request) -> Response`, while keeping `app.get["/users/{id}"](get_user)`. Production storage does not change in this item; a chosen migration is the next, separate item. The decision, evidence, and reconsideration thresholds are in `docs/ARCHITECTURE.md` ("Handler storage decision (M2)"); acceptance is in `feature_list.json`.
 
+M2-004, handler-storage migration: production `App` stores handlers in the private typed box chosen by M2-003 instead of the closed `Variant`, with every public behavior unchanged: the same registration syntax and the same two non-raising shapes (`def() -> String`, `def(Int) -> String`), the same routing, query and 400/404 rules, compile-time route checks, `TestClient` and Flare loopback results. The unsafe operations live in one internal module that a canonical check confines, the stored handler has one owner with executable ownership and move evidence on the production type, and copy support is dropped unless production needs it. Out of scope: any new handler shape, `raises` handlers, application-defined parameter or return types, extraction or response-conversion traits. Acceptance is in `feature_list.json`.
+
 ## M3 — composition and production ergonomics
 
 Potential work after M2 is stable:
