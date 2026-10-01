@@ -8,7 +8,7 @@ M0.5 — typed handler feasibility spike (M0.5-001..003 verified). M0 is verifie
 ## M0.5 result
 - The runtime handler value syntax `app.get["/users/{id}"](get_user)` works: `tests/test_spike_handler_model.mojo` dispatches `() -> String`, `(Int) -> User`, `(Request) -> Response` from one app through `handle(Request)`. `src/muntin` unchanged.
 - Feasibility, not adoption: a prototype storing the function pointer as `Int` bits + same-type trampoline works, but it is unsafe and provisional until M2. Closures and `rebind` fail (diagnostics in `docs/DX.md`). The compile-time handler parameter works but worsens the public syntax.
-- Return conversion: the `ToResponse` trait concept is the direction; conforming `String`/`Response` via `__extension` is provisional (fallback: overloads).
+- Return conversion: a Muntin-owned conversion from typed return values to `Response` is the direction; the `ToResponse` trait and its `__extension` conformances are provisional.
 - Route/handler arity mismatch fails at compile time. Parameter names cannot be reflected, so binding is positional.
 
 ## Current state
