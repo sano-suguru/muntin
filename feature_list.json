@@ -345,8 +345,13 @@
         "docs/ARCHITECTURE.md has an 'Argument extraction decision' section (alternatives, evidence, chosen source-binding and conversion contracts, builtin treatment, error boundary, storage interaction, revisit conditions); DX.md labels body syntax as target; AGENT_PROGRESS.md records PR #10 merged and the next smallest body slice.",
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass; planted mutations of the prototype turn checks red; a fresh-context review finds no unresolved material issue."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "tests/extraction_spike.mojo (library side: FromBody, ExtractApp, per-slot adapters, production _Erased unchanged) + tests/test_spike_extraction.mojo (app side, 9/9: move-only CreateUser and RenameTeam, borrowed/owned body handlers, (Int, B) from path and query, 400 vs handler failure, borrowed Request). tests/extraction_lib_only/driver.mojo builds the library without the app module. src/ and adapters/ unchanged.",
+        "./scripts/check.sh -> exit 0 (13 compile_fail, 12 spike_fail, 10 storage_fail, 8 extraction_fail). ./scripts/test.sh -> exit 0 (23/23, 6/6, 9/9, 4/4, 7/7). ./scripts/check_flare.sh -> exit 0 (adapter 7/7, loopback 2/2). git diff --check clean.",
+        "Planted mutations, each red: slots swapped, body gathered first, handler raise -> 400, body never gathered, conversion error swallowed (compile error), route-slot/Int-arity/conformance/Int type-equality asserts removed (fixtures), library special-casing an app type (isolated build). Renaming handler parameters stays green.",
+        "Fresh-context review: one material finding (disjointness relied on Int lacking a conformance; __extension SIMD gives Int the bound in the trait's module) fixed with a type-equality guard and three fixtures; minor wording findings fixed; re-review found no remaining material issue."
+      ]
     }
   ]
 }
