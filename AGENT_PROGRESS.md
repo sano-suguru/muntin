@@ -46,4 +46,4 @@ M0 — architecture bootstrap (all M0 features verified; see `feature_list.json`
 None.
 
 ## Next smallest step
-M1-001: pick a released Flare tag, verify it builds against Mojo 1.1.0, and pin it outside Muntin core (adapter path excluded from or outside `scripts/check_boundaries.sh`'s scope).
+M0.5 typed-handler feasibility spike, before Flare: can one app store `def() -> String`, `def(Int) -> User` and `def(Request) -> Response` handlers behind `app.get["/users/{id}"](get_user)`? The answer can change the public API, so M1 waits. Defined and executed in PR #2 (`docs/SPEC.md` M0.5, `feature_list.json` M0.5-001..003).
