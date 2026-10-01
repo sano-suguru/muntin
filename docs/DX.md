@@ -113,7 +113,7 @@ Mojo facts discovered while proving the above:
 
 `tests/test_spike_handler_model.mojo` registers `root() -> String`, `get_user(id: Int) -> User`, and `raw(req: Request) -> Response` in one app with `app.get["/users/{id}"](get_user)`-style calls and dispatches all three through `handle(Request) -> Response`. `GET /users/42` returns `User(42, Alice)` and `GET /users/abc` returns 400. `src/muntin` is unchanged.
 
-Result: the registration shape is feasible on Mojo 1.1.0, so this document's syntax stands. The working prototype below is provisional and stays in `tests/`. M2-001 did not adopt it: production `App` stores handlers in a `Variant` of thin function types, which needs no unsafe code for the closed set of shapes it supports (comparison in `docs/ARCHITECTURE.md`, "Routing and handler storage"). Approaches compared:
+Result: the registration shape is feasible on Mojo 1.1.0, so this document's syntax stands. The working prototype below is provisional and stays in `tests/`. M2-001 did not adopt it: production `App` stored handlers in a `Variant` of thin function types, which needs no unsafe code for the closed set of shapes it supports (comparison in `docs/ARCHITECTURE.md`, "Routing and handler storage"). Since M2-004 they are stored in a private typed box that erases a pointer to the handler, not the handler's bits (`docs/ARCHITECTURE.md`, "Handler storage decision (M2)"); the public syntax is unchanged. Approaches compared:
 
 | Approach | Result | Evidence |
 |---|---|---|

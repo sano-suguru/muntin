@@ -3,7 +3,8 @@
 Not part of Muntin's public API; nothing here is exported from `muntin`.
 This is the only module in `src/muntin` allowed to use unsafe pointer or
 ownership operations (`scripts/check_unsafe.sh` fails otherwise). Decision
-and evidence: docs/ARCHITECTURE.md, "Handler storage (M2)".
+and evidence: docs/ARCHITECTURE.md, "Handler storage decision (M2)" and its
+"Production implementation (M2-004)".
 
 A handler value of type `F` is moved into an `OwnedPointer[F]`, and the
 allocation is then held as an opaque pointer. Only the pointer is erased;
