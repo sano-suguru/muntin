@@ -131,7 +131,7 @@ When `muntin/adapters/flare` arrives in M1 it must live outside the boundary-che
 
 ### Handler storage candidate (M0.5)
 
-The M0.5 spike's recommended router design stores heterogeneous handlers by erasing a thin function value to its address bits and restoring it in a trampoline instantiated for the same type. That is unsafe machinery, so under the decision threshold below it may enter `src/muntin` only as a private implementation detail: never in a public signature, with the erase/restore pair inside one generic function, and with the `size_of` guard. The safe fallback (handler as a compile-time parameter) is recorded in `docs/DX.md`. `App.handle(Request) -> Response` is the smallest seam that works for M0; streaming or async may change it later.
+The M0.5 spike's candidate router design stores heterogeneous handlers as a function pointer (thin function value erased to its address bits) plus a trampoline instantiated for the same type, and converts results through a Muntin-owned `ToResponse` trait. That is unsafe machinery, so under the decision threshold below it may enter `src/muntin` only as a private implementation detail: never in a public signature, with the erase/restore pair inside one generic function, and with the `size_of` guard. The safe fallback (handler as a compile-time parameter) is recorded in `docs/DX.md`. `App.handle(Request) -> Response` is the smallest seam that works for M0; streaming or async may change it later.
 
 ## Request/Response ownership
 

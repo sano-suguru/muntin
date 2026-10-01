@@ -140,8 +140,14 @@
         "Registration keeps the runtime handler value syntax app.get[\"/users/{id}\"](get_user), or compiler evidence shows why it cannot.",
         "Storage candidates (capturing closure, trampoline, function pointer + context, compile-time generated wrapper, type erasure, compile-time handler parameter) are compared with minimal reproductions and compiler output recorded in docs/DX.md."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "./scripts/test.sh -> exit 0; tests/test_spike_handler_model.mojo PASS test_heterogeneous_handler_shapes_share_one_app: RuntimeApp registers root() -> String (GET /), get_user(id: Int) -> User (GET /users/{id}), raw(req: Request) -> Response (POST /raw) via app.get[\"/\"](root) / app.get[\"/users/{id}\"](get_user) / app.post[\"/raw\"](raw); handle(Request) returns 200, 200, 201, and 404 for GET /raw.",
+        "Runtime handler value syntax kept: handlers stored as Int address bits + same-type trampoline (one private generic _register), guarded by comptime assert size_of[F]() == size_of[Int]().",
+        "Closure repro (Mojo 1.1.0): storing a second capturing closure of identical signature in List[Route[type_of(a1)]] -> \"cannot be converted from 'Route[def(s: String) -> String]' to 'Route[def(s: String) -> String]'\"; field of type def(String) -> String -> \"struct fields do not support trait types\"; closure to thin -> \"cannot implicitly convert 'def(s: String) -> String' value to 'def(String) thin -> String'\". rebind -> 'rebind input type ... does not match result type'. Comparison table in docs/DX.md 'Handler model (M0.5 spike)'.",
+        "Fallback PASS test_compile_time_parameter_fallback_dispatches_same_shapes (app.get[\"/users/{id}\", get_user]()); recorded as fallback only.",
+        "Mutation: String.to_response returning status 500 -> test_heterogeneous_handler_shapes_share_one_app FAIL."
+      ]
     },
     {
       "id": "M0.5-002",
@@ -153,8 +159,12 @@
         "Invalid integer input produces a client error response instead of reaching the handler.",
         "Whether a route/handler mismatch fails at compile time is demonstrated with compiler output."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "./scripts/test.sh -> PASS test_typed_path_handler_adapts_to_request_response: GET /users/42 -> 'User(42, Alice)' (segment parsed to Int by the trampoline, not by application code); GET /users/abc -> 400; GET /users -> 404.",
+        "Mutation: trampoline passing 0 instead of the parsed segment -> test_typed_path_handler_adapts_to_request_response FAIL.",
+        "Compile-time mismatch: app.get[\"/users/{id}\"](root) fails to compile with 'note: call expansion failed' at the registration line and 'note: constraint failed: route declares path parameters but the handler takes none'."
+      ]
     },
     {
       "id": "M0.5-003",
@@ -165,8 +175,12 @@
         "String, a user-defined struct, and Response return values are each converted to a Response by one Muntin-owned mechanism.",
         "No JSON serializer is introduced."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "./scripts/test.sh -> PASS test_typed_return_values_convert_to_response: String -> 200 'hello', User -> 'User(7, Alice)', Response -> 201 'raw:ping', all via trait ToResponse (to_response(self) -> Response).",
+        "String and Response conform via __extension String(ToResponse) / __extension Response(ToResponse); builds under ./scripts/check.sh (--Werror) -> exit 0. No JSON code added.",
+        "Mutation: String.to_response returning status 500 -> test_typed_return_values_convert_to_response FAIL."
+      ]
     },
     {
       "id": "M1-001",

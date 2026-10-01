@@ -3,12 +3,13 @@
 This file is a concise factual handoff between coding sessions. Keep it short enough to read at the start of every session.
 
 ## Active milestone
-M0.5 — handler-model feasibility spike (M0.5-001 verified). M0 is verified and in PR #1; CI (`.github/workflows/ci.yml`) runs check.sh and test.sh on ubuntu-latest and macos-latest, green on run 36807185875.
+M0.5 — typed handler feasibility spike (M0.5-001..003 verified). M0 is verified in PR #1 with CI green; M0.5 is PR #2 (stacked on #1).
 
 ## M0.5 result
-- `tests/test_spike_handler_model.mojo` dispatches `() -> String`, `(Int) -> User`, `(Request) -> Response` from one app through `handle(Request)`, in two prototypes. `src/muntin` unchanged.
-- Recommended: runtime-value registration (`app.get["/users/{id}"](get_user)`) with thin-function address-bit erasure confined to one private generic function. Fallback: handler as compile-time parameter (`app.get["/users/{id}", get_user]()`, no unsafe). Details in `docs/DX.md` "Handler model".
-- Route/handler arity mismatch fails at compile time via `comptime assert` on the `StaticString` route literal. Parameter names cannot be reflected in Mojo 1.1.0, so binding is positional.
+- The runtime handler value syntax `app.get["/users/{id}"](get_user)` works: `tests/test_spike_handler_model.mojo` dispatches `() -> String`, `(Int) -> User`, `(Request) -> Response` from one app through `handle(Request)`. `src/muntin` unchanged.
+- Candidate storage: function pointer stored as `Int` bits + same-type trampoline (unsafe step confined to one private generic). Closures and `rebind` fail (diagnostics in `docs/DX.md`). The compile-time handler parameter works but is a fallback only, because it leaks storage concerns into the public syntax.
+- Return conversion: Muntin-owned `ToResponse` trait; `String`/`Response` conform via `__extension` (unstable-looking spelling; fallback is overloads).
+- Route/handler arity mismatch fails at compile time. Parameter names cannot be reflected, so binding is positional.
 
 ## Current state
 - Toolchain: **Mojo 1.1.0 (8189361e)** via pixi 0.81.0, pinned by `pixi.lock`. Environment was not reinstalled or reconfigured; `pixi.toml` only gained `check`/`test` tasks pointing at the scripts.
@@ -43,7 +44,7 @@ M0.5 — handler-model feasibility spike (M0.5-001 verified). M0 is verified and
 - `muntin.testing` is imported by `main.mojo` only because `app.run()` does not exist; it is not the canonical example.
 
 ## Risks for later milestones
-- M2: the recommended handler storage relies on `Pointer.unsafe_bitcast` of thin function values; re-run the spike test on every Mojo upgrade. Raising handlers, closures, and non-`Int` path parameters are not prototyped.
+- M2: the candidate handler storage relies on `Pointer.unsafe_bitcast` of thin function values; re-run the spike test on every Mojo upgrade. Raising handlers, closures, and non-`Int` path parameters are not prototyped.
 - M1: `check_boundaries.sh` scans all of `src/muntin`, so a Flare adapter at `src/muntin/adapters/flare` would fail it. Place the adapter outside `src/muntin` or scope the check deliberately.
 - M1: Request/Response have no headers or content type; the adapter must choose defaults.
 
@@ -51,4 +52,4 @@ M0.5 — handler-model feasibility spike (M0.5-001 verified). M0 is verified and
 None.
 
 ## Next smallest step
-User decides between the two handler designs (recommendation: runtime value). Then M1-001: pick a released Flare tag, verify it builds against Mojo 1.1.0, and pin it outside Muntin core (adapter path excluded from or outside `scripts/check_boundaries.sh`'s scope).
+User confirms the M0.5 candidate design. Then M1-001: pick a released Flare tag, verify it builds against Mojo 1.1.0, and pin it outside Muntin core (adapter path excluded from or outside `scripts/check_boundaries.sh`'s scope).

@@ -61,27 +61,27 @@ Mojo facts discovered while proving the above:
 
 ### Handler model (M0.5 spike)
 
-`tests/test_spike_handler_model.mojo` registers `root() -> String`, `get_user(id: Int) -> User`, and `raw(req: Request) -> Response` in one app and dispatches all three through `handle(Request) -> Response`, including `GET /users/42 → User(42, Alice)` and `GET /users/abc → 400`. It does this with two prototypes; `src/muntin` is unchanged.
+`tests/test_spike_handler_model.mojo` registers `root() -> String`, `get_user(id: Int) -> User`, and `raw(req: Request) -> Response` in one app with `app.get["/users/{id}"](get_user)`-style calls and dispatches all three through `handle(Request) -> Response`. `GET /users/42` returns `User(42, Alice)` and `GET /users/abc` returns 400. `src/muntin` is unchanged.
 
-| | A: runtime value | B: compile-time parameter |
+The runtime-value syntax works, so this document's registration syntax stands. Candidates compared on Mojo 1.1.0:
+
+| Candidate | Result | Evidence |
 |---|---|---|
-| Registration | `app.get["/users/{id}"](get_user)` (this document's syntax) | `app.get["/users/{id}", get_user]()` |
-| Storage | the thin function value is erased to its address bits; a trampoline instantiated for the same type restores and calls it | each registration instantiates a trampoline with the handler baked in; entries are already a uniform `def(Request, List[String]) raises thin -> Response` |
-| Unsafe code | two lines in one private generic function (`Pointer(...).unsafe_bitcast`), guarded by `comptime assert size_of[F]() == size_of[Int]()` | none |
-| Compile-time arity check | yes | yes |
+| Capturing closure | does not work as storage | Capture works (`def a(s: String) {var h} -> String`), but every closure has its own type: storing a second closure of the identical signature fails with `cannot be converted from 'Route[def(s: String) -> String]' to 'Route[def(s: String) -> String]'`. The shared function type is a trait, and `struct fields do not support trait types`. A capturing closure cannot become a thin function: `cannot implicitly convert 'def(s: String) -> String' value to 'def(String) thin -> String'`. |
+| `rebind` between function types | rejected | `rebind input type ... does not match result type` |
+| Function pointer + context, type-erased, with trampoline | works (candidate) | The handler's thin function value (8 bytes, the same as `Int`) is stored as `Int` address bits. A trampoline instantiated for the same type restores and calls it. Erase and restore use one type parameter inside one private generic function, guarded by `comptime assert size_of[F]() == size_of[Int]()`. |
+| Compile-time generated wrapper / handler as compile-time parameter | works (fallback only) | `app.get["/users/{id}", get_user]()`. No unsafe code, but framework storage concerns leak into the public syntax. Use only if the candidate breaks on a later Mojo release. |
 
-Recommendation: A, because it keeps the syntax this document targets and confines the unsafe step to one private function in which erase and restore use the same type parameter, so they cannot drift apart. B is the fallback if the unsafe step is rejected or breaks on a later Mojo release. The decision is made when M2 builds the real router.
+Return conversion: a Muntin-owned `trait ToResponse` with `def to_response(self) -> Response` covers all three result types. `User` conforms directly. `String` and `Response` conform through `__extension String(ToResponse)` / `__extension Response(ToResponse)`, which compiles under `--Werror` on 1.1.0. The double-underscore spelling suggests the extension feature is not yet stable, so an overload per stdlib type is the fallback. No JSON.
 
-Facts measured on Mojo 1.1.0:
+Other facts measured on Mojo 1.1.0:
 
-- Handler types can be inferred from a runtime argument: `def get[R: ...](handler: def(Int) thin -> R)` binds `R` from `get_user`.
-- Closures cannot be the storage. A nested `def` must declare captures (`{var handler}`); without them the compiler reports `Could not infer capture convention of the captured value handler`. Each closure has its own concrete type, so closures of different handlers cannot share one `List` element type.
-- `rebind` between thin function types of different signatures is rejected (`rebind input type ... does not match result type`). Address-bit erasure works: thin function values are 8 bytes, the same as `Int`.
-- Generic return types used by value need `Deinitable`; with only `Writable` the compiler reports `abandoned without being explicitly destroyed ... consider adding trait conformance to Deinitable`.
-- The route literal is a compile-time `StaticString`, so a plain `def` can count `{` in a `comptime assert`. Registering `app.get["/users/{id}"](root)` fails to compile; the notes point at that call and end with `constraint failed: route declares path parameters but the handler takes none`. Passing a handler of the wrong shape fails overload resolution, for example `cannot be converted from 'def root() thin -> String' to 'def(Request) thin -> Response'`.
-- Reflection (`std.reflection`, `reflect[T]()`) exposes struct fields only, not function parameter names. Path parameters therefore bind by position, and the `{id}`-to-`id` name check in section 16 is not possible yet. Struct-field reflection is available for M2 body/response work.
+- Handler types are inferred from a runtime argument: `def get[R: ToResponse](handler: def(Int) thin -> R)` binds `R` from `get_user`.
+- Generic return types used by value need `Deinitable` (otherwise `abandoned without being explicitly destroyed ... consider adding trait conformance to Deinitable`). `ToResponse` refines `Deinitable`.
+- The route literal is a compile-time `StaticString`, so a plain `def` can count `{` inside `comptime assert`. `app.get["/users/{id}"](root)` fails to compile; the notes point at that call and end with `constraint failed: route declares path parameters but the handler takes none`. A handler of the wrong shape fails overload resolution, for example `cannot be converted from 'def root() thin -> String' to 'def(Request) thin -> Response'`.
+- Reflection (`std.reflection`, `reflect[T]()`) covers struct fields only, not function parameter names, so path parameters bind by position. The `{id}`-to-`id` name check in section 16 is not possible yet.
 
-Shared limitations of both prototypes: handlers must be thin functions (no closures) and must not raise; return values are converted by the `Writable` stand-in until M2 designs response conversion; only `Int` path parameters are prototyped.
+Limitations of the candidate: handlers must be thin functions that do not raise, and only `Int` path parameters are prototyped. The design depends on how Mojo represents thin function values, so the spike test is the regression check on every Mojo upgrade.
 
 ## Design principles
 

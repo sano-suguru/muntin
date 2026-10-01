@@ -7,10 +7,11 @@
 #   def raw(req: Request) -> Response
 # on Mojo 1.1.0 without exposing the representation to application code?
 #
-# Two prototypes, both dispatching through `handle(Request) -> Response`:
-#   RuntimeApp      app.get["/users/{id}"](get_user)   handler is a runtime value
-#   CompileTimeApp  app.get["/users/{id}", get_user]()  handler is a parameter
-# Findings and the trade-off are recorded in docs/DX.md ("Handler model").
+# Candidate: RuntimeApp keeps `app.get["/users/{id}"](get_user)`; the handler
+# is a runtime value stored as function pointer + per-type trampoline.
+# Fallback: CompileTimeApp, `app.get["/users/{id}", get_user]()`.
+# Candidates that do not compile (closures, rebind) and all diagnostics are
+# recorded in docs/DX.md ("Handler model").
 
 from std.sys.info import size_of
 from std.testing import assert_equal, TestSuite
@@ -45,9 +46,23 @@ def _match(pattern: String, path: String, mut params: List[String]) -> Bool:
     return True
 
 
-def _to_response[R: Writable & Deinitable](value: R) -> Response:
-    # Stand-in for M2 response conversion: any Writable becomes a text body.
-    return Response.text(String(value))
+trait ToResponse(Deinitable):
+    """Converts a handler's return value into a Muntin Response.
+
+    M0.5 stand-in for M2 response conversion (no JSON yet)."""
+
+    def to_response(self) -> Response:
+        ...
+
+
+__extension String(ToResponse):
+    def to_response(self) -> Response:
+        return Response.text(self)
+
+
+__extension Response(ToResponse):
+    def to_response(self) -> Response:
+        return self.copy()
 
 
 comptime _Call = def(Request, List[String]) raises thin -> Response
@@ -102,25 +117,27 @@ def _invoke[
 
 
 def _call_none[
-    R: Writable & Deinitable
+    R: ToResponse
 ](
     h: def() thin -> R, request: Request, params: List[String]
 ) raises -> Response:
-    return _to_response(h())
+    return h().to_response()
 
 
 def _call_int[
-    R: Writable & Deinitable
+    R: ToResponse
 ](
     h: def(Int) thin -> R, request: Request, params: List[String]
 ) raises -> Response:
-    return _to_response(h(Int(params[0])))
+    return h(Int(params[0])).to_response()
 
 
-def _call_raw(
-    h: def(Request) thin -> Response, request: Request, params: List[String]
+def _call_raw[
+    R: ToResponse
+](
+    h: def(Request) thin -> R, request: Request, params: List[String]
 ) raises -> Response:
-    return h(request)
+    return h(request).to_response()
 
 
 struct RuntimeApp(Movable):
@@ -141,7 +158,7 @@ struct RuntimeApp(Movable):
         self._routes.append(_ErasedRoute(method, path, bits, _invoke[call]))
 
     def get[
-        path: StaticString, R: Writable & Deinitable
+        path: StaticString, R: ToResponse
     ](mut self, handler: def() thin -> R):
         comptime assert (
             _count_params(path) == 0
@@ -149,7 +166,7 @@ struct RuntimeApp(Movable):
         self._register[_call_none[R]]("GET", String(path), handler)
 
     def get[
-        path: StaticString, R: Writable & Deinitable
+        path: StaticString, R: ToResponse
     ](mut self, handler: def(Int) thin -> R):
         comptime assert (
             _count_params(path) == 1
@@ -157,9 +174,9 @@ struct RuntimeApp(Movable):
         self._register[_call_int[R]]("GET", String(path), handler)
 
     def post[
-        path: StaticString
-    ](mut self, handler: def(Request) thin -> Response):
-        self._register[_call_raw]("POST", String(path), handler)
+        path: StaticString, R: ToResponse
+    ](mut self, handler: def(Request) thin -> R):
+        self._register[_call_raw[R]]("POST", String(path), handler)
 
     def handle(self, request: Request) -> Response:
         var params = List[String]()
@@ -181,21 +198,21 @@ struct RuntimeApp(Movable):
 
 
 def _bake_none[
-    R: Writable & Deinitable, //, h: def() thin -> R
+    R: ToResponse, //, h: def() thin -> R
 ](request: Request, params: List[String]) raises -> Response:
-    return _to_response(h())
+    return h().to_response()
 
 
 def _bake_int[
-    R: Writable & Deinitable, //, h: def(Int) thin -> R
+    R: ToResponse, //, h: def(Int) thin -> R
 ](request: Request, params: List[String]) raises -> Response:
-    return _to_response(h(Int(params[0])))
+    return h(Int(params[0])).to_response()
 
 
 def _bake_raw[
-    h: def(Request) thin -> Response
+    R: ToResponse, //, h: def(Request) thin -> R
 ](request: Request, params: List[String]) raises -> Response:
-    return h(request)
+    return h(request).to_response()
 
 
 struct CompileTimeApp(Movable):
@@ -205,7 +222,7 @@ struct CompileTimeApp(Movable):
         self._routes = List[_Dispatch]()
 
     def get[
-        R: Writable & Deinitable, //, path: StaticString, h: def() thin -> R
+        R: ToResponse, //, path: StaticString, h: def() thin -> R
     ](mut self):
         comptime assert (
             _count_params(path) == 0
@@ -213,7 +230,7 @@ struct CompileTimeApp(Movable):
         self._routes.append(_Dispatch("GET", String(path), _bake_none[h]))
 
     def get[
-        R: Writable & Deinitable, //, path: StaticString, h: def(Int) thin -> R
+        R: ToResponse, //, path: StaticString, h: def(Int) thin -> R
     ](mut self):
         comptime assert (
             _count_params(path) == 1
@@ -232,12 +249,12 @@ struct CompileTimeApp(Movable):
 
 
 @fieldwise_init
-struct User(Copyable, Movable, Writable):
+struct User(Copyable, Movable, ToResponse):
     var id: Int
     var name: String
 
-    def write_to(self, mut writer: Some[Writer]):
-        writer.write("User(", self.id, ", ", self.name, ")")
+    def to_response(self) -> Response:
+        return Response.text("User(" + String(self.id) + ", " + self.name + ")")
 
 
 def root() -> String:
@@ -252,25 +269,52 @@ def raw(req: Request) -> Response:
     return Response.text("raw:" + req.body, status=201)
 
 
-def test_runtime_value_app_dispatches_three_shapes() raises:
+def _runtime_app() -> RuntimeApp:
     var app = RuntimeApp()
     app.get["/"](root)
     app.get["/users/{id}"](get_user)
     app.post["/raw"](raw)
+    return app^
 
-    assert_equal(app.handle(Request("GET", "/")).text(), "hello")
+
+def test_heterogeneous_handler_shapes_share_one_app() raises:
+    # M0.5-001: three handler shapes, one route table, one dispatch entry.
+    var app = _runtime_app()
+
+    assert_equal(app.handle(Request("GET", "/")).status, 200)
+    assert_equal(app.handle(Request("GET", "/users/1")).status, 200)
+    assert_equal(app.handle(Request("POST", "/raw")).status, 201)
+    assert_equal(app.handle(Request("GET", "/raw")).status, 404)
+
+
+def test_typed_path_handler_adapts_to_request_response() raises:
+    # M0.5-002: "/users/{id}" segment -> Int -> get_user, via handle(Request).
+    var app = _runtime_app()
+
     assert_equal(
         app.handle(Request("GET", "/users/42")).text(), "User(42, Alice)"
+    )
+    assert_equal(app.handle(Request("GET", "/users/abc")).status, 400)
+    assert_equal(app.handle(Request("GET", "/users")).status, 404)
+
+
+def test_typed_return_values_convert_to_response() raises:
+    # M0.5-003: String, User and Response results all become a Response.
+    var app = _runtime_app()
+
+    var text = app.handle(Request("GET", "/"))
+    assert_equal(text.status, 200)
+    assert_equal(text.text(), "hello")
+    assert_equal(
+        app.handle(Request("GET", "/users/7")).text(), "User(7, Alice)"
     )
     var r = app.handle(Request("POST", "/raw", "ping"))
     assert_equal(r.status, 201)
     assert_equal(r.text(), "raw:ping")
-    assert_equal(app.handle(Request("GET", "/users/abc")).status, 400)
-    assert_equal(app.handle(Request("GET", "/raw")).status, 404)
-    assert_equal(app.handle(Request("GET", "/users")).status, 404)
 
 
-def test_compile_time_app_dispatches_three_shapes() raises:
+def test_compile_time_parameter_fallback_dispatches_same_shapes() raises:
+    # Fallback design only; the runtime-value design above is the candidate.
     var app = CompileTimeApp()
     app.get["/", root]()
     app.get["/users/{id}", get_user]()
@@ -280,12 +324,8 @@ def test_compile_time_app_dispatches_three_shapes() raises:
     assert_equal(
         app.handle(Request("GET", "/users/42")).text(), "User(42, Alice)"
     )
-    var r = app.handle(Request("POST", "/raw", "ping"))
-    assert_equal(r.status, 201)
-    assert_equal(r.text(), "raw:ping")
+    assert_equal(app.handle(Request("POST", "/raw", "ping")).text(), "raw:ping")
     assert_equal(app.handle(Request("GET", "/users/abc")).status, 400)
-    assert_equal(app.handle(Request("GET", "/raw")).status, 404)
-    assert_equal(app.handle(Request("GET", "/users")).status, 404)
 
 
 def main() raises:
