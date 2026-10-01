@@ -43,7 +43,7 @@ def main() raises:
 
 Unmatched method/path pairs return status 404.
 
-Still targets (not implemented yet): `app.run()` (needs a network backend, M1), raising handlers, `def(Request) -> Response` raw handlers, `app.post`, path/query/body extraction, typed response conversion beyond `String`, middleware, state, and compile-time route validation (the route literal is currently only stored as a `String`).
+Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, `app.post`, path/query/body extraction, typed response conversion beyond `String`, middleware, state, and compile-time route validation (the route literal is currently only stored as a `String`).
 
 Mojo facts discovered while proving the above:
 
@@ -115,7 +115,7 @@ Returning a `String` should be convertible to a successful text response by Munt
 
 The parameterized `app.get["/"](...)` syntax is a target because route literals known at compile time may enable better validation. It becomes canonical only after it compiles cleanly on the supported Mojo version.
 
-Status: `app.get["/"](hello)` compiles and dispatches on Mojo 1.1.0 (see "Proven vs. target status"). `app.run()` remains a target until a network backend exists.
+Status: `app.get["/"](hello)` compiles and dispatches on Mojo 1.1.0 (see "Proven vs. target status"). `app.run()` remains a target: M1 proved a real network backend (Flare, M1-003) without adding it, and public run/lifecycle ownership is undecided.
 
 ## 2. Typed path parameters
 

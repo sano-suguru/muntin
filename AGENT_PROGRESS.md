@@ -3,7 +3,7 @@
 This file is a concise factual handoff between coding sessions. Keep it short enough to read at the start of every session.
 
 ## Active milestone
-M1 — Flare transport adapter. M1-001 (PR #4), M1-002 (PR #5) merged; M1-003 (real localhost round trip, PR #6) verified, so every M1 feature now has passing evidence. M0 and M0.5 are merged (PRs #1, #2).
+M2 — typed application ergonomics; nothing started. M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (real localhost round trip, PR #6) all have passing evidence. M0 and M0.5 are merged (PRs #1, #2).
 
 ## M1-003 result
 - `adapters/flare/test_localhost_roundtrip.mojo` (flare env only): parent `HttpServer.bind(SocketAddr.localhost(0))` (ephemeral 127.0.0.1 port), `fork()`; the child serves `MuntinHandler(hello_app())`; the parent sends `GET /hello` with Flare's `HttpClient` (cleartext HTTP/1.1, `Connection: close`, 5 s connect/read timeouts), then `GET /missing`. Asserts 200 `hello`, equality with `TestClient(hello_app()).get("/hello")`, and 404 `Not Found`.
@@ -59,7 +59,7 @@ M1 — Flare transport adapter. M1-001 (PR #4), M1-002 (PR #5) merged; M1-003 (r
 - `check.sh` asserts the `Mojo 1.1.0` prefix; upgrading Mojo is a deliberate change that must update the script and docs.
 
 ## Remaining limitations
-- No `app.run()`: the only listening socket is the M1-003 test fixture. Whether `app.run()` belongs to Muntin (DX.md lists it as a target) is undecided; SPEC M1 does not require it.
+- No `app.run()`: the only listening socket is the M1-003 test fixture. Whether `app.run()` belongs to Muntin (DX.md lists it as a target) is undecided; SPEC M1 does not require it. The fork + SIGKILL fixture is a test harness, not a template for `app.run()`.
 - Only non-raising `def() -> String` GET handlers; no raw `Request -> Response` handlers, no `app.post`, no extraction.
 - Route literal is a compile-time parameter but is only stored as a runtime `String`; no compile-time validation yet.
 - Request has no headers; Response has no headers/content type.
@@ -80,4 +80,4 @@ M1 — Flare transport adapter. M1-001 (PR #4), M1-002 (PR #5) merged; M1-003 (r
 None.
 
 ## Next smallest step
-M2-001 (after PR #6 merges): deliver one path parameter to a handler as `Int` without manual parsing (`docs/GOALS.md` M2 goal), through both TestClient and the Flare path with the same handler signature.
+M2-001: deliver one path parameter to a handler as `Int` without manual parsing (`docs/GOALS.md` M2 goal), through both TestClient and the Flare path with the same handler signature.

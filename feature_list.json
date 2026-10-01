@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "project": "Muntin",
-  "active_milestone": "M1",
+  "active_milestone": "M2",
   "rules": {
     "passing_requires_executable_evidence": true,
     "do_not_edit_acceptance_to_match_implementation": true,
