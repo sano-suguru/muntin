@@ -331,6 +331,22 @@
         "17 planted mutations each red (list in docs/ARCHITECTURE.md): missing/wrong-type/double drop, move freeing its source, wrong-type invoke, mismatched adapter, Copyable box, a _drop field put back on _Erased, handle aliasing, stray unsafe or helper import, export, wrong Int, extraction bypass, stale args, raising overload, Variant app.mojo restored.",
         "Two fresh-context reviews: no material issue; differentials vs main byte-identical (192 and 40 requests); downstream-corruption finding from PR review fixed and its residual stdlib reach recorded. CI verify + flare green on ubuntu-latest (ubuntu24) and macos-latest (macos26)."
       ]
+    },
+    {
+      "id": "M2-005",
+      "priority": 205,
+      "category": "feasibility_spike",
+      "description": "Decide Muntin's argument-extraction contract (which request source fills each handler parameter, and how a raw value becomes application type T) before request-body extraction, with Mojo 1.1.0 compiler evidence; production handler shapes and storage unchanged.",
+      "acceptance": [
+        "Source binding and typed conversion are decided separately. Source-binding alternatives compared: positional remainder becomes the body, explicit registration metadata, parameter wrapper types (Body[T]/Path[T]/Query[T]), and type-directed binding; conversion alternatives compared: a Muntin-owned conversion trait (source-specific vs source-neutral), a user-supplied decoder at registration, a static-factory convention without a trait, and reflection-based construction. Each is tested or eliminated with a pinned-compiler result or a stated DX reason.",
+        "The viable direction is proven across a module boundary: an application module defines a move-only CreateUser and handlers (CreateUser) -> String and, as evidence only, (Int, CreateUser) -> String; a separate library-side spike module converts and dispatches them through the production _Erased box without naming CreateUser, without new unsafe code and without changing src/muntin/_handler_storage.mojo.",
+        "Builtin versus application-defined types, body ownership against the current owned-String Request, the one-body rule, compile-time diagnostics, and the extraction-failure (400) versus future handler-failure boundary are each decided with executable evidence or an explicit limitation.",
+        "Production supports exactly def() -> String and def(Int) -> String, as after M2-004; no public extraction/body/decoder trait, app.post, raising handler or new overload enters src/muntin. Retained probes and must-not-compile fixtures run under check.sh/test.sh.",
+        "docs/ARCHITECTURE.md has an 'Argument extraction decision' section (alternatives, evidence, chosen source-binding and conversion contracts, builtin treatment, error boundary, storage interaction, revisit conditions); DX.md labels body syntax as target; AGENT_PROGRESS.md records PR #10 merged and the next smallest body slice.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass; planted mutations of the prototype turn checks red; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }

@@ -3,9 +3,9 @@
 This file is a concise factual handoff between coding sessions. Keep it short enough to read at the start of every session.
 
 ## Active milestone
-M2 — typed application ergonomics. M2-004 (production handler-storage migration) has passing evidence on its branch (PR #10, not merged), including the fix for a downstream-corruption review finding. M2-003 (handler-storage decision gate) is merged (PR #9). M2-002 (path/query boundary, one `Int` query value) is merged (PR #8). M2-001 (one `Int` path parameter) is merged (PR #7). M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (PR #6). M0 and M0.5 are merged (PRs #1, #2).
+M2 — typed application ergonomics. M2-005 (argument-extraction decision gate) is in progress. M2-004 (production handler-storage migration to the move-only typed box) is merged (PR #10). M2-003 (handler-storage decision gate) is merged (PR #9). M2-002 (path/query boundary, one `Int` query value) is merged (PR #8). M2-001 (one `Int` path parameter) is merged (PR #7). M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (PR #6). M0 and M0.5 are merged (PRs #1, #2).
 
-## M2-004 result (storage migration; public behavior unchanged)
+## M2-004 result (storage migration; public behavior unchanged; merged, PR #10)
 - Production storage: `Variant[def() thin -> String, def(Int) thin -> String]` → private move-only `_Erased` box in `src/muntin/_handler_storage.mojo`, the only `src/muntin` module with unsafe operations. Each `App.get` overload boxes the handler with its adapter (`_call_none`, `_call_int` in `app.mojo`); `App.handle` makes one `invoke`, any raise → 400. Details: `docs/ARCHITECTURE.md` "Production implementation (M2-004)".
 - Smaller than the spike: no `_clone`/copy-init, `F: Movable & Deinitable`. Nothing in production copies a route or `App`. 1.1.0 facts found: `for x in list` needs a `Copyable` element (so `handle` iterates by index with `ref`); the move constructor is spelled `__init__(out self, *, deinit move: Self)` (`deinit take` only warns and is not a move constructor).
 - Unchanged: `App.get` signatures and diagnostics, accepted shapes (raising, `String`, two-parameter and `-> Response` handlers fail with the same note as on `main`; a `Request` handler is rejected too), routing/query/400/404, TestClient, adapter (no file in `adapters/` changed).
