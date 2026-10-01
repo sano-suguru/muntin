@@ -3,7 +3,14 @@
 This file is a concise factual handoff between coding sessions. Keep it short enough to read at the start of every session.
 
 ## Active milestone
-M1 — Flare transport adapter. M1-001 (Flare pin, PR #4) and M1-002 (socket-free adapter, draft PR #5) verified; M1-003 not started. M0 and M0.5 are merged (PRs #1, #2).
+M1 — Flare transport adapter. M1-001 (PR #4), M1-002 (PR #5) merged; M1-003 (real localhost round trip, PR #6) verified, so every M1 feature now has passing evidence. M0 and M0.5 are merged (PRs #1, #2).
+
+## M1-003 result
+- `adapters/flare/test_localhost_roundtrip.mojo` (flare env only): parent `HttpServer.bind(SocketAddr.localhost(0))` (ephemeral 127.0.0.1 port), `fork()`; the child serves `MuntinHandler(hello_app())`; the parent sends `GET /hello` with Flare's `HttpClient` (cleartext HTTP/1.1, `Connection: close`, 5 s connect/read timeouts), then `GET /missing`. Asserts 200 `hello`, equality with `TestClient(hello_app()).get("/hello")`, and 404 `Not Found`.
+- Readiness: `TcpListener.bind` calls `listen(2)` (backlog 128) before returning, so connections queue before the child enters `serve`; no sleep. Termination: SIGKILL + `waitpid` in `finally`; the child arms a 30 s `alarm(2)` (verified: an orphaned child is gone by 31 s). `check_flare.sh` runs it with output to a file (a pipe would wait on an orphan) and fails if `pgrep -f '^\./build/test_localhost_roundtrip$'` finds a leftover.
+- Wire, observed with `curl -i` and the test's client: `HTTP/1.1 200 OK`, `Content-Length: 5`, `Date`, `Connection: keep-alive`, no `Content-Type`; 404 is `HTTP/1.1 404 Not Found`, body `Not Found`. Flare fills the reason phrase when Muntin leaves it unset.
+- Lifecycle is fixture-only: no `app.run()`, runtime, or shutdown API; adapter and `src/muntin` unchanged.
+- CI `flare` job green on ubuntu24 20260920.314.1 (Ubuntu 24.04.5, x86_64) and macos26 20260907.0351.1 (macOS 26.6.2, arm64); run ID in the PR description.
 
 ## M1-002 result
 - `adapters/flare/muntin_flare.mojo` (outside `src/`, flare env only): `to_muntin_request`, `to_flare_response`, and `MuntinHandler(Handler)` owning an `App`; `serve` = convert -> `App.handle` -> convert. No routing in the adapter, no M0.5 storage, `src/muntin` unchanged.
@@ -33,7 +40,8 @@ M1 — Flare transport adapter. M1-001 (Flare pin, PR #4) and M1-002 (socket-fre
 - Docs moved to the locations every document already referenced: `docs/{DX,ARCHITECTURE,SPEC,DEVELOPMENT,CLAUDE_CODE,GOALS,REFERENCES}.md`; path-scoped rules to `.claude/rules/{mojo,public-api}.md` (they carry `paths:` frontmatter).
 
 ## Last verified commands (all from repo root)
-- `./scripts/check_flare.sh` → exit 0 (Mojo 1.1.0 (8189361e) in `flare` env; flare 0.11.0 `v0.11.0#59bda50f`; fixture prints `200 hello`; adapter tests 7/7; serve probe builds; default env lacks `flare`).
+- `./scripts/check_flare.sh` → exit 0 (Mojo 1.1.0 (8189361e) in `flare` env; flare 0.11.0 `v0.11.0#59bda50f`; fixture prints `200 hello`; adapter tests 7/7; serve probe builds; localhost round trip 1/1, no leftover process; default env lacks `flare`).
+- Round-trip mutations (planted, reverted), each red: client path `/missing`, route registered as `/hell`, handler returns `hi`, client to `port + 1` (bounded `NetworkError`), adapter skips `App.handle` (empty 200, and constant 200 `hello` caught by the 404 check), adapter forces 201, cleanup removed (`check_flare.sh` exit 1: "left a server process behind"). A fresh-context review found no material issues; its suggestions (wire 404 check, `NO_PROXY`, anchored `pgrep`, child error logging) were applied.
 - CI on PR #5: `verify` and `flare` jobs success on ubuntu-latest and macos-latest.
 - Adapter mutations (planted, reverted), each → `check_flare.sh` exit 1 via failing tests: bypass `App.handle`, fixed path, method forced to GET, request body dropped, status forced to 200, response body replaced, empty 200 Flare response.
 - `./scripts/check.sh` → exit 0 (prints `Mojo 1.1.0 (8189361e)`; format ok; boundary ok; package, tests (`--Werror`) and example build ok).
@@ -51,7 +59,7 @@ M1 — Flare transport adapter. M1-001 (Flare pin, PR #4) and M1-002 (socket-fre
 - `check.sh` asserts the `Mojo 1.1.0` prefix; upgrading Mojo is a deliberate change that must update the script and docs.
 
 ## Remaining limitations
-- No `app.run()`, no listening socket yet (M1-003); the Flare adapter is exercised only in memory.
+- No `app.run()`: the only listening socket is the M1-003 test fixture. Whether `app.run()` belongs to Muntin (DX.md lists it as a target) is undecided; SPEC M1 does not require it.
 - Only non-raising `def() -> String` GET handlers; no raw `Request -> Response` handlers, no `app.post`, no extraction.
 - Route literal is a compile-time parameter but is only stored as a runtime `String`; no compile-time validation yet.
 - Request has no headers; Response has no headers/content type.
@@ -60,9 +68,10 @@ M1 — Flare transport adapter. M1-001 (Flare pin, PR #4) and M1-002 (socket-fre
 
 ## Risks for later milestones
 - M2: the provisional handler storage relies on `Pointer.unsafe_bitcast` of thin function values; re-run the spike test on every Mojo upgrade. Raising handlers, closures, and non-`Int` path parameters are not prototyped.
-- M1-003: responses carry no Content-Type (Muntin `Response` has none); a real client sees Flare's defaults only.
-- `Request.path` receives the raw target including the query, decided by the adapter (and TestClient) rather than core. Core must settle path/query semantics no later than query extraction (M2); DX.md targets `GET /search?query=...`. M1-003 should use a query-free path.
+- Responses carry no Content-Type on the wire (observed in M1-003); Muntin `Response` has no headers yet.
+- `Request.path` receives the raw target including the query, decided by the adapter (and TestClient) rather than core. Core must settle path/query semantics no later than query extraction (M2); DX.md targets `GET /search?query=...`.
 - CI: `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19. Current green evidence is ubuntu24; if the flare job breaks after that date, compare `ImageOS`/`ImageVersion` in the `runner image` step before blaming Muntin or Flare.
+- The localhost round trip relies on `fork(2)` in a Mojo process (as Flare's own tests do); Windows is out of scope. Its child exits only via SIGKILL or the 30 s alarm, since v0.11.0's `close()`/`drain()` need a second thread.
 - The flare CI job rebuilds Flare's C/C++ FFI wrappers from source on every run (no cache, ~1 min).
 - M1: v0.11.0's old server spellings (`bind_many`, `serve_tls`, ...) are shims removed in v0.12; use `HttpServer.bind`/`serve`. Flare's `Request` is `Movable` and holds `List[UInt8]` bodies, so the adapter copies into Muntin's `String`-owning types.
 - M1: Flare HTTP/3 is unavailable from the conda build (no rustls cdylib); irrelevant unless Muntin needs h3.
@@ -71,4 +80,4 @@ M1 — Flare transport adapter. M1-001 (Flare pin, PR #4) and M1-002 (socket-fre
 None.
 
 ## Next smallest step
-M1-003: serve `MuntinHandler` with Flare's `HttpServer.bind`/`serve` on localhost and prove one real HTTP request (e.g. `GET /hello`) returns `200 hello`, alongside the same behaviour through TestClient.
+M2-001 (after PR #6 merges): deliver one path parameter to a handler as `Int` without manual parsing (`docs/GOALS.md` M2 goal), through both TestClient and the Flare path with the same handler signature.
