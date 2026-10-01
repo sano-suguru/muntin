@@ -71,8 +71,9 @@ done
 # (M2)"; one that starts compiling after a toolchain change means the decision
 # must be revisited. tests/storage_fail: production handler storage (M2-004)
 # rejects a mismatched adapter and copies, and App.get still accepts only the
-# supported handler shapes.
-for dir in tests/spike_fail tests/storage_fail; do
+# supported handler shapes. tests/extraction_fail: evidence for
+# docs/ARCHITECTURE.md "Argument extraction decision" (M2-005).
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
