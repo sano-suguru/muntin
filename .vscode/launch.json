@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "mojo-lldb",
+      "request": "launch",
+      "name": "Debug main.mojo",
+      "mojoFile": "${workspaceFolder}/main.mojo",
+      "args": [],
+      "env": [],
+      "cwd": "${workspaceFolder}",
+      "runtimeArgs": ["-I", "${workspaceFolder}/src"]
+    }
+  ]
+}

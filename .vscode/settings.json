@@ -1,0 +1,6 @@
+{
+  "[mojo]": {
+    "editor.defaultFormatter": "modular-mojotools.vscode-mojo",
+    "editor.formatOnSave": true
+  }
+}

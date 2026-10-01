@@ -1,0 +1,17 @@
+[workspace]
+authors = ["sanosuguru <sa.50.00.no.riku@gmail.com>"]
+channels = ["https://conda.modular.com/max", "conda-forge"]
+name = "muntin"
+platforms = ["osx-arm64", "linux-64"]
+version = "0.1.0"
+
+[tasks]
+run = "mojo run -I src main.mojo"
+build = "mkdir -p build && mojo build -I src main.mojo -o build/muntin"
+package = "mkdir -p build && mojo precompile src/muntin -o build/muntin.mojoc"
+test = "mojo run -I src tests/test_core.mojo"
+format = "mojo format src tests main.mojo"
+
+[dependencies]
+mojo = ">=1.1.0,<2"
+pre-commit = ">=4.6.2,<5"
