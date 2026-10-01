@@ -47,6 +47,17 @@ for t in tests/test_*.mojo; do
 done
 echo "ok"
 
+# The library side of the argument-extraction spike must not depend on the
+# application module that defines its body types. Mojo 1.1.0 accepts a
+# circular import between two modules on one include path, so build a driver
+# that instantiates it from a directory without the application module.
+step "extraction spike library builds without the application module"
+mkdir -p "$tmp/lib_only"
+cp tests/extraction_spike.mojo tests/extraction_lib_only/driver.mojo "$tmp/lib_only/"
+"${MOJO[@]}" build --Werror -I src -I "$tmp/lib_only" "$tmp/lib_only/driver.mojo" -o "$tmp/lib_only/driver"
+"$tmp/lib_only/driver"
+echo "ok"
+
 step "compile-time route checks (tests/compile_fail must not build)"
 for t in tests/compile_fail/*.mojo; do
     expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"

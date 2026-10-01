@@ -40,6 +40,26 @@ struct CreateUser(FromBody):
         return Self(String(body[byte=5:]))
 
 
+struct RenameTeam(FromBody):
+    """A second body type with its own format, so a library that special-cased
+    one application type would fail here."""
+
+    var name: String
+
+    def __init__(out self, name: String):
+        self.name = name
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        if body.byte_length() == 0:
+            raise Error("empty team name")
+        return Self(body.upper())
+
+
+def rename_team(id: Int, body: RenameTeam) -> String:
+    return "team " + String(id) + " is " + body.name
+
+
 def create_user(body: CreateUser) -> String:
     return "created " + body.name
 
@@ -102,6 +122,9 @@ def test_route_value_and_body_compose_by_position() raises:
     assert_equal(_post(app, "/users/7", "Bob").status, 400)
     assert_equal(_post(app, "/teams", "name=Eve").status, 400)
     assert_equal(_post(app, "/teams?id=1&id=2", "name=Eve").status, 400)
+    app.post["/rename/{id}"](rename_team)
+    assert_equal(_post(app, "/rename/4", "core").body, "team 4 is CORE")
+    assert_equal(_post(app, "/rename/4", "").status, 400)
 
 
 def test_route_value_without_body_is_unaffected() raises:
