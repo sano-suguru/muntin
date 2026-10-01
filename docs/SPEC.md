@@ -138,6 +138,8 @@ M2-003, handler-storage decision gate: before any new handler shape, decide with
 
 M2-004, handler-storage migration: production `App` stores handlers in the private typed box chosen by M2-003 instead of the closed `Variant`, with every public behavior unchanged: the same registration syntax and the same two non-raising shapes (`def() -> String`, `def(Int) -> String`), the same routing, query and 400/404 rules, compile-time route checks, `TestClient` and Flare loopback results. The unsafe operations live in one internal module that a canonical check confines, the stored handler has one owner with executable ownership and move evidence on the production type, and copy support is dropped unless production needs it. Out of scope: any new handler shape, `raises` handlers, application-defined parameter or return types, extraction or response-conversion traits. Acceptance is in `feature_list.json`.
 
+M2-005, argument-extraction decision gate: before request-body extraction, decide with pinned-compiler evidence how Muntin turns request-derived raw values into typed handler arguments, as two separate questions: which request source (path segment, query value, body) fills each handler parameter, and how a raw value from that source becomes application type `T`. Alternatives for each are compared in spikes outside `src/muntin`, with an application-defined body type in a separate module from the library-side machinery. Production keeps exactly the M2-004 handler shapes and storage; the first body slice is the next, separate item. The decision is in `docs/ARCHITECTURE.md` ("Argument extraction decision"); acceptance is in `feature_list.json`.
+
 ## M3 — composition and production ergonomics
 
 Potential work after M2 is stable:
