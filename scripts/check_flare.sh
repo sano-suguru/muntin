@@ -86,11 +86,13 @@ step "run localhost round trip (GET /hello over loopback: Flare -> MuntinHandler
 # Output goes to a file, not a pipe: a leftover child holding the pipe would
 # make the shell wait for it and hide it from the pgrep check below.
 status=0
-./build/test_localhost_roundtrip >"$tmp/roundtrip.log" 2>&1 || status=$?
+# NO_PROXY keeps Flare's client from routing loopback through an HTTP_PROXY.
+NO_PROXY=127.0.0.1 ./build/test_localhost_roundtrip >"$tmp/roundtrip.log" 2>&1 || status=$?
 cat "$tmp/roundtrip.log"
 # The test forks a server child; it must be reaped, not left serving.
-if pgrep -f build/test_localhost_roundtrip; then
-    pkill -KILL -f build/test_localhost_roundtrip || true
+leftover='^\./build/test_localhost_roundtrip$'
+if pgrep -f "$leftover"; then
+    pkill -KILL -f "$leftover" || true
     echo "error: $roundtrip left a server process behind" >&2
     exit 1
 fi

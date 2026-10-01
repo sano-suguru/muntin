@@ -10,8 +10,8 @@ tests. `HttpServer.bind` returns a listening socket (`listen(2)`, backlog 128)
 on an ephemeral loopback port, so the kernel queues the client's connection
 even before the child enters `serve`: readiness is `bind` returning, with no
 sleep. The client has connect and read timeouts; the parent SIGKILLs and reaps
-the child in `finally`, and the child also arms `alarm(2)` so it cannot outlive
-a parent killed from outside.
+the child in `finally`, and the child also arms a 30-second `alarm(2)` so it
+cannot outlive a parent killed from outside.
 """
 
 from std.ffi import c_uint, external_call
@@ -49,16 +49,16 @@ def test_get_hello_over_localhost_matches_test_client() raises:
         _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
         try:
             server.serve(MuntinHandler(hello_app()))
-        except:
-            pass
+        except e:
+            print("server child: serve failed:", e)
         exit(1)
 
-    var url = String("http://127.0.0.1:", port, "/hello")
+    var base = String("http://127.0.0.1:", port)
     try:
         var client = HttpClient(timeout_ms=TIMEOUT_MS).with_read_timeout(
             TIMEOUT_MS
         )
-        var response = client.get(url)
+        var response = client.get(base + "/hello")
         print(
             "observed:",
             response.version,
@@ -79,6 +79,12 @@ def test_get_hello_over_localhost_matches_test_client() raises:
         var expected = TestClient(app).get("/hello")
         assert_equal(response.status, expected.status)
         assert_equal(response.text(), expected.body)
+
+        # A constant response that skipped App.handle would also say "hello";
+        # an unregistered path must reach the router and come back 404.
+        var missing = client.get(base + "/missing")
+        assert_equal(missing.status, 404)
+        assert_equal(missing.text(), "Not Found")
     finally:
         _ = kill(pid, SIGKILL)
         waitpid(pid)
