@@ -230,7 +230,9 @@
       "description": "Prove a real localhost HTTP round trip through Flare and Muntin.",
       "acceptance": [
         "A real local HTTP request enters through Flare, crosses the Muntin adapter, dispatches a Muntin route, and returns the expected response.",
-        "The equivalent application behavior still passes through the in-memory backend.",
+        "Concretely: a real HTTP client sends GET /hello over a loopback TCP connection to Flare's HttpServer (bind/serve) serving MuntinHandler, which calls App.handle on an App whose GET /hello handler returns \"hello\"; the client observes status 200 and body exactly \"hello\".",
+        "The equivalent application behavior still passes through the in-memory backend: TestClient on the same App registration returns the same status and body.",
+        "The network test binds loopback only, does not race server readiness, bounds every wait, and leaves no server process behind; ./scripts/check_flare.sh runs it and passes in CI on both Ubuntu and macOS.",
         "All M0 checks remain passing without weakening their intent."
       ],
       "passes": false,
