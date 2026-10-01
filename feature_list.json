@@ -324,8 +324,13 @@
         "Route matching, query extraction, 400/404 behavior, all tests/compile_fail fixtures, test_app, the spikes, the adapter tests and the real Flare loopback parity test are unchanged and green; planted ownership/pairing mutations turn checks red.",
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass locally, CI verify + flare pass on Ubuntu and macOS, and a fresh-context review finds no unresolved material issue."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "src/muntin/_handler_storage.mojo (private, not exported): move-only _Erased box (OwnedPointer[F] pointer erased to MutOpaquePointer[MutUntrackedOrigin]; invoke/drop instantiated for the same F; no clone/copy). src/muntin/app.mojo: the two App.get overloads box the handler with _call_none/_call_int; App.handle makes one invoke; no Variant. scripts/check_unsafe.sh (in check.sh) confines unsafe operations, box fields and helper imports to that module.",
+        "./scripts/check.sh -> exit 0 (13 compile_fail, 12 spike_fail, 7 storage_fail: mismatched adapter, _Erased.copy(), raising/String/two-parameter/-> Response/Request handlers). ./scripts/test.sh -> exit 0 (test_app 23/23 unchanged; test_handler_storage 6/6: ArcPointer count oracle on _Erased, list growth/move, App with /hello, /users/{id}, /items?{limit} moved five ways). ./scripts/check_flare.sh -> exit 0 (adapter 7/7, loopback 2/2; adapters/ unchanged). git diff --check clean.",
+        "Planted mutations each red (list in AGENT_PROGRESS.md and docs/ARCHITECTURE.md): missing/wrong-type/double drop, move freeing its source, wrong-type invoke, mismatched adapter, Copyable box, field overwrite, stray unsafe or helper import, export, wrong Int, extraction bypass, stale args, raising overload, Variant app.mojo restored.",
+        "Fresh-context review: no material issue; 192-request differential vs main byte-identical; its findings (helper-import guard, stale labels, Request fixture) applied. CI verify + flare green on ubuntu-latest (ubuntu24) and macos-latest (macos26)."
+      ]
     }
   ]
 }
