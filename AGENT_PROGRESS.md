@@ -3,7 +3,14 @@
 This file is a concise factual handoff between coding sessions. Keep it short enough to read at the start of every session.
 
 ## Active milestone
-M2 — typed application ergonomics. M2-001 (one `Int` path parameter) has passing evidence on PR #7. M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (PR #6). M0 and M0.5 are merged (PRs #1, #2).
+M2 — typed application ergonomics. M2-002 (path/query boundary, one `Int` query value) is on branch `m2-002-int-query-param`. M2-001 (one `Int` path parameter) is merged (PR #7). M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (PR #6). M0 and M0.5 are merged (PRs #1, #2).
+
+## M2-002 result
+- Boundary: `Request(method, target, body)` splits the target at the first `?` into `path` (all that routes match) and `query` (raw, undecoded, `""` if absent). `TestClient.get(target)` and the Flare adapter pass the raw target; neither splits or parses the query. Adapter code unchanged (docstring and one contract assertion updated: `path == "/items"`, `query == "page=1&x"` instead of the raw target).
+- API: `app.get["/items?{limit}"](list_items)` with `def list_items(limit: Int) -> String`. The key is in the route literal because Mojo 1.1.0 cannot reflect function parameter names (repro in `docs/DX.md`); binding is positional. Literal query part = `{key}` items joined by `&`; malformed parts and arity mismatches are compile errors (6 new `tests/compile_fail` fixtures, 12 total). The `def(Int)` arity diagnostic now reads `handler takes one Int parameter; route must declare exactly one path or query parameter` (two existing fixtures updated).
+- Rules: pairs split on `&`, key/value on the first `=`, byte-equal keys, no percent-decoding, `+` is not a space; value uses the path `Int` rule. Missing key, duplicate key, empty or invalid value → 400 `Bad Request`, handler not called. Query takes no part in route selection (no fall-through).
+- Storage: no new `Variant` arm; the value's source is route data (`_Route.query_key`). Arm growth now comes only from parameter-type lists × return types; the 14-arm projection is in `docs/ARCHITECTURE.md`.
+- Wire: the M2-001 loopback server's `App` gains `/items?{limit}`; `/hello?x=1`, `/users/42?x=1`, `/items?limit=010` (→ `items 10`), `/items?other=z&limit=10`, `/items` (400), `/items?limit=abc` (400), `/items?limit=1&limit=2` (400), `/missing?limit=1` (404) equal TestClient.
 
 ## M2-001 result
 - `app.get["/users/{id}"](get_user)` with `def get_user(id: Int) -> String` works on the production `App`, next to `def() -> String` routes. `App.get` is overloaded on the two shapes.
@@ -11,7 +18,7 @@ M2 — typed application ergonomics. M2-001 (one `Int` path parameter) has passi
 - Matching in `App.handle`, first registered match wins: static segments byte-equal, `{name}` = one non-empty segment. `Int` conversion: optional `-` + ASCII digits within `Int` range, else 400 `Bad Request` without calling the handler (Mojo's `Int(String)` alone would accept `+42`, ` 42`, `4_2`). Binding is positional; names are not checked.
 - Compile time: malformed route literals (no leading `/`, `{}`, stray braces) and route/handler arity mismatches fail at the `app.get` call, also for `def() -> String` routes (`app.get["hello"]` compiled in M0, now rejected). Six `tests/compile_fail/*.mojo` fixtures are asserted by `check.sh` (expected `constraint failed: ...` text in each file's header).
 - Wire: `adapters/flare/test_localhost_roundtrip.mojo` now forks a second server (shared `_serve_in_child` helper) for an App with `/hello` and `/users/{id}`; `/users/42`→200 `42`, `/users/042`→`42`, `/users/-7`→`-7`, `/users/abc`→400 `Bad Request`, `/users`→404, `/hello`→200, each equal to `TestClient` on the same registration. The adapter is unchanged.
-- Query not separated (deliberately deferred): `/users/42?x=1` → 400, like `/hello?x=1` → 404.
+- Query not separated in M2-001 (`/users/42?x=1` → 400); resolved by M2-002.
 
 ## M1-003 result
 - `adapters/flare/test_localhost_roundtrip.mojo` (flare env only): parent `HttpServer.bind(SocketAddr.localhost(0))` (ephemeral 127.0.0.1 port), `fork()`; the child serves `MuntinHandler(hello_app())`; the parent sends `GET /hello` with Flare's `HttpClient` (cleartext HTTP/1.1, `Connection: close`, 5 s connect/read timeouts), then `GET /missing`. Asserts 200 `hello`, equality with `TestClient(hello_app()).get("/hello")`, and 404 `Not Found`.
@@ -42,12 +49,14 @@ M2 — typed application ergonomics. M2-001 (one `Int` path parameter) has passi
 - Toolchain: **Mojo 1.1.0 (8189361e)** via pixi 0.81.0, pinned by `pixi.lock`. The default environment is unchanged since M0; `pixi.toml` adds `check`/`test`/`check-flare` tasks and the separate `flare` environment (M1-001).
 - Core: `src/muntin/{__init__,http,app,testing}.mojo`. Public exports `App`, `Request`, `Response`; in-memory `muntin.testing.TestClient`.
 - Seam: `App.handle(self, Request) -> Response`. `TestClient.get` builds a `Request` and calls it; no socket, no Flare.
-- Routing: method + segment match with at most one `{name}` → `Int` segment; unmatched → 404 `Not Found`; non-integer segment → 400 `Bad Request`.
+- Routing: method + path-segment match; one `Int` from a `{name}` segment or a `{key}` query item; unmatched → 404 `Not Found`; missing/invalid value → 400 `Bad Request`.
 - `main.mojo` is the Hello World example (driven via TestClient because `app.run()` does not exist yet).
 - Placeholder `greet`/`core.mojo`/`tests/test_core.mojo` removed.
 - Docs moved to the locations every document already referenced: `docs/{DX,ARCHITECTURE,SPEC,DEVELOPMENT,CLAUDE_CODE,GOALS,REFERENCES}.md`; path-scoped rules to `.claude/rules/{mojo,public-api}.md` (they carry `paths:` frontmatter).
 
 ## Last verified commands (all from repo root)
+- M2-002: `./scripts/check.sh` → exit 0 (12 compile_fail fixtures); `./scripts/test.sh` → exit 0 (`test_app` 23/23, spike 4/4); `./scripts/check_flare.sh` → exit 0 (adapter 7/7, round trip 2/2, no leftover); `git diff --check` clean.
+- M2-002 mutations (planted, reverted), each red: Request not splitting; matching on the raw target; route path keeping its `?{key}`; lenient `Int(String)` for the query value; value length passed; key extracted off by one; parse failure calling the handler; missing key → handler called; duplicate accepted; TestClient stripping the query (test_app, and adapter parity test); query arity assert removed and `=` allowed in keys (check.sh fixtures); adapter stripping the query (adapter tests, and the loopback test alone: `/items?limit=010` → 400); adapter answering `/items` via Flare's `query_param` (adapter parity test).
 - M2-001: `./scripts/check.sh` → exit 0 (6 compile_fail fixtures rejected as expected); `./scripts/test.sh` → exit 0 (`test_app` 13/13, spike 4/4); `./scripts/check_flare.sh` → exit 0 (adapter 7/7, round trip 2/2, no leftover); `git diff --check` clean; CI `verify` + `flare` green on ubuntu24 20260920.314.1 and macos26 20260907.0351.1.
 - M2-001 mutations (planted, reverted), each red: segment length passed instead of the value; last segment captured; digit prefilter dropped (`+42` accepted); handler bypassed (segment echoed); static segments ignored; empty segment matches `{name}`; parse failure → 404; last registered route wins; Int-arity assert removed; leading-`/` check removed; `{}` accepted; adapter answers `/users/*` itself by echoing the segment; adapter parses `Int` itself; server child serves a different app than TestClient (the last three via `check_flare.sh`).
 - M2-001 fresh-context review: no material issue. Its test gaps (leading `/`, `{}`) became compile_fail fixtures; `App.handle` now checks `isa` for each arm and aborts on an unhandled one; DX.md states the tightened literal rules.
@@ -71,16 +80,16 @@ M2 — typed application ergonomics. M2-001 (one `Int` path parameter) has passi
 
 ## Remaining limitations
 - No `app.run()`: the only listening socket is the M1-003 test fixture. Whether `app.run()` belongs to Muntin (DX.md lists it as a target) is undecided; SPEC M1 does not require it. The fork + SIGKILL fixture is a test harness, not a template for `app.run()`.
-- Only non-raising GET handlers of shape `def() -> String` or `def(Int) -> String`; no raw `Request -> Response` handlers, no `app.post`, no other return types (`-> User`), no multiple/non-`Int` path parameters, no query/body extraction.
+- Only non-raising GET handlers of shape `def() -> String` or `def(Int) -> String`; no raw `Request -> Response` handlers, no `app.post`, no other return types (`-> User`), no multiple/non-`Int` path or query parameters, no path+query handler, no optional/default query values, no body extraction.
 - Route literals are validated at compile time (shape, arity) but stored and split as runtime `String`s per request.
 - Request has no headers; Response has no headers/content type.
-- Route lookup is a linear scan; overlapping or duplicate registrations silently use the first match; no query splitting, so `/hello?x=1` → 404 and `/users/42?x=1` → 400; no percent-decoding.
+- Route lookup is a linear scan; overlapping or duplicate registrations silently use the first match; no percent-decoding of path or query; `#` is not special; query keys are positional, not checked against handler parameter names.
 - `muntin.testing` is imported by `main.mojo` only because `app.run()` does not exist; it is not the canonical example.
 
 ## Risks for later milestones
-- M2: typed return values (`-> User`) and more parameter types grow the `Variant` arm count per combination; if that becomes unmanageable, revisit erasure (the M0.5 spike still tracks whether the unsafe prototype compiles). Raising handlers and closures are not supported.
+- M2: typed return values (`-> User`) and more parameter types grow the `Variant` arm count per combination (projection: 14 arms for {Int, String} × arity ≤ 2 × two return types); decide storage before adding either. The M0.5 spike still tracks whether the unsafe prototype compiles. Raising handlers and closures are not supported.
 - Responses carry no Content-Type on the wire (observed in M1-003); Muntin `Response` has no headers yet.
-- `Request.path` receives the raw target including the query, decided by the adapter (and TestClient) rather than core. Core must settle path/query semantics no later than query extraction (M2); DX.md targets `GET /search?query=...`.
+- Absolute-form request targets (`http://host/path`) are not handled: the whole target becomes `path` and 404s. Flare's client sends origin-form; a proxy-facing server could receive absolute-form.
 - CI: `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19. Current green evidence is ubuntu24; if the flare job breaks after that date, compare `ImageOS`/`ImageVersion` in the `runner image` step before blaming Muntin or Flare.
 - The M1-003 `/hello` round trip took ~26 s on one cold local run (child `alarm` is 30 s); if it flakes, look at that margin before blaming routing.
 - The localhost round trip relies on `fork(2)` in a Mojo process (as Flare's own tests do); Windows is out of scope. Its child exits only via SIGKILL or the 30 s alarm, since v0.11.0's `close()`/`drain()` need a second thread.
@@ -92,4 +101,4 @@ M2 — typed application ergonomics. M2-001 (one `Int` path parameter) has passi
 None.
 
 ## Next smallest step
-Per `docs/SPEC.md` M2 order, typed query extraction, starting with a Muntin-owned decision to separate path and query in `Request` (the M1 risk below). Not yet in `feature_list.json`; define it as M2-002 with acceptance first.
+`docs/SPEC.md` M2 order puts request-body conversion next, then typed responses. Both add `Variant` arms (bodies also need `app.post`), so first decide whether the closed `Variant` stays or a reviewed erasure design replaces it, using the arm projection in `docs/ARCHITECTURE.md`. A `String` query value (DX section 3's `search(query: String)`) is the smallest extension that stays in the current design: one arm.

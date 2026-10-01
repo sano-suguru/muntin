@@ -310,5 +310,15 @@ def test_query_does_not_take_part_in_route_selection() raises:
     assert_equal(client.get("/items").status, 400)
 
 
+def test_query_binding_is_positional() raises:
+    var app = App()
+    # The key need not match the handler's parameter name (`limit`).
+    app.get["/items?{count}"](list_items)
+    var client = TestClient(app)
+
+    assert_equal(client.get("/items?count=3").text(), "items 3")
+    assert_equal(client.get("/items?limit=3").status, 400)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

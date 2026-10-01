@@ -116,8 +116,8 @@ Do not design the final middleware, schema, DI, async, or streaming system durin
 
 ```text
 src/muntin/__init__.mojo   public exports: App, Request, Response
-src/muntin/http.mojo       Request(method, path, body), Response(status, body)
-src/muntin/app.mojo        App: route table, get[path](handler) for () -> String and (Int) -> String, handle(Request) -> Response
+src/muntin/http.mojo       Request(method, target, body) -> path, query, body; Response(status, body)
+src/muntin/app.mojo        App: route table, get[route](handler) for () -> String and (Int) -> String, handle(Request) -> Response
 src/muntin/testing.mojo    TestClient: in-memory backend, imports only muntin modules
 ```
 
@@ -138,7 +138,7 @@ flare.http.Request -> to_muntin_request -> muntin.Request
   -> App.handle -> muntin.Response -> to_flare_response -> flare.http.Response
 ```
 
-`MuntinHandler` owns an `App` and implements Flare's `Handler` trait, so its `serve(Request) -> Response` is the call Flare's server makes; it does no routing of its own. Conversion is by copy: method and the request target (`url`, path plus query) verbatim, so routing matches the in-memory backend; body bytes decoded into a `String` as lossy UTF-8; headers, version and peer dropped. The response copies status and body bytes, leaves the reason unset (Flare's default applies), and sets no headers. The policy is listed in the module docstring. `adapters/flare/test_muntin_flare.mojo` tests it without a socket; `check_flare.sh` builds it with `--Werror`, runs it, and checks that the adapter does not build in the default environment. `adapters/flare/serve_probe.mojo` type-checks `HttpServer.bind(...).serve(handler^)` with an owned `MuntinHandler` and exits before binding, so the ownership shape is accepted by Flare's single-worker server without opening a socket. CI runs `check_flare.sh` on Ubuntu and macOS from a cold `pixi install --locked -e flare`.
+`MuntinHandler` owns an `App` and implements Flare's `Handler` trait, so its `serve(Request) -> Response` is the call Flare's server makes; it does no routing of its own. Conversion is by copy: method and the request target (`url`, path plus query, undecoded) verbatim into `Request(method, target, body)`, which splits it in core (M2-002), so routing and query extraction match the in-memory backend; body bytes decoded into a `String` as lossy UTF-8; headers, version and peer dropped. The response copies status and body bytes, leaves the reason unset (Flare's default applies), and sets no headers. The policy is listed in the module docstring. `adapters/flare/test_muntin_flare.mojo` tests it without a socket; `check_flare.sh` builds it with `--Werror`, runs it, and checks that the adapter does not build in the default environment. `adapters/flare/serve_probe.mojo` type-checks `HttpServer.bind(...).serve(handler^)` with an owned `MuntinHandler` and exits before binding, so the ownership shape is accepted by Flare's single-worker server without opening a socket. CI runs `check_flare.sh` on Ubuntu and macOS from a cold `pixi install --locked -e flare`.
 
 ### Real localhost round trip (M1-003)
 
@@ -151,7 +151,7 @@ HttpClient --TCP 127.0.0.1:<ephemeral>--> HttpServer.serve -> MuntinHandler.serv
 
 ### Routing and handler storage (M2-001)
 
-`App` stores each route as method, route literal, and a `Variant[def() thin -> String, def(Int) thin -> String]`. `App.get` is overloaded on those two shapes, so `app.get["/hello"](hello)` and `app.get["/users/{id}"](get_user)` are the same call syntax and both take the handler as a runtime value. `App.handle` scans routes in registration order; the first route whose method and segments match handles the request (later matches are not tried, even if conversion fails). A static segment matches by byte equality; a `{name}` segment matches one non-empty segment. For the `Int` arm, Muntin converts the captured segment (optional `-`, ASCII digits, `Int` range) before calling the handler; anything else returns 400 `Bad Request` and the handler is not called. No match is 404. Routing and extraction run only inside `App.handle`: `TestClient` and the Flare adapter pass the request target through unchanged and have no knowledge of `{name}`. Matching uses `Request.path` as delivered, which is still the raw request target including any query (M1 policy): `/users/42?x=1` is 400 and `/hello?x=1` is 404 until query separation is decided with query extraction. Percent-encoded segments are not decoded.
+`App` stores each route as method, route literal, and a `Variant[def() thin -> String, def(Int) thin -> String]`. `App.get` is overloaded on those two shapes, so `app.get["/hello"](hello)` and `app.get["/users/{id}"](get_user)` are the same call syntax and both take the handler as a runtime value. `App.handle` scans routes in registration order; the first route whose method and segments match handles the request (later matches are not tried, even if conversion fails). A static segment matches by byte equality; a `{name}` segment matches one non-empty segment. For the `Int` arm, Muntin converts the captured segment (optional `-`, ASCII digits, `Int` range) before calling the handler; anything else returns 400 `Bad Request` and the handler is not called. No match is 404. Routing and extraction run only inside `App.handle`: `TestClient` and the Flare adapter pass the request target through unchanged and have no knowledge of `{name}`. Matching uses `Request.path`, which since M2-002 excludes the query (next section). Percent-encoded segments are not decoded.
 
 `App.handle` selects the arm with `isa` for each shape and aborts on an unhandled one, so a new arm cannot silently fall into another's call path. `App.get` checks the route literal at compile time with the same segment classifier the runtime matcher uses (`_is_param`): a malformed literal, or a parameter count that differs from the handler's arity (0 or 1), fails to compile at the registration call. Because both use one classifier, an `Int` route always captures exactly one segment at runtime.
 
@@ -165,6 +165,22 @@ Storage choice, compared on Mojo 1.1.0:
 | Capturing closures, `rebind`, non-`thin` function fields | — | do not compile (diagnostics in `docs/DX.md`) | — |
 
 The `Variant` holds plain function values: no heap context, no captured state, no lifetime tied to the `App` beyond the `List` that owns the routes. Moving an `App` moves its route list; copying a route copies its function value; nothing is reinterpreted. The M0.5 unsafe storage therefore did not enter `src/muntin`; it remains only in `tests/test_spike_handler_model.mojo` as the record of the comparison. Supporting typed return values (`-> User`) or more parameter types will grow the closed set; if that becomes unmanageable, revisit erasure with the threshold below (private, paired erase/restore, size guard, ADR).
+
+### Request target boundary and query extraction (M2-002)
+
+```text
+raw request target ("/users/42?x=1")       TestClient.get(target) | Flare url, verbatim
+        |
+Request(method, target, body)               muntin/http.mojo: split at the first '?'
+        |-- path  "/users/42"   -> route matching (App.handle)
+        '-- query "x=1"         -> query extraction for a route's {key} (App.handle)
+```
+
+The split is owned by `Request.__init__`, the one constructor every backend already calls with the raw target, so the in-memory and Flare backends cannot diverge: neither splits, parses nor decodes the query. The Flare adapter's code is unchanged; it does not use Flare's own query helpers. `query` is stored raw (no `?`, `""` when absent); `#` is not special. Requests own `path` and `query` as separate `String`s, copied once at construction.
+
+A route literal is split the same way at registration: `_Route` stores the path part (matched as in M2-001) and the key of its `{key}` query item, if any. `App.get` checks both parts at compile time (`_path_params`, `_query_params`) and requires their placeholder total to equal the handler's arity. At dispatch, the query never affects which route is selected; for an `Int` route with a query key, `_query_value` finds the key in `Request.query` (pairs split on `&`, key/value on the first `=`, byte-equal keys, no decoding) and the value goes through the same `_parse_int` as a path segment. A missing or duplicated key or a failed conversion is 400 `Bad Request` and the handler is not called.
+
+Storage reassessment: M2-002 adds **no** `Variant` arm. The handler shape is still `def(Int) thin -> String`; whether the `Int` comes from a path segment or a query key is route data (`query_key`), not part of the shape. So the arm count grows with distinct parameter-type lists and return types, not with parameter sources. The next items would add arms: a `String` query value (DX section 3's `search(query: String)`) is one arm `def(String) thin -> String`; a path and a query value in one handler is `def(Int, Int) thin -> String`; each new return type (`-> User`, `-> Response`) multiplies the existing arms by one. With two parameter types, arity up to two and two return types that is already 2 x (1 + 2 + 4) = 14 arms, each needing an `isa` branch in `App.handle`. That product, not query extraction, is the evidence to weigh against an erasure design (threshold above) before adding typed returns or two-parameter handlers.
 
 `App.handle(Request) -> Response` is unchanged and remains the backend seam; streaming or async may change it later.
 
