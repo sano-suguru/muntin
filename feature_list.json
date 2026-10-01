@@ -373,8 +373,13 @@
         "A fresh-context skeptical review finds no unresolved material API, ownership, extraction/error-boundary, backend-leakage or scope issue.",
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass locally, and CI verify + flare pass on Ubuntu and macOS."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "src/muntin/body.mojo: public FromBody; src/muntin/app.mojo: one App.post overload def(var B) thin -> String (no placeholders, B != Int, conforms_to(B, FromBody)), _Route.body + _call_body convert before the handler and answer 400; TestClient.post builds the Request only. _handler_storage.mojo and adapters/flare/muntin_flare.mojo unchanged.",
+        "./scripts/check.sh -> exit 0 (19 compile_fail incl. 6 post_*, 7 body_fail: no param, (Int, B), two bodies, raising, -> Response, raw handler, GET body; check_unsafe.sh rejects body/request names in storage). ./scripts/test.sh -> exit 0 (test_body 12/12, test_app 23/23 unchanged). ./scripts/check_flare.sh -> exit 0 (adapter 8/8, loopback 2/2 with valid/invalid/byte-for-byte/wrong-method/missing-route POSTs equal to TestClient). git diff --check clean.",
+        "18 planted mutations each red (list in docs/ARCHITECTURE.md \"Body-only POST (M2-006)\"); fresh-context review: no material issue, minor findings fixed (three surviving mutations now caught).",
+        "CI verify + flare green on PR #13 on ubuntu-latest (ubuntu24) and macos-latest (macos26)."
+      ]
     }
   ]
 }
