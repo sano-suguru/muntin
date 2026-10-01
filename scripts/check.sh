@@ -84,7 +84,9 @@ done
 # rejects a mismatched adapter and copies, and App.get still accepts only the
 # supported handler shapes. tests/extraction_fail: evidence for
 # docs/ARCHITECTURE.md "Argument extraction decision" (M2-005).
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail; do
+# tests/body_fail: App.post accepts only the body-only shape and App.get takes
+# no body handler (M2-006).
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"

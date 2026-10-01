@@ -91,9 +91,46 @@ Semantics:
 - The value converts with the path rule (optional `-`, ASCII digits, `Int` range). A missing key, a key that appears more than once (even with equal values), an empty value, or a non-integer value returns 400 `Bad Request` without calling the handler.
 - The query takes no part in route selection. With `/items?{limit}` registered before `/items`, `GET /items` matches the first route and is 400; it does not fall through.
 
-Current handler shapes are exactly `def() -> String` and `def(Int) -> String`, non-raising. Other shapes (another return type such as `User`, more or non-`Int` parameters, `raises`) fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) thin -> String'`.
+Typed request body (M2-006), proven by `tests/test_body.mojo`, `tests/compile_fail/post_*.mojo` and `tests/body_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
 
-Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, `app.post`, multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, body extraction (contract decided in M2-005, section 4), typed response conversion beyond `String` (so `get_user(id: Int) -> User` from section 2 is not yet accepted), parameter-name checking, middleware, and state.
+```mojo
+from muntin import App, FromBody
+
+
+struct CreateUser(FromBody):              # defined by the application; may be move-only
+    var name: String
+
+    def __init__(out self, name: String):
+        self.name = name
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:   # the application owns the body format
+        if not body.startswith("name=") or body.byte_length() == 5:
+            raise Error("expected name=<text>")
+        return Self(String(body[byte=5:]))
+
+
+def create_user(body: CreateUser) -> String:      # `var body: CreateUser` also works
+    return "created " + body.name
+
+
+app.post["/users"](create_user)
+# POST /users  "name=Ada"       -> 200 "created Ada"   (create_user received the converted value)
+# POST /users  "Ada" or ""      -> 400 "Bad Request"   (from_body raised; create_user not called)
+# GET /users, PUT /users, POST /missing -> 404 "Not Found" (from_body not called)
+```
+
+Semantics:
+
+- `FromBody` is a public Muntin trait refining `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`. The application type conforms to it in its own module; Muntin never names the type. `body: String` matches today's `Request`, which carries the body as one `String` and has no headers or content type; it is the first-slice shape, not a permanent promise.
+- `app.post[route](handler)` accepts exactly one shape: a non-raising handler with one parameter, the body, returning `String` (or a type that converts to it implicitly, such as `StaticString`, as for `app.get` since M2-001), on a route literal with no path or query placeholder. Parameter names are not consulted.
+- Muntin calls `from_body(request.body)` before the handler. The body comes from the request body only, never from the path or query (`POST /users?name=Bob` with body `name=Ada` -> `created Ada`), byte for byte (an empty body or surrounding whitespace reaches `from_body` unchanged), and the `Request` is borrowed, not consumed. If `from_body` raises, the response is 400 `Bad Request` and the handler is not called. Routes are selected by method and path as for `GET`; no match is 404 and `from_body` is not called.
+- Compile-time errors at `app.post`: a type that does not conform, including `String` and `Request` (`constraint failed: the handler's parameter is the request body; its type must conform to FromBody`); an `Int` parameter (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a path or query placeholder (`constraint failed: handler takes only the request body; route must declare no path or query parameter`). Any other shape (no parameter, `(Int, B)`, two bodies, `raises`, `-> Response`, a raw `Request -> Response` handler) is `invalid call to 'post': value passed to 'handler' cannot be converted from '<handler type>' to 'def(var B) thin -> String'`. A body handler passed to `app.get` has no matching overload.
+- `TestClient.post(target, body)` sends `Request("POST", target, body)` through `App.handle`, like `TestClient.get`.
+
+Current handler shapes are exactly `def() -> String` and `def(Int) -> String` for `app.get`, and `def(B) -> String` with `B: FromBody` for `app.post`, all non-raising. Other `get` shapes (another return type such as `User`, more or non-`Int` parameters, `raises`) fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) thin -> String'`.
+
+Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, route values together with a body (`app.post["/users/{id}"](update_user)` with `def update_user(id: Int, body: CreateUser)`), `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, typed response conversion beyond `String` (so `get_user(id: Int) -> User` from section 2 is not yet accepted), parameter-name checking, middleware, and state.
 
 Mojo facts discovered while proving the above:
 
@@ -247,7 +284,7 @@ HTTP body -> decode -> validate -> CreateUser -> handler
 
 Muntin should use Mojo's type system and reflection capabilities where they genuinely reduce duplication. Do not introduce opaque runtime reflection when compile-time information is available.
 
-Status (M2-005): **target, not production.** `app.post` and body parameters are not accepted by `App` yet. The extraction contract is decided and proven in a spike outside `src/muntin` (`tests/extraction_spike.mojo`, `tests/test_spike_extraction.mojo`; `docs/ARCHITECTURE.md`, "Argument extraction decision"). Proven direction, with spike names that the first body slice may still rename:
+Status (M2-006): the body-only shape is **production**: `app.post["/users"](create_user)` with `from muntin import FromBody` (semantics in "Proven vs. target status"). The extraction contract was decided in M2-005 (`docs/ARCHITECTURE.md`, "Argument extraction decision"); the route-value-plus-body line below is still spike evidence only, and JSON is not implemented:
 
 ```mojo
 struct CreateUser(FromBody):            # the application type conforms; Muntin never names it
@@ -262,11 +299,11 @@ def create_user(body: CreateUser) -> String:      # `var body: CreateUser` also 
     return body.name
 
 
-app.post["/users"](create_user)          # target syntax: the one parameter after the route's values is the body
+app.post["/users"](create_user)          # production (M2-006): the one parameter is the body
 # app.post["/users/{id}"](update_user)   # def update_user(id: Int, body: CreateUser): route value, then body (spike evidence only)
 ```
 
-- Binding is positional: route values (path segments, then the query key) fill the first parameters, and one more parameter, last, is the body. Route values are Muntin builtins (`Int`), bodies are types that conform to the body trait, and the two never overlap, so a forgotten `{id}` or a misplaced body type is a compile error at `app.post`, not a silent rebinding.
+- Binding is positional (the decided rule; production implements only the case with no route values): route values (path segments, then the query key) fill the first parameters, and one more parameter, last, is the body. Route values are Muntin builtins (`Int`), bodies are types that conform to the body trait, and the two never overlap, so a forgotten `{id}` or a misplaced body type is a compile error at `app.post`, not a silent rebinding.
 - The application writes `from_body` and chooses the body format. Muntin does not decode JSON yet: a JSON codec will be a separate, later addition that fills `from_body`, so the "no manual decoding" goal above waits for it. Routing and binding do not change when it arrives.
 - A body that does not convert is 400 before the handler runs; a future raising handler's error is a different outcome (the application-error model).
 
@@ -371,7 +408,7 @@ def test_hello():
 
 The in-memory path must execute the same Muntin application dispatch seam used by real transports. This is an architecture proof, not merely test convenience.
 
-Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get` builds a Muntin `Request` and calls `App.handle`, the same entry point network adapters will use.
+Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)` and `TestClient.post(target, body)` build a Muntin `Request` and call `App.handle`, the same entry point network adapters use.
 
 ## 11. Transport independence
 

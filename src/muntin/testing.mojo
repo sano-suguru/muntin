@@ -15,3 +15,8 @@ struct TestClient[origin: Origin[mut=False]]:
     def get(self, target: String) -> Response:
         """Sends `GET target`; `target` is a path with an optional query."""
         return self._app[].handle(Request("GET", target))
+
+    def post(self, target: String, body: String) -> Response:
+        """Sends `POST target` with `body`; `target` is a path with an
+        optional query."""
+        return self._app[].handle(Request("POST", target, body))

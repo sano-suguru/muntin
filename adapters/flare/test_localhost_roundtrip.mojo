@@ -23,6 +23,13 @@ M2-002 registers `/items?{limit}` -> `list_items(limit: Int)` on that same
 server and sends targets with queries: Muntin's `Request` splits path from
 query, `App.handle` extracts and converts `limit`, and the results must equal
 `TestClient`'s for the same targets.
+
+M2-006 registers the body-only `POST /users` -> `create_user(body: CreateUser)`
+on that same server, with `CreateUser` defined here, and sends bodies with
+Flare's raw-bytes `post` (no `Content-Type`): the adapter only copies the body
+into Muntin's `Request`; `App.handle` converts it with `CreateUser.from_body`.
+Valid and invalid bodies, a wrong method and a missing route must equal
+`TestClient.post`.
 """
 
 from std.ffi import c_uint, external_call
@@ -31,7 +38,7 @@ from std.testing import assert_equal, TestSuite
 from flare.http import HttpClient, HttpServer
 from flare.net import SocketAddr
 from flare.utils import SIGKILL, exit, fork, kill, waitpid
-from muntin import App
+from muntin import App, FromBody
 from muntin.testing import TestClient
 from muntin_flare import MuntinHandler
 
@@ -51,6 +58,41 @@ def list_items(limit: Int) -> String:
     return "items " + String(limit)
 
 
+struct CreateUser(FromBody):
+    var name: String
+
+    def __init__(out self, name: String):
+        self.name = name
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        if not body.startswith("name=") or body.byte_length() == 5:
+            raise Error("expected name=<text>")
+        return Self(String(body[byte=5:]))
+
+
+def create_user(body: CreateUser) -> String:
+    return "created " + body.name
+
+
+struct RawText(FromBody):
+    """Accepts any body, including an empty one, unchanged: a backend that
+    rejected or rewrote a body itself would differ from `TestClient`."""
+
+    var text: String
+
+    def __init__(out self, text: String):
+        self.text = text
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        return Self(body)
+
+
+def echo(body: RawText) -> String:
+    return "[" + body.text + "]"
+
+
 def hello_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -62,6 +104,8 @@ def users_app() -> App:
     app.get["/hello"](hello)
     app.get["/users/{id}"](get_user)
     app.get["/items?{limit}"](list_items)
+    app.post["/users"](create_user)
+    app.post["/echo"](echo)
     return app^
 
 
@@ -170,6 +214,48 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             var local = in_memory.get(path)
             assert_equal(response.status, local.status, path)
             assert_equal(response.text(), local.body, path)
+
+        # M2-006: "created Ada" only if Muntin converted the body; the raw
+        # body is "name=Ada". GET /users above is the wrong method (404).
+        var posts = [
+            (String("/users"), String("name=Ada"), 200, String("created Ada")),
+            (
+                String("/users?name=Bob"),
+                String("name=Ada"),
+                200,
+                String("created Ada"),
+            ),
+            (String("/users"), String("Ada"), 400, String("Bad Request")),
+            (String("/users"), String(""), 400, String("Bad Request")),
+            # Bodies any backend must deliver unchanged, empty included.
+            (String("/echo"), String(""), 200, String("[]")),
+            (
+                String("/echo"),
+                String(" a=b&c?d \n"),
+                200,
+                String("[ a=b&c?d \n]"),
+            ),
+            (String("/users/42"), String("name=Ada"), 404, String("Not Found")),
+            (String("/hello"), String("name=Ada"), 404, String("Not Found")),
+            (String("/missing"), String("name=Ada"), 404, String("Not Found")),
+        ]
+        for want in posts:
+            var path = want[0]
+            var body = want[1]
+            var response = client.post(base + path, List(body.as_bytes()))
+            print(
+                "observed: POST",
+                path,
+                repr(body),
+                response.status,
+                repr(response.text()),
+            )
+            assert_equal(response.status, want[2], path + " " + body)
+            assert_equal(response.text(), want[3], path + " " + body)
+
+            var local = in_memory.post(path, body)
+            assert_equal(response.status, local.status, path + " " + body)
+            assert_equal(response.text(), local.body, path + " " + body)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)

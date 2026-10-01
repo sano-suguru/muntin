@@ -8,7 +8,7 @@ calls, and from there through the real `App.handle`.
 from std.testing import assert_equal, TestSuite
 
 from flare.http import Request as FlareRequest, Response as FlareResponse
-from muntin import App, Response
+from muntin import App, FromBody, Response
 from muntin.testing import TestClient
 from muntin_flare import MuntinHandler, to_flare_response, to_muntin_request
 
@@ -25,11 +25,48 @@ def list_items(limit: Int) -> String:
     return "items " + String(limit)
 
 
+struct CreateUser(FromBody):
+    var name: String
+
+    def __init__(out self, name: String):
+        self.name = name
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        if not body.startswith("name=") or body.byte_length() == 5:
+            raise Error("expected name=<text>")
+        return Self(String(body[byte=5:]))
+
+
+def create_user(body: CreateUser) -> String:
+    return "created " + body.name
+
+
+struct RawText(FromBody):
+    """Accepts any body, including an empty one, unchanged: a backend that
+    rejected or rewrote a body itself would differ from `TestClient`."""
+
+    var text: String
+
+    def __init__(out self, text: String):
+        self.text = text
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        return Self(body)
+
+
+def echo(body: RawText) -> String:
+    return "[" + body.text + "]"
+
+
 def app_with_routes() -> App:
     var app = App()
     app.get["/hello"](hello)
     app.get["/goodbye"](goodbye)
     app.get["/items?{limit}"](list_items)
+    app.post["/users"](create_user)
+    app.post["/echo"](echo)
     return app^
 
 
@@ -109,6 +146,40 @@ def test_adapter_matches_in_memory_backend() raises:
         var actual = handler.serve(FlareRequest("GET", path))
         assert_equal(actual.status, expected.status, path)
         assert_equal(actual.text(), expected.text(), path)
+
+
+def test_adapter_post_body_matches_in_memory_backend() raises:
+    var handler = MuntinHandler(app_with_routes())
+    var client = TestClient(handler.app)
+
+    for want in [
+        ("/users", "name=Ada"),
+        ("/users?name=Bob", "name=Ada"),
+        ("/users", "Ada"),
+        ("/users", ""),
+        ("/echo", ""),
+        ("/echo", " a=b&c?d \n"),
+        ("/hello", "name=Ada"),
+        ("/missing", "name=Ada"),
+    ]:
+        var path = String(want[0])
+        var body = String(want[1])
+        var expected = client.post(path, body)
+        var actual = handler.serve(
+            FlareRequest("POST", path, body=List(body.as_bytes()))
+        )
+        assert_equal(actual.status, expected.status, path + " " + body)
+        assert_equal(actual.text(), expected.text(), path + " " + body)
+    assert_equal(
+        handler.serve(
+            FlareRequest("POST", "/users", body=List("name=Ada".as_bytes()))
+        ).text(),
+        "created Ada",
+    )
+    assert_equal(
+        handler.serve(FlareRequest("POST", "/echo", body=List[UInt8]())).text(),
+        "[]",
+    )
 
 
 def main() raises:

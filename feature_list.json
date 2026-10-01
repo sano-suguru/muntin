@@ -352,6 +352,34 @@
         "Planted mutations, each red: slots swapped, body gathered first, handler raise -> 400, body never gathered, conversion error swallowed (compile error), route-slot/Int-arity/conformance/Int type-equality asserts removed (fixtures), library special-casing an app type (isolated build). Renaming handler parameters stays green.",
         "Fresh-context review: one material finding (disjointness relied on Int lacking a conformance; __extension SIMD gives Int the bound in the trait's module) fixed with a type-equality guard and three fixtures; minor wording findings fixed; re-review found no remaining material issue."
       ]
+    },
+    {
+      "id": "M2-006",
+      "priority": 206,
+      "category": "typed_extraction",
+      "description": "First typed request-body slice decided by M2-005: body-only POST with one application-defined FromBody parameter, converted by Muntin before the handler.",
+      "acceptance": [
+        "Public syntax compiles on Mojo 1.1.0 and is documented in docs/DX.md: from muntin import App, FromBody; struct CreateUser(FromBody) with @staticmethod def from_body(body: String) raises -> Self; def create_user(body: CreateUser) -> String; app.post[\"/users\"](create_user). FromBody is a public Muntin trait refining Deinitable & Movable; conversion uses the M2-005 mechanism (generic B: Movable & Deinitable refined by comptime assert conforms_to(B, FromBody), Int rejected by type equality), with no downcast, rebind_var or __extension.",
+        "Production adds only body-only POST: one required FromBody parameter (borrowed or var), a route literal with zero path and query placeholders, and a non-raising handler compatible with def(var B) thin -> String. -> String is the canonical documented shape; Mojo 1.1.0 also accepts implicitly String-convertible returns such as StaticString, matching App.get since M2-001. Int, String and Request bodies, (Int, B) and other multi-parameter shapes, body handlers on GET, raising handlers, -> Response and other return types that do not convert to String, raw Request handlers, JSON, and optional or multiple bodies remain unsupported.",
+        "Body conversion happens in Muntin (App.handle and its adapter) before the handler: a valid body reaches the handler as the converted value; from_body raising returns 400 'Bad Request' without invoking the handler; no matching method and path returns 404. The body comes from Request.body only, never from the path or query, and Request.body is not consumed.",
+        "The application body type is defined outside src/muntin, may be move-only (not Copyable), and Muntin never names it; mojo precompile src/muntin builds the package without any application module.",
+        "src/muntin/_handler_storage.mojo is unchanged and the unsafe surface is not expanded: no new unsafe operation, and no body or request logic in the storage module (scripts/check_unsafe.sh guards it).",
+        "muntin.testing.TestClient.post(target, body) builds Request(\"POST\", target, body) and calls App.handle, with no conversion logic.",
+        "Flare remains transport-only (adapters/flare/muntin_flare.mojo unchanged). One App registration gives the same status and body through TestClient and through real loopback requests to Flare's HttpServer serving MuntinHandler for a valid body, an invalid body, a wrong method and a missing route.",
+        "Must-not-compile fixtures, checked by scripts/check.sh, protect the boundary: missing FromBody conformance, Int body, a path or a query placeholder on the body-only overload, and unsupported multi-parameter, raising, return-type, raw-Request and GET-body shapes.",
+        "Existing GET/path/query behavior, tests and diagnostics remain green and unchanged.",
+        "Retained tests and planted mutations catch skipped conversion, handler invocation after conversion failure, the wrong body source, accidental route-value or body acceptance, backend-side conversion, and storage/unsafe expansion.",
+        "docs/DX.md, docs/ARCHITECTURE.md, docs/SPEC.md, feature_list.json and AGENT_PROGRESS.md record only facts that became production reality; no CI run IDs or commit SHAs in committed docs.",
+        "A fresh-context skeptical review finds no unresolved material API, ownership, extraction/error-boundary, backend-leakage or scope issue.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass locally, and CI verify + flare pass on Ubuntu and macOS."
+      ],
+      "passes": true,
+      "evidence": [
+        "src/muntin/body.mojo: public FromBody; src/muntin/app.mojo: one App.post overload def(var B) thin -> String (no placeholders, B != Int, conforms_to(B, FromBody)), _Route.body + _call_body convert before the handler and answer 400; TestClient.post builds the Request only. _handler_storage.mojo and adapters/flare/muntin_flare.mojo unchanged.",
+        "./scripts/check.sh -> exit 0 (19 compile_fail incl. 6 post_*, 7 body_fail: no param, (Int, B), two bodies, raising, -> Response, raw handler, GET body; check_unsafe.sh rejects body/request names in storage). ./scripts/test.sh -> exit 0 (test_body 12/12, test_app 23/23 unchanged). ./scripts/check_flare.sh -> exit 0 (adapter 8/8, loopback 2/2 with valid/invalid/byte-for-byte/wrong-method/missing-route POSTs equal to TestClient). git diff --check clean.",
+        "18 planted mutations each red (list in docs/ARCHITECTURE.md \"Body-only POST (M2-006)\"); fresh-context review: no material issue, minor findings fixed (three surviving mutations now caught).",
+        "CI verify + flare green on PR #13 on ubuntu-latest (ubuntu24) and macos-latest (macos26)."
+      ]
     }
   ]
 }

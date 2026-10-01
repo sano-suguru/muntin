@@ -115,11 +115,12 @@ Do not design the final middleware, schema, DI, async, or streaming system durin
 ### Implemented M0 layout (Mojo 1.1.0)
 
 ```text
-src/muntin/__init__.mojo   public exports: App, Request, Response
+src/muntin/__init__.mojo   public exports: App, FromBody, Request, Response
 src/muntin/http.mojo       Request(method, target, body) -> path, query, body; Response(status, body)
-src/muntin/app.mojo        App: route table, get[route](handler) for () -> String and (Int) -> String, handle(Request) -> Response
+src/muntin/body.mojo       FromBody: the request-body conversion trait an application type conforms to (M2-006)
+src/muntin/app.mojo        App: route table, get[route](handler) for () -> String and (Int) -> String, post[route](handler) for (B: FromBody) -> String, handle(Request) -> Response
 src/muntin/_handler_storage.mojo  private: _Erased typed handler box; the only module with unsafe operations (M2-004)
-src/muntin/testing.mojo    TestClient: in-memory backend, imports only muntin modules
+src/muntin/testing.mojo    TestClient: in-memory backend (get, post), imports only muntin modules
 ```
 
 The backend seam is the single concrete method `App.handle(self, request: Request) -> Response`. A backend converts its input into a Muntin `Request`, calls `handle`, and converts the returned `Response` back. `TestClient` does exactly that without a socket; a future Flare adapter must do the same and must not route on its own. There is deliberately no backend trait yet (A7): one implementation exists, and the trait can be extracted when a second backend arrives.
@@ -266,7 +267,7 @@ Public behavior is unchanged: the same two non-raising shapes (`def() -> String`
 
 ### Argument extraction decision (M2-005)
 
-Status: **decision only**. Production `App` still accepts exactly `def() -> String` and `def(Int) -> String`; `src/muntin` is unchanged. Two questions are decided separately:
+Status: **decision** (M2-005, which left `src/muntin` unchanged). Its body-only case is production since M2-006 ("Body-only POST (M2-006)" below); the rest of this section is the decision and spike evidence. Two questions are decided separately:
 
 ```text
 route literal + overload  --> source plan   [Path/Query value 0..k-1, Body k]   (route data)
@@ -328,7 +329,28 @@ Alternatives compared (all on Mojo 1.1.0 (8189361e)):
 - optional, multiple or streaming bodies are needed (this decision covers one required body);
 - the per-request body copy is measured to matter.
 
-**Next production slice.** `app.post["/users"](create_user)` with `def create_user(body: CreateUser) -> String`: one `post` overload taking `def(var B) -> String` on a route that declares no route value, the body trait exported from `muntin` (public API, so DX updated with it), an adapter that answers its own 400, `TestClient.post(target, body)`, and loopback parity through the Flare adapter (which already passes the body). `(Int, B)` waits for its own slice, as the first two-parameter shape.
+**Next production slice.** `app.post["/users"](create_user)` with `def create_user(body: CreateUser) -> String`: one `post` overload taking `def(var B) -> String` on a route that declares no route value, the body trait exported from `muntin` (public API, so DX updated with it), an adapter that answers its own 400, `TestClient.post(target, body)`, and loopback parity through the Flare adapter (which already passes the body). `(Int, B)` waits for its own slice, as the first two-parameter shape. Done in M2-006, below.
+
+### Body-only POST (M2-006)
+
+Production implements exactly the body-only case of the M2-005 decision: `app.post["/users"](create_user)` with `def create_user(body: CreateUser) -> String`, `CreateUser` an application type conforming to `muntin.FromBody`.
+
+```text
+POST /users, body "name=Ada"
+  App.handle: method + path match (_match); route.body -> args = [request.body]   (one String copy)
+  _Erased.invoke(args)  -> _call_body[CreateUser]: CreateUser.from_body(args[0])
+      raises -> 400 Bad Request, handler not called
+      ok     -> create_user(body^) -> Response.text(...)
+```
+
+- **Public contract:** `FromBody` in `src/muntin/body.mojo`, exported from `muntin`: `trait FromBody(Deinitable, Movable)` with `@staticmethod def from_body(body: String) raises -> Self`. `body: String` fits the current `Request` (one owned `String` body, no headers or content type); it is the first-slice shape, not a permanent promise. `TestClient.post(target, body)` builds `Request("POST", target, body)` and calls `App.handle`; it converts nothing.
+- **Registration:** one overload, `post[B: Movable & Deinitable, //, path: StaticString](mut self, handler: def(var B) thin -> String)`. A handler declaring `body: B` or `var body: B` converts to it. Checks, in order, each a `comptime assert` with a Muntin message: the literal is well formed; it declares no path or query placeholder; `B` is not `Int` (type equality, M2-005); `conforms_to(B, FromBody)`. `String` and `Request` parameters fail the last check. Shapes with another arity, `raises` or a return type that does not convert to `String` (`Response`) do not convert to the one overload (`tests/body_fail`); `-> StaticString` converts implicitly and is accepted, as on `app.get` since M2-001. `App.get` is unchanged and has no body overload.
+- **Source and conversion:** whether a route takes the body is route data (`_Route.body`), as the query key is. `App.handle` appends `request.body` as the last raw argument after matching method and path; nothing else reads `Request.body`. `_call_body[B]` in `app.mojo` refines `B` with `comptime assert conforms_to(B, FromBody)` (the documented 1.1.0 mechanism; no `downcast`, `rebind_var` or `__extension`), converts, answers 400 itself on a raise, and moves the value into the handler, so `B` may be move-only. `_call_body` does not raise; `App.handle`'s `try` → 400 still serves `_call_int` and gathering, as before. No route match is 404 before any conversion.
+- **Storage unchanged:** `src/muntin/_handler_storage.mojo` is byte-identical to M2-004; the body handler is one more `_Erased.__init__[call=_call_body[B]]` instantiation through the existing `_Call[F]` (`def(F, List[String]) raises thin -> Response`). No unsafe operation was added. `scripts/check_unsafe.sh` now also fails if the storage module names `FromBody`, `from_body`, `Request` or `.body`, so request and body handling stay in `app.mojo`.
+- **Package boundary:** the application body type lives in the application module; `mojo precompile src/muntin` (in `check.sh`) builds the package with no application module, and `tests/test_body.mojo` defines `CreateUser` (asserted not `Copyable`) and `RenameTeam` outside it. The M2-005 lib-only driver is not needed for production: the package build is that oracle.
+- **Flare:** `adapters/flare/muntin_flare.mojo` is unchanged; it already copied the body into `Request`. The loopback test adds `POST /users` to its typed-route server and sends bodies with Flare's raw-bytes `post` (no `Content-Type`); valid (`name=Ada` -> `created Ada`, also with a query `name=Bob`), invalid (`Ada`, empty), bodies a backend must not touch (an empty and a whitespace-padded body to a type that accepts any body, echoed unchanged), wrong-method (`GET /users`, `POST /users/42`, `POST /hello`) and missing-route (`POST /missing`) results equal `TestClient`.
+- **Evidence:** `tests/test_body.mojo` (12: conversion before the handler, the body byte for byte (empty, whitespace, `=&?`), 400 without the handler or with `from_body` recorded through environment variables, body source, 404 without conversion, GET routes on the same path, owned parameter, two body types, borrowed `Request`, `TestClient.post` parity, `App` moves); `tests/compile_fail/post_*.mojo` (6) and `tests/body_fail/*.mojo` (7); adapter contract test `test_adapter_post_body_matches_in_memory_backend`; loopback parity. Mutations (planted, reverted), each red: body never appended (crash), body taken from the query or the path, handler called after a conversion failure (environment-variable oracle; the response stayed 400), conversion failure answered 404 or 200, the route registered as `GET`, `TestClient.post` sending `GET` or dropping the body (`test_body`); the `Int` guard, placeholder check or conformance check removed, an `(Int, B)` overload added (fixtures); the storage module importing `Request` (`check_unsafe.sh`); the adapter rewriting the body or answering an empty `POST` body with 400 itself (adapter contract tests); `App.handle` or `TestClient.post` stripping the body (`test_body`). Whether `_call_body` answers 400 itself or raises into `App.handle`'s `except` is not observable until handlers can raise.
+- **Not supported:** `(Int, B)` and any other multi-parameter shape, `Int`/`String`/`Request` bodies, body handlers on `GET`, `POST` without a body, other methods, raising handlers, `-> Response` and other return types that do not convert to `String`, raw handlers, JSON, optional or multiple bodies, streaming.
 
 ## Request/Response ownership
 
