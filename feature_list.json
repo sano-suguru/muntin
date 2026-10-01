@@ -211,10 +211,17 @@
       "acceptance": [
         "Adapter depends inward on Muntin application contracts.",
         "No application handler signature requires a Flare type.",
-        "Adapter contract tests pass."
+        "Adapter contract tests pass.",
+        "Adapter contract tests convert a Flare Request to a Muntin Request, dispatch it through App.handle, and convert the Muntin Response back to a Flare Response without opening a socket.",
+        "CI installs the locked `flare` environment and ./scripts/check_flare.sh exits 0 on both Ubuntu and macOS runners."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "Adapter adapters/flare/muntin_flare.mojo (outside src/; imports flare.http and muntin's public App/Request/Response only): MuntinHandler(Handler).serve converts, calls App.handle, converts back.",
+        "./scripts/check_flare.sh -> exit 0: adapters/flare/test_muntin_flare.mojo 7/7 (conversion, App.handle dispatch, 404 path/method, TestClient parity); adapters/flare/serve_probe.mojo builds with --Werror (HttpServer.serve accepts an owned MuntinHandler); adapter does not build in the default env.",
+        "CI on PR #5: flare job (cold locked install, check_flare.sh) passes on ubuntu-latest (ubuntu24) and macos-latest (macos26); verify job passes without the flare env.",
+        "Planted adapter mutations turn check_flare.sh red (list in AGENT_PROGRESS.md). ./scripts/check.sh, ./scripts/test.sh, git diff --check -> exit 0."
+      ]
     },
     {
       "id": "M1-003",

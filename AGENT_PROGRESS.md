@@ -3,7 +3,14 @@
 This file is a concise factual handoff between coding sessions. Keep it short enough to read at the start of every session.
 
 ## Active milestone
-M1 — Flare transport adapter. M1-001 (Flare pin) verified; M1-002/M1-003 not started. M0 and M0.5 are merged (PRs #1, #2).
+M1 — Flare transport adapter. M1-001 (Flare pin, PR #4) and M1-002 (socket-free adapter, draft PR #5) verified; M1-003 not started. M0 and M0.5 are merged (PRs #1, #2).
+
+## M1-002 result
+- `adapters/flare/muntin_flare.mojo` (outside `src/`, flare env only): `to_muntin_request`, `to_flare_response`, and `MuntinHandler(Handler)` owning an `App`; `serve` = convert -> `App.handle` -> convert. No routing in the adapter, no M0.5 storage, `src/muntin` unchanged.
+- Policy: method and request target (`url`, path + query) verbatim; body copied as lossy UTF-8 `String`; headers/version/peer dropped; response copies status and body bytes, reason unset (Flare's default applies; not yet observed on the wire), no headers.
+- `adapters/flare/test_muntin_flare.mojo` 7/7, built `--Werror` and run by `check_flare.sh`, which also checks adapter formatting and that the adapter does not build in the default env.
+- `adapters/flare/serve_probe.mojo` (compile-only, built `--Werror` by `check_flare.sh`): `HttpServer.serve(handler^)` accepts an owned `MuntinHandler`. Dropping its `Handler` conformance → `no matching method in call to 'serve'`; passing it without `^` → `cannot be implicitly copied`.
+- CI `flare` job (cold `pixi install --locked -e flare`, `cache: false`, then `check_flare.sh`) is green on ubuntu24 20260920.314.1 (Ubuntu 24.04.5, x86_64) and macos26 20260907.0351.1 (macOS 26.6.2, arm64) on PR #5; run IDs live in the PR description, not in committed files. The `verify` job asserts `.pixi/envs/flare` is never installed.
 
 ## M1-001 result
 - Flare **v0.11.0** (commit `59bda50f46853f7351eef12f1737f7fb2287de71`, MIT) is the only release declaring `mojo >=1.1.0`. v0.10.0 fails `pixi lock` under pixi 0.81.0 (its `pixi-build-rattler-build ==0.3.13` pin needs build API 4) and declares `mojo <1.1.0`; v0.9.0/v0.8.1 pin `1.0.0b2`.
@@ -26,7 +33,9 @@ M1 — Flare transport adapter. M1-001 (Flare pin) verified; M1-002/M1-003 not s
 - Docs moved to the locations every document already referenced: `docs/{DX,ARCHITECTURE,SPEC,DEVELOPMENT,CLAUDE_CODE,GOALS,REFERENCES}.md`; path-scoped rules to `.claude/rules/{mojo,public-api}.md` (they carry `paths:` frontmatter).
 
 ## Last verified commands (all from repo root)
-- `./scripts/check_flare.sh` → exit 0 (Mojo 1.1.0 (8189361e) in `flare` env; flare 0.11.0 `v0.11.0#59bda50f`; build `--Werror` ok; prints `200 hello`; default env lacks `flare`).
+- `./scripts/check_flare.sh` → exit 0 (Mojo 1.1.0 (8189361e) in `flare` env; flare 0.11.0 `v0.11.0#59bda50f`; fixture prints `200 hello`; adapter tests 7/7; serve probe builds; default env lacks `flare`).
+- CI on PR #5: `verify` and `flare` jobs success on ubuntu-latest and macos-latest.
+- Adapter mutations (planted, reverted), each → `check_flare.sh` exit 1 via failing tests: bypass `App.handle`, fixed path, method forced to GET, request body dropped, status forced to 200, response body replaced, empty 200 Flare response.
 - `./scripts/check.sh` → exit 0 (prints `Mojo 1.1.0 (8189361e)`; format ok; boundary ok; package, tests (`--Werror`) and example build ok).
 - `./scripts/test.sh` → exit 0 (`tests/test_app.mojo` 6/6, `tests/test_spike_handler_model.mojo` 4/4).
 - `./build/muntin` → prints `200 hello`.
@@ -42,7 +51,7 @@ M1 — Flare transport adapter. M1-001 (Flare pin) verified; M1-002/M1-003 not s
 - `check.sh` asserts the `Mojo 1.1.0` prefix; upgrading Mojo is a deliberate change that must update the script and docs.
 
 ## Remaining limitations
-- No `app.run()`, no network backend (M1).
+- No `app.run()`, no listening socket yet (M1-003); the Flare adapter is exercised only in memory.
 - Only non-raising `def() -> String` GET handlers; no raw `Request -> Response` handlers, no `app.post`, no extraction.
 - Route literal is a compile-time parameter but is only stored as a runtime `String`; no compile-time validation yet.
 - Request has no headers; Response has no headers/content type.
@@ -51,9 +60,10 @@ M1 — Flare transport adapter. M1-001 (Flare pin) verified; M1-002/M1-003 not s
 
 ## Risks for later milestones
 - M2: the provisional handler storage relies on `Pointer.unsafe_bitcast` of thin function values; re-run the spike test on every Mojo upgrade. Raising handlers, closures, and non-`Int` path parameters are not prototyped.
-- M1: `check_boundaries.sh` scans all of `src/muntin`, so a Flare adapter at `src/muntin/adapters/flare` would fail it. Place the adapter outside `src/muntin` or scope the check deliberately.
-- M1: Request/Response have no headers or content type; the adapter must choose defaults.
-- M1: `check_flare.sh` is not in CI. The `flare` env compiles C/C++ FFI wrappers via pixi-build on install; verified only on osx-arm64. linux-64 is locked but its install/build is unverified.
+- M1-003: responses carry no Content-Type (Muntin `Response` has none); a real client sees Flare's defaults only.
+- `Request.path` receives the raw target including the query, decided by the adapter (and TestClient) rather than core. Core must settle path/query semantics no later than query extraction (M2); DX.md targets `GET /search?query=...`. M1-003 should use a query-free path.
+- CI: `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19. Current green evidence is ubuntu24; if the flare job breaks after that date, compare `ImageOS`/`ImageVersion` in the `runner image` step before blaming Muntin or Flare.
+- The flare CI job rebuilds Flare's C/C++ FFI wrappers from source on every run (no cache, ~1 min).
 - M1: v0.11.0's old server spellings (`bind_many`, `serve_tls`, ...) are shims removed in v0.12; use `HttpServer.bind`/`serve`. Flare's `Request` is `Movable` and holds `List[UInt8]` bodies, so the adapter copies into Muntin's `String`-owning types.
 - M1: Flare HTTP/3 is unavailable from the conda build (no rustls cdylib); irrelevant unless Muntin needs h3.
 
@@ -61,4 +71,4 @@ M1 — Flare transport adapter. M1-001 (Flare pin) verified; M1-002/M1-003 not s
 None.
 
 ## Next smallest step
-M1-002: a Flare adapter outside `src/muntin` (built only in the `flare` env) that converts a Flare `Request` to a Muntin `Request`, calls `App.handle`, and converts the `Response` back, with adapter contract tests that need no socket. It must not use the provisional M0.5 handler storage. Decide whether `check_flare.sh` joins CI at the same time.
+M1-003: serve `MuntinHandler` with Flare's `HttpServer.bind`/`serve` on localhost and prove one real HTTP request (e.g. `GET /hello`) returns `200 hello`, alongside the same behaviour through TestClient.

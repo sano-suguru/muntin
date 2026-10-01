@@ -21,3 +21,30 @@ jobs:
       - run: ./scripts/check.sh
       - run: ./scripts/test.sh
       - run: git diff --check
+      # Muntin's own checks must not need Flare: only the default
+      # environment was installed above.
+      - name: default checks ran without the flare environment
+        run: test ! -e .pixi/envs/flare
+
+  flare:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: runner image
+        run: |
+          echo "ImageOS=${ImageOS:-unknown} ImageVersion=${ImageVersion:-unknown}"
+          uname -a
+          if [ -r /etc/os-release ]; then cat /etc/os-release; else sw_vers; fi
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: v0.81.0
+          locked: true
+          environments: default flare
+          # Always build the flare env from the lock: a restored cache would
+          # skip the pixi-build compile this job exists to prove.
+          cache: false
+      - run: ./scripts/check_flare.sh
