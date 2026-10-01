@@ -4,6 +4,8 @@ channels = ["https://conda.modular.com/max", "conda-forge"]
 name = "muntin"
 platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
+# Required for git source dependencies (Flare) built by pixi-build.
+preview = ["pixi-build"]
 
 [tasks]
 run = "mojo run -I src main.mojo"
@@ -11,8 +13,19 @@ build = "mkdir -p build && mojo build -I src main.mojo -o build/muntin"
 package = "mkdir -p build && mojo precompile src/muntin -o build/muntin.mojoc"
 check = "./scripts/check.sh"
 test = "./scripts/test.sh"
+check-flare = "./scripts/check_flare.sh"
 format = "mojo format src tests main.mojo"
 
 [dependencies]
 mojo = ">=1.1.0,<2"
 pre-commit = ">=4.6.2,<5"
+
+# Flare is a backend dependency only. It lives in a separate `flare`
+# environment so the default environment (and thus src/muntin) never has
+# it on the module path. Pinned to a released tag; pixi.lock records the
+# resolved commit.
+[feature.flare.dependencies]
+flare = { git = "https://github.com/ehsanmok/flare.git", tag = "v0.11.0" }
+
+[environments]
+flare = ["flare"]
