@@ -129,9 +129,9 @@ Requests and responses own their data (`String` fields, copied in). No backend b
 
 When `muntin/adapters/flare` arrives in M1 it must live outside the boundary-checked core path or the check must be scoped to exclude only that adapter directory.
 
-### Handler storage candidate (M0.5)
+### Handler storage prototype (M0.5, provisional)
 
-The M0.5 spike's candidate router design stores heterogeneous handlers as a function pointer (thin function value erased to its address bits) plus a trampoline instantiated for the same type, and converts results through a Muntin-owned `ToResponse` trait. That is unsafe machinery, so under the decision threshold below it may enter `src/muntin` only as a private implementation detail: never in a public signature, with the erase/restore pair inside one generic function, and with the `size_of` guard. The safe fallback (handler as a compile-time parameter) is recorded in `docs/DX.md`. `App.handle(Request) -> Response` is the smallest seam that works for M0; streaming or async may change it later.
+The M0.5 spike's working prototype stores heterogeneous handlers as a function pointer (thin function value erased to its address bits) plus a trampoline instantiated for the same type, and converts results through a Muntin-owned `ToResponse` trait. It is not adopted: it proves feasibility, and the storage design is decided in M2. Because it is unsafe machinery, under the decision threshold below it could enter `src/muntin` only as a private implementation detail: never in a public signature, with the erase/restore pair inside one generic function, and with the `size_of` guard. The safe fallback (handler as a compile-time parameter) is recorded in `docs/DX.md`. `App.handle(Request) -> Response` is the smallest seam that works for M0; streaming or async may change it later.
 
 ## Request/Response ownership
 

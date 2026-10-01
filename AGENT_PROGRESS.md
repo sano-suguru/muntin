@@ -7,8 +7,8 @@ M0.5 — typed handler feasibility spike (M0.5-001..003 verified). M0 is verifie
 
 ## M0.5 result
 - The runtime handler value syntax `app.get["/users/{id}"](get_user)` works: `tests/test_spike_handler_model.mojo` dispatches `() -> String`, `(Int) -> User`, `(Request) -> Response` from one app through `handle(Request)`. `src/muntin` unchanged.
-- Candidate storage: function pointer stored as `Int` bits + same-type trampoline (unsafe step confined to one private generic). Closures and `rebind` fail (diagnostics in `docs/DX.md`). The compile-time handler parameter works but is a fallback only, because it leaks storage concerns into the public syntax.
-- Return conversion: Muntin-owned `ToResponse` trait; `String`/`Response` conform via `__extension` (unstable-looking spelling; fallback is overloads).
+- Feasibility, not adoption: a prototype storing the function pointer as `Int` bits + same-type trampoline works, but it is unsafe and provisional until M2. Closures and `rebind` fail (diagnostics in `docs/DX.md`). The compile-time handler parameter works but worsens the public syntax.
+- Return conversion: the `ToResponse` trait concept is the direction; conforming `String`/`Response` via `__extension` is provisional (fallback: overloads).
 - Route/handler arity mismatch fails at compile time. Parameter names cannot be reflected, so binding is positional.
 
 ## Current state
@@ -44,7 +44,7 @@ M0.5 — typed handler feasibility spike (M0.5-001..003 verified). M0 is verifie
 - `muntin.testing` is imported by `main.mojo` only because `app.run()` does not exist; it is not the canonical example.
 
 ## Risks for later milestones
-- M2: the candidate handler storage relies on `Pointer.unsafe_bitcast` of thin function values; re-run the spike test on every Mojo upgrade. Raising handlers, closures, and non-`Int` path parameters are not prototyped.
+- M2: the provisional handler storage relies on `Pointer.unsafe_bitcast` of thin function values; re-run the spike test on every Mojo upgrade. Raising handlers, closures, and non-`Int` path parameters are not prototyped.
 - M1: `check_boundaries.sh` scans all of `src/muntin`, so a Flare adapter at `src/muntin/adapters/flare` would fail it. Place the adapter outside `src/muntin` or scope the check deliberately.
 - M1: Request/Response have no headers or content type; the adapter must choose defaults.
 
@@ -52,4 +52,4 @@ M0.5 — typed handler feasibility spike (M0.5-001..003 verified). M0 is verifie
 None.
 
 ## Next smallest step
-User confirms the M0.5 candidate design. Then M1-001: pick a released Flare tag, verify it builds against Mojo 1.1.0, and pin it outside Muntin core (adapter path excluded from or outside `scripts/check_boundaries.sh`'s scope).
+Accept the M0.5 feasibility result (runtime storage stays provisional until M2). Then M1-001, without exposing or depending on that storage: pick a released Flare tag, verify it builds against Mojo 1.1.0, and pin it outside Muntin core (adapter path excluded from or outside `scripts/check_boundaries.sh`'s scope).

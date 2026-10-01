@@ -92,7 +92,7 @@ Do not implement these merely because mature frameworks have them:
 
 ## M0.5 — typed handler feasibility spike
 
-Purpose: before adding a network backend, verify on Mojo 1.1.0 that Muntin's target DX (`app.get["/users/{id}"](get_user)` with typed handlers) can be built. Inserted ahead of M1 because the answer can change the public API; M2 still follows M1.
+Purpose: before adding a network backend, verify on Mojo 1.1.0 that the core typed-handler registration shape, `app.get["/users/{id}"](get_user)`, is feasible. Only that shape is in scope; multiple or non-`Int` path parameters, query parameters, raising handlers, state, JSON and async are not. Inserted ahead of M1 because the answer can change the public API; M2 still follows M1.
 
 Non-goals: production routing, JSON, OpenAPI, middleware, Flare. Prototypes live in `tests/`; `src/muntin` does not change. Acceptance is in `feature_list.json` (M0.5-001 to M0.5-003).
 

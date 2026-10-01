@@ -7,10 +7,10 @@
 #   def raw(req: Request) -> Response
 # on Mojo 1.1.0 without exposing the representation to application code?
 #
-# Candidate: RuntimeApp keeps `app.get["/users/{id}"](get_user)`; the handler
+# Provisional prototype: RuntimeApp keeps `app.get["/users/{id}"](get_user)`; the handler
 # is a runtime value stored as function pointer + per-type trampoline.
 # Fallback: CompileTimeApp, `app.get["/users/{id}", get_user]()`.
-# Candidates that do not compile (closures, rebind) and all diagnostics are
+# Approaches that do not compile (closures, rebind) and all diagnostics are
 # recorded in docs/DX.md ("Handler model").
 
 from std.sys.info import size_of
@@ -314,7 +314,7 @@ def test_typed_return_values_convert_to_response() raises:
 
 
 def test_compile_time_parameter_fallback_dispatches_same_shapes() raises:
-    # Fallback design only; the runtime-value design above is the candidate.
+    # Safe alternative with worse public syntax; compared, not adopted.
     var app = CompileTimeApp()
     app.get["/", root]()
     app.get["/users/{id}", get_user]()
