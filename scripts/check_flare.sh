@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Flare checks (M1-001 to M1-003). Builds and runs compat/flare, the Flare
-# adapter's contract tests and its real localhost round trip (adapters/flare)
-# against the Flare release pinned in pixi.toml's `flare` environment, and
-# checks that the default environment (which builds src/muntin) cannot see
-# Flare. Exits nonzero on any failure.
+# Flare checks (M1-001 to M1-003, M2-001). Builds and runs compat/flare, the Flare
+# adapter's contract tests and its real localhost round trips (adapters/flare:
+# GET /hello, and the typed route GET /users/{id}) against the Flare release
+# pinned in pixi.toml's `flare` environment, and checks that the default
+# environment (which builds src/muntin) cannot see Flare. Exits nonzero on any
+# failure.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -82,7 +83,7 @@ step "build localhost round trip"
 "${FLARE[@]}" build --Werror -I src -I "$adapter" "$roundtrip" -o build/test_localhost_roundtrip
 echo "ok"
 
-step "run localhost round trip (GET /hello over loopback: Flare -> MuntinHandler -> App.handle)"
+step "run localhost round trip (GET /hello and typed GET /users/{id} over loopback: Flare -> MuntinHandler -> App.handle)"
 # Output goes to a file, not a pipe: a leftover child holding the pipe would
 # make the shell wait for it and hide it from the pgrep check below.
 status=0

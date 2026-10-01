@@ -43,7 +43,33 @@ def main() raises:
 
 Unmatched method/path pairs return status 404.
 
-Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, `app.post`, path/query/body extraction, typed response conversion beyond `String`, middleware, state, and compile-time route validation (the route literal is currently only stored as a `String`).
+Typed path parameter (M2-001), proven by `tests/test_app.mojo`, `tests/compile_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo` (via `./scripts/check_flare.sh`):
+
+```mojo
+def get_user(id: Int) -> String:
+    return String(id)
+
+
+var app = App()
+app.get["/hello"](hello)              # () -> String and (Int) -> String share one App
+app.get["/users/{id}"](get_user)      # same registration syntax
+# GET /users/42  -> 200 "42"   (get_user received Int(42))
+# GET /users/abc -> 400 "Bad Request"   (get_user not called)
+# GET /users     -> 404 "Not Found"
+```
+
+Semantics:
+
+- A route literal starts with `/` and is `/`-separated segments. A segment is either static (matched byte for byte) or `{name}`, which matches one non-empty segment; `name` is any non-empty text without braces and is not otherwise validated. A missing leading `/`, `{}`, or braces anywhere else are a compile error (`constraint failed: malformed route literal`). This also applies to `def() -> String` routes: `app.get["hello"](hello)` compiled in M0 and is now rejected.
+- Binding is positional. The handler's one `Int` parameter receives the one `{name}` segment; the name is not compared with the handler's parameter name, because Mojo 1.1.0 reflection does not expose function parameter names. `app.get["/users/{user}"](get_user)` is accepted.
+- `Int` conversion: an optional `-` followed by one or more ASCII digits, within `Int` range (`-9223372036854775808` to `9223372036854775807`); leading zeros are allowed (`/users/042` -> `Int(42)`). Anything else, including forms Mojo's `Int(String)` accepts (`+42`, ` 42`, `4_2`), returns 400 `Bad Request` without calling the handler.
+- The first registered route whose method and path match handles the request: with `/users/me` registered before `/users/{id}`, `GET /users/me` goes to the former. A conversion failure is 400; it does not fall through to later routes.
+- Arity is checked at compile time at the registration call: `app.get["/users/{id}"](hello)` fails with `constraint failed: route declares a path parameter but the handler takes none`; `app.get["/users"](get_user)` and `app.get["/users/{id}/posts/{post}"](get_user)` fail with `constraint failed: handler takes one Int path parameter; route must declare one`.
+- The request path is the raw target, query included (M1 policy), so `/users/42?x=1` is 400 and `/hello?x=1` is 404 until query handling is designed. Percent-encoding is not decoded.
+
+Current handler shapes are exactly `def() -> String` and `def(Int) -> String`, non-raising. Other shapes (another return type such as `User`, more or non-`Int` parameters, `raises`) fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) thin -> String'`.
+
+Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, `app.post`, multiple or non-`Int` path parameters, query/body extraction, typed response conversion beyond `String` (so `get_user(id: Int) -> User` from section 2 is not yet accepted), parameter-name checking, middleware, and state.
 
 Mojo facts discovered while proving the above:
 
@@ -63,7 +89,7 @@ Mojo facts discovered while proving the above:
 
 `tests/test_spike_handler_model.mojo` registers `root() -> String`, `get_user(id: Int) -> User`, and `raw(req: Request) -> Response` in one app with `app.get["/users/{id}"](get_user)`-style calls and dispatches all three through `handle(Request) -> Response`. `GET /users/42` returns `User(42, Alice)` and `GET /users/abc` returns 400. `src/muntin` is unchanged.
 
-Result: the registration shape is feasible on Mojo 1.1.0, so this document's syntax stands. No storage implementation is adopted; the working prototype below is provisional and stays in `tests/` until M2 designs the real router. Approaches compared:
+Result: the registration shape is feasible on Mojo 1.1.0, so this document's syntax stands. The working prototype below is provisional and stays in `tests/`. M2-001 did not adopt it: production `App` stores handlers in a `Variant` of thin function types, which needs no unsafe code for the closed set of shapes it supports (comparison in `docs/ARCHITECTURE.md`, "Routing and handler storage"). Approaches compared:
 
 | Approach | Result | Evidence |
 |---|---|---|
@@ -150,6 +176,8 @@ get_user(id=42)
 ```
 
 Application code should not manually parse common path types.
+
+Status (M2-001): `app.get["/users/{id}"](get_user)` with `def get_user(id: Int) -> String` is proven, through `TestClient` and a real Flare loopback request; see "Proven vs. target status" for matching and conversion rules. Returning `User` waits for typed response conversion.
 
 Where Mojo makes it practical, route/handler mismatches should be diagnosed at compile time. A route declaring `{id}` should not silently bind to an unrelated handler parameter. If compile-time name matching is not practical, fail as early and clearly as the language permits.
 

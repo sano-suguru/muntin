@@ -44,6 +44,25 @@ for t in tests/test_*.mojo; do
 done
 echo "ok"
 
+step "compile-time route checks (tests/compile_fail must not build)"
+for t in tests/compile_fail/*.mojo; do
+    expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
+    if [[ -z "$expected" ]]; then
+        echo "error: $t has no expected diagnostic" >&2
+        exit 1
+    fi
+    if "${MOJO[@]}" build -I src "$t" -o "$tmp/compile_fail" >"$tmp/log" 2>&1; then
+        echo "error: $t compiled; Muntin no longer rejects it" >&2
+        exit 1
+    fi
+    if ! grep -qF "constraint failed: $expected" "$tmp/log"; then
+        cat "$tmp/log" >&2
+        echo "error: $t failed without 'constraint failed: $expected'" >&2
+        exit 1
+    fi
+    echo "ok: $t -> $expected"
+done
+
 step "build example"
 "${MOJO[@]}" build --Werror -I src main.mojo -o build/muntin
 echo "ok"
