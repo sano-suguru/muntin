@@ -259,8 +259,13 @@
         "One App registering the typed route is driven through muntin.testing.TestClient and through a real loopback request to Flare's HttpServer serving MuntinHandler; both observe the same status and body for an integer path whose handler output differs from the raw segment (e.g. /users/042 -> '42') and for /users/abc -> 400. Routing and extraction live in Muntin; the adapter is not changed to understand {id}.",
         "Any handler-storage mechanism is safe or, if unsafe, private, justified and contained; the choice and alternatives are recorded in docs/ARCHITECTURE.md. ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh pass locally and in CI on Ubuntu and macOS."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "src/muntin/app.mojo: App.get overloaded on def() thin -> String and def(Int) thin -> String, stored as a Variant (no unsafe code); App.handle matches {name} segments and converts to Int (optional '-', ASCII digits, Int range) before calling the handler, else 400.",
+        "./scripts/test.sh -> exit 0: tests/test_app.mojo 13/13 (/users/42 -> '42', /users/042 -> '42', +42/' 42'/4_2/abc/overflow -> 400 'Bad Request', /users, /users/, /user/42, POST -> 404, exact routes unchanged, first registered match wins). ./scripts/check.sh -> exit 0: 6 tests/compile_fail fixtures rejected with their expected 'constraint failed' text (arity, malformed literal).",
+        "./scripts/check_flare.sh -> exit 0: adapters/flare/test_localhost_roundtrip.mojo 2/2; one App with /hello and /users/{id} over loopback through Flare HttpServer + unchanged MuntinHandler gives /users/42 -> 200 '42', /users/042 -> '42', /users/abc -> 400, /users -> 404, each equal to TestClient; no leftover process. CI verify + flare green on ubuntu-latest (ubuntu24) and macos-latest (macos26).",
+        "Planted mutations each turned a check red (list in AGENT_PROGRESS.md); fresh-context review found no material issue; git diff --check clean."
+      ]
     }
   ]
 }

@@ -60,7 +60,7 @@ app.get["/users/{id}"](get_user)      # same registration syntax
 
 Semantics:
 
-- A route literal is `/`-separated segments. A segment is either static (matched byte for byte) or exactly `{name}`, which matches one non-empty segment. Braces anywhere else are a compile error (`constraint failed: malformed route literal`).
+- A route literal starts with `/` and is `/`-separated segments. A segment is either static (matched byte for byte) or `{name}`, which matches one non-empty segment; `name` is any non-empty text without braces and is not otherwise validated. A missing leading `/`, `{}`, or braces anywhere else are a compile error (`constraint failed: malformed route literal`). This also applies to `def() -> String` routes: `app.get["hello"](hello)` compiled in M0 and is now rejected.
 - Binding is positional. The handler's one `Int` parameter receives the one `{name}` segment; the name is not compared with the handler's parameter name, because Mojo 1.1.0 reflection does not expose function parameter names. `app.get["/users/{user}"](get_user)` is accepted.
 - `Int` conversion: an optional `-` followed by one or more ASCII digits, within `Int` range (`-9223372036854775808` to `9223372036854775807`); leading zeros are allowed (`/users/042` -> `Int(42)`). Anything else, including forms Mojo's `Int(String)` accepts (`+42`, ` 42`, `4_2`), returns 400 `Bad Request` without calling the handler.
 - The first registered route whose method and path match handles the request: with `/users/me` registered before `/users/{id}`, `GET /users/me` goes to the former. A conversion failure is 400; it does not fall through to later routes.

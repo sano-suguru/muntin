@@ -1,5 +1,6 @@
 """Muntin application: route registration and request dispatch."""
 
+from std.os import abort
 from std.utils import Variant
 
 from .http import Request, Response
@@ -137,10 +138,12 @@ struct App(Movable):
                 continue
             if route.handler.isa[_NoArgs]():
                 return Response.text(route.handler[_NoArgs]())
-            var value: Int
-            try:
-                value = _parse_int(captured)
-            except:
-                return Response.text("Bad Request", status=400)
-            return Response.text(route.handler[_IntArg](value))
+            if route.handler.isa[_IntArg]():
+                var value: Int
+                try:
+                    value = _parse_int(captured)
+                except:
+                    return Response.text("Bad Request", status=400)
+                return Response.text(route.handler[_IntArg](value))
+            abort("muntin: unhandled handler shape")
         return Response.text("Not Found", status=404)
