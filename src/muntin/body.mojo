@@ -18,7 +18,7 @@ trait FromBody(Deinitable, Movable):
 
     @staticmethod
     def from_body(body: String) raises -> Self:
-        """Builds the value from the request body, borrowed from the
-        `Request`. Raising rejects the request with 400 `Bad Request`
-        without calling the handler."""
+        """Builds the value from the request body (a copy of
+        `Request.body`, unchanged). Raising rejects the request with 400
+        `Bad Request` without calling the handler."""
         ...

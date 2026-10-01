@@ -75,6 +75,24 @@ def create_user(body: CreateUser) -> String:
     return "created " + body.name
 
 
+struct RawText(FromBody):
+    """Accepts any body, including an empty one, unchanged: a backend that
+    rejected or rewrote a body itself would differ from `TestClient`."""
+
+    var text: String
+
+    def __init__(out self, text: String):
+        self.text = text
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        return Self(body)
+
+
+def echo(body: RawText) -> String:
+    return "[" + body.text + "]"
+
+
 def hello_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -87,6 +105,7 @@ def users_app() -> App:
     app.get["/users/{id}"](get_user)
     app.get["/items?{limit}"](list_items)
     app.post["/users"](create_user)
+    app.post["/echo"](echo)
     return app^
 
 
@@ -208,6 +227,14 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             ),
             (String("/users"), String("Ada"), 400, String("Bad Request")),
             (String("/users"), String(""), 400, String("Bad Request")),
+            # Bodies any backend must deliver unchanged, empty included.
+            (String("/echo"), String(""), 200, String("[]")),
+            (
+                String("/echo"),
+                String(" a=b&c?d \n"),
+                200,
+                String("[ a=b&c?d \n]"),
+            ),
             (String("/users/42"), String("name=Ada"), 404, String("Not Found")),
             (String("/hello"), String("name=Ada"), 404, String("Not Found")),
             (String("/missing"), String("name=Ada"), 404, String("Not Found")),

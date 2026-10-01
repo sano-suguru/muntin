@@ -305,8 +305,8 @@ struct App(Movable):
         network adapters) delivers requests through this method. The first
         registered route whose method and path match handles the request;
         the query takes no part in selecting it. A body route receives
-        `request.body` as its last raw argument; its adapter converts it and
-        answers 400 itself if that fails.
+        `request.body` as its last raw argument; its call trampoline
+        (`_call_body`) converts it and answers 400 itself if that fails.
         """
         var args = List[String]()
         # Indexed, not `for route in self._routes`: on Mojo 1.1.0 List

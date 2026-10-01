@@ -55,6 +55,19 @@ struct RenameTeam(FromBody):
         return Self(body.upper())
 
 
+struct RawText(FromBody):
+    """Accepts any body, including an empty one, unchanged."""
+
+    var text: String
+
+    def __init__(out self, text: String):
+        self.text = text
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        return Self(body)
+
+
 def create_user(body: CreateUser) -> String:
     _ = setenv(HANDLER_CALLED, "1")
     return "created " + body.name
@@ -72,6 +85,10 @@ def rename_team(body: RenameTeam) -> String:
     return "team " + body.name
 
 
+def echo(body: RawText) -> String:
+    return "[" + body.text + "]"
+
+
 def list_users() -> String:
     return "users"
 
@@ -87,6 +104,7 @@ def body_app() -> App:
     app.post["/users"](create_user)
     app.post["/stored"](store_user)
     app.post["/teams"](rename_team)
+    app.post["/echo"](echo)
     return app^
 
 
@@ -126,6 +144,15 @@ def test_body_comes_from_the_request_body_only() raises:
     )
     assert_equal(client.post("/users?name=Bob", "").status, 400)
     assert_equal(client.post("/users?x=1", "name=Eve").text(), "created Eve")
+
+
+def test_body_reaches_from_body_byte_for_byte() raises:
+    var app = body_app()
+    var client = TestClient(app)
+    for body in ["", " a=b&c?d \n", "\t", "name=Ada "]:
+        assert_equal(client.post("/echo", body).status, 200, body)
+        assert_equal(client.post("/echo", body).text(), "[" + body + "]", body)
+    assert_equal(client.post("/echo?x=1", "y").text(), "[y]")
 
 
 def test_unmatched_method_or_path_is_404_without_conversion() raises:
