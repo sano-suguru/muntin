@@ -302,8 +302,13 @@
         "docs/ARCHITECTURE.md records the candidates, diagnostics, rejected alternatives with reasons, the decision, the Variant growth projection, primary sources, and objective reconsideration thresholds. src/muntin is unchanged; retained probes are run or compile-checked by check.sh/test.sh.",
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass; a fresh-context review finds no unresolved material issue."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "tests/handler_storage_spike.mojo (library side) + tests/test_spike_handler_storage.mojo (app side): Variant and typed-box models store (), (Int), (String), (Int, Int), (Int, String) -> String and (Int) -> User in one list behind one handle(Request); the box also takes app-defined CreateUser parameters and raising handlers; ArcPointer count oracle for erase/copy/move/drop. src/muntin unchanged.",
+        "./scripts/test.sh -> exit 0 (test_app 23/23, M0.5 spike 4/4, storage spike 7/7). ./scripts/check.sh -> exit 0 (13 compile_fail + 12 tests/spike_fail fixtures with their quoted 1.1.0 diagnostics). ./scripts/check_flare.sh -> exit 0 (adapter 7/7, loopback 2/2). git diff --check clean.",
+        "Planted mutations, each red: box copy/clone sharing and double drop (crash), missing drop and move-without-free (count oracle), removed Variant dispatch branch (compile error), new Variant shape without an arm (no matching get). Decision and sources in docs/ARCHITECTURE.md.",
+        "Fresh-context review: no material issue; its findings (deciding-fact wording, body-type evidence, unsafe count, move mutation, fixture count) were applied."
+      ]
     }
   ]
 }

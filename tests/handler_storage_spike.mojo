@@ -6,6 +6,7 @@
 # test.sh runs it; src/muntin is unchanged. Decision and evidence:
 # docs/ARCHITECTURE.md, "Handler storage decision (M2)".
 
+from std.builtin.rebind import downcast
 from std.memory import MutOpaquePointer, OwnedPointer
 
 from muntin import Request, Response
@@ -128,10 +129,21 @@ struct _Erased(Copyable, Movable):
 
 
 # Argument conversion is generic, so registration grows with arity, not with
-# parameter types. Types are selected by compile-time type equality: `Int` is
-# `comptime Int = Scalar[DType.int]` on 1.1.0, so `__extension Int(...)`
-# fails with "can't find a struct named 'Int'". An unsupported parameter type
-# is a compile error at the registration call.
+# parameter types. Muntin types are selected by compile-time type equality:
+# `Int` is `comptime Int = Scalar[DType.int]` on 1.1.0, so
+# `__extension Int(...)` fails with "can't find a struct named 'Int'".
+# Application-defined types (a request body such as `CreateUser`) conform to
+# `FromArg` and are reached through `conforms_to` + `downcast`
+# (std/builtin/rebind.mojo). An unsupported parameter type is a compile error
+# at the registration call.
+
+
+trait FromArg(Deinitable, Movable):
+    """Conversion for application-defined parameter types (bodies)."""
+
+    @staticmethod
+    def from_arg(s: String) raises -> Self:
+        ...
 
 
 def _from_arg[A: Movable & Deinitable](s: String) raises -> A:
@@ -139,6 +151,8 @@ def _from_arg[A: Movable & Deinitable](s: String) raises -> A:
         return rebind_var[A](_int(s))
     elif A == String:
         return rebind_var[A](s.copy())
+    elif conforms_to(A, FromArg):
+        return rebind_var[A](downcast[A, FromArg].from_arg(s))
     else:
         comptime assert False, "unsupported handler parameter type"
 

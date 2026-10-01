@@ -20,6 +20,7 @@ from std.utils import Variant
 
 from handler_storage_spike import (
     BoxApp,
+    FromArg,
     Reply,
     _Erased,
     _count_params,
@@ -70,6 +71,25 @@ def risky(id: Int) raises -> String:
 
 def get_user(id: Int) -> User:
     return User(id, "Alice")
+
+
+@fieldwise_init
+struct CreateUser(FromArg):
+    """Stands in for an application-defined request body."""
+
+    var name: String
+
+    @staticmethod
+    def from_arg(s: String) raises -> Self:
+        return Self("body:" + s)
+
+
+def create_user(body: CreateUser) -> String:
+    return body.name
+
+
+def update_user(id: Int, body: CreateUser) -> User:
+    return User(id, body.name)
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +283,19 @@ def test_box_stores_six_shapes_in_one_list() raises:
     _check_box(app)
     var moved = app^
     _check_box(moved)
+
+
+def test_box_takes_app_defined_parameter_types() raises:
+    # The body half of the deciding fact: a library-side Variant could not
+    # name `CreateUser` either.
+    var app = _box_app()
+    app.get["/create/{body}"](create_user)
+    app.get["/update/{id}/{body}"](update_user)
+    assert_equal(app.handle(Request("GET", "/create/bob")).text(), "body:bob")
+    assert_equal(
+        app.handle(Request("GET", "/update/3/z")).text(), "User(3, body:z)"
+    )
+    _check_box(app)
 
 
 def test_box_raising_handler() raises:
