@@ -1,9 +1,11 @@
 """Muntin application: route registration and request dispatch."""
 
 from ._handler_storage import _Erased
+from .body import FromBody
 from .http import Request, Response
 
-# Handler shapes App accepts: `def() -> String` and `def(Int) -> String`,
+# Handler shapes App accepts: `def() -> String` and `def(Int) -> String` for
+# GET, and `def(B) -> String` for POST with `B: FromBody` (M2-006), all
 # non-raising. Mojo 1.1.0 function types spelled without `thin` are traits
 # and cannot be stored, so `App.get` takes thin function values; ordinary
 # `def` functions convert implicitly. Each shape has one `App.get` overload
@@ -12,7 +14,9 @@ from .http import Request, Response
 # together in an `_Erased` box (`_handler_storage.mojo`), so dispatch is one
 # call whatever the shape. Where a value comes from (path segment or query
 # key) is route data, not part of the shape, so `_call_int` serves both
-# `/users/{id}` and `/items?{limit}`.
+# `/users/{id}` and `/items?{limit}`. Whether a route takes the request body
+# is route data too (`_Route.body`): `App.handle` appends the body as the
+# last raw argument, and `_call_body` converts it.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -148,6 +152,10 @@ def _query_value(query: String, key: String) raises -> String:
     return value
 
 
+def _bad_request() -> Response:
+    return Response.text("Bad Request", status=400)
+
+
 def _call_none(handler: def() thin -> String, args: List[String]) -> Response:
     return Response.text(handler())
 
@@ -160,6 +168,27 @@ def _call_int(
     return Response.text(handler(_parse_int(args[0])))
 
 
+def _call_body[
+    B: Movable & Deinitable
+](handler: def(var B) thin -> String, args: List[String]) -> Response:
+    """Converts the one argument, the request body, with `B.from_body` and
+    moves the value into `handler`; answers 400 itself, without calling
+    `handler`, if `from_body` raises.
+
+    `B` is refined here rather than bounded, as in `App.post`: forwarding a
+    handler with an explicit `B` to a callee that requires `B: FromBody`
+    fails on Mojo 1.1.0 (docs/ARCHITECTURE.md, "Argument extraction
+    decision (M2-005)").
+    """
+    comptime assert conforms_to(B, FromBody)
+    var body: B
+    try:
+        body = B.from_body(args[0])
+    except:
+        return _bad_request()
+    return Response.text(handler(body^))
+
+
 struct _Route(Movable):
     var method: String
     var path: String
@@ -167,13 +196,20 @@ struct _Route(Movable):
     against."""
     var query_key: String
     """Key of the route's `{key}` query parameter, or empty if it has none."""
+    var body: Bool
+    """Whether the handler's last argument is the request body."""
     var handler: _Erased
 
     def __init__(
-        out self, method: String, route: StaticString, var handler: _Erased
+        out self,
+        method: String,
+        route: StaticString,
+        var handler: _Erased,
+        body: Bool = False,
     ):
         """Splits `route` like `Request` splits a target: at its first `?`."""
         self.method = method
+        self.body = body
         var mark = route.find("?")
         if mark < 0:
             self.path = String(route)
@@ -229,13 +265,48 @@ struct App(Movable):
             _Route("GET", path, _Erased.__init__[call=_call_int](handler))
         )
 
+    def post[
+        B: Movable & Deinitable, //, path: StaticString
+    ](mut self, handler: def(var B) thin -> String):
+        """Registers `handler` for `POST path`, where `handler`'s one
+        parameter is the request body and `path` declares no path or query
+        parameter. `B` is an application type conforming to `FromBody`; the
+        body is converted with `B.from_body` before `handler` runs, and a
+        conversion failure yields 400 without calling `handler`. A handler
+        may declare `body: B` or `var body: B`; `B` may be move-only."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 0, (
+            "handler takes only the request body; route must declare no path"
+            " or query parameter"
+        )
+        comptime assert not B == Int, (
+            "Int is a route-value type, never the request body; the body"
+            " parameter's type must conform to FromBody"
+        )
+        comptime assert conforms_to(B, FromBody), (
+            "the handler's parameter is the request body; its type must"
+            " conform to FromBody"
+        )
+        self._routes.append(
+            _Route(
+                "POST",
+                path,
+                _Erased.__init__[call=_call_body[B]](handler),
+                body=True,
+            )
+        )
+
     def handle(self, request: Request) -> Response:
         """Dispatches `request` through the application's routes.
 
         This is the backend seam: every transport (the in-memory TestClient,
         network adapters) delivers requests through this method. The first
         registered route whose method and path match handles the request;
-        the query takes no part in selecting it.
+        the query takes no part in selecting it. A body route receives
+        `request.body` as its last raw argument; its adapter converts it and
+        answers 400 itself if that fails.
         """
         var args = List[String]()
         # Indexed, not `for route in self._routes`: on Mojo 1.1.0 List
@@ -250,6 +321,8 @@ struct App(Movable):
             try:
                 if route.query_key:
                     args.append(_query_value(request.query, route.query_key))
+                if route.body:
+                    args.append(request.body)
                 return route.handler.invoke(args)
             except:
                 return Response.text("Bad Request", status=400)

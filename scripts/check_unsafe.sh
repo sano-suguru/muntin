@@ -3,9 +3,9 @@
 # Fails if, anywhere in src/muntin except src/muntin/_handler_storage.mojo,
 # a line names an unsafe pointer/ownership operation or touches the box's
 # fields; if a module imports anything but `_Erased` from it; if the package
-# root exports it; or if the module imports anything but the standard
-# library and `.http`. A confinement guard, not a
-# safety proof: the invariant itself is in the module docstring and
+# root exports it; if the module imports anything but the standard library
+# and `.http`; or if it names request or body data (M2-006). A confinement
+# guard, not a safety proof: the invariant itself is in the module docstring and
 # docs/ARCHITECTURE.md "Handler storage decision (M2)". tests/ is not checked
 # (spikes and storage tests use these operations on purpose).
 set -euo pipefail
@@ -46,6 +46,13 @@ fi
 if grep -nE '^[[:space:]]*(from|import)[[:space:]]' "$storage" |
     grep -vE '^[0-9]+:[[:space:]]*from[[:space:]]+(std\.[[:alnum:]_.]+|\.http)[[:space:]]+import[[:space:]]'; then
     echo "error: $storage may import only std and .http" >&2
+    status=1
+fi
+
+# Request data reaches handler storage only as the adapters' raw argument
+# strings: body conversion and request handling stay in app.mojo (M2-006).
+if grep -nE 'FromBody|from_body|Request|\.body\b' "$storage"; then
+    echo "error: $storage handles request or body data; keep it in the adapters" >&2
     status=1
 fi
 
