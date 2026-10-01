@@ -21,9 +21,10 @@ if [[ ! -f "$storage" ]]; then
 fi
 
 # Operations the typed box uses (`unsafe_*`, `MutUntrackedOrigin`,
-# `MutOpaquePointer`, `OwnedPointer`, `unsafe_bitcast`), any other `Unsafe*`
-# API, and the `_Erased` fields whose pairing the module guarantees.
-pattern='[Uu]nsafe|Untracked|OpaquePointer|OwnedPointer|bitcast|\._(box|invoke|drop)\b'
+# `MutOpaquePointer`, `OwnedPointer`, `ThinAllocation`, `unsafe_bitcast`),
+# any other `Unsafe*` API, and the `_Erased`/`_Header` fields whose pairing
+# the module guarantees.
+pattern='[Uu]nsafe|Untracked|OpaquePointer|OwnedPointer|Allocation|bitcast|\._(header|invoke|drop|value)\b'
 if grep -rnE --include='*.mojo' "$pattern" "$dir" | grep -v "^$storage:"; then
     echo "error: unsafe handler-storage operations outside $storage" >&2
     status=1

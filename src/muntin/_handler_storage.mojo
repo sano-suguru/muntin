@@ -13,31 +13,45 @@ represents a function value. Ownership returns to an `OwnedPointer[F]`
 through its documented `unsafe_from_opaque_pointer` constructor, whose
 contract is this round trip.
 
+The opaque pointer and the two functions that may restore it as `F` are
+kept together in one heap `_Header`, and `_Erased`'s only field is the
+move-only `ThinAllocation[_Header]` that owns it. Mojo 1.1.0 has no private
+fields, so code outside this module can name `_Erased`'s field; it still
+cannot copy, overwrite or move the handle out (compile errors, pinned by
+`tests/storage_fail/downstream_*.mojo`), and reaching the header's fields
+takes `unsafe_ptr()` or the stdlib's own private `ThinAllocation._ptr`.
+Swapping two handles keeps each pairing intact.
+
 Unsafe operations, all in this module:
 - `OwnedPointer.unsafe_take_allocation` + `Allocation.unsafe_leak`: the
-  allocation stops being owned by an `OwnedPointer[F]` (`_erase`);
+  value's allocation stops being owned by an `OwnedPointer[F]` (`_erase`);
 - `Pointer.unsafe_bitcast`: `F` to `NoneType` when erasing, `NoneType` to
   `F` when invoking (`_erase`, `_invoke_box`);
 - `[]` on the untracked `Pointer[F, MutUntrackedOrigin]` (`_invoke_box`);
 - `OwnedPointer(unsafe_from_opaque_pointer=)`: ownership restored as `F`
-  and released (`_drop_box`).
+  and released (`_drop_box`);
+- `OwnedPointer.unsafe_take_allocation` + `Allocation.into_thin`,
+  `ThinAllocation.unsafe_ptr`, `ThinAllocation.unsafe_leak` +
+  `OwnedPointer(unsafe_from_raw_pointer=)`: the header's allocation is made,
+  read, and released (`_Erased`).
 
 Invariant, which the compiler does not check (`MutUntrackedOrigin` is an
-origin the lifetime checker does not track, and Mojo 1.1.0 has no private
-fields):
-- `_box` points to one live `F` allocated by `OwnedPointer[F]`, owned by
-  exactly one `_Erased`;
-- `_box`, `_invoke` and `_drop` are set only by `_Erased.__init__` (and
-  carried unchanged by the synthesized move), which instantiates `_invoke_box` and `_drop_box` with the same `F` it
-  allocated, so the pointer is only ever restored as that `F`;
-- the pointer never leaves this module: `_Erased` exposes only `invoke`,
-  and other modules import only `_Erased` (`check_unsafe.sh`);
-- `_Erased` is `Movable` and not `Copyable`: a move transfers the pointer
-  without running `__deinit__` on the source, and `__deinit__` frees the
-  allocation exactly once, so the allocation outlives every `invoke`.
+origin the lifetime checker does not track):
+- `_value` points to one live `F` allocated by `OwnedPointer[F]`, and its
+  header is owned by exactly one `_Erased`;
+- a header is written only by `_Erased.__init__`, which instantiates
+  `_invoke_box` and `_drop_box` with the same `F` it allocated, so the
+  pointer is only ever restored as that `F`;
+- `_Erased` exposes only `invoke`; other modules in `src/muntin` import
+  only `_Erased` (`check_unsafe.sh`);
+- `_Erased` is `Movable` and not `Copyable`: a move transfers the handle
+  without running `__deinit__` on the source, `__deinit__` frees the value
+  and then the header exactly once, and `invoke` borrows the owning
+  `_Erased`, so both allocations outlive every call.
 """
 
 from std.memory import MutOpaquePointer, OwnedPointer
+from std.memory.alloc import ThinAllocation
 
 from .http import Response
 
@@ -64,12 +78,19 @@ def _drop_box[F: Movable & Deinitable](box: _Box):
     _ = OwnedPointer[F](unsafe_from_opaque_pointer=box)
 
 
+@fieldwise_init
+struct _Header(Movable):
+    """A boxed value and the two functions instantiated for its type."""
+
+    var _invoke: def(_Box, List[String]) raises thin -> Response
+    var _drop: def(_Box) thin
+    var _value: _Box
+
+
 struct _Erased(Movable):
     """Owns one handler value of a type known only at registration."""
 
-    var _box: _Box
-    var _invoke: def(_Box, List[String]) raises thin -> Response
-    var _drop: def(_Box) thin
+    var _header: ThinAllocation[_Header]
 
     def __init__[
         F: Movable & Deinitable, //, call: _Call[F]
@@ -79,13 +100,19 @@ struct _Erased(Movable):
         `call` shares `F` with `value`, so a trampoline for another type is
         rejected here at compile time.
         """
-        self._box = _erase(OwnedPointer(value^))
-        self._invoke = _invoke_box[call]
-        self._drop = _drop_box[F]
+        var header = _Header(
+            _invoke_box[call], _drop_box[F], _erase(OwnedPointer(value^))
+        )
+        self._header = (
+            OwnedPointer(header^).unsafe_take_allocation().into_thin()
+        )
 
     def __deinit__(deinit self):
-        self._drop(self._box)
+        var header = self._header^.unsafe_leak()
+        header[]._drop(header[]._value)
+        _ = OwnedPointer[_Header](unsafe_from_raw_pointer=header)
 
     def invoke(self, args: List[String]) raises -> Response:
         """Calls the boxed value with `args`; raises if `call` does."""
-        return self._invoke(self._box, args)
+        ref header = self._header.unsafe_ptr()[]
+        return header._invoke(header._value, args)
