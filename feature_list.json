@@ -289,6 +289,26 @@
         "./scripts/check_flare.sh -> exit 0: adapter 7/7; loopback round trip 2/2 with /hello?x=1, /users/42?x=1, /items?limit=010, /items?other=z&limit=10, /items, /items?limit=abc, /items?limit=1&limit=2, /missing?limit=1 each equal to TestClient; no leftover process. CI verify + flare green on ubuntu-latest (ubuntu24) and macos-latest (macos26).",
         "16 planted mutations each turned a check red (list in AGENT_PROGRESS.md; TestClient stripping counted once per check); fresh-context review found no material issue (its doc nits fixed); acceptance unchanged since it was committed before the implementation; git diff --check clean."
       ]
+    },
+    {
+      "id": "M2-003",
+      "priority": 203,
+      "category": "feasibility_spike",
+      "description": "Decide production handler storage before any new handler shape, with Mojo 1.1.0 compiler evidence; production storage unchanged.",
+      "acceptance": [
+        "Candidates compared in isolated spikes outside src/muntin: the closed Variant (baseline), safe concrete storage (trait fields, Some, List of a trait, generic wrappers, closures), the M0.5 typed trampoline/erasure direction, and compile-time specialization. Each is tested or eliminated with a pinned-compiler result.",
+        "Representative shapes () -> String, (Int) -> String, (String) -> String, (Int, Int) -> String, (Int, String) -> String and (Int) -> User, with User defined in the application module, are stored together in one route list and dispatched through one handle(Request) -> Response by every viable candidate, before and after moving the app. The registration shape app.get[\"/users/{id}\"](get_user) is a hard requirement.",
+        "Any unsafe candidate documents what is erased, its representation, size/alignment, exact restore and type pairing, owner and origin, App move/copy, reliance on function-value representation, and raises/return-type feasibility, with executable ownership and pairing evidence and planted mutations.",
+        "docs/ARCHITECTURE.md records the candidates, diagnostics, rejected alternatives with reasons, the decision, the Variant growth projection, primary sources, and objective reconsideration thresholds. src/muntin is unchanged; retained probes are run or compile-checked by check.sh/test.sh.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": true,
+      "evidence": [
+        "tests/handler_storage_spike.mojo (library side) + tests/test_spike_handler_storage.mojo (app side): Variant and typed-box models store (), (Int), (String), (Int, Int), (Int, String) -> String and (Int) -> User in one list behind one handle(Request); the box also takes app-defined CreateUser parameters and raising handlers; ArcPointer count oracle for erase/copy/move/drop. src/muntin unchanged.",
+        "./scripts/test.sh -> exit 0 (test_app 23/23, M0.5 spike 4/4, storage spike 7/7). ./scripts/check.sh -> exit 0 (13 compile_fail + 12 tests/spike_fail fixtures with their quoted 1.1.0 diagnostics). ./scripts/check_flare.sh -> exit 0 (adapter 7/7, loopback 2/2). git diff --check clean.",
+        "Planted mutations, each red: box copy/clone sharing and double drop (crash), missing drop and move-without-free (count oracle), removed Variant dispatch branch (compile error), new Variant shape without an arm (no matching get). Decision and sources in docs/ARCHITECTURE.md.",
+        "Fresh-context review: no material issue; its findings (deciding-fact wording, body-type evidence, unsafe count, move mutation, fixture count) were applied."
+      ]
     }
   ]
 }
