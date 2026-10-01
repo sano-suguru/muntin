@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Flare checks (M1-001, M1-002). Builds and runs compat/flare and the Flare
-# adapter's contract tests (adapters/flare) against the Flare release pinned
-# in pixi.toml's `flare` environment, and checks that the default environment
-# (which builds src/muntin) cannot see Flare. Exits nonzero on any failure.
+# Flare checks (M1-001 to M1-003). Builds and runs compat/flare, the Flare
+# adapter's contract tests and its real localhost round trip (adapters/flare)
+# against the Flare release pinned in pixi.toml's `flare` environment, and
+# checks that the default environment (which builds src/muntin) cannot see
+# Flare. Exits nonzero on any failure.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -13,6 +14,7 @@ fixture=compat/flare/flare_smoke.mojo
 adapter=adapters/flare
 adapter_tests=$adapter/test_muntin_flare.mojo
 serve_probe=$adapter/serve_probe.mojo
+roundtrip=$adapter/test_localhost_roundtrip.mojo
 
 step() { printf '\n== %s\n' "$*"; }
 
@@ -76,8 +78,36 @@ step "serve probe (compile-only: HttpServer.serve accepts MuntinHandler)"
 "${FLARE[@]}" build --Werror -I src -I "$adapter" "$serve_probe" -o build/serve_probe
 ./build/serve_probe
 
+step "build localhost round trip"
+"${FLARE[@]}" build --Werror -I src -I "$adapter" "$roundtrip" -o build/test_localhost_roundtrip
+echo "ok"
+
+step "run localhost round trip (GET /hello over loopback: Flare -> MuntinHandler -> App.handle)"
+# Output goes to a file, not a pipe: a leftover child holding the pipe would
+# make the shell wait for it and hide it from the pgrep check below.
+status=0
+# NO_PROXY keeps Flare's client from routing loopback through an HTTP_PROXY.
+NO_PROXY=127.0.0.1 ./build/test_localhost_roundtrip >"$tmp/roundtrip.log" 2>&1 || status=$?
+cat "$tmp/roundtrip.log"
+# The test forks a server child; it must be reaped, not left serving.
+leftover='^\./build/test_localhost_roundtrip$'
+if pgrep -f "$leftover"; then
+    pkill -KILL -f "$leftover" || true
+    echo "error: $roundtrip left a server process behind" >&2
+    exit 1
+fi
+if ((status != 0)); then
+    echo "error: localhost round trip failed" >&2
+    exit 1
+fi
+if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/roundtrip.log"; then
+    echo "error: $roundtrip ran no tests" >&2
+    exit 1
+fi
+echo "ok: no server process left behind"
+
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe"; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip"; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1

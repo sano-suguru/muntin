@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "project": "Muntin",
-  "active_milestone": "M1",
+  "active_milestone": "M2",
   "rules": {
     "passing_requires_executable_evidence": true,
     "do_not_edit_acceptance_to_match_implementation": true,
@@ -230,11 +230,18 @@
       "description": "Prove a real localhost HTTP round trip through Flare and Muntin.",
       "acceptance": [
         "A real local HTTP request enters through Flare, crosses the Muntin adapter, dispatches a Muntin route, and returns the expected response.",
-        "The equivalent application behavior still passes through the in-memory backend.",
+        "Concretely: a real HTTP client sends GET /hello over a loopback TCP connection to Flare's HttpServer (bind/serve) serving MuntinHandler, which calls App.handle on an App whose GET /hello handler returns \"hello\"; the client observes status 200 and body exactly \"hello\".",
+        "The equivalent application behavior still passes through the in-memory backend: TestClient on the same App registration returns the same status and body.",
+        "The network test binds loopback only, does not race server readiness, bounds every wait, and leaves no server process behind; ./scripts/check_flare.sh runs it and passes in CI on both Ubuntu and macOS.",
         "All M0 checks remain passing without weakening their intent."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "adapters/flare/test_localhost_roundtrip.mojo: forked child runs HttpServer.bind(SocketAddr.localhost(0)).serve(MuntinHandler(hello_app())); parent's HttpClient GET http://127.0.0.1:<port>/hello -> 200 'hello' (== TestClient(hello_app()).get(\"/hello\")), GET /missing -> 404 'Not Found'. Readiness = bind (already listening); 5 s client timeouts; SIGKILL+waitpid in finally; child alarm(30).",
+        "./scripts/check_flare.sh -> exit 0: round trip 1/1 (wire: HTTP/1.1 200 'OK', Content-Length 5, no Content-Type), pgrep finds no leftover; default env cannot build it. CI flare job green on ubuntu-latest (ubuntu24) and macos-latest (macos26).",
+        "Planted mutations each turn it red (list in AGENT_PROGRESS.md), including bypassing App.handle and removing child cleanup.",
+        "./scripts/check.sh, ./scripts/test.sh, git diff --check -> exit 0; src/muntin unchanged."
+      ]
     },
     {
       "id": "M2-001",
