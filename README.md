@@ -98,7 +98,7 @@ pixi install
 ./scripts/check.sh   # toolchain version, formatting, architecture boundary, package + example build
 ./scripts/test.sh    # executable tests in tests/test_*.mojo
 git diff --check
-./scripts/check_flare.sh  # Flare compatibility (installs the separate `flare` environment)
+./scripts/check_flare.sh  # Flare compatibility + adapter contract tests (separate `flare` environment)
 ```
 
 `pixi run check` and `pixi run test` run the same scripts. `pixi run format` formats sources.

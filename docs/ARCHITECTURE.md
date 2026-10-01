@@ -127,9 +127,18 @@ Requests and responses own their data (`String` fields, copied in). No backend b
 
 `scripts/check_boundaries.sh` enforces A2 mechanically: it fails if any module under `src/muntin` imports or mentions Flare or socket modules. `scripts/check.sh` runs it.
 
-When `muntin/adapters/flare` arrives in M1 it must live outside the boundary-checked core path or the check must be scoped to exclude only that adapter directory.
+The Flare adapter (M1-002) lives outside the boundary-checked core path, in `adapters/flare/muntin_flare.mojo`, and imports only Flare and Muntin's public `App`/`Request`/`Response`; nothing under `src/` imports it.
 
 Flare (M1-001) is a dependency of the separate `flare` pixi environment only (`[feature.flare]` in `pixi.toml`, pinned to the released tag `v0.11.0`; `pixi.lock` records commit `59bda50f`). The default environment, which `check.sh` and `test.sh` use to build and test `src/muntin`, does not have Flare on its module path. `compat/flare/flare_smoke.mojo` is a Flare-only compatibility fixture (no Muntin import); `scripts/check_flare.sh` builds and runs it in the `flare` environment and fails if the same fixture builds in the default environment.
+
+### Flare adapter (M1-002)
+
+```text
+flare.http.Request -> to_muntin_request -> muntin.Request
+  -> App.handle -> muntin.Response -> to_flare_response -> flare.http.Response
+```
+
+`MuntinHandler` owns an `App` and implements Flare's `Handler` trait, so its `serve(Request) -> Response` is the call Flare's server makes; it does no routing of its own. Conversion is by copy: method and the request target (`url`, path plus query) verbatim, so routing matches the in-memory backend; body bytes decoded into a `String` as lossy UTF-8; headers, version and peer dropped. The response copies status and body bytes, leaves the reason for Flare to derive, and sets no headers. The policy is listed in the module docstring. `adapters/flare/test_muntin_flare.mojo` tests it without a socket; `check_flare.sh` builds it with `--Werror`, runs it, and checks that the adapter does not build in the default environment. CI runs `check_flare.sh` on Ubuntu and macOS from a cold `pixi install --locked -e flare`.
 
 ### Handler storage prototype (M0.5, provisional)
 
