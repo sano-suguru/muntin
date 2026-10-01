@@ -3,7 +3,13 @@
 This file is a concise factual handoff between coding sessions. Keep it short enough to read at the start of every session.
 
 ## Active milestone
-M0 — architecture bootstrap (all M0 features verified; see `feature_list.json`).
+M0.5 — typed handler feasibility spike (M0.5-001..003 verified). M0 is verified in PR #1 with CI green; M0.5 is PR #2 (stacked on #1).
+
+## M0.5 result
+- The runtime handler value syntax `app.get["/users/{id}"](get_user)` works: `tests/test_spike_handler_model.mojo` dispatches `() -> String`, `(Int) -> User`, `(Request) -> Response` from one app through `handle(Request)`. `src/muntin` unchanged.
+- Feasibility, not adoption: a prototype storing the function pointer as `Int` bits + same-type trampoline works, but it is unsafe and provisional until M2. Closures and `rebind` fail (diagnostics in `docs/DX.md`). The compile-time handler parameter works but worsens the public syntax.
+- Return conversion: a Muntin-owned conversion from typed return values to `Response` is the direction; the `ToResponse` trait and its `__extension` conformances are provisional.
+- Route/handler arity mismatch fails at compile time. Parameter names cannot be reflected, so binding is positional.
 
 ## Current state
 - Toolchain: **Mojo 1.1.0 (8189361e)** via pixi 0.81.0, pinned by `pixi.lock`. Environment was not reinstalled or reconfigured; `pixi.toml` only gained `check`/`test` tasks pointing at the scripts.
@@ -38,7 +44,7 @@ M0 — architecture bootstrap (all M0 features verified; see `feature_list.json`
 - `muntin.testing` is imported by `main.mojo` only because `app.run()` does not exist; it is not the canonical example.
 
 ## Risks for later milestones
-- M2: typed handlers such as `get_user(id: Int) -> User` need heterogeneous route storage (type erasure or a trampoline into a uniform `Request -> Response` entry). Not yet shown to be expressible in Mojo 1.1.0 with a runtime handler argument; spike this before freezing `app.get[path](handler)` for typed handlers.
+- M2: the provisional handler storage relies on `Pointer.unsafe_bitcast` of thin function values; re-run the spike test on every Mojo upgrade. Raising handlers, closures, and non-`Int` path parameters are not prototyped.
 - M1: `check_boundaries.sh` scans all of `src/muntin`, so a Flare adapter at `src/muntin/adapters/flare` would fail it. Place the adapter outside `src/muntin` or scope the check deliberately.
 - M1: Request/Response have no headers or content type; the adapter must choose defaults.
 
@@ -46,4 +52,4 @@ M0 — architecture bootstrap (all M0 features verified; see `feature_list.json`
 None.
 
 ## Next smallest step
-M0.5 typed-handler feasibility spike, before Flare: can one app store `def() -> String`, `def(Int) -> User` and `def(Request) -> Response` handlers behind `app.get["/users/{id}"](get_user)`? The answer can change the public API, so M1 waits. Defined and executed in PR #2 (`docs/SPEC.md` M0.5, `feature_list.json` M0.5-001..003).
+Accept the M0.5 feasibility result (runtime storage stays provisional until M2). Then M1-001, without exposing or depending on that storage: pick a released Flare tag, verify it builds against Mojo 1.1.0, and pin it outside Muntin core (adapter path excluded from or outside `scripts/check_boundaries.sh`'s scope).
