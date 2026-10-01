@@ -105,7 +105,8 @@ M1 acceptance:
 - compatible Mojo and Flare versions are recorded and reproducible;
 - the adapter lives outside Muntin core and depends inward on Muntin contracts;
 - application handlers keep Muntin-owned signatures;
-- adapter contract tests pass;
+- adapter contract tests pass, converting Flare request -> Muntin `Request` -> `App.handle` -> Muntin `Response` -> Flare response without a socket;
+- the locked `flare` environment installs and `./scripts/check_flare.sh` passes in CI on both Ubuntu and macOS (M1-002);
 - a real localhost HTTP request reaches a Muntin route through Flare and receives the expected response;
 - all M0 architecture tests continue to pass without weakening their intent;
 - any conversion/allocation impedance mismatch is documented.

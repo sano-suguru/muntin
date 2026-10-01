@@ -211,7 +211,9 @@
       "acceptance": [
         "Adapter depends inward on Muntin application contracts.",
         "No application handler signature requires a Flare type.",
-        "Adapter contract tests pass."
+        "Adapter contract tests pass.",
+        "Adapter contract tests convert a Flare Request to a Muntin Request, dispatch it through App.handle, and convert the Muntin Response back to a Flare Response without opening a socket.",
+        "CI installs the locked `flare` environment and ./scripts/check_flare.sh exits 0 on both Ubuntu and macOS runners."
       ],
       "passes": false,
       "evidence": []
