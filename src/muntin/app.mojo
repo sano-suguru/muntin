@@ -1,20 +1,18 @@
 """Muntin application: route registration and request dispatch."""
 
-from std.os import abort
-from std.utils import Variant
-
+from ._handler_storage import _Erased
 from .http import Request, Response
 
-# Handler shapes App can store. Mojo 1.1.0 function types spelled without
-# `thin` are traits and cannot be stored, so handlers are thin function values;
-# ordinary `def` functions convert implicitly. The set is closed: a Variant
-# holds each shape with its own static type, so no handler is ever erased or
-# reinterpreted. Each new shape is a new arm here and in `App.handle`. Where
-# a value comes from (path segment or query key) is route data, not part of
-# the shape, so `_IntArg` serves both `/users/{id}` and `/items?{limit}`.
-comptime _NoArgs = def() thin -> String
-comptime _IntArg = def(Int) thin -> String
-comptime _Handler = Variant[_NoArgs, _IntArg]
+# Handler shapes App accepts: `def() -> String` and `def(Int) -> String`,
+# non-raising. Mojo 1.1.0 function types spelled without `thin` are traits
+# and cannot be stored, so `App.get` takes thin function values; ordinary
+# `def` functions convert implicitly. Each shape has one `App.get` overload
+# and one adapter below, which converts a matched route's raw argument
+# strings and calls the handler. The handler and its adapter are stored
+# together in an `_Erased` box (`_handler_storage.mojo`), so dispatch is one
+# call whatever the shape. Where a value comes from (path segment or query
+# key) is route data, not part of the shape, so `_call_int` serves both
+# `/users/{id}` and `/items?{limit}`.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -85,13 +83,14 @@ def _query_params(route: StaticString) -> Int:
     return n
 
 
-def _match(route: String, path: String, mut captured: String) -> Bool:
+def _match(route: String, path: String, mut args: List[String]) -> Bool:
     """Matches `path` against `route` segment by segment.
 
     Static segments must be equal; a `{name}` segment matches one non-empty
-    segment, which is stored in `captured`. Routes hold at most one parameter
-    (enforced at registration).
+    segment, which is appended to `args` (cleared first). Routes hold at most
+    one parameter (enforced at registration).
     """
+    args.clear()
     var want = route.split("/")
     var got = path.split("/")
     if len(want) != len(got):
@@ -100,7 +99,7 @@ def _match(route: String, path: String, mut captured: String) -> Bool:
         if _is_param(want[i]):
             if got[i].byte_length() == 0:
                 return False
-            captured = String(got[i])
+            args.append(String(got[i]))
         elif want[i] != got[i]:
             return False
     return True
@@ -149,17 +148,29 @@ def _query_value(query: String, key: String) raises -> String:
     return value
 
 
-struct _Route(Copyable, Movable):
+def _call_none(handler: def() thin -> String, args: List[String]) -> Response:
+    return Response.text(handler())
+
+
+def _call_int(
+    handler: def(Int) thin -> String, args: List[String]
+) raises -> Response:
+    """Raises, without calling `handler`, if the one argument is not an
+    integer."""
+    return Response.text(handler(_parse_int(args[0])))
+
+
+struct _Route(Movable):
     var method: String
     var path: String
     """Path part of the route literal; the only part requests are matched
     against."""
     var query_key: String
     """Key of the route's `{key}` query parameter, or empty if it has none."""
-    var handler: _Handler
+    var handler: _Erased
 
     def __init__(
-        out self, method: String, route: StaticString, handler: _Handler
+        out self, method: String, route: StaticString, var handler: _Erased
     ):
         """Splits `route` like `Request` splits a target: at its first `?`."""
         self.method = method
@@ -173,7 +184,7 @@ struct _Route(Copyable, Movable):
             self.query_key = String(
                 route[byte = mark + 2 : route.byte_length() - 1]
             )
-        self.handler = handler
+        self.handler = handler^
 
 
 struct App(Movable):
@@ -196,7 +207,9 @@ struct App(Movable):
         comptime assert (
             _query_params(path) == 0
         ), "route declares a query parameter but the handler takes none"
-        self._routes.append(_Route("GET", path, handler))
+        self._routes.append(
+            _Route("GET", path, _Erased.__init__[call=_call_none](handler))
+        )
 
     def get[path: StaticString](mut self, handler: def(Int) thin -> String):
         """Registers `handler` for `GET path`, where `path` declares exactly
@@ -212,7 +225,9 @@ struct App(Movable):
             "handler takes one Int parameter; route must declare exactly one"
             " path or query parameter"
         )
-        self._routes.append(_Route("GET", path, handler))
+        self._routes.append(
+            _Route("GET", path, _Erased.__init__[call=_call_int](handler))
+        )
 
     def handle(self, request: Request) -> Response:
         """Dispatches `request` through the application's routes.
@@ -222,25 +237,20 @@ struct App(Movable):
         registered route whose method and path match handles the request;
         the query takes no part in selecting it.
         """
-        var captured = String()
-        for route in self._routes:
+        var args = List[String]()
+        # Indexed, not `for route in self._routes`: on Mojo 1.1.0 List
+        # iteration requires a `Copyable` element, and routes are move-only
+        # because each owns its handler box.
+        for i in range(len(self._routes)):
+            ref route = self._routes[i]
             if route.method != request.method or not _match(
-                route.path, request.path, captured
+                route.path, request.path, args
             ):
                 continue
-            if route.handler.isa[_NoArgs]():
-                return Response.text(route.handler[_NoArgs]())
-            if route.handler.isa[_IntArg]():
-                var value: Int
-                try:
-                    if route.query_key:
-                        value = _parse_int(
-                            _query_value(request.query, route.query_key)
-                        )
-                    else:
-                        value = _parse_int(captured)
-                except:
-                    return Response.text("Bad Request", status=400)
-                return Response.text(route.handler[_IntArg](value))
-            abort("muntin: unhandled handler shape")
+            try:
+                if route.query_key:
+                    args.append(_query_value(request.query, route.query_key))
+                return route.handler.invoke(args)
+            except:
+                return Response.text("Bad Request", status=400)
         return Response.text("Not Found", status=404)
