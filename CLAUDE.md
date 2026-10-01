@@ -41,6 +41,14 @@ Keep working while the active goal has unmet, unblocked criteria. A progress sum
 Stop to ask only when user input is genuinely required or before a risky/irreversible external action.
 When the requested work is complete and verified, stop. Do not add unrelated features, docs, refactors, or tests; mention useful follow-ups instead.
 
+## Which document to update
+Update a document only when its subject changed:
+- public API changed → `docs/DX.md`
+- dependency boundary or seam changed → `docs/ARCHITECTURE.md`
+- milestone scope or acceptance changed → `docs/SPEC.md` and `feature_list.json`
+- end of a verified increment → `AGENT_PROGRESS.md`
+- ordinary implementation → code and tests only
+
 ## Canonical verification
 Once bootstrap creates them, prefer:
 - `./scripts/check.sh` for formatting/static/build checks;

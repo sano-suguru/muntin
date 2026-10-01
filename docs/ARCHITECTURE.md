@@ -129,6 +129,10 @@ Requests and responses own their data (`String` fields, copied in). No backend b
 
 When `muntin/adapters/flare` arrives in M1 it must live outside the boundary-checked core path or the check must be scoped to exclude only that adapter directory.
 
+### Handler storage candidate (M0.5)
+
+The M0.5 spike's recommended router design stores heterogeneous handlers by erasing a thin function value to its address bits and restoring it in a trampoline instantiated for the same type. That is unsafe machinery, so under the decision threshold below it may enter `src/muntin` only as a private implementation detail: never in a public signature, with the erase/restore pair inside one generic function, and with the `size_of` guard. The safe fallback (handler as a compile-time parameter) is recorded in `docs/DX.md`. `App.handle(Request) -> Response` is the smallest seam that works for M0; streaming or async may change it later.
+
 ## Request/Response ownership
 
 M0 should choose the simplest ownership model that compiles cleanly and supports deterministic tests. Do not prematurely optimize around zero-copy wire buffers if that leaks backend lifetimes into Muntin's durable API.

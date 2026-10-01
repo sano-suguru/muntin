@@ -59,6 +59,30 @@ Mojo facts discovered while proving the above:
 - `TestClient(app)` borrows without copying via an inferred origin parameter (`struct TestClient[origin: Origin[mut=False]]` holding `Pointer[App, origin]`). The spellings `ImmutOrigin` and `ImmutableOrigin` do not exist in Mojo 1.1.0.
 - Overloading `get` on handler shape (`def() thin -> String` vs. `def(Request) thin -> ...`) resolves correctly in a scratch experiment, so the raw-request escape hatch does not require different registration syntax. Not implemented in M0.
 
+### Handler model (M0.5 spike)
+
+`tests/test_spike_handler_model.mojo` registers `root() -> String`, `get_user(id: Int) -> User`, and `raw(req: Request) -> Response` in one app and dispatches all three through `handle(Request) -> Response`, including `GET /users/42 → User(42, Alice)` and `GET /users/abc → 400`. It does this with two prototypes; `src/muntin` is unchanged.
+
+| | A: runtime value | B: compile-time parameter |
+|---|---|---|
+| Registration | `app.get["/users/{id}"](get_user)` (this document's syntax) | `app.get["/users/{id}", get_user]()` |
+| Storage | the thin function value is erased to its address bits; a trampoline instantiated for the same type restores and calls it | each registration instantiates a trampoline with the handler baked in; entries are already a uniform `def(Request, List[String]) raises thin -> Response` |
+| Unsafe code | two lines in one private generic function (`Pointer(...).unsafe_bitcast`), guarded by `comptime assert size_of[F]() == size_of[Int]()` | none |
+| Compile-time arity check | yes | yes |
+
+Recommendation: A, because it keeps the syntax this document targets and confines the unsafe step to one private function in which erase and restore use the same type parameter, so they cannot drift apart. B is the fallback if the unsafe step is rejected or breaks on a later Mojo release. The decision is made when M2 builds the real router.
+
+Facts measured on Mojo 1.1.0:
+
+- Handler types can be inferred from a runtime argument: `def get[R: ...](handler: def(Int) thin -> R)` binds `R` from `get_user`.
+- Closures cannot be the storage. A nested `def` must declare captures (`{var handler}`); without them the compiler reports `Could not infer capture convention of the captured value handler`. Each closure has its own concrete type, so closures of different handlers cannot share one `List` element type.
+- `rebind` between thin function types of different signatures is rejected (`rebind input type ... does not match result type`). Address-bit erasure works: thin function values are 8 bytes, the same as `Int`.
+- Generic return types used by value need `Deinitable`; with only `Writable` the compiler reports `abandoned without being explicitly destroyed ... consider adding trait conformance to Deinitable`.
+- The route literal is a compile-time `StaticString`, so a plain `def` can count `{` in a `comptime assert`. Registering `app.get["/users/{id}"](root)` fails to compile; the notes point at that call and end with `constraint failed: route declares path parameters but the handler takes none`. Passing a handler of the wrong shape fails overload resolution, for example `cannot be converted from 'def root() thin -> String' to 'def(Request) thin -> Response'`.
+- Reflection (`std.reflection`, `reflect[T]()`) exposes struct fields only, not function parameter names. Path parameters therefore bind by position, and the `{id}`-to-`id` name check in section 16 is not possible yet. Struct-field reflection is available for M2 body/response work.
+
+Shared limitations of both prototypes: handlers must be thin functions (no closures) and must not raise; return values are converted by the `Writable` stand-in until M2 designs response conversion; only `Int` path parameters are prototyped.
+
 ## Design principles
 
 The public API should optimize for minimal boilerplate, strong static typing, useful compile-time validation, explicit escape hatches, predictable ownership, transport independence, composability, helpful diagnostics, and tests that do not require a real network socket.

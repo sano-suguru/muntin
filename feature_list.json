@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "project": "Muntin",
-  "active_milestone": "M0",
+  "active_milestone": "M0.5",
   "rules": {
     "passing_requires_executable_evidence": true,
     "do_not_edit_acceptance_to_match_implementation": true,
@@ -128,6 +128,27 @@
         "docs/ARCHITECTURE.md 'Implemented M0 layout' documents App.handle as the seam, testing -> app -> http dependency direction and the boundary check; docs/DX.md 'Proven vs. target status' separates proven from target syntax.",
         "AGENT_PROGRESS.md records verification commands, decisions, limitations and next step (M1-001).",
         "git add -A && git diff --cached --check -> exit 0."
+      ]
+    },
+    {
+      "id": "M0.5-001",
+      "priority": 50,
+      "category": "feasibility_spike",
+      "description": "Prove that one Muntin app can store and dispatch String-returning, Int-path-parameter, and raw Request -> Response handlers with the docs/DX.md registration shape, and record the internal representation trade-off.",
+      "acceptance": [
+        "An executable test registers def() -> String, def(Int) -> User, and def(Request) -> Response handlers in one app and dispatches each through handle(Request) -> Response.",
+        "GET /users/{id} delivers the path segment to the handler as Int.",
+        "At least two internal representations are compared and the trade-off and recommendation are recorded in docs/DX.md.",
+        "Whether a route/handler mismatch fails at compile time is demonstrated with compiler output.",
+        "The spike adds no Flare dependency and does not change the M0 public API in src/muntin."
+      ],
+      "passes": true,
+      "evidence": [
+        "./scripts/test.sh -> exit 0; tests/test_spike_handler_model.mojo: PASS test_runtime_value_app_dispatches_three_shapes, PASS test_compile_time_app_dispatches_three_shapes (2 tests run: 2 passed). Each registers root() -> String at GET /, get_user(id: Int) -> User at GET /users/{id}, raw(req: Request) -> Response at POST /raw, and asserts via handle(Request): '/' -> 'hello', '/users/42' -> 'User(42, Alice)', POST /raw 'ping' -> 201 'raw:ping', '/users/abc' -> 400, GET /raw -> 404.",
+        "Mutation: _match treating {id} segments as literals -> both spike tests FAIL (2 failed).",
+        "Compile-time mismatch: planting app.get[\"/users/{id}\"](root) (runtime prototype) and app.get[\"/users/{id}\", root]() (compile-time prototype) each fails to compile with 'note: constraint failed: route declares path parameters but the handler takes none', with a note pointing at the registration call. app.post[\"/raw\"](root) fails with \"cannot be converted from 'def root() thin -> String' to 'def(Request) thin -> Response'\".",
+        "docs/DX.md 'Handler model (M0.5 spike)' compares runtime-value erasure vs compile-time handler parameter and recommends the runtime-value design with the compile-time one as fallback.",
+        "./scripts/check.sh -> exit 0 (boundary ok: no Flare/socket imports in src/muntin; tests build with --Werror); git diff --stat shows no change under src/muntin."
       ]
     },
     {

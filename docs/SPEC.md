@@ -90,6 +90,21 @@ Do not implement these merely because mature frameworks have them:
 - deployment tooling;
 - performance optimization before a baseline exists.
 
+## M0.5 — handler-model feasibility spike
+
+Inserted before M1 deliberately. Connecting Flare is known to be possible; what was unknown after M0 is whether one Muntin app can store and dispatch handlers of different shapes with the `docs/DX.md` registration syntax. If it cannot, the public API changes, so this is answered first.
+
+M0.5 is a spike, not a feature: prototypes live in `tests/` and are replaced by the real router in M2. `src/muntin` does not change.
+
+M0.5 acceptance:
+
+- one executable test registers `def() -> String`, `def(Int) -> User`, and `def(Request) -> Response` handlers in one app and dispatches each through `handle(Request) -> Response`, including a `/users/{id}` path parameter;
+- at least two internal representations are compared, and the trade-off and recommended direction are recorded in `docs/DX.md`;
+- whether a route/handler mismatch can fail at compile time is shown with compiler output;
+- no Flare dependency and no change to the M0 public API.
+
+M2 still requires M1 for its own acceptance; M0.5 only removes the API-shape uncertainty.
+
 ## M1 — Flare transport adapter
 
 After M0 is fully verified, integrate a released/pinned Flare version behind the existing Muntin backend seam.
