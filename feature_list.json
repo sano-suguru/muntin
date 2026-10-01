@@ -266,6 +266,24 @@
         "./scripts/check_flare.sh -> exit 0: adapters/flare/test_localhost_roundtrip.mojo 2/2; one App with /hello and /users/{id} over loopback through Flare HttpServer + unchanged MuntinHandler gives /users/42 -> 200 '42', /users/042 -> '42', /users/abc -> 400, /users -> 404, each equal to TestClient; no leftover process. CI verify + flare green on ubuntu-latest (ubuntu24) and macos-latest (macos26).",
         "Planted mutations each turned a check red (list in AGENT_PROGRESS.md); fresh-context review found no material issue; git diff --check clean."
       ]
+    },
+    {
+      "id": "M2-002",
+      "priority": 202,
+      "category": "typed_routing",
+      "description": "Separate path from query at Muntin's Request boundary and deliver one query value to a handler as Int without manual application parsing.",
+      "acceptance": [
+        "Request boundary in Muntin core: Request(method, target, body) splits the request target at the first '?'; Request.path is the text before it and is the only input to route matching; Request.query is the raw text after it ('' when there is no '?'). muntin.testing.TestClient and the Flare adapter pass the raw target and do not split, parse or interpret the query themselves.",
+        "Route matching sees only the path: GET /hello?x=1 -> 200 'hello'; GET /users/42?x=1 -> 200 '42' (the path Int is unchanged, not parsed from '42?x=1'). Every M2-001 behavior without a query is unchanged, including compile-time route checks and first-registered-match-wins.",
+        "Public syntax proven to compile on Mojo 1.1.0 and documented in docs/DX.md: app.get[\"/items?{limit}\"](list_items) with def list_items(limit: Int) -> String. The route literal names the query key because Mojo 1.1.0 cannot reflect handler parameter names; binding is positional and docs say so. The number of {..} placeholders in path plus query must equal the handler arity at compile time; a malformed query part (empty, static text, {}, a key containing '=', '&', '?', '#' or braces) fails to compile at the registration call.",
+        "GET /items?limit=10 -> 200 '10'; GET /items?limit=010 -> 200 '10' (proves Int conversion happened before the handler); unrelated keys are ignored (GET /items?other=z&limit=10 -> '10').",
+        "Query rules, documented and tested: pairs separated by '&'; key and value split at the first '='; a pair without '=' has an empty value; keys compared byte for byte, case-sensitively; no percent-decoding of keys or values; the value is converted with the same strict Int rule as path parameters. A missing key, a duplicated key, an empty value, or an invalid Int (abc, +10, ' 10', 1_0, %31%30, out of range) returns 400 'Bad Request' without invoking the handler. A path or method mismatch returns 404.",
+        "Handler storage: the closed Variant is reassessed; the value's source (path segment or query key) is route metadata, so the existing def(Int) arm is reused if possible and any new arm is justified. docs/ARCHITECTURE.md records the arm set and what would add arms next. No unsafe storage is adopted.",
+        "Parity: one App registering /hello, /users/{id} and /items?{limit} is driven through TestClient and through real loopback requests to Flare's HttpServer serving the unchanged MuntinHandler; both give the same status and body for /hello?x=1, /users/42?x=1, /items?limit=010 ('10'), /items (400), /items?limit=abc (400) and a non-matching path with a query (404). The adapter contains no query parsing and does not use Flare's query helpers.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass locally, and CI verify + flare pass on Ubuntu and macOS."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }
