@@ -282,8 +282,13 @@
         "Parity: one App registering /hello, /users/{id} and /items?{limit} is driven through TestClient and through real loopback requests to Flare's HttpServer serving the unchanged MuntinHandler; both give the same status and body for /hello?x=1, /users/42?x=1, /items?limit=010 ('10'), /items (400), /items?limit=abc (400) and a non-matching path with a query (404). The adapter contains no query parsing and does not use Flare's query helpers.",
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass locally, and CI verify + flare pass on Ubuntu and macOS."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "src/muntin/http.mojo: Request(method, target, body) splits at the first '?' into path and raw query; TestClient and the unchanged Flare adapter pass the raw target. src/muntin/app.mojo: app.get[\"/items?{limit}\"](list_items) reuses the def(Int) Variant arm (no new arm, no unsafe code); _query_value + _parse_int run before the handler, else 400.",
+        "./scripts/test.sh -> exit 0: tests/test_app.mojo 23/23 (Request split; /hello?x=1 -> 200; /users/42?x=1 -> '42'; /items?limit=010 -> 'items 10'; unrelated keys ignored; missing, duplicate, empty, +10, ' 10', 1_0, %31%30, overflow -> 400; path/method mismatch -> 404; no fall-through; positional key). ./scripts/check.sh -> exit 0: 12 tests/compile_fail fixtures incl. 6 for malformed query parts and query arity.",
+        "./scripts/check_flare.sh -> exit 0: adapter 7/7; loopback round trip 2/2 with /hello?x=1, /users/42?x=1, /items?limit=010, /items?other=z&limit=10, /items, /items?limit=abc, /items?limit=1&limit=2, /missing?limit=1 each equal to TestClient; no leftover process. CI verify + flare green on ubuntu-latest (ubuntu24) and macos-latest (macos26).",
+        "15 planted mutations each turned a check red (list in AGENT_PROGRESS.md); fresh-context review found no material issue (its doc nits fixed); acceptance unchanged since it was committed before the implementation; git diff --check clean."
+      ]
     }
   ]
 }

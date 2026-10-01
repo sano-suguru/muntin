@@ -3,7 +3,7 @@
 This file is a concise factual handoff between coding sessions. Keep it short enough to read at the start of every session.
 
 ## Active milestone
-M2 — typed application ergonomics. M2-002 (path/query boundary, one `Int` query value) is on branch `m2-002-int-query-param`. M2-001 (one `Int` path parameter) is merged (PR #7). M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (PR #6). M0 and M0.5 are merged (PRs #1, #2).
+M2 — typed application ergonomics. M2-002 (path/query boundary, one `Int` query value) has passing evidence on PR #8 (not merged). M2-001 (one `Int` path parameter) is merged (PR #7). M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (PR #6). M0 and M0.5 are merged (PRs #1, #2).
 
 ## M2-002 result
 - Boundary: `Request(method, target, body)` splits the target at the first `?` into `path` (all that routes match) and `query` (raw, undecoded, `""` if absent). `TestClient.get(target)` and the Flare adapter pass the raw target; neither splits or parses the query. Adapter code unchanged (docstring and one contract assertion updated: `path == "/items"`, `query == "page=1&x"` instead of the raw target).
@@ -55,7 +55,8 @@ M2 — typed application ergonomics. M2-002 (path/query boundary, one `Int` quer
 - Docs moved to the locations every document already referenced: `docs/{DX,ARCHITECTURE,SPEC,DEVELOPMENT,CLAUDE_CODE,GOALS,REFERENCES}.md`; path-scoped rules to `.claude/rules/{mojo,public-api}.md` (they carry `paths:` frontmatter).
 
 ## Last verified commands (all from repo root)
-- M2-002: `./scripts/check.sh` → exit 0 (12 compile_fail fixtures); `./scripts/test.sh` → exit 0 (`test_app` 23/23, spike 4/4); `./scripts/check_flare.sh` → exit 0 (adapter 7/7, round trip 2/2, no leftover); `git diff --check` clean.
+- M2-002: `./scripts/check.sh` → exit 0 (12 compile_fail fixtures); `./scripts/test.sh` → exit 0 (`test_app` 23/23, spike 4/4); `./scripts/check_flare.sh` → exit 0 (adapter 7/7, round trip 2/2, no leftover); `git diff --check` clean; CI `verify` + `flare` green on ubuntu24 20260920.314.1 and macos26 20260907.0351.1.
+- M2-002 fresh-context review: no material issue; its findings (stale arity diagnostic in DX.md, `_Route` storage wording, two docstrings, non-visible-ASCII route keys) were fixed or recorded.
 - M2-002 mutations (planted, reverted), each red: Request not splitting; matching on the raw target; route path keeping its `?{key}`; lenient `Int(String)` for the query value; value length passed; key extracted off by one; parse failure calling the handler; missing key → handler called; duplicate accepted; TestClient stripping the query (test_app, and adapter parity test); query arity assert removed and `=` allowed in keys (check.sh fixtures); adapter stripping the query (adapter tests, and the loopback test alone: `/items?limit=010` → 400); adapter answering `/items` via Flare's `query_param` (adapter parity test).
 - M2-001: `./scripts/check.sh` → exit 0 (6 compile_fail fixtures rejected as expected); `./scripts/test.sh` → exit 0 (`test_app` 13/13, spike 4/4); `./scripts/check_flare.sh` → exit 0 (adapter 7/7, round trip 2/2, no leftover); `git diff --check` clean; CI `verify` + `flare` green on ubuntu24 20260920.314.1 and macos26 20260907.0351.1.
 - M2-001 mutations (planted, reverted), each red: segment length passed instead of the value; last segment captured; digit prefilter dropped (`+42` accepted); handler bypassed (segment echoed); static segments ignored; empty segment matches `{name}`; parse failure → 404; last registered route wins; Int-arity assert removed; leading-`/` check removed; `{}` accepted; adapter answers `/users/*` itself by echoing the segment; adapter parses `Int` itself; server child serves a different app than TestClient (the last three via `check_flare.sh`).
@@ -83,7 +84,7 @@ M2 — typed application ergonomics. M2-002 (path/query boundary, one `Int` quer
 - Only non-raising GET handlers of shape `def() -> String` or `def(Int) -> String`; no raw `Request -> Response` handlers, no `app.post`, no other return types (`-> User`), no multiple/non-`Int` path or query parameters, no path+query handler, no optional/default query values, no body extraction.
 - Route literals are validated at compile time (shape, arity) but stored and split as runtime `String`s per request.
 - Request has no headers; Response has no headers/content type.
-- Route lookup is a linear scan; overlapping or duplicate registrations silently use the first match; no percent-decoding of path or query; `#` is not special; query keys are positional, not checked against handler parameter names.
+- Route lookup is a linear scan; overlapping or duplicate registrations silently use the first match; no percent-decoding of path or query; `#` is not special; query keys are positional, not checked against handler parameter names. Route literals may contain spaces or non-visible-ASCII bytes (e.g. `?{lim it}`); they match through TestClient but never over Flare, which rejects such target bytes.
 - `muntin.testing` is imported by `main.mojo` only because `app.run()` does not exist; it is not the canonical example.
 
 ## Risks for later milestones
@@ -91,7 +92,7 @@ M2 — typed application ergonomics. M2-002 (path/query boundary, one `Int` quer
 - Responses carry no Content-Type on the wire (observed in M1-003); Muntin `Response` has no headers yet.
 - Absolute-form request targets (`http://host/path`) are not handled: the whole target becomes `path` and 404s. Flare's client sends origin-form; a proxy-facing server could receive absolute-form.
 - CI: `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19. Current green evidence is ubuntu24; if the flare job breaks after that date, compare `ImageOS`/`ImageVersion` in the `runner image` step before blaming Muntin or Flare.
-- The M1-003 `/hello` round trip took ~26 s on one cold local run (child `alarm` is 30 s); if it flakes, look at that margin before blaming routing.
+- The first loopback test (`/hello`, unchanged since M1-003) is slow on a cold start: ~26 s locally once, 11–21 s on macOS CI for M2-001, 64 s on macOS CI for M2-002 (it passed; the child `alarm` is 30 s, so the time is not all inside the serving window). If it flakes, look at this before blaming routing.
 - The localhost round trip relies on `fork(2)` in a Mojo process (as Flare's own tests do); Windows is out of scope. Its child exits only via SIGKILL or the 30 s alarm, since v0.11.0's `close()`/`drain()` need a second thread.
 - The flare CI job rebuilds Flare's C/C++ FFI wrappers from source on every run (no cache, ~1 min).
 - M1: v0.11.0's old server spellings (`bind_many`, `serve_tls`, ...) are shims removed in v0.12; use `HttpServer.bind`/`serve`. Flare's `Request` is `Movable` and holds `List[UInt8]` bodies, so the adapter copies into Muntin's `String`-owning types.

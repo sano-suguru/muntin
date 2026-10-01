@@ -56,8 +56,10 @@ def _query_params(route: StaticString) -> Int:
     after its first `?`; none means 0), or -1 if malformed.
 
     The query part is one or more `{key}` items separated by `&`. A key is
-    non-empty and contains none of `{}=&?#`, since a key containing those
-    could never equal a key in a request's query.
+    non-empty and contains none of `{}=&?#`: braces and `=`/`&` would be
+    ambiguous with the literal's own syntax and the request's pair syntax,
+    and `?`/`#` are rejected to keep keys plain (a request key could contain
+    them, since only the first `?` splits the target and `#` is not special).
     """
     var mark = route.find("?")
     if mark < 0:
@@ -99,11 +101,12 @@ def _match(route: String, path: String, mut captured: String) -> Bool:
 
 
 def _parse_int(segment: String) raises -> Int:
-    """Converts a path segment to `Int`: an optional `-` followed by one or
-    more ASCII digits, within `Int` range. Anything else raises.
+    """Converts a path segment or query value to `Int`: an optional `-`
+    followed by one or more ASCII digits, within `Int` range. Anything else
+    raises.
 
     `Int(String)` alone also accepts `+`, surrounding whitespace and `_`
-    separators, which are not part of Muntin's path syntax.
+    separators, which Muntin does not accept in path or query values.
     """
     var b = segment.as_bytes()
     var start = 1 if len(b) > 0 and Int(b[0]) == ord("-") else 0
