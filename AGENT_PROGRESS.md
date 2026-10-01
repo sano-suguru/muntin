@@ -35,14 +35,14 @@ M1 — Flare transport adapter. M1-001 (PR #4), M1-002 (PR #5) merged; M1-003 (r
 - Core: `src/muntin/{__init__,http,app,testing}.mojo`. Public exports `App`, `Request`, `Response`; in-memory `muntin.testing.TestClient`.
 - Seam: `App.handle(self, Request) -> Response`. `TestClient.get` builds a `Request` and calls it; no socket, no Flare.
 - Routing: exact match on method + path; unmatched → 404 `Not Found`.
-- `main.mojo` is the Hello World example (driven via TestClient because `app.run()` is M1).
+- `main.mojo` is the Hello World example (driven via TestClient because `app.run()` does not exist yet).
 - Placeholder `greet`/`core.mojo`/`tests/test_core.mojo` removed.
 - Docs moved to the locations every document already referenced: `docs/{DX,ARCHITECTURE,SPEC,DEVELOPMENT,CLAUDE_CODE,GOALS,REFERENCES}.md`; path-scoped rules to `.claude/rules/{mojo,public-api}.md` (they carry `paths:` frontmatter).
 
 ## Last verified commands (all from repo root)
 - `./scripts/check_flare.sh` → exit 0 (Mojo 1.1.0 (8189361e) in `flare` env; flare 0.11.0 `v0.11.0#59bda50f`; fixture prints `200 hello`; adapter tests 7/7; serve probe builds; localhost round trip 1/1, no leftover process; default env lacks `flare`).
 - Round-trip mutations (planted, reverted), each red: client path `/missing`, route registered as `/hell`, handler returns `hi`, client to `port + 1` (bounded `NetworkError`), adapter skips `App.handle` (empty 200, and constant 200 `hello` caught by the 404 check), adapter forces 201, cleanup removed (`check_flare.sh` exit 1: "left a server process behind"). A fresh-context review found no material issues; its suggestions (wire 404 check, `NO_PROXY`, anchored `pgrep`, child error logging) were applied.
-- CI on PR #5: `verify` and `flare` jobs success on ubuntu-latest and macos-latest.
+- CI on PR #6: `verify` and `flare` jobs success on ubuntu-latest and macos-latest.
 - Adapter mutations (planted, reverted), each → `check_flare.sh` exit 1 via failing tests: bypass `App.handle`, fixed path, method forced to GET, request body dropped, status forced to 200, response body replaced, empty 200 Flare response.
 - `./scripts/check.sh` → exit 0 (prints `Mojo 1.1.0 (8189361e)`; format ok; boundary ok; package, tests (`--Werror`) and example build ok).
 - `./scripts/test.sh` → exit 0 (`tests/test_app.mojo` 6/6, `tests/test_spike_handler_model.mojo` 4/4).
