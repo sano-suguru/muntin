@@ -56,10 +56,13 @@ def _query_params(route: StaticString) -> Int:
     after its first `?`; none means 0), or -1 if malformed.
 
     The query part is one or more `{key}` items separated by `&`. A key is
-    non-empty and contains none of `{}=&?#`: braces and `=`/`&` would be
-    ambiguous with the literal's own syntax and the request's pair syntax,
-    and `?`/`#` are rejected to keep keys plain (a request key could contain
-    them, since only the first `?` splits the target and `#` is not special).
+    non-empty, visible ASCII (`!` to `~`), and contains none of `{}=&?#`.
+    Visible ASCII is what an HTTP request target can carry, so a key with a
+    space or any other byte could match through `TestClient` but never over
+    a real connection. Braces and `=`/`&` would be ambiguous with the
+    literal's own syntax and the request's pair syntax; `?`/`#` are rejected
+    to keep keys plain (a request key could contain them, since only the
+    first `?` splits the target and `#` is not special).
     """
     var mark = route.find("?")
     if mark < 0:
@@ -72,6 +75,9 @@ def _query_params(route: StaticString) -> Int:
         if not _is_param(item):
             return -1
         var key = item[byte = 1 : item.byte_length() - 1]
+        for b in key.as_bytes():
+            if Int(b) < ord("!") or Int(b) > ord("~"):
+                return -1
         for c in ["{", "}", "=", "&", "?", "#"]:
             if key.find(c) >= 0:
                 return -1
