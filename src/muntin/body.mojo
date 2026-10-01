@@ -11,9 +11,10 @@ trait FromBody(Deinitable, Movable):
     `Deinitable`: Muntin may have to drop a converted value. A body type may
     be move-only; the handler receives the converted value by move.
 
-    The `body: String` argument fits the current `Request`, which carries
-    the body as one `String` and no headers or content type. It is the
-    first-slice shape, not a permanent promise.
+    `from_body(body: String)` is the current public body-conversion input
+    contract: the `Request` carries the body as one `String`, with no
+    headers or content type. Future body capabilities are added as new APIs
+    without changing this one.
     """
 
     @staticmethod

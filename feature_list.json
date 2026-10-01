@@ -380,6 +380,22 @@
         "18 planted mutations each red (list in docs/ARCHITECTURE.md \"Body-only POST (M2-006)\"); fresh-context review: no material issue, minor findings fixed (three surviving mutations now caught).",
         "CI verify + flare green on PR #13 on ubuntu-latest (ubuntu24) and macos-latest (macos26)."
       ]
+    },
+    {
+      "id": "M2-007",
+      "priority": 207,
+      "category": "feasibility_spike",
+      "description": "Decide how an application-defined handler result R becomes a Response (typed handler return conversion) with Mojo 1.1.0 compiler evidence, keeping the registration syntax and the M2-004 _Erased storage; production behavior unchanged.",
+      "acceptance": [
+        "Candidates compared with pinned-compiler results or a stated DX reason: a Muntin-owned conversion trait on application types, an explicit converter at registration, static/convention-based conversion without a trait, and a direct Response special case.",
+        "The chosen contract is proven across a module boundary: application return types live in an application module, the library-side spike never names them (built without the application module), and mixed String-compatible and application-defined-return handlers coexist in production _Erased, unchanged, for GET and POST.",
+        "The decision states how R becomes Response; the mechanism; whether conversion moves or borrows R, with move-only evidence; how -> String and String-compatible returns (StaticString) are treated, distinguishing the declared return type from compatibility with the registered function type; whether -> Response is a direct escape hatch; whether conversion may raise, without designing the application-error model; and one return policy across GET and POST independent of argument extraction.",
+        "Production supports exactly the M2-006 handler shapes: no typed-return overload, exported response trait, -> User, -> Response, raising handler, (Int, B), JSON, headers, middleware or new unsafe code; _handler_storage.mojo unchanged. The only src/muntin change is FromBody's docstring: from_body(body: String) is the current public body-conversion input contract and future body capabilities are additive.",
+        "docs/ARCHITECTURE.md has a 'Typed response decision (M2-007)' section recording the contract, String/StaticString treatment, the Response decision, ownership and error semantics, rejected alternatives with evidence, reconsideration conditions and the exact next production slice; DX.md section 5 labels the shape as decided but not production.",
+        "Retained probes and must-not-compile fixtures run under check.sh/test.sh; planted mutations of the spike turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }
