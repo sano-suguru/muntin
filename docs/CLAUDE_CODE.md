@@ -15,8 +15,8 @@ Ready-to-paste conditions are in `docs/GOALS.md`.
 The durable loop uses distinct artifacts:
 
 ```text
-CLAUDE.md
-  always-on project rules
+AGENTS.md
+  always-on project rules (CLAUDE.md imports it with @AGENTS.md)
 
 docs/DX.md
   desired public API and ergonomics
@@ -34,7 +34,7 @@ AGENT_PROGRESS.md
   concise cross-session handoff
 ```
 
-Keep `CLAUDE.md` short. Put detailed reference material in `docs/` or path-specific `.claude/rules/` so every session is not burdened with the whole design history.
+Keep `AGENTS.md` short. Put detailed reference material in `docs/` or path-specific `.claude/rules/` so every session is not burdened with the whole design history.
 
 ## Feature-list discipline
 
@@ -46,7 +46,7 @@ Work on one coherent failing feature at a time. This reduces the chance of a bro
 
 For executable code changes, require a real build/test/type-check or changed command before completion. A syntax-only check or a command that never successfully starts is not proof.
 
-Muntin reinforces this in `CLAUDE.md`, `docs/DEVELOPMENT.md`, `/goal`, and the JSON acceptance list so completion does not depend on the agent deciding that its own output looks correct.
+Muntin reinforces this in `AGENTS.md`, `docs/DEVELOPMENT.md`, `/goal`, and the JSON acceptance list so completion does not depend on the agent deciding that its own output looks correct.
 
 ## Independent evaluation
 
