@@ -93,7 +93,7 @@ Semantics:
 
 Current handler shapes are exactly `def() -> String` and `def(Int) -> String`, non-raising. Other shapes (another return type such as `User`, more or non-`Int` parameters, `raises`) fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) thin -> String'`.
 
-Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, `app.post`, multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, body extraction, typed response conversion beyond `String` (so `get_user(id: Int) -> User` from section 2 is not yet accepted), parameter-name checking, middleware, and state.
+Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, `app.post`, multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, body extraction (contract decided in M2-005, section 4), typed response conversion beyond `String` (so `get_user(id: Int) -> User` from section 2 is not yet accepted), parameter-name checking, middleware, and state.
 
 Mojo facts discovered while proving the above:
 
@@ -246,6 +246,29 @@ HTTP body -> decode -> validate -> CreateUser -> handler
 ```
 
 Muntin should use Mojo's type system and reflection capabilities where they genuinely reduce duplication. Do not introduce opaque runtime reflection when compile-time information is available.
+
+Status (M2-005): **target, not production.** `app.post` and body parameters are not accepted by `App` yet. The extraction contract is decided and proven in a spike outside `src/muntin` (`tests/extraction_spike.mojo`, `tests/test_spike_extraction.mojo`; `docs/ARCHITECTURE.md`, "Argument extraction decision"). Proven direction, with spike names that the first body slice may still rename:
+
+```mojo
+struct CreateUser(FromBody):            # the application type conforms; Muntin never names it
+    var name: String
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:   # raise -> 400, handler not called
+        ...
+
+
+def create_user(body: CreateUser) -> String:      # `var body: CreateUser` also works; may be move-only
+    return body.name
+
+
+app.post["/users"](create_user)          # target syntax: the one parameter after the route's values is the body
+# app.post["/users/{id}"](update_user)   # def update_user(id: Int, body: CreateUser): route value, then body (spike evidence only)
+```
+
+- Binding is positional: route values (path segments, then the query key) fill the first parameters, and one more parameter, last, is the body. Route values are Muntin builtins (`Int`), bodies are types that conform to the body trait, and the two never overlap, so a forgotten `{id}` or a misplaced body type is a compile error at `app.post`, not a silent rebinding.
+- The application writes `from_body` and chooses the body format. Muntin does not decode JSON yet: a JSON codec will be a separate, later addition that fills `from_body`, so the "no manual decoding" goal above waits for it. Routing and binding do not change when it arrives.
+- A body that does not convert is 400 before the handler runs; a future raising handler's error is a different outcome (the application-error model).
 
 ## 5. Typed responses
 
