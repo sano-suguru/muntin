@@ -20,16 +20,18 @@ fields, so code outside this module can name `_Erased`'s field; it still
 cannot copy, overwrite or move the handle out (compile errors, pinned by
 `tests/storage_fail/downstream_*.mojo`), and reaching the header's fields
 takes `unsafe_ptr()` or the stdlib's own private `ThinAllocation._ptr`.
-Swapping two handles keeps each pairing intact.
+Swapping two handles keeps each pairing intact. The helpers that touch
+the erased pointer are named `_unsafe_*`, so no caller can reach them
+without writing `unsafe`.
 
 Unsafe operations, all in this module:
 - `OwnedPointer.unsafe_take_allocation` + `Allocation.unsafe_leak`: the
-  value's allocation stops being owned by an `OwnedPointer[F]` (`_erase`);
+  value's allocation stops being owned by an `OwnedPointer[F]` (`_unsafe_erase`);
 - `Pointer.unsafe_bitcast`: `F` to `NoneType` when erasing, `NoneType` to
-  `F` when invoking (`_erase`, `_invoke_box`);
-- `[]` on the untracked `Pointer[F, MutUntrackedOrigin]` (`_invoke_box`);
+  `F` when invoking (`_unsafe_erase`, `_unsafe_invoke_box`);
+- `[]` on the untracked `Pointer[F, MutUntrackedOrigin]` (`_unsafe_invoke_box`);
 - `OwnedPointer(unsafe_from_opaque_pointer=)`: ownership restored as `F`
-  and released (`_drop_box`);
+  and released (`_unsafe_drop_box`);
 - `OwnedPointer.unsafe_take_allocation` + `Allocation.into_thin`,
   `ThinAllocation.unsafe_ptr`, `ThinAllocation.unsafe_leak` +
   `OwnedPointer(unsafe_from_raw_pointer=)`: the header's allocation is made,
@@ -40,7 +42,7 @@ origin the lifetime checker does not track):
 - `_value` points to one live `F` allocated by `OwnedPointer[F]`, and its
   header is owned by exactly one `_Erased`;
 - a header is written only by `_Erased.__init__`, which instantiates
-  `_invoke_box` and `_drop_box` with the same `F` it allocated, so the
+  `_unsafe_invoke_box` and `_unsafe_drop_box` with the same `F` it allocated, so the
   pointer is only ever restored as that `F`;
 - `_Erased` exposes only `invoke`; other modules in `src/muntin` import
   only `_Erased` (`check_unsafe.sh`);
@@ -62,19 +64,19 @@ comptime _Call[F: AnyType] = def(F, List[String]) raises thin -> Response
 Raising means an argument failed to convert."""
 
 
-def _erase[F: Movable & Deinitable](var owner: OwnedPointer[F]) -> _Box:
+def _unsafe_erase[F: Movable & Deinitable](var owner: OwnedPointer[F]) -> _Box:
     return (
         owner^.unsafe_take_allocation().unsafe_leak().unsafe_bitcast[NoneType]()
     )
 
 
-def _invoke_box[
+def _unsafe_invoke_box[
     F: Movable & Deinitable, //, call: _Call[F]
 ](box: _Box, args: List[String]) raises -> Response:
     return call(box.unsafe_bitcast[F]()[], args)
 
 
-def _drop_box[F: Movable & Deinitable](box: _Box):
+def _unsafe_drop_box[F: Movable & Deinitable](box: _Box):
     _ = OwnedPointer[F](unsafe_from_opaque_pointer=box)
 
 
@@ -101,7 +103,9 @@ struct _Erased(Movable):
         rejected here at compile time.
         """
         var header = _Header(
-            _invoke_box[call], _drop_box[F], _erase(OwnedPointer(value^))
+            _unsafe_invoke_box[call],
+            _unsafe_drop_box[F],
+            _unsafe_erase(OwnedPointer(value^)),
         )
         self._header = (
             OwnedPointer(header^).unsafe_take_allocation().into_thin()

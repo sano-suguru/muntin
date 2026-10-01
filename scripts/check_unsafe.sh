@@ -3,8 +3,8 @@
 # Fails if, anywhere in src/muntin except src/muntin/_handler_storage.mojo,
 # a line names an unsafe pointer/ownership operation or touches the box's
 # fields; if a module imports anything but `_Erased` from it; if the package
-# root exports it; or if the module imports
-# anything but the standard library and `.http`. A confinement guard, not a
+# root exports it; or if the module imports anything but the standard
+# library and `.http`. A confinement guard, not a
 # safety proof: the invariant itself is in the module docstring and
 # docs/ARCHITECTURE.md "Handler storage decision (M2)". tests/ is not checked
 # (spikes and storage tests use these operations on purpose).
