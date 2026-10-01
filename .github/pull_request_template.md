@@ -1,23 +1,23 @@
 ## Decision
 
-<!-- What should a reviewer be comfortable approving after reading this PR? -->
+<!-- What does merging this PR mean? -->
 
 ## Changes
 
 <!-- Observable changes only. No implementation diary or commit summary. -->
 
+## Verification
+
+<!-- Executable evidence or current CI status. -->
+
 ## Not changed
 
-<!-- Non-goals, deferred decisions, or things this PR deliberately does not adopt. -->
+<!-- Optional. Delete if it adds no decision-relevant information. -->
 
 ## Risks / limitations
 
-<!-- Omit if none. Be specific. -->
-
-## Verification
-
-<!-- Commands, CI, or executable evidence. -->
+<!-- Optional. Delete if none. -->
 
 ## Review focus
 
-<!-- Optional. What deserves the reviewer's attention most? -->
+<!-- Optional. Where should reviewer attention go? Delete if nothing stands out. -->

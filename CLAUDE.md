@@ -55,3 +55,5 @@ PR descriptions minimize the reviewer's decision cost and follow `.github/pull_r
 - tool or model provenance (such as "Generated with Claude Code"); attribution belongs in commit trailers;
 - compiler output already recorded in the docs;
 - narration of effort or process.
+
+Do not fill template sections mechanically: Decision, Changes and Verification are required; delete optional sections that add no review-relevant information.
