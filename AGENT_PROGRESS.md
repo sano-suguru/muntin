@@ -3,7 +3,14 @@
 This file is a concise factual handoff between coding sessions. Keep it short enough to read at the start of every session.
 
 ## Active milestone
-M2 — typed application ergonomics. M2-003 (handler-storage decision gate) has passing evidence on its branch (not merged). M2-002 (path/query boundary, one `Int` query value) is merged (PR #8). M2-001 (one `Int` path parameter) is merged (PR #7). M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (PR #6). M0 and M0.5 are merged (PRs #1, #2).
+M2 — typed application ergonomics. M2-004 (production handler-storage migration) is implemented on its branch (not merged). M2-003 (handler-storage decision gate) is merged (PR #9). M2-002 (path/query boundary, one `Int` query value) is merged (PR #8). M2-001 (one `Int` path parameter) is merged (PR #7). M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (PR #6). M0 and M0.5 are merged (PRs #1, #2).
+
+## M2-004 result (storage migration; public behavior unchanged)
+- Production storage: `Variant[def() thin -> String, def(Int) thin -> String]` → private move-only `_Erased` box in `src/muntin/_handler_storage.mojo`, the only `src/muntin` module with unsafe operations. Each `App.get` overload boxes the handler with its adapter (`_call_none`, `_call_int` in `app.mojo`); `App.handle` makes one `invoke`, any raise → 400. Details: `docs/ARCHITECTURE.md` "Production implementation (M2-004)".
+- Smaller than the spike: no `_clone`/copy-init, `F: Movable & Deinitable`. Nothing in production copies a route or `App`. 1.1.0 facts found: `for x in list` needs a `Copyable` element (so `handle` iterates by index with `ref`); the move constructor is spelled `__init__(out self, *, deinit move: Self)` (`deinit take` only warns and is not a move constructor).
+- Unchanged: `App.get` signatures and diagnostics, accepted shapes (raising, `String`, two-parameter and `-> Response` handlers fail with the same note as on `main`; a `Request` handler is rejected too), routing/query/400/404, TestClient, adapter (no file in `adapters/` changed).
+- Guard: `scripts/check_unsafe.sh` (in `check.sh`) confines the operations and `_box`/`_invoke`/`_drop` access to the module, lets other modules import only `_Erased` from it, forbids exporting it, and limits its imports to `std` and `.http`. Confinement only, not a proof.
+- Evidence: `tests/test_handler_storage.mojo` (6: `ArcPointer` count oracle on the production `_Erased`, list growth/move, `App` with both shapes moved five ways, routes hold `_Erased`, no stale argument); `tests/storage_fail` (7 fixtures). Residual risk: drop pairing and field writes are kept by construction and the guard, not by the type system.
 
 ## M2-003 result (decision only; production unchanged)
 - Decision: production `App` moves from the closed `Variant` to a private typed box with pointer erasure, in a separate behavior-preserving PR before any new handler shape. Details, matrix, unsafe invariants, sources and thresholds: `docs/ARCHITECTURE.md` "Handler storage decision (M2)".
@@ -62,6 +69,8 @@ M2 — typed application ergonomics. M2-003 (handler-storage decision gate) has 
 - Docs moved to the locations every document already referenced: `docs/{DX,ARCHITECTURE,SPEC,DEVELOPMENT,CLAUDE_CODE,GOALS,REFERENCES}.md`; path-scoped rules to `.claude/rules/{mojo,public-api}.md` (they carry `paths:` frontmatter).
 
 ## Last verified commands (all from repo root)
+- M2-004: `./scripts/check.sh` → exit 0 (13 compile_fail, 12 spike_fail, 7 storage_fail; unsafe confinement ok); `./scripts/test.sh` → exit 0 (`test_app` 23/23, `test_handler_storage` 6/6, M0.5 spike 4/4, storage spike 7/7); `./scripts/check_flare.sh` → exit 0 (adapter 7/7, round trip 2/2, no leftover); `git diff --check` clean.
+- M2-004 mutations (planted, reverted), each red: missing drop and `_drop_box[Int]` (count oracle); double drop and a move constructor freeing its source (crash); `_invoke_box` as `Int`, `Int` route with `_call_none` (compile error); `_Erased` `Copyable` (`copy_erased.mojo` compiles); `_box` overwritten in `App.get`, `OwnedPointer` in `app.mojo`, `_Erased` exported, storage importing `.testing`, `app.mojo` importing `_drop_box` or the module itself (guard); wrong Int to the handler, query route given a path segment (`test_app`); `_match` not clearing (stale-argument test); raising `Int` overload + adapter (`raising_handler.mojo` compiles); `main`'s Variant `app.mojo` (`test_handler_storage` fails to build; `test_app` 23/23 either way).
 - M2-003: `./scripts/check.sh` → exit 0 (13 compile_fail, 12 spike_fail fixtures); `./scripts/test.sh` → exit 0 (`test_app` 23/23, M0.5 spike 4/4, storage spike 7/7); `./scripts/check_flare.sh` → exit 0 (adapter 7/7, round trip 2/2, no leftover); `git add -A && git diff --cached --check` clean; `src/` unchanged vs main.
 - M2-003 mutations (planted in copies, reverted), each red: box copy-init or `_clone_box` sharing the box, double drop (crash); `__deinit__` not dropping, `_drop_box` leaking, move constructor cloning without freeing (count oracle); Variant dispatch branch removed (compile error); new Variant shape without an arm (no matching `get`). Fresh-context review: no material issue; its five minor/nit findings were applied.
 - M2-002: `./scripts/check.sh` → exit 0 (13 compile_fail fixtures); `./scripts/test.sh` → exit 0 (`test_app` 23/23, spike 4/4); `./scripts/check_flare.sh` → exit 0 (adapter 7/7, round trip 2/2, no leftover); `git diff --check` clean; CI `verify` + `flare` green on ubuntu24 20260920.314.1 and macos26 20260907.0351.1.
@@ -83,7 +92,7 @@ M2 — typed application ergonomics. M2-003 (handler-storage decision gate) has 
 
 ## Decisions in force
 - Muntin owns `App`/`Request`/`Response`; backends call `App.handle`. No backend trait until a second backend exists (A7).
-- Handlers are stored as thin function values in a `Variant` (M2-001) because `def() -> String` is a trait in Mojo 1.1.0 (repro and diagnostic in `docs/DX.md`). Users still write plain `def hello() -> String` / `def get_user(id: Int) -> String`. M2-003 decided to replace this with a typed box before any new shape (not yet implemented).
+- Handlers are thin function values (`def() -> String` is a trait in Mojo 1.1.0; repro in `docs/DX.md`) stored in a private move-only typed box since M2-004 (`Variant` in M2-001 to M2-003). Users still write plain `def hello() -> String` / `def get_user(id: Int) -> String`. Unsafe code stays in `src/muntin/_handler_storage.mojo` (`check_unsafe.sh`).
 - `TestClient[origin: Origin[mut=False]]` borrows the app via `Pointer`, so `TestClient(app)` matches DX without copying.
 - Request/Response own `String` data; no backend buffer lifetimes in public types.
 - `check.sh` asserts the `Mojo 1.1.0` prefix; upgrading Mojo is a deliberate change that must update the script and docs.
@@ -97,7 +106,7 @@ M2 — typed application ergonomics. M2-003 (handler-storage decision gate) has 
 - `muntin.testing` is imported by `main.mojo` only because `app.run()` does not exist; it is not the canonical example.
 
 ## Risks for later milestones
-- M2 storage migration (next PR): Mojo 1.1.0 has no private fields, so the box's pairing invariant (fields written only in `__init__`/copy-init) is by module confinement and review; add a `check.sh` rule that `unsafe_` appears only in that module. `List[T: AnyType]` is `Copyable` only when `T` is, so if routes need only be `Movable`, `_clone` (and its unsafe path) can be dropped. Application parameter types go through `downcast` (an MLIR alias with a one-line docstring); record it with the other relied-on stdlib APIs. Closures and captured state remain unsupported.
+- Handler storage: Mojo 1.1.0 has no private fields, so `_Erased`'s drop pairing and field writes are kept by its constructor and `check_unsafe.sh`, not by the type system (`_drop_box[Int]` compiles; only the count oracle catches it). A future need to copy an `App` would need clone support back, with its own oracle. When application parameter types arrive, the spike's `downcast` path (an MLIR alias with a one-line docstring) is a relied-on stdlib API to record. Closures and captured state remain unsupported.
 - Responses carry no Content-Type on the wire (observed in M1-003); Muntin `Response` has no headers yet.
 - Absolute-form request targets (`http://host/path`) are not handled: the whole target becomes `path` and 404s. Flare's client sends origin-form; a proxy-facing server could receive absolute-form.
 - CI: `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19. Current green evidence is ubuntu24; if the flare job breaks after that date, compare `ImageOS`/`ImageVersion` in the `runner image` step before blaming Muntin or Flare.
@@ -111,4 +120,4 @@ M2 — typed application ergonomics. M2-003 (handler-storage decision gate) has 
 None.
 
 ## Next smallest step
-M2-004: migrate production `App` storage to the typed box, behavior-preserving: same two shapes (`def() -> String`, `def(Int) -> String`), all `tests/compile_fail` fixtures, `test_app`, adapter and loopback parity green, the ownership oracle ported to production storage, unsafe confined to one private module with a `check.sh` rule. No new handler shape in that PR. Then `docs/SPEC.md` M2 order: request-body conversion, typed responses.
+After M2-004 merges: the next SPEC M2 item is request-body conversion, preceded by its own decision on Muntin's argument-extraction contract (M2-004 did not productionize the spike's `FromArg`). A typed-response slice (`-> User` through a Muntin-owned conversion, the spike's `Reply` direction) is the alternative smallest step; either adds one `App.get` overload family and one adapter, with no storage change.

@@ -95,7 +95,7 @@ Toolchain: **Mojo 1.1.0 (8189361e)**, managed by pixi (pinned in `pixi.lock`; `s
 
 ```sh
 pixi install
-./scripts/check.sh   # toolchain version, formatting, architecture boundary, package + example build
+./scripts/check.sh   # toolchain version, formatting, architecture boundary, unsafe confinement, package + example build, must-not-compile fixtures
 ./scripts/test.sh    # executable tests in tests/test_*.mojo
 git diff --check
 ./scripts/check_flare.sh  # Flare compatibility + adapter contract tests (separate `flare` environment)

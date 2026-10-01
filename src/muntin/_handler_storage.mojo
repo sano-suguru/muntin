@@ -27,10 +27,11 @@ origin the lifetime checker does not track, and Mojo 1.1.0 has no private
 fields):
 - `_box` points to one live `F` allocated by `OwnedPointer[F]`, owned by
   exactly one `_Erased`;
-- `_box`, `_invoke` and `_drop` are written only by `_Erased.__init__`,
-  which instantiates `_invoke_box` and `_drop_box` with the same `F` it
+- `_box`, `_invoke` and `_drop` are set only by `_Erased.__init__` (and
+  carried unchanged by the synthesized move), which instantiates `_invoke_box` and `_drop_box` with the same `F` it
   allocated, so the pointer is only ever restored as that `F`;
-- the pointer never leaves this module: `_Erased` exposes only `invoke`;
+- the pointer never leaves this module: `_Erased` exposes only `invoke`,
+  and other modules import only `_Erased` (`check_unsafe.sh`);
 - `_Erased` is `Movable` and not `Copyable`: a move transfers the pointer
   without running `__deinit__` on the source, and `__deinit__` frees the
   allocation exactly once, so the allocation outlives every `invoke`.

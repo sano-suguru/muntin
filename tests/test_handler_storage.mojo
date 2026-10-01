@@ -22,8 +22,8 @@ def _call_counted(c: _Counted, args: List[String]) raises -> Response:
 
 def test_erased_owns_exactly_one_value() raises:
     # Oracle: `live.count()` is 1 + the number of live `_Counted` values.
-    # A missing or wrong-type drop (leak), a second drop (crash) or a move
-    # that copies the value each change one of these numbers.
+    # A missing or wrong-type drop (leak) changes one of these numbers; a
+    # second drop, or a move that frees its source, crashes.
     var live = ArcPointer(0)
     var a = _Erased.__init__[call=_call_counted](_Counted(live))
     assert_equal(live.count(), 2)

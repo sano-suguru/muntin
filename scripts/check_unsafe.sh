@@ -2,7 +2,8 @@
 # Confines Muntin's unsafe handler storage to one private module (M2-004).
 # Fails if, anywhere in src/muntin except src/muntin/_handler_storage.mojo,
 # a line names an unsafe pointer/ownership operation or touches the box's
-# fields; if the package root exports the module; or if the module imports
+# fields; if a module imports anything but `_Erased` from it; if the package
+# root exports it; or if the module imports
 # anything but the standard library and `.http`. A confinement guard, not a
 # safety proof: the invariant itself is in the module docstring and
 # docs/ARCHITECTURE.md "Handler storage decision (M2)". tests/ is not checked
@@ -25,6 +26,14 @@ fi
 pattern='[Uu]nsafe|Untracked|OpaquePointer|OwnedPointer|bitcast|\._(box|invoke|drop)\b'
 if grep -rnE --include='*.mojo' "$pattern" "$dir" | grep -v "^$storage:"; then
     echo "error: unsafe handler-storage operations outside $storage" >&2
+    status=1
+fi
+
+# Other modules may import `_Erased` and nothing else from the storage module,
+# so its helpers (`_erase`, `_invoke_box`, `_drop_box`, `_Box`) stay inside it.
+if grep -rnE --include='*.mojo' '_handler_storage' "$dir" | grep -v "^$storage:" |
+    grep -vE '^[^:]+:[0-9]+:([[:space:]]*#|from \._handler_storage import _Erased$)'; then
+    echo "error: only 'from ._handler_storage import _Erased' may name the storage module" >&2
     status=1
 fi
 
