@@ -7,9 +7,10 @@ M1 — Flare transport adapter. M1-001 (Flare pin, PR #4) and M1-002 (socket-fre
 
 ## M1-002 result
 - `adapters/flare/muntin_flare.mojo` (outside `src/`, flare env only): `to_muntin_request`, `to_flare_response`, and `MuntinHandler(Handler)` owning an `App`; `serve` = convert -> `App.handle` -> convert. No routing in the adapter, no M0.5 storage, `src/muntin` unchanged.
-- Policy: method and request target (`url`, path + query) verbatim; body copied as lossy UTF-8 `String`; headers/version/peer dropped; response copies status and body bytes, empty reason (Flare derives it), no headers.
+- Policy: method and request target (`url`, path + query) verbatim; body copied as lossy UTF-8 `String`; headers/version/peer dropped; response copies status and body bytes, reason unset (Flare's default applies; not yet observed on the wire), no headers.
 - `adapters/flare/test_muntin_flare.mojo` 7/7, built `--Werror` and run by `check_flare.sh`, which also checks adapter formatting and that the adapter does not build in the default env.
-- CI `flare` job (cold `pixi install --locked -e flare`, `cache: false`, then `check_flare.sh`) is green on ubuntu24 20260920.314.1 (Ubuntu 24.04.5, x86_64) and macos26 20260907.0351.1 (macOS 26.6.2, arm64): run 36818051999. The `verify` job asserts `.pixi/envs/flare` is never installed.
+- `adapters/flare/serve_probe.mojo` (compile-only, built `--Werror` by `check_flare.sh`): `HttpServer.serve(handler^)` accepts an owned `MuntinHandler`. Dropping its `Handler` conformance → `no matching method in call to 'serve'`; passing it without `^` → `cannot be implicitly copied`.
+- CI `flare` job (cold `pixi install --locked -e flare`, `cache: false`, then `check_flare.sh`) is green on ubuntu24 20260920.314.1 (Ubuntu 24.04.5, x86_64) and macos26 20260907.0351.1 (macOS 26.6.2, arm64) on PR #5; run IDs live in the PR description, not in committed files. The `verify` job asserts `.pixi/envs/flare` is never installed.
 
 ## M1-001 result
 - Flare **v0.11.0** (commit `59bda50f46853f7351eef12f1737f7fb2287de71`, MIT) is the only release declaring `mojo >=1.1.0`. v0.10.0 fails `pixi lock` under pixi 0.81.0 (its `pixi-build-rattler-build ==0.3.13` pin needs build API 4) and declares `mojo <1.1.0`; v0.9.0/v0.8.1 pin `1.0.0b2`.
@@ -32,8 +33,8 @@ M1 — Flare transport adapter. M1-001 (Flare pin, PR #4) and M1-002 (socket-fre
 - Docs moved to the locations every document already referenced: `docs/{DX,ARCHITECTURE,SPEC,DEVELOPMENT,CLAUDE_CODE,GOALS,REFERENCES}.md`; path-scoped rules to `.claude/rules/{mojo,public-api}.md` (they carry `paths:` frontmatter).
 
 ## Last verified commands (all from repo root)
-- `./scripts/check_flare.sh` → exit 0 (Mojo 1.1.0 (8189361e) in `flare` env; flare 0.11.0 `v0.11.0#59bda50f`; fixture prints `200 hello`; adapter tests 7/7; default env lacks `flare`).
-- CI run 36818051999 (HEAD a3ce330): `verify` and `flare` jobs success on ubuntu-latest and macos-latest.
+- `./scripts/check_flare.sh` → exit 0 (Mojo 1.1.0 (8189361e) in `flare` env; flare 0.11.0 `v0.11.0#59bda50f`; fixture prints `200 hello`; adapter tests 7/7; serve probe builds; default env lacks `flare`).
+- CI on PR #5: `verify` and `flare` jobs success on ubuntu-latest and macos-latest.
 - Adapter mutations (planted, reverted), each → `check_flare.sh` exit 1 via failing tests: bypass `App.handle`, fixed path, method forced to GET, request body dropped, status forced to 200, response body replaced, empty 200 Flare response.
 - `./scripts/check.sh` → exit 0 (prints `Mojo 1.1.0 (8189361e)`; format ok; boundary ok; package, tests (`--Werror`) and example build ok).
 - `./scripts/test.sh` → exit 0 (`tests/test_app.mojo` 6/6, `tests/test_spike_handler_model.mojo` 4/4).

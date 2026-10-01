@@ -12,6 +12,7 @@ DEFAULT=(pixi run --frozen mojo)
 fixture=compat/flare/flare_smoke.mojo
 adapter=adapters/flare
 adapter_tests=$adapter/test_muntin_flare.mojo
+serve_probe=$adapter/serve_probe.mojo
 
 step() { printf '\n== %s\n' "$*"; }
 
@@ -71,8 +72,12 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' <<<"$out"; then
     exit 1
 fi
 
+step "serve probe (compile-only: HttpServer.serve accepts MuntinHandler)"
+"${FLARE[@]}" build --Werror -I src -I "$adapter" "$serve_probe" -o build/serve_probe
+./build/serve_probe
+
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests"; do
+for src in "$fixture" "$adapter_tests" "$serve_probe"; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1

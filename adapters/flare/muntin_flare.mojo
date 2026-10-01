@@ -10,8 +10,8 @@ Conversion policy (M1):
 - request body: bytes copied into a `String`, decoded as UTF-8 with invalid
   sequences replaced by U+FFFD (Flare's `Request.text()`).
 - headers, version and peer: dropped; Muntin `Request` has none.
-- response: status and body bytes copied; reason left empty for Flare to
-  derive from the status; no headers set (Muntin `Response` has none).
+- response: status and body bytes copied; reason left unset, so Flare's
+  default applies; no headers set (Muntin `Response` has none).
 """
 
 from flare.http import (
