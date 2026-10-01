@@ -34,13 +34,17 @@ from muntin.app import (
 trait FromBody(Deinitable, Movable):
     """An application type that can be built from a request body.
 
-    The application type conforms itself, in its own module. Builtins cannot
-    conform (`Int` is `comptime Int = Scalar[DType.int]` and takes no
-    `__extension`; tests/spike_fail/extension_int.mojo), and route values are
-    only Muntin-known builtins, so a type is either a route-value type or a
-    body type, never both. `Deinitable` is required: without it the
-    temporary passed to a handler is "abandoned without being explicitly
-    destroyed" on 1.1.0.
+    The application type conforms itself, in its own module. A route-value
+    type (`Int`) is never a body type: registration rejects it by type
+    equality (`_ROUTE_VALUE_BODY`), not by relying on it lacking a
+    conformance, because on 1.1.0 an `__extension SIMD(FromBody)` in the
+    module that declares the trait does give `Int` the trait bound (only
+    cross-module extensions fail, and `conforms_to` does not see extension
+    conformances; tests/extraction_fail/builtin_body_via_extension.mojo,
+    extension_invisible_to_conforms_to.mojo). `Deinitable`: Muntin may have
+    to drop a converted value (a borrowed `def(B)` call leaves a temporary
+    that is "abandoned without being explicitly destroyed" otherwise), and
+    it keeps linear types out.
     """
 
     @staticmethod
@@ -62,10 +66,11 @@ trait FromBody(Deinitable, Movable):
 # `B` is generic over `Movable & Deinitable` and refined with
 # `comptime assert conforms_to(B, FromBody)`, the documented 1.1.0 mechanism
 # (release notes: `trait_downcast` removed in its favour); no `downcast` or
-# `rebind_var`. Passing a handler typed with a refined `B` on to a function
-# that requires `B: FromBody` fails on 1.1.0 ("function type conversions
-# between closures not supported yet"), so refinement happens in the adapter
-# that calls `from_body`.
+# `rebind_var`. The adapter that calls `from_body` refines `B` itself:
+# forwarding the handler with an explicit `inner[B](handler, raw)` to a
+# function that requires `B: FromBody` fails on 1.1.0 ("function type
+# conversions between closures not supported yet"; letting `B` be inferred
+# compiles).
 
 
 def _bad_request() -> Response:
@@ -123,6 +128,12 @@ def _call_int_body[
 # Every mismatch is a compile error at the registration call, because a slot
 # whose source is the route accepts only `Int` and the body slot accepts only
 # `FromBody` types.
+
+
+comptime _ROUTE_VALUE_BODY = (
+    "Int is a route-value type, never the request body; declare a path or"
+    " query parameter for every Int parameter"
+)
 
 
 def _route_values(route: StaticString) -> Int:
@@ -190,11 +201,16 @@ struct ExtractApp(Movable):
     ](mut self, handler: def(var B) raises thin -> String):
         comptime assert _route_values(path) >= 0, "malformed route literal"
         comptime if _route_values(path) == 0:
+            comptime assert not B == Int, _ROUTE_VALUE_BODY
             comptime assert conforms_to(B, FromBody), (
                 "the handler's parameter is the request body; its type must"
                 " conform to FromBody"
             )
         elif _route_values(path) == 1:
+            comptime assert not B == Int, (
+                "an owned (`var`) Int parameter is not supported; declare it"
+                " borrowed (`id: Int`)"
+            )
             comptime assert False, (
                 "route declares a path or query parameter; the handler"
                 " parameter bound to it must be Int"
@@ -221,6 +237,7 @@ struct ExtractApp(Movable):
             "handler takes a route value and a body; route must declare"
             " exactly one path or query parameter"
         )
+        comptime assert not B == Int, _ROUTE_VALUE_BODY
         comptime assert conforms_to(B, FromBody), (
             "the handler's last parameter is the request body; its type must"
             " conform to FromBody"
