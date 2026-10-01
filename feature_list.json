@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "project": "Muntin",
-  "active_milestone": "M0.5",
+  "active_milestone": "M1",
   "rules": {
     "passing_requires_executable_evidence": true,
     "do_not_edit_acceptance_to_match_implementation": true,
@@ -192,8 +192,15 @@
         "Verified Mojo and Flare versions are recorded.",
         "Core/public Muntin modules remain buildable without importing Flare."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "Candidates (GitHub releases of ehsanmok/flare, checked 2026-10-01): v0.11.0 declares mojo >=1.1.0,<2.0.0 in pixi.toml and recipe.yaml; v0.10.0 declares >=1.0.0,<1.1.0; v0.9.0 and v0.8.1 pin ==1.0.0b2; older releases predate them.",
+        "Selected: pixi.toml [feature.flare.dependencies] flare = { git = \"https://github.com/ehsanmok/flare.git\", tag = \"v0.11.0\" } in a separate `flare` environment; pixi.lock records git+https://github.com/ehsanmok/flare?tag=v0.11.0#59bda50f46853f7351eef12f1737f7fb2287de71 for osx-arm64 and linux-64, with mojo-1.1.0-release in both.",
+        "./scripts/check_flare.sh -> exit 0 (pixi 0.81.0, osx-arm64): flare env 'Mojo 1.1.0 (8189361e)'; pixi list shows flare 0.11.0 from v0.11.0#59bda50f; 'pixi run --frozen -e flare mojo build --Werror compat/flare/flare_smoke.mojo' -> ok; ./build/flare_smoke prints '200 hello' (Flare Request -> handler -> ok() Response; no socket opened). The fixture also type-checks Flare's HttpServer.bind/serve in a branch the script never takes: planting server.serve(42) there -> \"error: no matching method in call to 'serve'\".",
+        "Failed candidate v0.10.0: pixi.toml with tag = \"v0.10.0\" in a scratch copy, 'pixi lock' (pixi 0.81.0) -> exit 1: \"failed to resolve source package 'flare' ... pixi-build-rattler-build ==0.3.13 ... would require pixi-build-api-version >=4,<5, for which no candidates were found\". Its declared mojo range <1.1.0 also excludes the pinned toolchain.",
+        "Core stays Flare-free: default environment unchanged in pixi.lock (parsed and compared with the pre-change lock); check_flare.sh 'default environment excludes Flare' step: building the fixture with 'pixi run --frozen mojo build' -> \"unable to locate module 'flare'\" (exit 1, asserted). ./scripts/check.sh -> exit 0 (boundary 'ok: no Flare/socket imports in src/muntin'; precompile --Werror src/muntin ok). ./scripts/test.sh -> exit 0.",
+        "pixi install --locked and pixi install --locked -e flare -> both environments installed (lock matches manifest)."
+      ]
     },
     {
       "id": "M1-002",

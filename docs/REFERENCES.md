@@ -46,3 +46,6 @@ Important policy: examples in `docs/DX.md` are targets until compiled against th
 As reviewed, Flare describes itself as a full Mojo networking stack with HTTP/1.1, HTTP/2, HTTP/3/QUIC, WebSocket, TLS and other networking facilities, and provides its own Router/Request/Response/Handler abstractions. This is precisely why Muntin treats it as a backend rather than adopting those types as Muntin's public application contract.
 
 When M1 begins, pin a released tag and verify its current license, supported Mojo version, package instructions, and adapter-relevant API from the repository at that time.
+
+Pinned (M1-001, checked 2026-10-01): release `v0.11.0` (tag object `50fac2b6`, commit `59bda50f46853f7351eef12f1737f7fb2287de71`), MIT license. Its `pixi.toml` and `recipe.yaml` declare `mojo >=1.1.0,<2.0.0`; it is installed as a pixi-build git source dependency as its README describes. The GitHub release is not marked immutable, so `pixi.lock`'s commit hash is the reproducible reference.
+- Release notes: https://github.com/ehsanmok/flare/releases/tag/v0.11.0
