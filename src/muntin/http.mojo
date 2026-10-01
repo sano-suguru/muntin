@@ -2,15 +2,29 @@
 
 
 struct Request(Copyable, Movable):
-    """An application-level HTTP request, independent of any transport."""
+    """An application-level HTTP request, independent of any transport.
+
+    Built from the raw request target, which Muntin splits at the first `?`:
+    `path` is the text before it and is what routes match; `query` is the
+    text after it, undecoded (empty when there is no `?`). Backends pass the
+    target as received and never split it themselves, so every backend gets
+    the same rule.
+    """
 
     var method: String
     var path: String
+    var query: String
     var body: String
 
-    def __init__(out self, method: String, path: String, body: String = ""):
+    def __init__(out self, method: String, target: String, body: String = ""):
         self.method = method
-        self.path = path
+        var mark = target.find("?")
+        if mark < 0:
+            self.path = target
+            self.query = String()
+        else:
+            self.path = String(target[byte=:mark])
+            self.query = String(target[byte = mark + 1 :])
         self.body = body
 
 

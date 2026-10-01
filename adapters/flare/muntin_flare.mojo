@@ -3,10 +3,12 @@
 Depends inward on Muntin's backend seam, `App.handle(Request) -> Response`,
 and never routes on its own. Builds only in the `flare` pixi environment.
 
-Conversion policy (M1):
+Conversion policy (M1; target handling restated for M2-002):
 - method: copied verbatim.
-- path: Flare's request target (`url`, path plus any query) copied verbatim,
-  so routing matches the in-memory backend exactly; `/hello?x=1` is 404.
+- request target: Flare's `url` (path plus any query, undecoded) passed
+  verbatim to Muntin's `Request`, which splits path from query, exactly as
+  for the in-memory backend. The adapter does not split, parse or decode the
+  query, and does not use Flare's query helpers.
 - request body: bytes copied into a `String`, decoded as UTF-8 with invalid
   sequences replaced by U+FFFD (Flare's `Request.text()`).
 - headers, version and peer: dropped; Muntin `Request` has none.

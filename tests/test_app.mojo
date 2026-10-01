@@ -24,11 +24,16 @@ def me() -> String:
     return "me"
 
 
+def list_items(limit: Int) -> String:
+    return "items " + String(limit)
+
+
 def users_app() -> App:
     var app = App()
     app.get["/hello"](hello)
     app.get["/users/{id}"](get_user)
     app.get["/users/{id}/posts"](user_posts)
+    app.get["/items?{limit}"](list_items)
     return app^
 
 
@@ -167,6 +172,142 @@ def test_first_registered_matching_route_wins() raises:
 
     assert_equal(client.get("/users/me").text(), "me")
     assert_equal(client.get("/users/7").text(), "7")
+
+
+def test_request_splits_target_at_first_question_mark() raises:
+    var plain = Request("GET", "/users/42")
+    assert_equal(plain.path, "/users/42")
+    assert_equal(plain.query, "")
+
+    var with_query = Request("GET", "/users/42?x=1&y=2")
+    assert_equal(with_query.path, "/users/42")
+    assert_equal(with_query.query, "x=1&y=2")
+
+    var empty_query = Request("GET", "/a?")
+    assert_equal(empty_query.path, "/a")
+    assert_equal(empty_query.query, "")
+
+    var second_mark = Request("GET", "/a?b=1?c=2")
+    assert_equal(second_mark.path, "/a")
+    assert_equal(second_mark.query, "b=1?c=2")
+
+
+def test_route_matching_ignores_the_query() raises:
+    var app = users_app()
+    var client = TestClient(app)
+
+    assert_equal(client.get("/hello?x=1").status, 200)
+    assert_equal(client.get("/hello?x=1").text(), "hello")
+    # The path Int comes from "42", not from "42?x=1".
+    assert_equal(client.get("/users/42?x=1").text(), "42")
+    assert_equal(client.get("/users/042?id=7").text(), "42")
+    assert_equal(client.get("/users/42/posts?x").text(), "posts of 42")
+    assert_equal(client.get("/users/abc?x=1").status, 400)
+    assert_equal(client.get("/missing?x=1").status, 404)
+    assert_equal(client.get("/users?id=42").status, 404)
+
+
+def test_query_parameter_reaches_handler_as_int() raises:
+    var app = users_app()
+    var client = TestClient(app)
+
+    var response = client.get("/items?limit=10")
+    assert_equal(response.status, 200)
+    assert_equal(response.text(), "items 10")
+    # The handler's output differs from the raw value, so it saw an Int.
+    assert_equal(client.get("/items?limit=010").text(), "items 10")
+    assert_equal(client.get("/items?limit=-3").text(), "items -3")
+    assert_equal(
+        client.get("/items?limit=9223372036854775807").text(),
+        "items 9223372036854775807",
+    )
+
+
+def test_unrelated_query_keys_are_ignored() raises:
+    var app = users_app()
+    var client = TestClient(app)
+
+    for target in [
+        "/items?other=z&limit=10",
+        "/items?limit=10&other",
+        "/items?&&limit=10&",
+        "/items?limits=1&limit=10&Limit=2&=3",
+        "/items?limit=10&x=a=b",
+    ]:
+        assert_equal(client.get(target).text(), "items 10", target)
+
+
+def test_missing_query_parameter_is_bad_request() raises:
+    var app = users_app()
+    var client = TestClient(app)
+
+    for target in [
+        "/items",
+        "/items?",
+        "/items?other=10",
+        "/items?Limit=10",
+        "/items?limits=10",
+        "/items?lim%69t=10",
+    ]:
+        var response = client.get(target)
+        assert_equal(response.status, 400, target)
+        assert_equal(response.text(), "Bad Request", target)
+
+
+def test_invalid_query_value_is_bad_request() raises:
+    var app = users_app()
+    var client = TestClient(app)
+
+    for target in [
+        "/items?limit=",
+        "/items?limit",
+        "/items?limit=abc",
+        "/items?limit=+10",
+        "/items?limit= 10",
+        "/items?limit=%2010",
+        "/items?limit=1_0",
+        "/items?limit=%31%30",
+        "/items?limit=10#x",
+        "/items?limit=9223372036854775808",
+    ]:
+        var response = client.get(target)
+        assert_equal(response.status, 400, target)
+        assert_equal(response.text(), "Bad Request", target)
+
+
+def test_duplicate_query_key_is_bad_request() raises:
+    var app = users_app()
+    var client = TestClient(app)
+
+    for target in [
+        "/items?limit=1&limit=2",
+        "/items?limit=1&limit=1",
+        "/items?limit=1&limit",
+    ]:
+        var response = client.get(target)
+        assert_equal(response.status, 400, target)
+        assert_equal(response.text(), "Bad Request", target)
+
+
+def test_query_route_does_not_match_other_paths_or_methods() raises:
+    var app = users_app()
+    var client = TestClient(app)
+
+    for target in ["/items/?limit=1", "/item?limit=1", "/items/1?limit=1"]:
+        assert_equal(client.get(target).status, 404, target)
+    assert_equal(app.handle(Request("POST", "/items?limit=1")).status, 404)
+
+
+def test_query_does_not_take_part_in_route_selection() raises:
+    var app = App()
+    app.get["/items?{limit}"](list_items)
+    app.get["/items"](hello)
+    var client = TestClient(app)
+
+    # The first route matches on path alone; a missing key is 400 there,
+    # not a fall-through to the later route.
+    assert_equal(client.get("/items?limit=5").text(), "items 5")
+    assert_equal(client.get("/items").status, 400)
 
 
 def main() raises:

@@ -21,20 +21,27 @@ def goodbye() -> String:
     return "goodbye"
 
 
+def list_items(limit: Int) -> String:
+    return "items " + String(limit)
+
+
 def app_with_routes() -> App:
     var app = App()
     app.get["/hello"](hello)
     app.get["/goodbye"](goodbye)
+    app.get["/items?{limit}"](list_items)
     return app^
 
 
 def test_request_conversion_keeps_method_target_and_body() raises:
     var request = to_muntin_request(
-        FlareRequest("POST", "/items?page=1", body=List("ping".as_bytes()))
+        FlareRequest("POST", "/items?page=1&x", body=List("ping".as_bytes()))
     )
 
     assert_equal(request.method, "POST")
-    assert_equal(request.path, "/items?page=1")
+    # The adapter passes the target verbatim; Muntin's Request splits it.
+    assert_equal(request.path, "/items")
+    assert_equal(request.query, "page=1&x")
     assert_equal(request.body, "ping")
 
 
@@ -88,7 +95,16 @@ def test_adapter_matches_in_memory_backend() raises:
     var handler = MuntinHandler(app_with_routes())
     var client = TestClient(handler.app)
 
-    for path in ["/hello", "/goodbye", "/missing", "/hello?x=1"]:
+    for path in [
+        "/hello",
+        "/goodbye",
+        "/missing",
+        "/hello?x=1",
+        "/items?limit=010",
+        "/items?limit=abc",
+        "/items?limit=1&limit=2",
+        "/items",
+    ]:
         var expected = client.get(path)
         var actual = handler.serve(FlareRequest("GET", path))
         assert_equal(actual.status, expected.status, path)
