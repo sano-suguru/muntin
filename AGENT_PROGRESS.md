@@ -10,7 +10,7 @@ M1 — Flare transport adapter. M1-001 (PR #4), M1-002 (PR #5) merged; M1-003 (r
 - Readiness: `TcpListener.bind` calls `listen(2)` (backlog 128) before returning, so connections queue before the child enters `serve`; no sleep. Termination: SIGKILL + `waitpid` in `finally`; the child arms a 30 s `alarm(2)` (verified: an orphaned child is gone by 31 s). `check_flare.sh` runs it with output to a file (a pipe would wait on an orphan) and fails if `pgrep -f '^\./build/test_localhost_roundtrip$'` finds a leftover.
 - Wire, observed with `curl -i` and the test's client: `HTTP/1.1 200 OK`, `Content-Length: 5`, `Date`, `Connection: keep-alive`, no `Content-Type`; 404 is `HTTP/1.1 404 Not Found`, body `Not Found`. Flare fills the reason phrase when Muntin leaves it unset.
 - Lifecycle is fixture-only: no `app.run()`, runtime, or shutdown API; adapter and `src/muntin` unchanged.
-- CI `flare` job green on ubuntu24 20260920.314.1 (Ubuntu 24.04.5, x86_64) and macos26 20260907.0351.1 (macOS 26.6.2, arm64); run ID in the PR description.
+- CI `flare` job green on ubuntu24 20260927.320.1 (Ubuntu 24.04.5, x86_64) and macos26 20260907.0351.1 (macOS 26.6.2, arm64); run ID in the PR description.
 
 ## M1-002 result
 - `adapters/flare/muntin_flare.mojo` (outside `src/`, flare env only): `to_muntin_request`, `to_flare_response`, and `MuntinHandler(Handler)` owning an `App`; `serve` = convert -> `App.handle` -> convert. No routing in the adapter, no M0.5 storage, `src/muntin` unchanged.
