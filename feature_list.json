@@ -394,8 +394,13 @@
         "docs/ARCHITECTURE.md has a 'Typed response decision (M2-007)' section recording the contract, String/StaticString treatment, the Response decision, ownership and error semantics, rejected alternatives with evidence, reconsideration conditions and the exact next production slice; DX.md section 5 labels the shape as decided but not production.",
         "Retained probes and must-not-compile fixtures run under check.sh/test.sh; planted mutations of the spike turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "tests/response_spike.mojo (library: ToResponse, ResponseApp, adapters generic over respond, production _Erased unchanged) + tests/test_spike_response.mojo (app side, 8/8: String/StaticString stay on String overloads, move-only User, Created, one policy for four argument sources, 400/404 without conversion, app moves, widened raises, explicit converter); tests/response_lib_only/driver.mojo built without the app module; tests/response_fail (4). src/muntin differs from main only in body.mojo's docstring.",
+        "./scripts/check.sh -> exit 0; ./scripts/test.sh -> exit 0 (test_spike_response 8/8, earlier suites unchanged); ./scripts/check_flare.sh -> exit 0 (adapter 8/8, loopback 2/2); git diff --check clean. Scratch copy of the next slice (not retained): test_app 23/23, test_body 12/12, test_handler_storage 6/6, -> User/-> Response/-> StaticString served.",
+        "7 planted mutations each red (borrowed-self requirement, raises requirement, wrong Int, library naming User, conversion ignored, unbounded generic, String overload removed).",
+        "Fresh-context review: no material issue; minor findings (scratch-only Response evidence labelled, DX M0.5 paragraph, raw var-Request resolution, one mutation description, slice DX list, driver status check) fixed."
+      ]
     }
   ]
 }

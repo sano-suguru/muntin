@@ -57,6 +57,7 @@ def main():
     if (
         got.status != 202
         or got.body != "note 1"
+        or saved.status != 202
         or saved.body != "x"
         or plain.body != "hello"
     ):

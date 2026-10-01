@@ -159,7 +159,7 @@ Result: the registration shape is feasible on Mojo 1.1.0, so this document's syn
 | Function pointer + context, type-erased, with trampoline | works, provisional (unsafe) | The handler's thin function value (8 bytes, the same as `Int`) is stored as `Int` address bits. A trampoline instantiated for the same type restores and calls it. Erase and restore use one type parameter inside one private generic function, guarded by `comptime assert size_of[F]() == size_of[Int]()`. |
 | Compile-time generated wrapper / handler as compile-time parameter | works (fallback only) | `app.get["/users/{id}", get_user]()`. No unsafe code, but framework storage concerns leak into the public syntax. Consider only if the runtime-value approach proves unworkable. |
 
-Return conversion: a Muntin-owned conversion from typed return values to `Response` is the direction; the mechanism was decided in M2-007 (section 5): a trait the application type conforms to, with `String` kept on its own overloads instead of an `__extension`. The prototype `trait ToResponse` with `def to_response(self) -> Response` covers all three result types. `User` conforms directly. `String` and `Response` conform through `__extension String(ToResponse)` / `__extension Response(ToResponse)`, which compiles under `--Werror` on 1.1.0. The double-underscore spelling suggests the extension feature is not yet stable, so the trait and this way of conforming stdlib types are provisional; an overload per stdlib type is the fallback. No JSON.
+Return conversion: a Muntin-owned conversion from typed return values to `Response` is the direction. The M0.5 prototype below is history; the M2-007 decision (section 5) differs: the requirement is `def to_response(var self) -> Response`, `String` stays on its own overloads instead of conforming through `__extension`, and `Response` conforms in its own module. The M0.5 prototype `trait ToResponse` with `def to_response(self) -> Response` covers all three result types. `User` conforms directly. `String` and `Response` conform through `__extension String(ToResponse)` / `__extension Response(ToResponse)`, which compiles under `--Werror` on 1.1.0. The double-underscore spelling suggests the extension feature is not yet stable, so the trait and this way of conforming stdlib types are provisional; an overload per stdlib type is the fallback. No JSON.
 
 Other facts measured on Mojo 1.1.0:
 
@@ -332,7 +332,7 @@ def health() -> Response:
 
 Convenience must not eliminate low-level control.
 
-Status (M2-007, decision only; production still accepts only `String`-compatible returns): an application result type conforms to a Muntin-owned trait in its own module, as body types conform to `FromBody`; the next production slice implements it (`docs/ARCHITECTURE.md`, "Typed response decision (M2-007)"). Target shape, proven in a spike outside `src/muntin`:
+Status (M2-007, decision only; production still accepts only `String`-compatible returns): an application result type conforms to a Muntin-owned trait in its own module, as body types conform to `FromBody`; the next production slice implements it (`docs/ARCHITECTURE.md`, "Typed response decision (M2-007)"). Target shape: `-> User` is proven in a retained spike outside `src/muntin`; `-> Response` was shown only on an unretained scratch copy of the next slice, whose tests will first retain it:
 
 ```mojo
 @fieldwise_init
