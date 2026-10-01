@@ -20,7 +20,13 @@ if [[ "$version" != "$EXPECTED_MOJO "* ]]; then
     echo "error: expected $EXPECTED_MOJO, found: $version" >&2
     exit 1
 fi
-pixi list --frozen -e flare '^flare$'
+FLARE_COMMIT="59bda50f46853f7351eef12f1737f7fb2287de71" # tag v0.11.0
+listing="$(pixi list --frozen -e flare '^flare$')"
+echo "$listing"
+if ! grep -q "tag=v0.11.0#$FLARE_COMMIT" <<<"$listing"; then
+    echo "error: flare env is not at v0.11.0 ($FLARE_COMMIT)" >&2
+    exit 1
+fi
 
 step "build fixture"
 mkdir -p build

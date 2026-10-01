@@ -28,7 +28,7 @@ M1 — Flare transport adapter. M1-001 (Flare pin) verified; M1-002/M1-003 not s
 ## Last verified commands (all from repo root)
 - `./scripts/check_flare.sh` → exit 0 (Mojo 1.1.0 (8189361e) in `flare` env; flare 0.11.0 `v0.11.0#59bda50f`; build `--Werror` ok; prints `200 hello`; default env lacks `flare`).
 - `./scripts/check.sh` → exit 0 (prints `Mojo 1.1.0 (8189361e)`; format ok; boundary ok; package, tests (`--Werror`) and example build ok).
-- `./scripts/test.sh` → exit 0 (`tests/test_app.mojo`: 6 tests run, 6 passed).
+- `./scripts/test.sh` → exit 0 (`tests/test_app.mojo` 6/6, `tests/test_spike_handler_model.mojo` 4/4).
 - `./build/muntin` → prints `200 hello`.
 - `git add -A && git diff --cached --check` → exit 0 (plain `git diff --check` is vacuous for untracked files).
 - Negative evidence (planted, then reverted): type error in `http.mojo` → check.sh exit 1 at "build package"; `from flare.http import ...` in `app.mojo` → check.sh exit 1 at "architecture boundary"; misformatted function → check.sh exit 1 at "format"; router changed to `if True:` → test.sh exit 1 (3 tests fail); test file whose `main` never runs the suite → test.sh exit 1; `muntin_flare_adapter` identifier in core → check.sh exit 1; unused variable in a test → check.sh exit 1 at "build tests" (`--Werror`).

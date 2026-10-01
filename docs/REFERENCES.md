@@ -47,5 +47,5 @@ As reviewed, Flare describes itself as a full Mojo networking stack with HTTP/1.
 
 When M1 begins, pin a released tag and verify its current license, supported Mojo version, package instructions, and adapter-relevant API from the repository at that time.
 
-Pinned (M1-001, checked 2026-10-01): release `v0.11.0` (tag object `50fac2b6`, commit `59bda50f46853f7351eef12f1737f7fb2287de71`), MIT license. Its `pixi.toml` and `recipe.yaml` declare `mojo >=1.1.0,<2.0.0`; it is installed as a pixi-build git source dependency as its README describes. The GitHub release is not marked immutable, so `pixi.lock`'s commit hash is the reproducible reference.
+Pinned (M1-001, checked 2026-10-01): release `v0.11.0` (tag object `50fac2b6`, commit `59bda50f46853f7351eef12f1737f7fb2287de71`), MIT license. Its `pixi.toml` and `recipe.yaml` declare `mojo >=1.1.0,<2.0.0`; it is installed as a pixi-build git source dependency as its README describes. The GitHub release is not marked immutable, so `pixi.lock`'s commit hash is the reproducible reference. Flare's build backend (`pixi-build-rattler-build >=0.3.13`, declared by Flare) is resolved at install time and is not recorded in `pixi.lock`; the source commit and its build/host packages are.
 - Release notes: https://github.com/ehsanmok/flare/releases/tag/v0.11.0
