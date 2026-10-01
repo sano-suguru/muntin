@@ -3,7 +3,14 @@
 This file is a concise factual handoff between coding sessions. Keep it short enough to read at the start of every session.
 
 ## Active milestone
-M2 — typed application ergonomics. M2-002 (path/query boundary, one `Int` query value) has passing evidence on PR #8 (not merged). M2-001 (one `Int` path parameter) is merged (PR #7). M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (PR #6). M0 and M0.5 are merged (PRs #1, #2).
+M2 — typed application ergonomics. M2-003 (handler-storage decision gate) is the current item. M2-002 (path/query boundary, one `Int` query value) is merged (PR #8). M2-001 (one `Int` path parameter) is merged (PR #7). M1 (Flare transport adapter) is complete: M1-001 (PR #4), M1-002 (PR #5), M1-003 (PR #6). M0 and M0.5 are merged (PRs #1, #2).
+
+## M2-003 result (decision only; production unchanged)
+- Decision: production `App` moves from the closed `Variant` to a private typed box with pointer erasure, in a separate behavior-preserving PR before any new handler shape. Details, matrix, unsafe invariants, sources and thresholds: `docs/ARCHITECTURE.md` "Handler storage decision (M2)".
+- Deciding fact: a library-side `Variant` cannot name an application-defined type (`-> User`, `body: CreateUser`): `constraint failed: Type does not exist in Variant.`. The only safe workaround, `App[User]`, changes `App()`. Closures, trait fields, `Some`, `List[Trait]` and generic wrappers cannot store mixed shapes (12 `tests/spike_fail` fixtures). The M0.5 bits erasure relies on function-value representation; the handler-as-parameter API regresses syntax.
+- Box: the handler value moves into an `OwnedPointer[F]`; only its pointer is erased to `MutOpaquePointer[MutUntrackedOrigin]` and restored through `OwnedPointer(unsafe_from_opaque_pointer=)`. Invoke/clone/drop are instantiated with the same `F` in one generic `__init__`. Registration is 6 overloads (arity ≤ 2 x {`String`, `Reply`}), independent of parameter types; `raises` handlers need none extra. Projection for `Variant`: 14 arms/overloads/branches for Muntin-known types alone.
+- Spike: `tests/handler_storage_spike.mojo` (library side) + `tests/test_spike_handler_storage.mojo` (app side, 6/6): both candidates store all six fixture shapes in one list; ownership oracle via `ArcPointer.count()`; `App[R]` evidence. `check.sh` now builds tests with `-I tests` and checks `tests/spike_fail` diagnostics; `test.sh` runs with `-I tests`.
+- Also measured: `Int` is `comptime Int = Scalar[DType.int]` and cannot take `__extension`; `__extension` is undocumented in 1.1.0; a `comptime for` over `Variant.Ts` with a `comptime assert` default makes a missing dispatch branch a compile error (production still aborts at run time); non-raising `def` converts to a `raises` thin type.
 
 ## M2-002 result
 - Boundary: `Request(method, target, body)` splits the target at the first `?` into `path` (all that routes match) and `query` (raw, undecoded, `""` if absent). `TestClient.get(target)` and the Flare adapter pass the raw target; neither splits or parses the query. Adapter code unchanged (docstring and one contract assertion updated: `path == "/items"`, `query == "page=1&x"` instead of the raw target).
@@ -74,7 +81,7 @@ M2 — typed application ergonomics. M2-002 (path/query boundary, one `Int` quer
 
 ## Decisions in force
 - Muntin owns `App`/`Request`/`Response`; backends call `App.handle`. No backend trait until a second backend exists (A7).
-- Handlers are stored as thin function values in a `Variant` (M2-001) because `def() -> String` is a trait in Mojo 1.1.0 (repro and diagnostic in `docs/DX.md`). Users still write plain `def hello() -> String` / `def get_user(id: Int) -> String`.
+- Handlers are stored as thin function values in a `Variant` (M2-001) because `def() -> String` is a trait in Mojo 1.1.0 (repro and diagnostic in `docs/DX.md`). Users still write plain `def hello() -> String` / `def get_user(id: Int) -> String`. M2-003 decided to replace this with a typed box before any new shape (not yet implemented).
 - `TestClient[origin: Origin[mut=False]]` borrows the app via `Pointer`, so `TestClient(app)` matches DX without copying.
 - Request/Response own `String` data; no backend buffer lifetimes in public types.
 - `check.sh` asserts the `Mojo 1.1.0` prefix; upgrading Mojo is a deliberate change that must update the script and docs.
@@ -88,7 +95,7 @@ M2 — typed application ergonomics. M2-002 (path/query boundary, one `Int` quer
 - `muntin.testing` is imported by `main.mojo` only because `app.run()` does not exist; it is not the canonical example.
 
 ## Risks for later milestones
-- M2: typed return values (`-> User`) and more parameter types grow the `Variant` arm count per combination (projection: 14 arms for {Int, String} × arity ≤ 2 × two return types); decide storage before adding either. The M0.5 spike still tracks whether the unsafe prototype compiles. Raising handlers and closures are not supported.
+- M2 storage migration (next PR): Mojo 1.1.0 has no private fields, so the box's pairing invariant (fields written only in `__init__`/copy-init) is by module confinement and review; add a `check.sh` rule that `unsafe_` appears only in that module. `List[T: AnyType]` is `Copyable` only when `T` is, so if routes need only be `Movable`, `_clone` (and its unsafe path) can be dropped. Application-defined parameter types (bodies) will need a trait-bounded adapter, not `_from_arg`'s type-equality dispatch. Closures and captured state remain unsupported.
 - Responses carry no Content-Type on the wire (observed in M1-003); Muntin `Response` has no headers yet.
 - Absolute-form request targets (`http://host/path`) are not handled: the whole target becomes `path` and 404s. Flare's client sends origin-form; a proxy-facing server could receive absolute-form.
 - CI: `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19. Current green evidence is ubuntu24; if the flare job breaks after that date, compare `ImageOS`/`ImageVersion` in the `runner image` step before blaming Muntin or Flare.
@@ -102,4 +109,4 @@ M2 — typed application ergonomics. M2-002 (path/query boundary, one `Int` quer
 None.
 
 ## Next smallest step
-Decide production handler storage before adding any handler shape (including a one-arm `String` query value). Bounded investigation on Mojo 1.1.0: keep the closed `Variant` vs. typed trampoline/erasure vs. compile-time specialization vs. any other safe representation, measured against the 14-arm projection in `docs/ARCHITECTURE.md`. The M0.5 unsafe prototype is evidence, not the answer. Then `docs/SPEC.md` M2 order: request-body conversion, typed responses.
+M2-004: migrate production `App` storage to the typed box, behavior-preserving: same two shapes (`def() -> String`, `def(Int) -> String`), all `tests/compile_fail` fixtures, `test_app`, adapter and loopback parity green, the ownership oracle ported to production storage, unsafe confined to one private module with a `check.sh` rule. No new handler shape in that PR. Then `docs/SPEC.md` M2 order: request-body conversion, typed responses.

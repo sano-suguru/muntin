@@ -15,7 +15,7 @@ pixi run --frozen mojo --version
 failed=0
 for f in "${files[@]}"; do
     printf '\n== %s\n' "$f"
-    if ! out="$(pixi run --frozen mojo run -I src "$f" 2>&1)"; then
+    if ! out="$(pixi run --frozen mojo run -I src -I tests "$f" 2>&1)"; then
         failed=1
     fi
     printf '%s\n' "$out"

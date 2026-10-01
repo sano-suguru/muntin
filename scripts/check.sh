@@ -40,7 +40,7 @@ echo "ok"
 
 step "build tests"
 for t in tests/test_*.mojo; do
-    "${MOJO[@]}" build --Werror -I src "$t" -o "$tmp/$(basename "$t" .mojo)"
+    "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$tmp/$(basename "$t" .mojo)"
 done
 echo "ok"
 
@@ -61,6 +61,28 @@ for t in tests/compile_fail/*.mojo; do
         exit 1
     fi
     echo "ok: $t -> $expected"
+done
+
+step "handler-storage spike negatives (tests/spike_fail must not build)"
+# Compile-time evidence for docs/ARCHITECTURE.md "Handler storage decision
+# (M2)". The expected text is the compiler's own diagnostic; a fixture that
+# starts compiling after a toolchain change means the decision must be revisited.
+for t in tests/spike_fail/*.mojo; do
+    expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
+    if [[ -z "$expected" ]]; then
+        echo "error: $t has no expected diagnostic" >&2
+        exit 1
+    fi
+    if "${MOJO[@]}" build -I src -I tests "$t" -o "$tmp/spike_fail" >"$tmp/log" 2>&1; then
+        echo "error: $t compiled; revisit the handler-storage decision" >&2
+        exit 1
+    fi
+    if ! grep -qF "$expected" "$tmp/log"; then
+        cat "$tmp/log" >&2
+        echo "error: $t failed without '$expected'" >&2
+        exit 1
+    fi
+    echo "ok: $t"
 done
 
 step "build example"
