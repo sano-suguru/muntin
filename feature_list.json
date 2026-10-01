@@ -1,0 +1,187 @@
+{
+  "schema_version": 2,
+  "project": "Muntin",
+  "active_milestone": "M0",
+  "rules": {
+    "passing_requires_executable_evidence": true,
+    "do_not_edit_acceptance_to_match_implementation": true,
+    "do_not_mark_multiple_features_passing_without_direct_evidence": true
+  },
+  "features": [
+    {
+      "id": "M0-001",
+      "priority": 1,
+      "category": "bootstrap",
+      "description": "Initialize a coherent Muntin Mojo project for the verified stable toolchain and record the exact toolchain version.",
+      "acceptance": [
+        "Project layout is valid for the verified stable Mojo toolchain.",
+        "The exact Mojo version used for verification is recorded in project documentation or canonical check output.",
+        "A clean repository user can discover the canonical verification commands from README/docs."
+      ],
+      "passes": true,
+      "evidence": [
+        "pixi run --frozen mojo --version -> 'Mojo 1.1.0 (8189361e)' (pixi 0.81.0); pixi.lock pins mojo-1.1.0 and mojo-compiler-1.1.0 for osx-arm64 and linux-64.",
+        "./scripts/check.sh -> exit 0; 'toolchain' step prints 'Mojo 1.1.0 (8189361e)' and fails on any other version; 'build package' step: mojo precompile --Werror src/muntin -> ok.",
+        "README.md 'Development' section lists ./scripts/check.sh, ./scripts/test.sh and git diff --check plus the Mojo version."
+      ]
+    },
+    {
+      "id": "M0-002",
+      "priority": 2,
+      "category": "verification",
+      "description": "Provide reliable canonical check and test scripts.",
+      "acceptance": [
+        "scripts/check.sh exists, is executable, and returns nonzero on relevant build/static failures.",
+        "scripts/test.sh exists, is executable, and runs executable Muntin tests.",
+        "Both scripts exit 0 on the verified M0 implementation."
+      ],
+      "passes": true,
+      "evidence": [
+        "./scripts/check.sh -> exit 0 (toolchain, format, architecture boundary, build package, build tests --Werror, build example).",
+        "./scripts/test.sh -> exit 0 (tests/test_app.mojo: 'Summary ... 6 tests run: 6 passed , 0 failed , 0 skipped').",
+        "Negative (planted then reverted): type error in src/muntin/http.mojo -> check.sh exit 1 at 'build package' ('cannot implicitly convert StringLiteral[\"x\"] value to Int'); misformatted function -> check.sh exit 1 at 'format'; 'from flare.http import Request as FlareRequest' in app.mojo -> check.sh exit 1 at 'architecture boundary'; unused variable in a test -> check.sh exit 1 at 'build tests'.",
+        "Negative (planted then reverted): router condition replaced with 'if True:' -> test.sh exit 1 (3 FAIL); test file whose main() never runs TestSuite -> test.sh exit 1 ('ran no tests')."
+      ]
+    },
+    {
+      "id": "M0-003",
+      "priority": 3,
+      "category": "core",
+      "description": "Implement the minimal Muntin-owned application contracts for request dispatch.",
+      "acceptance": [
+        "Muntin owns the application entry point and Request/Response contracts or documented proven equivalents.",
+        "A handler can be registered and dispatched for a static GET route.",
+        "Muntin core/public modules do not import Flare."
+      ],
+      "passes": true,
+      "evidence": [
+        "src/muntin/{__init__,http,app}.mojo define Muntin-owned App, Request, Response; App.get[path](handler) registers a static GET route; App.handle(Request) -> Response dispatches.",
+        "./scripts/test.sh -> PASS test_get_hello_through_backend_seam (app.handle(Request(\"GET\", \"/hello\")) -> 200 'hello').",
+        "./scripts/check_boundaries.sh (run by check.sh) -> 'ok: no Flare/socket imports in src/muntin'; planted Flare import and 'muntin_flare_adapter' identifier each -> exit 1."
+      ]
+    },
+    {
+      "id": "M0-004",
+      "priority": 4,
+      "category": "vertical_slice",
+      "description": "Prove GET /hello returns status 200 and body hello through real Muntin routing/application dispatch.",
+      "acceptance": [
+        "An executable test sends a GET /hello request through Muntin's application dispatch path.",
+        "The observed response status is 200.",
+        "The observed response body is hello.",
+        "The test does not bypass routing by calling the hello handler directly."
+      ],
+      "passes": true,
+      "evidence": [
+        "./scripts/test.sh -> PASS test_get_hello_through_test_client (TestClient(app).get(\"/hello\") -> status 200, text 'hello'), test_get_hello_through_backend_seam, test_router_selects_matching_route, test_unregistered_path_is_not_found, test_method_mismatch_is_not_found; 6 tests run: 6 passed.",
+        "Tests never call hello() directly; mutation 'if True:' in App.handle route matching -> 3 tests FAIL, test.sh exit 1. Independent reviewer mutations (ignore path, ignore method, 404->200, TestClient hardcoding 'hello') were each caught."
+      ]
+    },
+    {
+      "id": "M0-005",
+      "priority": 5,
+      "category": "architecture",
+      "description": "Prove transport replaceability with an in-memory/reference backend or TestClient.",
+      "acceptance": [
+        "The application can be driven without opening a real network socket.",
+        "The same Muntin application seam intended for real backend adapters is exercised.",
+        "No public application API exposes or requires Flare types."
+      ],
+      "passes": true,
+      "evidence": [
+        "./scripts/test.sh -> PASS test_get_hello_through_test_client: muntin.testing.TestClient builds a Muntin Request and calls App.handle, the documented backend seam (docs/ARCHITECTURE.md 'Implemented M0 layout').",
+        "src/muntin/testing.mojo imports only .app and .http; check_boundaries.sh -> 'ok: no Flare/socket imports in src/muntin'.",
+        "Public exports (src/muntin/__init__.mojo): App, Request, Response only; none reference Flare."
+      ]
+    },
+    {
+      "id": "M0-006",
+      "priority": 6,
+      "category": "dx",
+      "description": "Keep the M0 public surface compatible with Muntin's canonical DX direction without inventing unsupported Mojo syntax.",
+      "acceptance": [
+        "The checked-in Hello World example/test uses only Muntin-owned application concepts.",
+        "Any deviation from a docs/DX.md target syntax caused by Mojo is documented with toolchain/compiler evidence.",
+        "M0 does not expose backend/runtime machinery merely to register an ordinary route."
+      ],
+      "passes": true,
+      "evidence": [
+        "main.mojo (Hello World) uses only muntin.App and muntin.testing.TestClient; check.sh 'build example' -> ok; ./build/muntin prints '200 hello'.",
+        "app.get[\"/hello\"](hello), TestClient(app), client.get, response.status, response.text() and Response.text(\"ok\", status=201) compile and run as in docs/DX.md (tests/test_app.mojo).",
+        "Mojo 1.1.0 limitation recorded in docs/DX.md 'Proven vs. target status': storing 'def() -> String' in a struct field -> \"error: struct fields do not support trait types; 'def() -> String' is a trait\"; Muntin stores 'def() thin -> String' internally, application handlers unchanged.",
+        "Registering a route requires no backend/runtime type: App.get takes only a route literal and a handler."
+      ]
+    },
+    {
+      "id": "M0-007",
+      "priority": 7,
+      "category": "docs",
+      "description": "Finish M0 with accurate architecture, DX, and handoff state.",
+      "acceptance": [
+        "docs/ARCHITECTURE.md matches the implemented dependency direction.",
+        "docs/DX.md clearly distinguishes proven syntax from future target syntax.",
+        "AGENT_PROGRESS.md records successful verification and the next work item.",
+        "git diff --check succeeds."
+      ],
+      "passes": true,
+      "evidence": [
+        "docs/ARCHITECTURE.md 'Implemented M0 layout' documents App.handle as the seam, testing -> app -> http dependency direction and the boundary check; docs/DX.md 'Proven vs. target status' separates proven from target syntax.",
+        "AGENT_PROGRESS.md records verification commands, decisions, limitations and next step (M1-001).",
+        "git add -A && git diff --cached --check -> exit 0."
+      ]
+    },
+    {
+      "id": "M1-001",
+      "priority": 101,
+      "category": "dependency",
+      "description": "Pin and document a released Flare version compatible with the verified Mojo toolchain.",
+      "acceptance": [
+        "Flare dependency uses a released tag or other reproducible immutable reference.",
+        "Verified Mojo and Flare versions are recorded.",
+        "Core/public Muntin modules remain buildable without importing Flare."
+      ],
+      "passes": false,
+      "evidence": []
+    },
+    {
+      "id": "M1-002",
+      "priority": 102,
+      "category": "adapter",
+      "description": "Implement the Flare adapter behind the existing Muntin backend seam.",
+      "acceptance": [
+        "Adapter depends inward on Muntin application contracts.",
+        "No application handler signature requires a Flare type.",
+        "Adapter contract tests pass."
+      ],
+      "passes": false,
+      "evidence": []
+    },
+    {
+      "id": "M1-003",
+      "priority": 103,
+      "category": "e2e",
+      "description": "Prove a real localhost HTTP round trip through Flare and Muntin.",
+      "acceptance": [
+        "A real local HTTP request enters through Flare, crosses the Muntin adapter, dispatches a Muntin route, and returns the expected response.",
+        "The equivalent application behavior still passes through the in-memory backend.",
+        "All M0 checks remain passing without weakening their intent."
+      ],
+      "passes": false,
+      "evidence": []
+    },
+    {
+      "id": "M2-001",
+      "priority": 201,
+      "category": "typed_routing",
+      "description": "Deliver one path parameter to a handler as Int without manual application parsing.",
+      "acceptance": [
+        "The public syntax is proven to compile on the supported Mojo version and documented in docs/DX.md.",
+        "GET /users/42 yields handler input Int(42).",
+        "Invalid integer input produces documented client-error behavior.",
+        "The same handler signature works with in-memory and any enabled real backend."
+      ],
+      "passes": false,
+      "evidence": []
+    }
+  ]
+}

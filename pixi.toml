@@ -9,7 +9,8 @@ version = "0.1.0"
 run = "mojo run -I src main.mojo"
 build = "mkdir -p build && mojo build -I src main.mojo -o build/muntin"
 package = "mkdir -p build && mojo precompile src/muntin -o build/muntin.mojoc"
-test = "mojo run -I src tests/test_core.mojo"
+check = "./scripts/check.sh"
+test = "./scripts/test.sh"
 format = "mojo format src tests main.mojo"
 
 [dependencies]
