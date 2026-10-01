@@ -30,6 +30,7 @@ Before changing code:
 - Do not implement speculative M1+ features while M0 acceptance remains unmet.
 - Do not weaken, delete, or rewrite acceptance criteria or tests merely to make them pass.
 - Never mark a feature passing until a real executable check exercises the requirement successfully. Syntax-only checks, commands that failed to start, and inspection alone are not passing evidence.
+- When CI fails, first classify the cause (Muntin bug, toolchain bug, packaging, runner/image). Do not change Muntin core to work around a non-Muntin cause.
 - When current Mojo or dependency behavior matters, verify it from the installed toolchain and/or authoritative upstream documentation instead of guessing.
 - Treat `docs/DX.md` examples as design constraints. If current Mojo cannot express one exactly, prove the limitation with a minimal reproduction and implement the closest type-safe alternative.
 - For architecture, ownership/lifetime, backend-seam, or public-API changes, use a fresh-context skeptical review when practical.

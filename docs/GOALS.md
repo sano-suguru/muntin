@@ -12,7 +12,7 @@ Paste at the beginning of the M0 run:
 
 ## M1 — Flare adapter
 
-Use only after all M0 features have executable passing evidence:
+Use only after all M0 and M0.5 features have executable passing evidence and the M0.5 handler design is confirmed:
 
 ```text
 /goal Complete Muntin milestone M1 in docs/SPEC.md by adding a pinned released Flare backend behind the existing Muntin backend seam. The goal is met only when: (1) compatible Mojo and Flare versions are recorded reproducibly; (2) application handlers and public Muntin Request/Response/App contracts remain free of Flare types; (3) Muntin core does not import Flare and the adapter depends inward on Muntin contracts; (4) adapter contract tests pass; (5) a real localhost HTTP request travels through Flare -> Muntin adapter -> Muntin application dispatch -> response and returns the expected status/body; (6) the same application behavior is still exercised successfully by the in-memory backend; (7) all M0 checks remain passing without weakening their intent; (8) ./scripts/check.sh, ./scripts/test.sh, and git diff --check exit 0; (9) feature_list.json and AGENT_PROGRESS.md contain concrete evidence; and (10) the final turn shows the exact successful verification commands. Do not replace Muntin's application/router model with Flare's APIs, do not expose Flare publicly, and do not expand into unrelated M2 features. If Flare and the current Mojo toolchain are incompatible, preserve M0 architecture and document the smallest reproducible incompatibility before declaring the goal blocked.
