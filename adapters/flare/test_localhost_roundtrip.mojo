@@ -18,6 +18,11 @@ M2-001 adds a second server whose `App` has the typed route
 over loopback and through `TestClient`, must give the same status and body.
 Flare and the adapter only carry the request target; `{id}` matching and
 `Int` conversion happen in `App.handle`.
+
+M2-002 registers `/items?{limit}` -> `list_items(limit: Int)` on that same
+server and sends targets with queries: Muntin's `Request` splits path from
+query, `App.handle` extracts and converts `limit`, and the results must equal
+`TestClient`'s for the same targets.
 """
 
 from std.ffi import c_uint, external_call
@@ -42,6 +47,10 @@ def get_user(id: Int) -> String:
     return String(id)
 
 
+def list_items(limit: Int) -> String:
+    return "items " + String(limit)
+
+
 def hello_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -52,6 +61,7 @@ def users_app() -> App:
     var app = App()
     app.get["/hello"](hello)
     app.get["/users/{id}"](get_user)
+    app.get["/items?{limit}"](list_items)
     return app^
 
 
@@ -139,6 +149,16 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/users/abc"), 400, String("Bad Request")),
             (String("/users"), 404, String("Not Found")),
             (String("/hello"), 200, String("hello")),
+            # M2-002: routing sees the path only; the query is extracted by
+            # Muntin. "010" -> "items 10" only if the handler got an Int.
+            (String("/hello?x=1"), 200, String("hello")),
+            (String("/users/42?x=1"), 200, String("42")),
+            (String("/items?limit=010"), 200, String("items 10")),
+            (String("/items?other=z&limit=10"), 200, String("items 10")),
+            (String("/items"), 400, String("Bad Request")),
+            (String("/items?limit=abc"), 400, String("Bad Request")),
+            (String("/items?limit=1&limit=2"), 400, String("Bad Request")),
+            (String("/missing?limit=1"), 404, String("Not Found")),
         ]
         for want in expected:
             var path = want[0]

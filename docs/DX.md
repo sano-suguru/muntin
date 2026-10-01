@@ -64,12 +64,36 @@ Semantics:
 - Binding is positional. The handler's one `Int` parameter receives the one `{name}` segment; the name is not compared with the handler's parameter name, because Mojo 1.1.0 reflection does not expose function parameter names. `app.get["/users/{user}"](get_user)` is accepted.
 - `Int` conversion: an optional `-` followed by one or more ASCII digits, within `Int` range (`-9223372036854775808` to `9223372036854775807`); leading zeros are allowed (`/users/042` -> `Int(42)`). Anything else, including forms Mojo's `Int(String)` accepts (`+42`, ` 42`, `4_2`), returns 400 `Bad Request` without calling the handler.
 - The first registered route whose method and path match handles the request: with `/users/me` registered before `/users/{id}`, `GET /users/me` goes to the former. A conversion failure is 400; it does not fall through to later routes.
-- Arity is checked at compile time at the registration call: `app.get["/users/{id}"](hello)` fails with `constraint failed: route declares a path parameter but the handler takes none`; `app.get["/users"](get_user)` and `app.get["/users/{id}/posts/{post}"](get_user)` fail with `constraint failed: handler takes one Int path parameter; route must declare one`.
-- The request path is the raw target, query included (M1 policy), so `/users/42?x=1` is 400 and `/hello?x=1` is 404 until query handling is designed. Percent-encoding is not decoded.
+- Arity is checked at compile time at the registration call: `app.get["/users/{id}"](hello)` fails with `constraint failed: route declares a path parameter but the handler takes none`; `app.get["/users"](get_user)` and `app.get["/users/{id}/posts/{post}"](get_user)` fail with `constraint failed: handler takes one Int parameter; route must declare exactly one path or query parameter` (M2-002 wording; M2-001 said `path parameter; route must declare one`).
+- Routes match the path only (M2-002, below): `/users/42?x=1` passes `Int(42)` and `/hello?x=1` is 200. Percent-encoding is not decoded.
+
+Typed query parameter (M2-002), proven by the same tests and fixtures:
+
+```mojo
+def list_items(limit: Int) -> String:
+    return "items " + String(limit)
+
+
+app.get["/items?{limit}"](list_items)    # the literal names the query key
+# GET /items?limit=10          -> 200 "items 10"
+# GET /items?limit=010         -> 200 "items 10"  (list_items received Int(10))
+# GET /items?other=z&limit=10  -> 200 "items 10"  (other keys are ignored)
+# GET /items, /items?limit=abc, /items?limit=1&limit=2 -> 400 "Bad Request" (list_items not called)
+# GET /hello?x=1               -> 200 "hello"     (no-query routes ignore the query)
+```
+
+Semantics:
+
+- `Request(method, target, body)` splits the target at its first `?`: `request.path` is the text before it and is all that routes match; `request.query` is the text after it, undecoded (`""` when there is no `?` or nothing follows it). `TestClient.get(target)` and the Flare adapter pass the target as received, so both backends get this one rule. `#` has no meaning (a fragment is not part of an HTTP request target), so `/items?limit=10#x` has value `10#x` and is 400.
+- The route literal's query part, after `?`, is `{key}` items separated by `&`. A key is non-empty, visible ASCII (`!` to `~`, the bytes an HTTP request target can carry), and contains none of `{}=&?#`; an empty query part, static text such as `?limit`, `{}`, a space or other non-visible byte (`?{lim it}`, `?{límit}`), or one of those characters is a compile error (`malformed route literal`). Path and query placeholders together must match the handler's arity: `app.get["/items?{limit}"](hello)` fails with `constraint failed: route declares a query parameter but the handler takes none`, and `app.get["/users/{id}?{limit}"](list_items)` with `constraint failed: handler takes one Int parameter; route must declare exactly one path or query parameter` (the same text as `app.get["/users"](get_user)`). One handler cannot take a path and a query value yet.
+- The key is written in the route literal because Mojo 1.1.0 cannot reflect a function's parameter names: `reflect[Q].field_names()` returns `limit` for `struct Q` with field `limit`, but `reflect[type_of(list_items)]` has no parameter-name accessor (`'Reflected[def(limit: Int) thin -> String]' value has no attribute 'param_names'`; its `name()` is `std.builtin._stubs.__MLIRType[<unprintable>]`). Binding is positional, as for path parameters: `app.get["/items?{count}"](list_items)` is accepted.
+- Parsing the request query: pairs are separated by `&`; a pair's key and value split at its first `=`; a pair without `=` has an empty value; empty pairs are skipped. Keys compare byte for byte, case-sensitively. Nothing is percent-decoded and `+` is not a space, so `lim%69t=1` does not match `limit` and `limit=%31%30` is not `10`.
+- The value converts with the path rule (optional `-`, ASCII digits, `Int` range). A missing key, a key that appears more than once (even with equal values), an empty value, or a non-integer value returns 400 `Bad Request` without calling the handler.
+- The query takes no part in route selection. With `/items?{limit}` registered before `/items`, `GET /items` matches the first route and is 400; it does not fall through.
 
 Current handler shapes are exactly `def() -> String` and `def(Int) -> String`, non-raising. Other shapes (another return type such as `User`, more or non-`Int` parameters, `raises`) fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) thin -> String'`.
 
-Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, `app.post`, multiple or non-`Int` path parameters, query/body extraction, typed response conversion beyond `String` (so `get_user(id: Int) -> User` from section 2 is not yet accepted), parameter-name checking, middleware, and state.
+Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, `app.post`, multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, body extraction, typed response conversion beyond `String` (so `get_user(id: Int) -> User` from section 2 is not yet accepted), parameter-name checking, middleware, and state.
 
 Mojo facts discovered while proving the above:
 
@@ -195,6 +219,8 @@ app.get["/search"](search)
 For `GET /search?query=mojo&limit=10`, the handler should receive typed values rather than raw strings. Missing required values and invalid conversions should become clear client errors.
 
 Exact optional/default extraction semantics are M2 work and must be proven against Mojo's callable/reflection capabilities before they are frozen.
+
+Status (M2-002): one required `Int` query value is proven as `app.get["/items?{limit}"](list_items)` with `def list_items(limit: Int) -> String`; see "Proven vs. target status". The key sits in the route literal because handler parameter names cannot be reflected, so the name-based `app.get["/search"](search)` above is not possible on Mojo 1.1.0. `String` values, several keys, and defaults are not implemented.
 
 ## 4. Typed request bodies
 

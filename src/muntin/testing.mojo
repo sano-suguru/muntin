@@ -12,5 +12,6 @@ struct TestClient[origin: Origin[mut=False]]:
     def __init__(out self, ref[Self.origin] app: App):
         self._app = Pointer(to=app)
 
-    def get(self, path: String) -> Response:
-        return self._app[].handle(Request("GET", path))
+    def get(self, target: String) -> Response:
+        """Sends `GET target`; `target` is a path with an optional query."""
+        return self._app[].handle(Request("GET", target))
