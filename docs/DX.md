@@ -171,7 +171,7 @@ Mojo facts discovered while proving the above:
   fails with `error: struct fields do not support trait types; 'def() -> String' is a trait, use a concrete type or compile-time generic`, and passing `hello` to a parameter of that type fails with `cannot be converted from 'def hello() thin -> String' to 'def() -> String'`. Muntin therefore accepts thin function types internally (`def() thin raises E -> String` since M2-011). Application code is unaffected: an ordinary `def hello() -> String` is passed as-is.
 - A `@staticmethod def text(body, status=200) -> Response` and an instance `def text(self) -> String` can coexist on `Response`, so both `Response.text("ok", status=200)` and `response.text()` from this document compile as written.
 - `TestClient(app)` borrows without copying via an inferred origin parameter (`struct TestClient[origin: Origin[mut=False]]` holding `Pointer[App, origin]`). The spellings `ImmutOrigin` and `ImmutableOrigin` do not exist in Mojo 1.1.0.
-- Overloading `get` on handler shape (`def() thin -> String` vs. `def(Request) thin -> ...`) resolves correctly in a scratch experiment, so the raw-request escape hatch does not require different registration syntax. Not implemented in M0.
+- Overloading `get` on handler shape (`def() thin -> String` vs. `def(Request) thin -> ...`) resolves correctly in a scratch experiment, so the raw-request escape hatch does not require different registration syntax. Not implemented in M0 (decided in M2-014, section 9).
 
 ### Handler model (M0.5 spike)
 
