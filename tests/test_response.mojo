@@ -63,6 +63,19 @@ struct Created(ToResponse):
         return Response.text(self.location, status=201)
 
 
+struct Token(ToResponse):
+    """Conforms with `var self`, the requirement's own convention."""
+
+    var value: String
+
+    def __init__(out self, value: String):
+        self.value = value
+
+    def to_response(var self) -> Response:
+        _bump(CONVERSIONS)
+        return Response.text(self.value^, status=203)
+
+
 struct NewUser(FromBody):
     var name: String
 
@@ -94,6 +107,11 @@ def create_user(var body: NewUser) -> User:
 def create_team(body: NewUser) -> Created:
     _bump(HANDLER_CALLS)
     return Created("/teams/" + body.name)
+
+
+def issue_token(id: Int) -> Token:
+    _bump(HANDLER_CALLS)
+    return Token("token " + String(id))
 
 
 def teapot() -> Response:
@@ -142,6 +160,7 @@ def response_app() -> App:
     app.get["/search?{id}"](get_user)
     app.post["/users"](create_user)
     app.post["/teams"](create_team)
+    app.get["/tokens/{id}"](issue_token)
     app.get["/teapot"](teapot)
     app.get["/items/{id}"](item_status)
     app.post["/raw"](create_raw)
@@ -163,6 +182,7 @@ def test_result_types_are_application_defined() raises:
     comptime assert not conforms_to(User, Copyable)
     comptime assert conforms_to(User, ToResponse)
     comptime assert conforms_to(Created, ToResponse)
+    comptime assert conforms_to(Token, ToResponse)
     comptime assert conforms_to(Response, ToResponse)
     # `String`-compatible results need no conformance; they stay on the
     # `String` overloads (below), never on the generic one.
@@ -186,7 +206,8 @@ def test_result_chooses_its_status() raises:
     var app = response_app()
     _reset()
     _expect(app, "POST", "/teams", 201, "/teams/Ada")
-    assert_equal(_count(CONVERSIONS), 1)
+    _expect(app, "GET", "/tokens/4", 203, "token 4")
+    assert_equal(_count(CONVERSIONS), 2)
 
 
 def test_response_result_keeps_its_status_and_body() raises:

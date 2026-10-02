@@ -332,7 +332,7 @@ def health() -> Response:
 
 Convenience must not eliminate low-level control.
 
-Status (M2-008): **production**. Decided in M2-007 (`docs/ARCHITECTURE.md`, "Typed response decision (M2-007)"); proven by `tests/test_response.mojo`, `tests/storage_fail/non_conforming_return_handler.mojo`, `tests/body_fail/post_non_conforming_return.mojo`, `tests/compile_fail/typed_*.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. An application result type conforms to the public `muntin.ToResponse` in its own module, as body types conform to `FromBody`:
+Status (M2-008): **production**. Decided in M2-007 (`docs/ARCHITECTURE.md`, "Typed response decision (M2-007)"); proven by `tests/test_response.mojo`, `tests/storage_fail/{non_conforming_return_handler,raising_typed_handler,raising_to_response}.mojo`, `tests/body_fail/post_non_conforming_return.mojo`, `tests/compile_fail/typed_*.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. An application result type conforms to the public `muntin.ToResponse` in its own module, as body types conform to `FromBody`:
 
 ```mojo
 from muntin import App, Response, ToResponse

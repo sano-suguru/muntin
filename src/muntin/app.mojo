@@ -17,9 +17,9 @@ from .http import Request, Response, ToResponse
 # `Response`) gets `R.to_response()` (`_converted[R]`). The policy is a
 # compile-time parameter of the adapter, so extraction never looks at the
 # result type. The generic overloads bound `R` by the trait, so a
-# `String`-compatible result is never a candidate for them. The handler and its adapter are stored
-# together in an `_Erased` box (`_handler_storage.mojo`), so dispatch is one
-# call whatever the shape. Where a value comes from (path segment or query
+# `String`-compatible result is never a candidate for them. The handler and
+# its adapter are stored together in an `_Erased` box
+# (`_handler_storage.mojo`), so dispatch is one call whatever the shape. Where a value comes from (path segment or query
 # key) is route data, not part of the shape, so `_call_int` serves both
 # `/users/{id}` and `/items?{limit}`. Whether a route takes the request body
 # is route data too (`_Route.body`): `App.handle` appends the body as the
