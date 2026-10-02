@@ -90,8 +90,9 @@ done
 # tests/spike_fail: evidence for docs/ARCHITECTURE.md "Handler storage decision
 # (M2)"; one that starts compiling after a toolchain change means the decision
 # must be revisited. tests/storage_fail: production handler storage (M2-004)
-# rejects a mismatched adapter and copies, and App.get still accepts only the
-# supported handler shapes. tests/extraction_fail: evidence for
+# rejects a mismatched adapter and copies, App.get still accepts only the
+# supported handler shapes, and result types must be String-compatible or
+# conform to the non-raising ToResponse (M2-008). tests/extraction_fail: evidence for
 # docs/ARCHITECTURE.md "Argument extraction decision" (M2-005).
 # tests/body_fail: App.post accepts only the body-only shape and App.get takes
 # no body handler (M2-006). tests/response_fail: evidence for
