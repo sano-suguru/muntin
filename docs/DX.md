@@ -493,7 +493,7 @@ def webhook(req: Request) -> Response:
 app.post["/webhook"](webhook)
 ```
 
-The escape hatch matters for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. An earlier version of this example read `req.headers`; `Request` has no headers yet, and they remain a separate target.
+The escape hatch matters for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. An earlier version of this example read `req.headers.get("x-signature")`; `Request` has no headers yet. Headers remain the target for exactly this case (a signature header is how most webhooks authenticate): when `Request` gains them, this example reads the signature from them.
 
 Decided in M2-014 (`docs/ARCHITECTURE.md`, "Raw Request decision (M2-014)"); not implemented yet, so production `app.post` still rejects this handler (with the `FromBody` message):
 

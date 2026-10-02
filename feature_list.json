@@ -545,8 +545,13 @@
         "Production unchanged: src/muntin and adapters/ byte-identical; no _Erased redesign, new unsafe code, headers, JSON, new methods, middleware/state, route expansion or Request redesign; TestClient and Flare depend only on App.handle(Request) -> Response.",
         "docs/ARCHITECTURE.md records the decision, rejected alternatives, compiler evidence, revisit conditions and the exact next production slice; DX/SPEC updated; planted mutations turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "tests/raw_spike.mojo (RawApp: production's eight overloads copied, plus get/post taking def(var Request) thin raises E -> Response, the body overloads' not B == Request guard, _call_raw rebuilding Request from four raw strings, production _Erased/adapters/_handler_error) + tests/test_spike_raw.mojo 8/8; tests/raw_fail (8) incl. equal_parameter_lists (ambiguous: list length decides).",
+        "Scratch copy of src/muntin with the slice applied (not retained): check.sh, test.sh, check_flare.sh pass; only body_fail/post_raw_handler (retires) and compile_fail/post_request_param (guard message) change. src/muntin and adapters/ unchanged vs main.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh (adapter 8/8, loopback 2/2) and git diff --check exit 0.",
+        "8 spike mutations planted and reverted, each red. Fresh-context review: no material issue; minors applied in docs."
+      ]
     }
   ]
 }
