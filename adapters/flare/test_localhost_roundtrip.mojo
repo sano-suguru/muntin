@@ -35,6 +35,12 @@ M2-008 registers typed results on that same server: `GET /people/{id}` and
 `POST /people` return `Person`, a move-only type defined here conforming to
 `muntin.ToResponse`, and `GET /teapot` returns a `Response` with status 418.
 `App.handle` converts the result; the adapter only carries the `Response`.
+
+M2-009 registers one route value then the body on that same server:
+`POST /accounts/{id}` and `POST /accounts?{id}` -> `update_account(id: Int,
+body: CreateUser) -> String`, and `POST /profiles/{id}` -> `update_person`
+returning `Person`. Valid path and query values, an invalid value, an invalid
+body and the typed result must equal `TestClient.post`.
 """
 
 from std.ffi import c_uint, external_call
@@ -125,6 +131,14 @@ def teapot() -> Response:
     return Response.text("short and stout", status=418)
 
 
+def update_account(id: Int, body: CreateUser) -> String:
+    return "account " + String(id) + " " + body.name
+
+
+def update_person(id: Int, var body: CreateUser) -> Person:
+    return Person(id, body.name)
+
+
 def hello_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -141,6 +155,9 @@ def users_app() -> App:
     app.get["/people/{id}"](get_person)
     app.post["/people"](create_person)
     app.get["/teapot"](teapot)
+    app.post["/accounts/{id}"](update_account)
+    app.post["/accounts?{id}"](update_account)
+    app.post["/profiles/{id}"](update_person)
     return app^
 
 
@@ -286,6 +303,52 @@ def test_typed_route_over_localhost_matches_test_client() raises:
                 String("Person(7, Ada)"),
             ),
             (String("/people"), String("Ada"), 400, String("Bad Request")),
+            # M2-009: "account 42 Ada" only if the route value reached the
+            # handler as Int(42) and the body as a converted CreateUser.
+            (
+                String("/accounts/042"),
+                String("name=Ada"),
+                200,
+                String("account 42 Ada"),
+            ),
+            (
+                String("/accounts?id=042"),
+                String("name=Ada"),
+                200,
+                String("account 42 Ada"),
+            ),
+            (
+                String("/accounts/abc"),
+                String("name=Ada"),
+                400,
+                String("Bad Request"),
+            ),
+            (
+                String("/accounts?id=abc"),
+                String("name=Ada"),
+                400,
+                String("Bad Request"),
+            ),
+            (
+                String("/accounts"),
+                String("name=Ada"),
+                400,
+                String("Bad Request"),
+            ),
+            (String("/accounts/1"), String("Ada"), 400, String("Bad Request")),
+            (String("/accounts?id=1"), String(""), 400, String("Bad Request")),
+            (
+                String("/profiles/5"),
+                String("name=Ada"),
+                200,
+                String("Person(5, Ada)"),
+            ),
+            (
+                String("/profiles/x"),
+                String("name=Ada"),
+                400,
+                String("Bad Request"),
+            ),
         ]
         for want in posts:
             var path = want[0]

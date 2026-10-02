@@ -424,6 +424,27 @@
         "./scripts/check_flare.sh -> exit 0 (adapter 8/8; loopback 2/2 with GET /people/{id}, POST /people -> Person and GET /teapot -> Response 418 equal to TestClient). git diff --check clean. CI verify + flare green on ubuntu24 20260927.320.1 and macos26 20260907.0351.1.",
         "Mutations planted and reverted, each red: conversion skipped, Response status lost, String no-arg overload removed (StaticString/String handlers stop compiling), conversion on bad Int or bad body, path/body extraction changed, trait bound dropped on GET(Int)/POST (fixtures lose the ToResponse note), generic GET() path assert dropped, unsafe import in app.mojo (check_unsafe.sh), storage module edited (diff vs main). Fresh-context review: no material issue; minors fixed."
       ]
+    },
+    {
+      "id": "M2-009",
+      "priority": 209,
+      "category": "request_body",
+      "description": "Production POST handler with exactly one Int route value followed by one typed FromBody body, returning String or R: ToResponse, using the M2-005 extraction contract and the M2-008 response contract.",
+      "acceptance": [
+        "Exactly two App.post overloads are added: def(Int, var B) thin -> String and def(Int, var B) thin -> R with R: ToResponse; B is an application-defined, possibly move-only FromBody type; the route value comes from exactly one path placeholder or one query placeholder with the existing Int rules; binding is positional (route value, then body), never by parameter name.",
+        "One adapter reuses the existing extraction and response policies: route value converted first, then the body, then the handler once, then _text or _converted[R] once. No match is 404 with no extraction, conversion or handler; an invalid matched path value, or a missing, duplicated, empty or invalid query value, is 400 before body conversion (a missing path segment does not match the route and is 404); a body conversion failure is 400 before the handler; no fallthrough after a matched route fails.",
+        "Executable evidence covers path and query sources and both return policies, with a move-only body and a move-only typed result; TestClient and real loopback through Flare agree for a valid path value + body, a valid query value + body, an invalid value, an invalid body and one ToResponse result.",
+        "Unsupported shapes stay closed at compile time: missing route value, too many route values (incl. path + query), a body type without FromBody, Int in the body slot, reversed (B, Int), two bodies, a raising handler, a result that is neither String-compatible nor ToResponse. Existing diagnostics are preserved where overload resolution does not inherently change.",
+        "_handler_storage.mojo and adapters/flare/muntin_flare.mojo unchanged, no new unsafe code; _call_none, _call_int and _call_body unchanged. Not added: several route values, path + query values together, two or optional bodies, String/builtin bodies, raising handlers or conversions, raw Request handlers, JSON, headers, new methods, middleware, state.",
+        "Planted mutations (ordering, source binding, handler after a conversion failure, swapped argument order, skipped response conversion, guards removed, storage/unsafe expansion) turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass locally, and CI verify + flare pass on Ubuntu and macOS."
+      ],
+      "passes": true,
+      "evidence": [
+        "src/muntin/app.mojo: _call_int_body[B, R, respond] (_parse_int(args[0]) raising into App.handle's 400, then B.from_body(args[1]) answering 400, then respond(handler(id, body^))); two post overloads (String / R: ToResponse) with identical route-arity, Int-guard and FromBody asserts. _handler_storage.mojo and adapters/flare/muntin_flare.mojo unchanged vs main.",
+        "./scripts/check.sh -> exit 0 (36 compile_fail incl. 8 new {,typed_}post_int_*; 12 body_fail incl. 6 new (B, Int)/two bodies/var Int/raising/raising typed/non-conforming result; post_int_and_body retired into tests). ./scripts/test.sh -> exit 0 (test_int_body 13/13; earlier suites unchanged).",
+        "./scripts/check_flare.sh -> exit 0 (adapter 8/8; loopback 2/2 incl. POST /accounts/{id}, /accounts?{id} and /profiles/{id} -> Person: valid path/query values, invalid value, missing query value, invalid body, typed result equal to TestClient). git diff --check clean. CI verify + flare green on ubuntu24 20260927.320.1 and macos26 20260907.0351.1.",
+        "22 mutations planted and reverted, each red: body before Int, fallthrough after a 400, body parsed as Int, route value as body, handler after either failure, body appended before the query value, response policy skipped, body flag dropped, registered as GET, each assert removed from either overload, R bound dropped, String overload removed, reversed overload added, unsafe import / storage edits (check_unsafe.sh, diff vs main). Fresh-context review: no material issue; minors fixed."
+      ]
     }
   ]
 }

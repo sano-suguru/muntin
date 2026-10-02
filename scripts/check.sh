@@ -94,8 +94,8 @@ done
 # supported handler shapes, and result types must be String-compatible or
 # conform to the non-raising ToResponse (M2-008). tests/extraction_fail: evidence for
 # docs/ARCHITECTURE.md "Argument extraction decision" (M2-005).
-# tests/body_fail: App.post accepts only the body-only shape and App.get takes
-# no body handler (M2-006). tests/response_fail: evidence for
+# tests/body_fail: App.post accepts only the body-only (M2-006) and the
+# route-value-then-body (M2-009) shapes, and App.get takes no body handler. tests/response_fail: evidence for
 # docs/ARCHITECTURE.md "Typed response decision (M2-007)".
 for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail; do
     step "$dir (must not build)"
