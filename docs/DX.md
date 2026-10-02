@@ -417,7 +417,32 @@ app.get["/users/{id}"](get_user)              # unchanged registration
 - Exception, a Mojo 1.1.0 limitation: a handler *value* whose type is spelled without `raises` (`var f: def() thin -> String = hello`, or a helper parameter of that type forwarded to `app.get`) no longer registers: `TODO: function type conversions between closures not supported yet` (`tests/storage_fail/typed_thin_value_handler.mojo`; it compiled before M2-011). Spell the type `def() thin raises Never -> String`, or make the helper generic: `def register[E: Deinitable](mut app: App, h: def() thin raises E -> String)`.
 - An error type must be `Deinitable`, because Muntin drops it: a linear error type is rejected at registration (`tests/storage_fail/linear_error_type.mojo`).
 - Request failures stay 400 and are decided before the handler: an invalid value in a matched path segment, a missing, duplicated or invalid query value, a body that `from_body` rejects. No route match, including a missing path segment, stays 404. Anything the handler raises is a fixed 500 with the body `Internal Server Error`, whatever the error says: the same message raised by the handler and by a failing conversion step gives 500 and 400. The error value is dropped; Muntin has no logging hook yet.
-- Returning and raising mean different things. A returned value goes through the response conversion; a raised value is a handler error and gets 500, even if its type conforms to `ToResponse`. Application-defined error responses are deferred: a handler that wants a specific status returns a `Response` (or a `ToResponse` result) instead of raising.
+- Returning and raising mean different things. A returned value goes through the response conversion; a raised value is a handler error and gets 500, even if its type conforms to `ToResponse`. Application-defined error responses are decided (M2-012, below) but not in production: today a handler that wants a specific status returns a `Response` (or a `ToResponse` result) instead of raising.
+
+Application-defined error responses, status (M2-012): **decided, not in production**. Decision and evidence: `docs/ARCHITECTURE.md`, "Error-response decision (M2-012)"; `tests/test_spike_error_response.mojo`, `tests/error_response_fail/`. An error type opts in by declaring a dedicated trait, separate from `ToResponse`; registration does not change:
+
+```mojo
+@fieldwise_init
+struct NotFound(Movable, ToErrorResponse):     # the opt-in, in the type's own declaration
+    var id: Int
+
+    def to_error_response(var self) -> Response:
+        return Response.text("no user " + String(self.id), status=404)
+
+
+def get_user(id: Int) raises NotFound -> User:
+    ...
+
+
+app.get["/users/{id}"](get_user)
+# GET /users/0   -> 404 "no user 0"          (NotFound.to_error_response; User not converted)
+# GET /users/abc -> 400 "Bad Request"        (get_user not called)
+```
+
+- Only the handler's declared error type decides: `raises T` converts if `T` declares `ToErrorResponse` (directly or through a refining trait). Bare `raises` (`Error`) has no opt-in and stays the fixed 500; Muntin never maps by message. A type that conforms only to `ToResponse`, or merely has a `to_error_response` method, stays 500 when raised.
+- A type may conform to both traits: returned, it converts with `to_response`; raised, with `to_error_response`.
+- One central place: an application that wants one mapping uses one error type with several kinds (a Mojo function declares one error type), or a trait of its own that refines `ToErrorResponse`.
+- The conversion consumes the error, works for move-only types and cannot raise.
 
 ## 7. Middleware
 
