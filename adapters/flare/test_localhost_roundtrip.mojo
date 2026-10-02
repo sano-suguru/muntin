@@ -55,6 +55,14 @@ String`, with `OutOfStock` defined here and declaring `muntin.ToErrorResponse`:
 its raise is answered 409 by `to_error_response`, in Muntin; the adapter only
 carries the final `Response`. A return and an invalid value are unchanged.
 Each must equal `TestClient`.
+
+M2-015 registers the raw `POST /webhook` -> `webhook(req: Request) raises
+Unsigned -> Response`, with `Unsigned` defined here and declaring
+`muntin.ToErrorResponse`: the handler echoes the request's method, path,
+query and body as Muntin received them (an empty body and a query a typed
+route would answer 400 included), or raises `Unsigned`, answered 401 by
+`to_error_response` in Muntin. `GET /webhook` is 404. The adapter only
+carries the request and the final `Response`. Each must equal `TestClient`.
 """
 
 from std.ffi import c_uint, external_call
@@ -63,7 +71,14 @@ from std.testing import assert_equal, TestSuite
 from flare.http import HttpClient, HttpServer
 from flare.net import SocketAddr
 from flare.utils import SIGKILL, exit, fork, kill, waitpid
-from muntin import App, FromBody, Response, ToErrorResponse, ToResponse
+from muntin import (
+    App,
+    FromBody,
+    Request,
+    Response,
+    ToErrorResponse,
+    ToResponse,
+)
 from muntin.testing import TestClient
 from muntin_flare import MuntinHandler
 
@@ -188,6 +203,26 @@ def reserve(id: Int) raises OutOfStock -> String:
     return "reserved " + String(id)
 
 
+@fieldwise_init
+struct Unsigned(Movable, ToErrorResponse):
+    """Raised by the raw `webhook`; opts into its own response."""
+
+    var query: String
+
+    def to_error_response(var self) -> Response:
+        return Response.text("unsigned " + self.query, status=401)
+
+
+def webhook(req: Request) raises Unsigned -> Response:
+    """A raw handler: the whole request, no typed extraction (M2-015)."""
+    if not req.body.startswith("signed"):
+        raise Unsigned(req.query)
+    return Response.text(
+        req.method + "|" + req.path + "|" + req.query + "|" + req.body,
+        status=202,
+    )
+
+
 def hello_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -210,6 +245,7 @@ def users_app() -> App:
     app.get["/orders/{id}"](find_order)
     app.post["/orders"](place_order)
     app.get["/stock/{id}"](reserve)
+    app.post["/webhook"](webhook)
     return app^
 
 
@@ -321,6 +357,8 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/stock/0"), 409, String("out of stock 0")),
             (String("/stock/3"), 200, String("reserved 3")),
             (String("/stock/abc"), 400, String("Bad Request")),
+            # M2-015: the raw route is POST only.
+            (String("/webhook"), 404, String("Not Found")),
         ]
         for want in expected:
             var path = want[0]
@@ -424,6 +462,22 @@ def test_typed_route_over_localhost_matches_test_client() raises:
                 String("Person(9, Ada)"),
             ),
             (String("/orders"), String("Ada"), 400, String("Bad Request")),
+            # M2-015: the raw handler sees the request as Muntin received
+            # it; a query a typed route would answer 400 reaches it.
+            (
+                String("/webhook?id=abc&id=2"),
+                String("signed a=b&c?d \n"),
+                202,
+                String("POST|/webhook|id=abc&id=2|signed a=b&c?d \n"),
+            ),
+            (
+                String("/webhook"),
+                String("signed"),
+                202,
+                String("POST|/webhook||signed"),
+            ),
+            (String("/webhook?k"), String(""), 401, String("unsigned k")),
+            (String("/webhook/x"), String("signed"), 404, String("Not Found")),
         ]
         for want in posts:
             var path = want[0]
