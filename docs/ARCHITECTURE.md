@@ -14,7 +14,8 @@ Application code
 | Muntin public API              |
 | App / Request / Response       |
 | routes / handlers              |
-| later: extraction / middleware|
+| extraction / errors (M2)       |
+| later: middleware (M3)         |
 +---------------+----------------+
                 |
          narrow backend seam
@@ -115,15 +116,15 @@ Do not design the final middleware, schema, DI, async, or streaming system durin
 ### Implemented M0 layout (Mojo 1.1.0)
 
 ```text
-src/muntin/__init__.mojo   public exports: App, FromBody, Request, Response
-src/muntin/http.mojo       Request(method, target, body) -> path, query, body; Response(status, body)
+src/muntin/__init__.mojo   public exports: App, FromBody, Request, Response, ToErrorResponse, ToResponse
+src/muntin/http.mojo       Request(method, target, body) -> path, query, body; Response(status, body); ToResponse (M2-008), ToErrorResponse (M2-013)
 src/muntin/body.mojo       FromBody: the request-body conversion trait an application type conforms to (M2-006)
-src/muntin/app.mojo        App: route table, get[route](handler) for () -> String and (Int) -> String, post[route](handler) for (B: FromBody) -> String, handle(Request) -> Response
+src/muntin/app.mojo        App: route table; get[route](handler) for (), (Int) and raw (Request); post[route](handler) for (B), (Int, B) and raw (Request); handle(Request) -> Response (shapes as of M2-015: "M2 closure (M2-016)")
 src/muntin/_handler_storage.mojo  private: _Erased typed handler box; the only module with unsafe operations (M2-004)
 src/muntin/testing.mojo    TestClient: in-memory backend (get, post), imports only muntin modules
 ```
 
-The backend seam is the single concrete method `App.handle(self, request: Request) -> Response`. A backend converts its input into a Muntin `Request`, calls `handle`, and converts the returned `Response` back. `TestClient` does exactly that without a socket; a future Flare adapter must do the same and must not route on its own. There is deliberately no backend trait yet (A7): one implementation exists, and the trait can be extracted when a second backend arrives.
+The backend seam is the single concrete method `App.handle(self, request: Request) -> Response`. A backend converts its input into a Muntin `Request`, calls `handle`, and converts the returned `Response` back. `TestClient` does exactly that without a socket; the Flare adapter (M1-002) does the same and does not route on its own. There is deliberately no backend trait yet (A7): one implementation exists, and the trait can be extracted when a second backend arrives.
 
 Requests and responses own their data (`String` fields, copied in). No backend buffer lifetimes appear in the public types. `TestClient` borrows the `App` immutably through an origin parameter, so `App.handle` takes `self` read-only and dispatch cannot mutate routing state.
 
@@ -805,6 +806,92 @@ so `def webhook(req: Request) -> Response` registers as `app.post["/webhook"](we
 - **Mutations** (21, planted, reverted), each red: raw `post` list made longer (raw handlers fall to the body overload: `test_raw` stops compiling with the guard message); query dropped from the rebuilt target (4 tests); body dropped (7); typed query gathering and `_parse_int` run on raw routes (9); the body prepended to the raw arguments (7); a raw handler error answered 400 (3); a constant method (1); the raw GET registered as POST (5); the guard removed from each of the four body overloads (its fixture gets the `FromBody` message); each of the four raw placeholder asserts removed (its fixture compiles); the raw malformed-literal assert removed (another message); routes searched last-first (1); the storage module naming `Request`, and `UnsafePointer` in `app.mojo` (`check_unsafe.sh`, one each); the Flare adapter rewriting 401 as 500 (`check_flare.sh`, loopback).
 - **Review:** a fresh-context review found no material issue. It reproduced the ranking in production (two defaulted extra parameters on the raw `post`, equal lists: `ambiguous call to 'post'`; three: the body overload and the guard), raw selection for `raises`, `raises T`, `@staticmethod` and `var req` handlers, an `@implicit Request -> T` body type staying on `from_body` as on `main`, and lossless reconstruction for backend-set fields (a `path` containing `?` is 404). Minors applied: the DX body-diagnostics wording (the guard applies only where a body overload is viable; `mut req` or two `Request`s match no overload), the mutation count, a fixture cleanup. Noted, not added: no fixture pins the raw `get` malformed-literal assert, as for typed `def()`.
 - **Not in the slice:** raw route values, `String`/`ToResponse` raw results, headers, a raw target field, new methods, middleware, state, `_Erased`/`_Call` or `Request` changes. The M2-014 revisit conditions apply unchanged.
+
+### M2 closure (M2-016)
+
+Status: **decision**; product behavior is unchanged (no change under `src/muntin` or `adapters/`, and no test or fixture changes). **M2 is complete.** The contract, meaning what M2 guarantees and deliberately leaves out, is in `docs/SPEC.md` ("M2 completion contract"). This section records how the decision was reached.
+
+**Question.** Does the merged implementation satisfy M2's boundary, typed application ergonomics, well enough to close the milestone? Or is there exactly one missing capability without which M2 cannot honestly be called complete? M2's boundary is the handler/application programming model, not feature breadth.
+
+**Production shapes as of M2-015.** `App` has ten registration overloads, all with the syntax `app.<method>[route](handler)`:
+
+| Method | Argument shape | Results | Errors |
+|---|---|---|---|
+| `get` | `def()`, `def(Int)` | `String`-compatible, or `R: ToResponse` | `thin raises E`, inferred: `Never`, `Error`, application `T` |
+| `post` | `def(var B)`, `def(Int, var B)` with `B: FromBody` | `String`-compatible, or `R: ToResponse` | same |
+| `get`, `post` | raw `def(var Request)` | `Response` | same |
+
+**Every M2 item maps to merged behavior.**
+
+| Item | Kind | Merged as | PR |
+|---|---|---|---|
+| M2-001 | production | one `Int` path value | #7 |
+| M2-002 | production | path/query split in `Request`; one `Int` query value | #8 |
+| M2-003 | decision | handler storage; slice M2-004 | #9 |
+| M2-004 | production | move-only typed box `_Erased`, behavior unchanged | #10 |
+| M2-005 | decision | argument extraction; slices M2-006, M2-009 | #11 |
+| M2-006 | production | body-only `POST`, public `FromBody` | #13 |
+| M2-007 | decision | typed response; slice M2-008 | #15 |
+| M2-008 | production | public `ToResponse`, `Response` conforming | #16 |
+| M2-009 | production | `POST` `(Int, B)` | #17 |
+| M2-010 | decision | application errors; slice M2-011 | #18 |
+| M2-011 | production | parametric `raises E`, fixed 500 | #19 |
+| M2-012 | decision | error responses; slice M2-013 | #20 |
+| M2-013 | production | public `ToErrorResponse` | #21 |
+| M2-014 | decision | raw `Request` handlers; slice M2-015 | #22 |
+| M2-015 | production | raw overloads on `get`/`post` | #23 |
+
+Each decision's "Next production slice" was merged as the item it names, and no decision names a production slice that has not merged. Two scope notes: M2-005's positional rule covers several route values, but its only committed slices were body-only `POST` and, later, `(Int, B)`, both merged; several route values never had a slice. M2-014's revisit conditions (raw route values, broader raw results, `Request` fields) are conditions, not committed slices.
+
+**The blocker test.** A deferred capability blocks M2 only if a statement that `docs/DX.md` labels proven or production, an M2 acceptance item in `feature_list.json`, or a rule in `.claude/rules/public-api.md` needs it, and its absence then breaks a promised core workflow, contradicts the documented public API, or leaves the typed/raw boundary materially incomplete. DX snippets labeled as targets or provisional do not count: they may be revised when they describe later work. Four candidates could plausibly fail this test, and each was checked (the fresh-context review added a fifth, state, recorded after the list):
+
+1. **`app.run()`.** DX section 1, DX section 19 and the README use it. Each is labeled a target, and DX section 1's status line has said since M1 that public run/lifecycle ownership is undecided. No acceptance item requires it (SPEC M1 proved serving through Flare without it). The Flare policy above places server bootstrap and lifecycle in the adapter. Not a blocker; the contract says plainly that application code has no supported way to serve an `App`.
+2. **Headers.** DX section 9 marks headers as a target. No proven statement reads or sets a header, and the public-api rule asks only that raw `Request -> Response` handling stay available. The raw handler receives every field Muntin's `Request` has, so the typed/raw boundary is complete for the current request model; typed and raw handlers lack headers alike. Not a blocker. DX section 9's motivation sentence listed uses that need headers without saying so; M2-016 corrects it.
+3. **Non-`Int` dynamic segments.** `/users/{name}` with a `String` value cannot be routed by a typed handler (only `Int`) or by a raw handler (raw literals declare no placeholders). This is documented (DX "Still targets"; DX section 9: "The route literal declares no path or query parameter"), so it contradicts nothing. Not a blocker, but it is the most visible gap, and the contract names it explicitly.
+4. **SPEC's M2 bullet "foundations for schema/OpenAPI generation".** This is the only item on SPEC's M2 exploration list with no delivered item or recorded decision. The list is exploration scope, not acceptance, and no feature item names it. M2's body and result contracts are format-agnostic (`from_body(String)`, `to_response`), so no type-level schema source exists until a codec defines one; `reflect[T].field_names()` works on Mojo 1.1.0 (DX, M2-002 facts), so nothing in M2 forecloses it. Moved to M3, together with "serialization" (M2 delivered conversion).
+
+Fifth, **runtime data in handlers** (found by the review). On Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`), handlers are thin functions that cannot capture, and there is no state API, so a handler reads only its arguments and compile-time constants. The `users.get(id)` of DX sections 2, 4 and 19 and of the decision rule is therefore not expressible yet. Every one of those snippets is a target (DX section 8 marks state as a target); no proven example, acceptance item or public-api rule needs shared data. Not a blocker under the rule, but it is the property of the handler model that the contract names first. Application state is class 2, not 3.
+
+**Classification of the deferred candidates.** The classes are: 1 = required for M2's existing promise to be truthful/coherent; 2 = useful but additive (M3 or later); 3 = outside M2's concern.
+
+| Candidate | Class | Reason |
+|---|---|---|
+| public `app.run()` / lifecycle | 3 | serving belongs to backend/lifecycle work, not the handler model; DX labels it a target with undecided ownership; M3 "graceful lifecycle integration" |
+| request/response headers | 2 | a new `Request`/`Response` field and seam translation; no proven statement needs it; second M3 item (M3-002) |
+| JSON body/response | 2 | the codec fills `from_body`/`to_response` without changing routing or binding (DX section 4); needs headers for Content-Type |
+| more HTTP methods | 2 | overload families repeating the `get`/`post` contract; nothing in the model is specific to a method except body-on-`POST` |
+| more/non-`Int` route or query values | 2 | M2-005's positional rule covers them; each type adds a converter |
+| optional/default query values | 2 | needs a representation proven against Mojo's reflection limits (DX section 3); additive |
+| raw route values, broader raw results | 2 | additive overloads or route rules under M2-014's parameter-list invariant |
+| application state | 2 | no proven statement needs it, but handlers can read no runtime data without it (no globals on Mojo 1.1.0, no captures), and DX section 8 makes it a handler parameter. This is the M3 item most likely to touch an M2 signature or M2-005's binding rule (reopen condition below), so it is the first M3 item (M3-001) |
+| middleware | 3 | composition (SPEC M3); no M2 statement depends on it |
+| logging/observability | 3 | M2-010 drops handler errors unread on purpose until a hook exists (SPEC M3) |
+| application-level error mappers | 2 | M2-012 rejected them on Mojo 1.1.0 (heterogeneous storage, type identity or `App` coupling) and kept the per-type opt-in; its revisit conditions apply |
+| schema/OpenAPI foundations, serialization | 2 | moved from M2's exploration list (item 4 above) |
+
+No candidate is class 1.
+
+**Recorded compiler limitations.** Neither blocks closure, because ordinary application code (a plain `def` handler passed by name) is unaffected:
+- an explicitly typed non-raising function value needs `raises Never` (M2-011, `storage_fail/typed_thin_value_handler.mojo`);
+- a raw function value must be typed `def(var Request) thin raises Never -> Response` (M2-015).
+
+**Stale documents corrected in M2-016.** The fixes do not change behavior:
+- AGENT_PROGRESS still described M2-015 as unmerged and raw handlers as unimplemented ("Remaining limitations", "Next smallest step");
+- this document's M0 layout listed four exports and the M2-006 shapes, and called the Flare adapter "future";
+- the thesis diagram said "later: extraction";
+- the README "Current status" pointed at M0, and its M2 summary still listed schema foundations;
+- the comment in `main.mojo` said `app.run()` arrives with M1;
+- DX section 13 said schema generation is "not an M0 requirement"; DX sections 7 and 8 had no status line; DX section 9 implied current `Request` supports content types and authentication; DX section 19 had no status note; DX section 3 called optional/default extraction "M2 work"; DX's "byte for byte" body rule did not say that Flare replaces invalid UTF-8;
+- `docs/GOALS.md` offered the M2-001 goal without saying it is done.
+
+**Reopen M2 (rather than add an M3 item) when:**
+- a toolchain upgrade changes what M2's contract rests on: overload resolution (`raw_fail/equal_parameter_lists.mojo` compiles), parametric raises inference, or `conforms_to` detection. Re-measure, and re-verify the contract before adding features;
+- an M3 design has to change an M2 public signature or semantics instead of adding to them, for example a changed `Request(method, target, body)` initializer, a different 400/404/500 boundary, or `ToResponse`/`ToErrorResponse` becoming fallible. That is a breaking change to the contract and needs its own explicit decision;
+- a statement that DX labels proven stops passing its test. That is a defect, to be fixed before new M3 work.
+
+**Evidence.** All four commands passed on unmodified `main` after PR #23, and again on this change: `./scripts/check.sh` (every fixture directory), `./scripts/test.sh` (every suite, including `test_raw` 12/12), `./scripts/check_flare.sh` (adapter 8/8, loopback 2/2) and `git diff --check`. `git diff main -- src adapters tests` is empty. A fresh-context review was asked: "If M2 were tagged complete today, what concrete claim would be false or misleading?" It found no blocker and two material omissions, both applied: (1) handlers can read no runtime data, now the contract's first exclusion, with state reclassified; (2) bodies are lossless only for UTF-8 over Flare, now named. It also found minors, all applied: the M3 list lacked some deferred items; DX section 3 still said "M2 work"; parity differences and serving through Flare were left implicit; placeholder checks compare counts, not names; the `/users/ada` wording; the raw function-value limitation; `_` internals.
+
+**Next.** M3-001, the application state decision gate, then M3-002, the request/response headers decision gate (`docs/SPEC.md`, M3). State comes first because it is the M3 item most likely to reopen this decision. Both are decision only; neither is implemented here.
 
 ## Request/Response ownership
 

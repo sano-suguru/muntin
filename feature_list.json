@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "project": "Muntin",
-  "active_milestone": "M2",
+  "active_milestone": "M3",
   "rules": {
     "passing_requires_executable_evidence": true,
     "do_not_edit_acceptance_to_match_implementation": true,
@@ -572,9 +572,59 @@
       "evidence": [
         "src/muntin/app.mojo: _call_raw[E] (rebuilds Request from method/path/query/body, moves it in, handler alone in the try -> _handler_error[E], Response unconverted); _Route.raw; App.handle passes the four fields to a raw route and skips query gathering/body argument; get/post raw overloads [E, //, path] after the typed overloads with def()'s three route asserts; not B == Request before FromBody in the four body overloads. Every other src/muntin file, check_unsafe.sh and adapters/flare/muntin_flare.mojo unchanged.",
         "tests/test_raw.mojo 12/12 (DX section 9 example; exact fields over 12 query forms x bodies on GET/POST; borrowed/owned/explicit value; no extraction counters with typed control; handler/ToErrorResponse 400; 404 without handler; fixed 500 without text; 401 ToErrorResponse; typed shapes beside raw; first registration both orders on GET/POST; TestClient parity). Fixtures: compile_fail/{post_request_param,raw_post_typed_return,raw_post_int_and_request{,_string},raw_{get,post}_{path,query}_placeholder,raw_malformed_route}, storage_fail/raw_{get_string_return,borrowed_function_value,function_value_without_raises}, body_fail/raw_extra_parameter; body_fail/post_raw_handler retired.",
-        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh (adapter 8/8; loopback 2/2 incl. raw POST /webhook 202/401/404 equal to TestClient) and git diff --check exit 0. CI verify + flare green on Ubuntu and macOS (PR #23).",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh (adapter 8/8; loopback 2/2 incl. raw POST /webhook 202/401/404 equal to TestClient) and git diff --check exit 0. CI verify + flare green on Ubuntu and macOS (PR #23); merged (PR #23).",
         "21 mutations planted and reverted, each red (docs/ARCHITECTURE.md \"Raw Request handlers in production (M2-015)\"). Fresh-context review: no material issue; it reproduced the ranking (equal lists ambiguous, a longer raw list falls to the body overload and the guard), raising/static/@implicit-wrapper probes and lossless reconstruction for backend-set fields; minors applied (DX guard wording, mutation count, fixture cleanup)."
       ]
+    },
+    {
+      "id": "M2-016",
+      "priority": 216,
+      "category": "milestone_closure",
+      "description": "Decide, with evidence and without adding product behavior, whether M2 (typed application ergonomics: the handler/application programming model, not feature breadth) is complete, or name exactly one smallest blocking slice.",
+      "acceptance": [
+        "Every M2 feature_list item maps to merged production behavior or to a decision whose named production slice has merged; no decision has an unimplemented production slice.",
+        "Each deferred candidate (app.run/lifecycle, request/response headers, JSON, more methods, more or non-Int route/query values, optional/default query values, raw route values or broader raw results, middleware/state, logging/observability, application-level error mappers, and SPEC's schema/OpenAPI foundations) is classified as required for M2's existing promise, additive (M3/later), or outside M2's concern. A candidate counts as a blocker only if a statement DX labels proven/production, an M2 acceptance item or a public-api rule needs it.",
+        "Outcome A (complete): SPEC holds an M2 completion contract (what M2 guarantees and deliberately does not), remaining candidates move to M3 with rationale, and the first M3 decision slice is identified but not implemented. Outcome B (not complete): exactly one smallest blocker, with the user-visible contradiction it resolves and its acceptance criteria, is recorded but not implemented.",
+        "Docs that still describe merged behavior as future work are corrected; M2-015 is recorded as merged.",
+        "No change under src/muntin or adapters/, no new public API, no new unsafe code, no test or fixture changes; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; a fresh-context review asked what claim would be false if M2 were tagged complete today finds no unresolved material issue."
+      ],
+      "passes": true,
+      "evidence": [
+        "Decision: M2 complete (Outcome A). Contract in docs/SPEC.md \"M2 completion contract\"; item mapping (M2-001..015, PRs #7-#11, #13, #15-#23, every decision's slice merged), blocker test, candidate classification (no class 1) and reopen conditions in docs/ARCHITECTURE.md \"M2 closure (M2-016)\". Next: M3-001 application state decision gate, then M3-002 headers decision gate (both not passing).",
+        "Stale docs corrected: AGENT_PROGRESS (M2-015 merged, raw handlers, next step), ARCHITECTURE M0 layout and diagram, README status, main.mojo comment, DX sections 3, 7, 8, 9, 13, 19, GOALS. Re-measured: a module-level var fails on Mojo 1.1.0 (global variables are not supported).",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh (adapter 8/8, loopback 2/2) and git diff --check exit 0 on main after PR #23 and on this change; git diff main -- src adapters tests empty.",
+        "Fresh-context review: no blocker; two material omissions applied (handlers can read no runtime data, now the first contract exclusion with state reclassified to M3 class 2; Flare's UTF-8 replacement of bodies), minors applied."
+      ]
+    },
+    {
+      "id": "M3-001",
+      "priority": 301,
+      "category": "application_state",
+      "description": "Decide with pinned-compiler evidence how a handler reaches application state (a repository, a connection) before any state API enters production, and whether that is additive to the M2 handler contract; production and adapters unchanged.",
+      "acceptance": [
+        "Compares at least: handler argument injection (def h(id: Int, state: State[Db]) -> User), App-owned typed state with handlers receiving a state/context value, and no framework state (an explicit application pattern), each measured on Mojo 1.1.0.",
+        "Decides how a framework-injected parameter is distinguished from route-value and body parameters at compile time without undocumented overload ranking, and how this relates to M2-005's positional rule (route values first, body last) and the registration placeholder-count checks.",
+        "Decides ownership and lifetime (who owns the state; read-only or mutable borrow; App.handle(self) read-only; TestClient borrowing), testability with no hidden globals and no per-request allocation, the effect on _Erased, _Call and the unsafe surface, and whether backends holding an App (Flare's MuntinHandler) are affected (M2-012 rejected App[on_error=m] for that coupling).",
+        "States whether any M2 public signature, binding rule or 400/404/500 boundary changes: if yes, M2 is reopened under the M2-016 condition by explicit decision; if no, a scratch copy shows every existing suite and fixture unchanged. If no candidate separates injected parameters cleanly, the decision says so and names no production slice.",
+        "Spikes run outside src/muntin; src/muntin, adapters/ and the seam App.handle(Request) -> Response are unchanged; the decision, rejected alternatives and revisit conditions are in docs/ARCHITECTURE.md; canonical checks pass and a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
+    },
+    {
+      "id": "M3-002",
+      "priority": 302,
+      "category": "headers",
+      "description": "Decide with pinned-compiler evidence how Muntin-owned Request and Response carry HTTP headers, before any header enters production; production and adapters unchanged.",
+      "acceptance": [
+        "The decision covers a Muntin-owned header representation (type, case-insensitive names, repeated fields, ordering, ownership and copying, invalid bytes) carried by Request and Response with no backend type or lifetime.",
+        "It decides how a raw handler receives headers given _Call's List[String] transport (M2-014 revisit condition), and what that means for _Erased, _Call and the unsafe surface.",
+        "It decides what the Flare adapter maps in each direction, whether String or ToResponse results get a default Content-Type, and whether any existing response's wire bytes change.",
+        "It decides whether typed handlers get header extraction in the first production slice, and names that slice.",
+        "Spikes run outside src/muntin; src/muntin, adapters/ and the seam App.handle(Request) -> Response are unchanged; the decision, rejected alternatives and revisit conditions are in docs/ARCHITECTURE.md; canonical checks pass and a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }

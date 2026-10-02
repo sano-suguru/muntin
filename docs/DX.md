@@ -18,6 +18,8 @@ Muntin should feel like a native Mojo framework rather than a mechanical transla
 
 Verified on **Mojo 1.1.0 (8189361e)** by `tests/test_app.mojo` and `main.mojo` (run via `./scripts/test.sh` / `./scripts/check.sh`).
 
+M2 is complete (M2-016). The examples labeled proven or production below make up its contract. Everything this document still calls a target is M3 or later: `docs/SPEC.md`, "M2 completion contract", lists what M2 deliberately leaves out.
+
 Proven (compiles and is exercised by executable tests):
 
 ```mojo
@@ -124,7 +126,7 @@ Semantics:
 
 - `FromBody` is a public Muntin trait refining `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`. The application type conforms to it in its own module; Muntin never names the type. `from_body(body: String)` is the current public body-conversion input contract (the `Request` carries the body as one `String`, with no headers or content type); future body capabilities are added as new APIs without changing it.
 - The body-only shape of `app.post[route](handler)` is a handler (non-raising, or raising since M2-011, section 6) with one parameter, the body, on a route literal with no path or query placeholder (the route-value-then-body shape is below, M2-009). It returns `String` (or a type that converts to it implicitly, such as `StaticString`, as for `app.get` since M2-001) or, since M2-008, a type conforming to `ToResponse` (section 5). Parameter names are not consulted.
-- Muntin calls `from_body(request.body)` before the handler. The body comes from the request body only, never from the path or query (`POST /users?name=Bob` with body `name=Ada` -> `created Ada`), byte for byte (an empty body or surrounding whitespace reaches `from_body` unchanged), and the `Request` is borrowed, not consumed. If `from_body` raises, the response is 400 `Bad Request` and the handler is not called. Routes are selected by method and path as for `GET`; no match is 404 and `from_body` is not called.
+- Muntin calls `from_body(request.body)` before the handler. The body comes from the request body only, never from the path or query (`POST /users?name=Bob` with body `name=Ada` -> `created Ada`), byte for byte (an empty body or surrounding whitespace reaches `from_body` unchanged; over Flare this holds for UTF-8 bodies, because the adapter replaces invalid UTF-8 with U+FFFD), and the `Request` is borrowed, not consumed. If `from_body` raises, the response is 400 `Bad Request` and the handler is not called. Routes are selected by method and path as for `GET`; no match is 404 and `from_body` is not called.
 - Compile-time errors at `app.post`: a type that does not conform, including `String` (`constraint failed: the handler's parameter is the request body; its type must conform to FromBody`); a `Request` body parameter, i.e. `def(req: Request)` with a result other than `Response` or `def(id: Int, req: Request)` (since M2-015, section 9: `constraint failed: Request is the whole request, not a body; a raw handler takes only the Request and returns Response`; other `Request` shapes, such as `mut req` or two `Request`s, match no overload); an `Int` parameter (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a path or query placeholder (`constraint failed: handler takes only the request body; route must declare no path or query parameter`). Any other shape (no parameter, two bodies) is `no matching method in call to 'post'`, with a note per candidate: `value passed to 'handler' cannot be converted from '<handler type>' to 'def(var B) raises Never thin -> String'` (`raises Never thin` since M2-011: the inferred error type of a non-raising handler), the `ToResponse` candidate's (since M2-008; until then the single candidate gave `invalid call to 'post'`) and, since M2-009, the two `(Int, B)` candidates'. A raw `def(request: Request) -> Response` handler is the raw shape (section 9) since M2-015 (until then it reached the `ToResponse` overload with `Request` as the body type and failed with the `FromBody` message). A body handler passed to `app.get` has no matching overload.
 - `TestClient.post(target, body)` sends `Request("POST", target, body)` through `App.handle`, like `TestClient.get`.
 
@@ -157,7 +159,7 @@ Semantics:
 
 Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` and `def(Int, B)` (M2-009) with `B: FromBody` for `app.post`, plus, on both, the raw `def(req: Request) -> Response` (M2-015, section 9; `Response` only, under the same error model). Each may be non-raising or declare `raises` or `raises T` (M2-011, section 6; a `T` declaring `ToErrorResponse` chooses its own response, M2-013), and returns `String` (or a type that converts to it implicitly, such as `StaticString`) or a type conforming to `ToResponse`, including `Response` (M2-008, section 5). Other `get` shapes (more or non-`Int` parameters) and other result types fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) raises Never thin -> String'` and, for the `ToResponse` candidate, `argument type 'Int' does not conform to trait 'ToResponse'`.
 
-Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, response headers, parameter-name checking, middleware, and state.
+Still targets (not implemented yet; M3 or later, each placed in `docs/SPEC.md` "M3"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, response headers, parameter-name checking, middleware, and state.
 
 Mojo facts discovered while proving the above:
 
@@ -282,7 +284,7 @@ app.get["/search"](search)
 
 For `GET /search?query=mojo&limit=10`, the handler should receive typed values rather than raw strings. Missing required values and invalid conversions should become clear client errors.
 
-Exact optional/default extraction semantics are M2 work and must be proven against Mojo's callable/reflection capabilities before they are frozen.
+Exact optional/default extraction semantics are M3 work (`docs/SPEC.md` M3, more route values) and must be proven against Mojo's callable/reflection capabilities before they are frozen.
 
 Status (M2-002): one required `Int` query value is proven as `app.get["/items?{limit}"](list_items)` with `def list_items(limit: Int) -> String`; see "Proven vs. target status". The key sits in the route literal because handler parameter names cannot be reflected, so the name-based `app.get["/search"](search)` above is not possible on Mojo 1.1.0. `String` values, several keys, and defaults are not implemented.
 
@@ -461,6 +463,8 @@ app.get["/users/{id}"](get_user)
 
 Middleware should be able to inspect a request, short-circuit, call the next layer, inspect/modify a response, and attach request-scoped typed context. The public middleware contract must be Muntin-owned even if an adapter internally translates to a backend-specific mechanism.
 
+Status: not implemented; M3 (`docs/SPEC.md`). `app.use` does not exist.
+
 ## 8. Application state
 
 Long-lived state should have explicit ownership and predictable lifetime behavior.
@@ -479,6 +483,8 @@ def get_user(id: Int, state: State[AppState]) -> User:
 ```
 
 The exact state/extractor syntax is not frozen. Requirements are explicit ownership, no hidden globals, testability, and no unnecessary per-request allocation.
+
+Status: not implemented; M3 (`docs/SPEC.md`). Handlers cannot capture state (they are thin functions; closures are not stored, "Handler model" above).
 
 ## 9. Raw Request/Response escape hatch
 
@@ -500,7 +506,7 @@ app.post["/webhook"](webhook)                # same syntax as typed handlers; ap
 # GET /webhook, POST /webhook/x    -> 404 "Not Found"  (webhook not called)
 ```
 
-The escape hatch matters for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. An earlier version of this example read `req.headers.get("x-signature")`; `Request` has no headers yet. Headers remain the target for exactly this case (a signature header is how most webhooks authenticate): when `Request` gains them, this example reads the signature from them.
+The escape hatch is meant for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. Today it covers what can be decided from the method, path, query and body, as in the example above. Streaming, content types and header-based authentication also need `Request`/`Response` capabilities that do not exist yet: headers (M3-002) and streaming (M3). An earlier version of this example read `req.headers.get("x-signature")`; `Request` has no headers yet. Headers remain the target for exactly this case (a signature header is how most webhooks authenticate): when `Request` gains them, this example reads the signature from them.
 
 Semantics (decided in M2-014, `docs/ARCHITECTURE.md` "Raw Request decision (M2-014)"; production facts in "Raw Request handlers in production (M2-015)"):
 
@@ -580,7 +586,7 @@ Compile-time machinery must earn its complexity through simpler application code
 
 The same type information used for request parsing and response serialization should eventually feed API schema generation. Application authors should not maintain a second copy of their data model solely for OpenAPI.
 
-Schema generation is not an M0 requirement.
+Status: not part of M2. M2-016 moved schema/OpenAPI foundations to M3: `FromBody` and `ToResponse` leave the body format to the application, so there is no type-level schema source until a codec defines the mapping.
 
 ## 14. Async and streaming
 
@@ -677,6 +683,15 @@ def main():
 ```
 
 The exact spellings are provisional. The durable properties are a small application surface, typed handlers, typed extraction, automatic conversion where safe, useful compile-time validation, low-level escape hatches, and backend independence.
+
+Status after M2 (M2-016): the handler model of this example is production: `get_user(id: Int) -> User` with `app.get["/users/{id}"]` and `create_user(body: CreateUser) -> User` with `app.post["/users"]`, through `TestClient` and the Flare adapter. Some parts are still later work:
+
+- `CreateUser` must conform to `FromBody` and parse its own body, because there is no JSON codec;
+- `User` must conform to `ToResponse`. The stdlib `List[User]` does not conform, so a list result needs an application type that does;
+- `users` cannot exist yet: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`), handlers cannot capture, and there is no state API, so a handler can read only its arguments and compile-time constants;
+- there is no `app.run()`.
+
+The first three are M3 items (codec, state); `app.run()` is lifecycle work (M3, ownership undecided). The closest runnable form today is section 4's `CreateUser` and section 5's `User`, driven through `TestClient`.
 
 ## 20. Non-goals
 

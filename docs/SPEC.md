@@ -117,6 +117,8 @@ M1 does not replace Muntin's router, request/response model, or public middlewar
 
 M2 begins only after the transport seam is proven in both in-memory and real-network paths.
 
+Status: **complete** (M2-016). What M2 guarantees and what it deliberately leaves out is the "M2 completion contract" below.
+
 Explore and verify, in roughly this order:
 
 - compile-time route literal representation where practical;
@@ -127,6 +129,8 @@ Explore and verify, in roughly this order:
 - an application-error model compatible with current Mojo;
 - `TestClient` ergonomics matching application semantics;
 - foundations for schema/OpenAPI generation.
+
+M2 delivered every item on this list except two parts, which M2-016 moved to M3: serialization (M2 delivered conversion only: `FromBody` and `ToResponse` leave the body format to the application, and no codec exists) and schema/OpenAPI foundations (a schema needs a type-to-format mapping, which only a codec defines).
 
 Each public API addition should be demonstrated by a small canonical example in `docs/DX.md` and executable tests.
 
@@ -160,20 +164,74 @@ M2-014, raw-Request decision gate: before raw handlers enter production, decide 
 
 M2-015, raw Request handlers in production: the M2-014 decision becomes production behavior, exactly as recorded in `docs/ARCHITECTURE.md` ("Raw Request decision (M2-014)", "Next production slice"), without widening the typed API. `app.get["/x"](handler)` and `app.post["/x"](handler)` each accept one raw shape, `def(var Request) thin raises E -> Response` with `E: Deinitable` inferred; `def h(req: Request) -> Response` is the canonical spelling and `var req: Request` also works. Raw handlers return `Response` only and use the existing error model unchanged (an opted-in `raises T` answers with `ToErrorResponse`, every other raise is the fixed 500). Route selection stays method + path, first registration wins across raw and typed routes, 404 otherwise; a raw route literal declares no path or query placeholder. After a raw route matches, Muntin performs no typed path/query/body extraction and generates no pre-handler 400; the handler receives Muntin's `Request` (`method`, `path`, `query`, `body`) with no backend type or lifetime, and its `Response` or `ToErrorResponse` may use any status. Selection on `post` rests on Mojo 1.1.0's documented "shorter parameter list" rule (the raw overloads' lists stay strictly shorter than every body overload a `Request -> Response` handler satisfies; equal lists are ambiguous, pinned by a retained fixture); the body overloads' `not B == Request` guard only improves diagnostics for already-invalid calls. `_handler_storage.mojo`, `_Erased`, `_Call`, the unsafe surface, `http.mojo`, `body.mojo`, `testing.mojo`, `__init__.mojo`, `Request`/`Response`, `TestClient`, the Flare adapter and the seam `App.handle(Request) -> Response` are unchanged; `TestClient` and real loopback through Flare agree for a raw `POST` route. Out of scope: raw route values, `String`/`ToResponse` raw results, headers, a raw target field, new methods, middleware, state. Acceptance is in `feature_list.json`.
 
+M2-016, M2 closure decision: decide, without adding product behavior, whether the merged implementation satisfies M2's boundary, the handler/application programming model rather than feature breadth. Every M2 item maps to merged production behavior or to a decision whose production slice has merged. Each deferred capability is tested as a possible blocker: is it needed by a statement that `docs/DX.md` labels proven or production, by an M2 acceptance item, or by a `.claude/rules/public-api.md` rule? A statement that DX labels as a target does not count. A capability is a blocker only if its absence breaks a promised core workflow, contradicts the documented public API, or leaves the typed/raw boundary materially incomplete. Result: no blocker; M2 is complete. The classification, item mapping and revisit conditions are in `docs/ARCHITECTURE.md` ("M2 closure (M2-016)"); the contract is below. No change under `src/muntin` or `adapters/`, and no test or fixture changes. Acceptance is in `feature_list.json`.
+
+### M2 completion contract
+
+On Mojo 1.1.0, through `TestClient` and, for the same `App`, a real loopback request through the Flare adapter, M2 guarantees:
+
+- **Registration:** `app.get[route](handler)` and `app.post[route](handler)` with a compile-time route literal and a plain `def` handler. A malformed literal, or a route whose placeholder count does not match the handler's parameters, fails to compile at the registration call (names are not compared; binding is positional).
+- **Typed arguments:** GET `def()` and `def(Int)`; POST `def(B)` and `def(Int, B)` with an application-defined `B: FromBody`. At most one `Int` route value, from one `{name}` path segment or one `{key}` query item, bound by position; the body comes from the request body only and is converted by `B.from_body` before the handler.
+- **Results:** `String` (or `String`-compatible) is a 200 text response; a result type `R: ToResponse` (an application type, or `Response` itself) is converted once, after the handler returns.
+- **Errors:** handlers may be non-raising, `raises` or `raises T`. No route match is 404. A request failure (invalid route value, missing/duplicated/empty/invalid query value, `from_body` raise) is 400 before the handler. Anything the handler raises is a fixed 500 whose body never contains the error text, unless the declared `T` conforms to `ToErrorResponse` and answers with its own response. A matched route never falls through, and the first registered matching route wins.
+- **Raw escape hatch:** `def h(req: Request) -> Response` on `get` and `post` with the same syntax, receiving Muntin's whole `Request` (`method`, `path`, `query`, `body`) with no typed extraction and no pre-handler 400, under the same error model.
+- **Ownership of the API:** the public surface is `App`, `Request`, `Response`, `FromBody`, `ToResponse`, `ToErrorResponse` and `muntin.testing.TestClient`, all Muntin-owned. `_`-prefixed internals are importable on Mojo 1.1.0 but are not part of the contract. Backends call only `App.handle(Request) -> Response`, and no backend type or lifetime reaches application code.
+
+Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it. The executable tests cover it in memory; the loopback suite samples it over Flare (every argument shape, result policy, error kind and the raw route). Two documented differences: a static path segment containing a byte outside `!`..`~` (`/hello world`) compiles and matches in memory but never arrives over Flare, and an absolute-form target (`http://host/path`) is 404.
+
+M2 deliberately does not provide (the M3 list below places each item):
+
+- shared or runtime application data in handlers: a handler can read only its arguments and compile-time constants. On Mojo 1.1.0, module-level variables do not compile, handlers are thin functions that cannot capture, and there is no state API. An in-memory store or a connection opened at startup therefore cannot reach a handler; the `users.get(id)` of DX sections 2, 4 and 19 is M3 (application state);
+- a way to serve an `App` over a network from application code: there is no `app.run()` or other public lifecycle API. Serving today means application code imports Flare's `HttpServer` and the adapter's `MuntinHandler` (`adapters/flare/serve_probe.mojo`). That puts a backend type in application code, so it is unsupported and outside this contract;
+- binary bodies: `Request.body` and `Response.body` are `String`, and the Flare adapter replaces invalid UTF-8 in a request body with U+FFFD;
+- headers: `Request` has none, and `Response` sets none, so there is no Content-Type on the wire;
+- JSON or any other codec, and no schema/OpenAPI output;
+- methods other than `GET` and `POST`: those requests are 404;
+- route values other than one `Int`: `String` and other types, several values, a path and a query value together, optional/default query values, percent-decoding and parameter-name checking are not supported. A dynamic segment that is not an `Int` (`ada` in `/users/ada`) cannot be captured: typed routes take only `Int` values, and raw routes declare no placeholders. A static route such as `app.get["/users/ada"]` still matches that path, subject to first-registration-wins (with `/users/{id}` registered first, `/users/ada` is 400);
+- bodies other than one required `FromBody` body on `POST` (no `String`/builtin, optional, multiple or streaming bodies, and no `POST` without a body); raw handlers returning anything but `Response`;
+- middleware, a logging/observability hook (a handler error is dropped unread), application-level or per-route error mappers, fallible response or error conversions;
+- function values typed explicitly without `raises`: they do not register on Mojo 1.1.0. Write the type with `raises Never` (`def() thin raises Never -> String`; for raw handlers, `def(var Request) thin raises Never -> Response`). A plain `def` passed by name is unaffected (`docs/ARCHITECTURE.md`, "M2 closure (M2-016)", recorded compiler limitations);
+- performance claims: routes are found by a linear scan, and request data is copied into `String`s.
+
 ## M3 — composition and production ergonomics
 
-Potential work after M2 is stable:
+Status: active after M2-016. Its first items are the decision gates M3-001 (application state) and M3-002 (headers), below.
 
+Potential work, each cut into its own decision-first item. These include the capabilities M2-016 deferred, with the reason each is additive:
+
+- **request and response headers:** a new field on `Request`/`Response`, translated by each backend. Typed and raw handlers lack them alike, so the typed/raw boundary is complete for Muntin's current `Request`. Adding a non-`String` field reopens the raw transport (`_Call`'s `List[String]`, a revisit condition of M2-014);
+- **JSON or another codec, and serialization:** the codec fills `from_body`/`to_response` without changing routing or binding (DX section 4). It needs response headers for its Content-Type;
+- **OpenAPI/schema output, and its foundations** (moved from M2): it needs the type-to-format mapping that only a codec defines;
+- **more route values:** non-`Int` types (`String` first, which also makes `/users/{name}` routable), several values, path and query values together, optional/default query values, percent-decoding. The M2-005 positional rule already covers several values; each type adds a converter;
+- **more HTTP methods** (`put`, `patch`, `delete`, `POST` without a body): overload families that repeat the `get`/`post` contract;
+- **more body shapes:** `String`/builtin, optional, multiple and streaming bodies, and binary (bytes) bodies, which need a non-`String` body representation;
+- **fallible conversions and parameter-name checking:** a raising `to_response`/`to_error_response` needs its own error answer (M2-007, M2-012). Name checking needs function-parameter reflection, which Mojo 1.1.0 lacks;
+- **broader raw handlers:** raw route values, `String`/`ToResponse` raw results. Each is an additive overload under the M2-014 parameter-list rule;
 - middleware;
-- application state/context;
-- structured errors;
-- OpenAPI/schema output;
-- observability hooks;
+- **application state/context:** M2 handlers can read no runtime data (no globals on Mojo 1.1.0, no captures). DX section 8 makes state a handler parameter, so this is the M3 item most likely to touch an M2 signature or M2-005's binding rule. If it does, the M2-016 reopen condition applies;
+- structured errors, including the application-level error mappers that M2-012 rejected on Mojo 1.1.0 (its revisit conditions apply);
+- observability hooks, including logging of dropped handler errors;
 - streaming;
-- graceful lifecycle integration;
+- graceful lifecycle integration, including whether Muntin owns a public `app.run()` (serving is backend/lifecycle work, not part of the handler model);
 - performance benchmarks and allocation profiling.
 
 M3 scope should be cut into independently verifiable milestones rather than attempted as one framework rewrite.
+
+M3-001, the first item, is the application state decision gate. State comes first for three reasons. It is the largest gap in the current product story: `def get_user(id: Int) -> User: return users.get(id)` cannot be written, because a handler can reach no repository or connection. It is also the M3 item most likely to change an M2 public signature or M2-005's binding rule (route values first, body last), and it is cheapest to learn that before other M3 work is built on top: an additive result confirms the M2-016 closure, and a breaking one reopens M2 while nothing depends on it yet. Headers, by contrast, are mostly an additive field on `Request`/`Response`.
+
+M3-001 compares, with pinned-compiler evidence and at least: (1) injecting state as a handler argument, `def get_user(id: Int, state: State[Db]) -> User`; (2) state owned by the `App` with a typed accessor (for example `app.state[Db](...)`), with handlers receiving a state or context value; (3) no framework state feature, using an explicit pattern in the application. The central question is how a framework-injected parameter is told apart from route-value and body parameters at compile time, without undocumented overload ranking. That includes how it relates to M2-005's positional rule and to the placeholder-count checks at registration. The gate also decides:
+
+- ownership and lifetime: who owns the state, whether handlers borrow it read-only or mutably, and how that fits `App.handle(self)` being read-only and `TestClient` borrowing the `App`;
+- testability, with no hidden globals and no per-request allocation;
+- the effect on `_Erased`, `_Call` and the unsafe surface;
+- whether backends that hold an `App` (the Flare adapter's `MuntinHandler`) are affected; M2-012 rejected `App[on_error=m]` for exactly that coupling;
+- whether any M2 public signature, binding rule or 400/404/500 boundary changes. If one does, M2 is reopened under the M2-016 condition, by an explicit decision. If none does, a scratch copy proves that every existing suite and fixture is unchanged.
+
+If no candidate separates injected parameters cleanly, the decision records that and does not hurry a state API into production. The gate does not change production or `adapters/`.
+
+M3-002 is the request/response headers decision gate. Three other candidates depend on headers: a JSON response needs a Content-Type, middleware such as CORS or authentication reads and writes headers, and the DX section 9 webhook reads its signature header. Headers also change the backend seam and the raw-handler transport. M3-002 decides with pinned-compiler evidence: the Muntin-owned representation (type, case-insensitive names, repeated fields, ownership and copying, invalid bytes); how `Request` and `Response` carry headers without any backend type or lifetime; how a raw handler receives them, given `_Call`'s `List[String]` transport; what the Flare adapter maps in each direction; whether a `String` or `ToResponse` result gets a default Content-Type, and whether any wire bytes of existing responses change; and whether typed handlers get header extraction in the first production slice. The gate does not change production or `adapters/`.
+
+Acceptance for both gates is in `feature_list.json`.
 
 ## Long-term success criterion
 
