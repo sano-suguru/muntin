@@ -506,7 +506,7 @@ app.post["/webhook"](webhook)                # same syntax as typed handlers; ap
 # GET /webhook, POST /webhook/x    -> 404 "Not Found"  (webhook not called)
 ```
 
-The escape hatch is meant for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. Today it covers what can be decided from the method, path, query and body, as in the example above. Streaming, content types and header-based authentication also need `Request`/`Response` capabilities that do not exist yet: headers (M3-001) and streaming (M3). An earlier version of this example read `req.headers.get("x-signature")`; `Request` has no headers yet. Headers remain the target for exactly this case (a signature header is how most webhooks authenticate): when `Request` gains them, this example reads the signature from them.
+The escape hatch is meant for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. Today it covers what can be decided from the method, path, query and body, as in the example above. Streaming, content types and header-based authentication also need `Request`/`Response` capabilities that do not exist yet: headers (M3-002) and streaming (M3). An earlier version of this example read `req.headers.get("x-signature")`; `Request` has no headers yet. Headers remain the target for exactly this case (a signature header is how most webhooks authenticate): when `Request` gains them, this example reads the signature from them.
 
 Semantics (decided in M2-014, `docs/ARCHITECTURE.md` "Raw Request decision (M2-014)"; production facts in "Raw Request handlers in production (M2-015)"):
 

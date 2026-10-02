@@ -77,7 +77,7 @@ Complete (M2-016). Typed routes, `Int` path/query extraction, typed request bodi
 
 ### M3 — composition and production ergonomics
 
-Headers (the first item, M3-001), codecs and schema/OpenAPI output, more route values and methods, middleware, application state, observability, streaming, lifecycle (`app.run()`) and production hardening. Each is decided before it is built, and only once the application model earns the abstraction.
+Application state (the first item, M3-001), headers (M3-002), codecs and schema/OpenAPI output, more route values and methods, middleware, observability, streaming, lifecycle (`app.run()`) and production hardening. Each is decided before it is built, and only once the application model earns the abstraction.
 
 ## Repository guide
 

@@ -857,13 +857,13 @@ Fifth, **runtime data in handlers** (found by the review). On Mojo 1.1.0 module-
 | Candidate | Class | Reason |
 |---|---|---|
 | public `app.run()` / lifecycle | 3 | serving belongs to backend/lifecycle work, not the handler model; DX labels it a target with undecided ownership; M3 "graceful lifecycle integration" |
-| request/response headers | 2 | a new `Request`/`Response` field and seam translation; no proven statement needs it; first M3 item (M3-001) |
+| request/response headers | 2 | a new `Request`/`Response` field and seam translation; no proven statement needs it; second M3 item (M3-002) |
 | JSON body/response | 2 | the codec fills `from_body`/`to_response` without changing routing or binding (DX section 4); needs headers for Content-Type |
 | more HTTP methods | 2 | overload families repeating the `get`/`post` contract; nothing in the model is specific to a method except body-on-`POST` |
 | more/non-`Int` route or query values | 2 | M2-005's positional rule covers them; each type adds a converter |
 | optional/default query values | 2 | needs a representation proven against Mojo's reflection limits (DX section 3); additive |
 | raw route values, broader raw results | 2 | additive overloads or route rules under M2-014's parameter-list invariant |
-| application state | 2 | no proven statement needs it, but handlers can read no runtime data without it (no globals on Mojo 1.1.0, no captures), and DX section 8 makes it a handler parameter. This is the M3 item most likely to touch an M2 signature or M2-005's binding rule (reopen condition below) |
+| application state | 2 | no proven statement needs it, but handlers can read no runtime data without it (no globals on Mojo 1.1.0, no captures), and DX section 8 makes it a handler parameter. This is the M3 item most likely to touch an M2 signature or M2-005's binding rule (reopen condition below), so it is the first M3 item (M3-001) |
 | middleware | 3 | composition (SPEC M3); no M2 statement depends on it |
 | logging/observability | 3 | M2-010 drops handler errors unread on purpose until a hook exists (SPEC M3) |
 | application-level error mappers | 2 | M2-012 rejected them on Mojo 1.1.0 (heterogeneous storage, type identity or `App` coupling) and kept the per-type opt-in; its revisit conditions apply |
@@ -891,7 +891,7 @@ No candidate is class 1.
 
 **Evidence.** All four commands passed on unmodified `main` after PR #23, and again on this change: `./scripts/check.sh` (every fixture directory), `./scripts/test.sh` (every suite, including `test_raw` 12/12), `./scripts/check_flare.sh` (adapter 8/8, loopback 2/2) and `git diff --check`. `git diff main -- src adapters tests` is empty. A fresh-context review was asked: "If M2 were tagged complete today, what concrete claim would be false or misleading?" It found no blocker and two material omissions, both applied: (1) handlers can read no runtime data, now the contract's first exclusion, with state reclassified; (2) bodies are lossless only for UTF-8 over Flare, now named. It also found minors, all applied: the M3 list lacked some deferred items; DX section 3 still said "M2 work"; parity differences and serving through Flare were left implicit; placeholder checks compare counts, not names; the `/users/ada` wording; the raw function-value limitation; `_` internals.
 
-**Next.** M3-001, the request/response headers decision gate (`docs/SPEC.md`, M3). Decision only; not implemented here.
+**Next.** M3-001, the application state decision gate, then M3-002, the request/response headers decision gate (`docs/SPEC.md`, M3). State comes first because it is the M3 item most likely to reopen this decision. Both are decision only; neither is implemented here.
 
 ## Request/Response ownership
 

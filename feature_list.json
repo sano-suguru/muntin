@@ -590,7 +590,7 @@
       ],
       "passes": true,
       "evidence": [
-        "Decision: M2 complete (Outcome A). Contract in docs/SPEC.md \"M2 completion contract\"; item mapping (M2-001..015, PRs #7-#11, #13, #15-#23, every decision's slice merged), blocker test, candidate classification (no class 1) and reopen conditions in docs/ARCHITECTURE.md \"M2 closure (M2-016)\". First M3 item: M3-001 headers decision gate (not passing).",
+        "Decision: M2 complete (Outcome A). Contract in docs/SPEC.md \"M2 completion contract\"; item mapping (M2-001..015, PRs #7-#11, #13, #15-#23, every decision's slice merged), blocker test, candidate classification (no class 1) and reopen conditions in docs/ARCHITECTURE.md \"M2 closure (M2-016)\". Next: M3-001 application state decision gate, then M3-002 headers decision gate (both not passing).",
         "Stale docs corrected: AGENT_PROGRESS (M2-015 merged, raw handlers, next step), ARCHITECTURE M0 layout and diagram, README status, main.mojo comment, DX sections 3, 7, 8, 9, 13, 19, GOALS. Re-measured: a module-level var fails on Mojo 1.1.0 (global variables are not supported).",
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh (adapter 8/8, loopback 2/2) and git diff --check exit 0 on main after PR #23 and on this change; git diff main -- src adapters tests empty.",
         "Fresh-context review: no blocker; two material omissions applied (handlers can read no runtime data, now the first contract exclusion with state reclassified to M3 class 2; Flare's UTF-8 replacement of bodies), minors applied."
@@ -599,6 +599,21 @@
     {
       "id": "M3-001",
       "priority": 301,
+      "category": "application_state",
+      "description": "Decide with pinned-compiler evidence how a handler reaches application state (a repository, a connection) before any state API enters production, and whether that is additive to the M2 handler contract; production and adapters unchanged.",
+      "acceptance": [
+        "Compares at least: handler argument injection (def h(id: Int, state: State[Db]) -> User), App-owned typed state with handlers receiving a state/context value, and no framework state (an explicit application pattern), each measured on Mojo 1.1.0.",
+        "Decides how a framework-injected parameter is distinguished from route-value and body parameters at compile time without undocumented overload ranking, and how this relates to M2-005's positional rule (route values first, body last) and the registration placeholder-count checks.",
+        "Decides ownership and lifetime (who owns the state; read-only or mutable borrow; App.handle(self) read-only; TestClient borrowing), testability with no hidden globals and no per-request allocation, the effect on _Erased, _Call and the unsafe surface, and whether backends holding an App (Flare's MuntinHandler) are affected (M2-012 rejected App[on_error=m] for that coupling).",
+        "States whether any M2 public signature, binding rule or 400/404/500 boundary changes: if yes, M2 is reopened under the M2-016 condition by explicit decision; if no, a scratch copy shows every existing suite and fixture unchanged. If no candidate separates injected parameters cleanly, the decision says so and names no production slice.",
+        "Spikes run outside src/muntin; src/muntin, adapters/ and the seam App.handle(Request) -> Response are unchanged; the decision, rejected alternatives and revisit conditions are in docs/ARCHITECTURE.md; canonical checks pass and a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
+    },
+    {
+      "id": "M3-002",
+      "priority": 302,
       "category": "headers",
       "description": "Decide with pinned-compiler evidence how Muntin-owned Request and Response carry HTTP headers, before any header enters production; production and adapters unchanged.",
       "acceptance": [

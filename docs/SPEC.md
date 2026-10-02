@@ -195,7 +195,7 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: active after M2-016. Its first item is the decision gate M3-001 (below).
+Status: active after M2-016. Its first items are the decision gates M3-001 (application state) and M3-002 (headers), below.
 
 Potential work, each cut into its own decision-first item. These include the capabilities M2-016 deferred, with the reason each is additive:
 
@@ -217,7 +217,21 @@ Potential work, each cut into its own decision-first item. These include the cap
 
 M3 scope should be cut into independently verifiable milestones rather than attempted as one framework rewrite.
 
-M3-001, the first item, is the request/response headers decision gate. Headers come first because three other candidates depend on them: a JSON response needs a Content-Type, middleware such as CORS or authentication reads and writes headers, and the DX section 9 webhook reads its signature header. They also change the backend seam and the raw-handler transport, which is cheaper to decide before middleware is built on top. M3-001 decides with pinned-compiler evidence: the Muntin-owned representation (type, case-insensitive names, repeated fields, ownership and copying, invalid bytes); how `Request` and `Response` carry headers without any backend type or lifetime; how a raw handler receives them, given `_Call`'s `List[String]` transport; what the Flare adapter maps in each direction; whether a `String` or `ToResponse` result gets a default Content-Type, and whether any wire bytes of existing responses change; and whether typed handlers get header extraction in the first production slice. The gate does not change production or `adapters/`. Acceptance is in `feature_list.json`.
+M3-001, the first item, is the application state decision gate. State comes first for three reasons. It is the largest gap in the current product story: `def get_user(id: Int) -> User: return users.get(id)` cannot be written, because a handler can reach no repository or connection. It is also the M3 item most likely to change an M2 public signature or M2-005's binding rule (route values first, body last), and it is cheapest to learn that before other M3 work is built on top: an additive result confirms the M2-016 closure, and a breaking one reopens M2 while nothing depends on it yet. Headers, by contrast, are mostly an additive field on `Request`/`Response`.
+
+M3-001 compares, with pinned-compiler evidence and at least: (1) injecting state as a handler argument, `def get_user(id: Int, state: State[Db]) -> User`; (2) state owned by the `App` with a typed accessor (for example `app.state[Db](...)`), with handlers receiving a state or context value; (3) no framework state feature, using an explicit pattern in the application. The central question is how a framework-injected parameter is told apart from route-value and body parameters at compile time, without undocumented overload ranking. That includes how it relates to M2-005's positional rule and to the placeholder-count checks at registration. The gate also decides:
+
+- ownership and lifetime: who owns the state, whether handlers borrow it read-only or mutably, and how that fits `App.handle(self)` being read-only and `TestClient` borrowing the `App`;
+- testability, with no hidden globals and no per-request allocation;
+- the effect on `_Erased`, `_Call` and the unsafe surface;
+- whether backends that hold an `App` (the Flare adapter's `MuntinHandler`) are affected; M2-012 rejected `App[on_error=m]` for exactly that coupling;
+- whether any M2 public signature, binding rule or 400/404/500 boundary changes. If one does, M2 is reopened under the M2-016 condition, by an explicit decision. If none does, a scratch copy proves that every existing suite and fixture is unchanged.
+
+If no candidate separates injected parameters cleanly, the decision records that and does not hurry a state API into production. The gate does not change production or `adapters/`.
+
+M3-002 is the request/response headers decision gate. Three other candidates depend on headers: a JSON response needs a Content-Type, middleware such as CORS or authentication reads and writes headers, and the DX section 9 webhook reads its signature header. Headers also change the backend seam and the raw-handler transport. M3-002 decides with pinned-compiler evidence: the Muntin-owned representation (type, case-insensitive names, repeated fields, ownership and copying, invalid bytes); how `Request` and `Response` carry headers without any backend type or lifetime; how a raw handler receives them, given `_Call`'s `List[String]` transport; what the Flare adapter maps in each direction; whether a `String` or `ToResponse` result gets a default Content-Type, and whether any wire bytes of existing responses change; and whether typed handlers get header extraction in the first production slice. The gate does not change production or `adapters/`.
+
+Acceptance for both gates is in `feature_list.json`.
 
 ## Long-term success criterion
 
