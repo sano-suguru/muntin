@@ -122,7 +122,7 @@ app.post["/users"](create_user)
 
 Semantics:
 
-- `FromBody` is a public Muntin trait refining `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`. The application type conforms to it in its own module; Muntin never names the type. `body: String` matches today's `Request`, which carries the body as one `String` and has no headers or content type; it is the first-slice shape, not a permanent promise.
+- `FromBody` is a public Muntin trait refining `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`. The application type conforms to it in its own module; Muntin never names the type. `from_body(body: String)` is the current public body-conversion input contract (the `Request` carries the body as one `String`, with no headers or content type); future body capabilities are added as new APIs without changing it.
 - `app.post[route](handler)` accepts exactly one shape: a non-raising handler with one parameter, the body, returning `String` (or a type that converts to it implicitly, such as `StaticString`, as for `app.get` since M2-001), on a route literal with no path or query placeholder. Parameter names are not consulted.
 - Muntin calls `from_body(request.body)` before the handler. The body comes from the request body only, never from the path or query (`POST /users?name=Bob` with body `name=Ada` -> `created Ada`), byte for byte (an empty body or surrounding whitespace reaches `from_body` unchanged), and the `Request` is borrowed, not consumed. If `from_body` raises, the response is 400 `Bad Request` and the handler is not called. Routes are selected by method and path as for `GET`; no match is 404 and `from_body` is not called.
 - Compile-time errors at `app.post`: a type that does not conform, including `String` and `Request` (`constraint failed: the handler's parameter is the request body; its type must conform to FromBody`); an `Int` parameter (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a path or query placeholder (`constraint failed: handler takes only the request body; route must declare no path or query parameter`). Any other shape (no parameter, `(Int, B)`, two bodies, `raises`, `-> Response`, a raw `Request -> Response` handler) is `invalid call to 'post': value passed to 'handler' cannot be converted from '<handler type>' to 'def(var B) thin -> String'`. A body handler passed to `app.get` has no matching overload.
@@ -130,7 +130,7 @@ Semantics:
 
 Current handler shapes are exactly `def() -> String` and `def(Int) -> String` for `app.get`, and `def(B) -> String` with `B: FromBody` for `app.post`, all non-raising. Other `get` shapes (another return type such as `User`, more or non-`Int` parameters, `raises`) fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) thin -> String'`.
 
-Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, route values together with a body (`app.post["/users/{id}"](update_user)` with `def update_user(id: Int, body: CreateUser)`), `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, typed response conversion beyond `String` (so `get_user(id: Int) -> User` from section 2 is not yet accepted), parameter-name checking, middleware, and state.
+Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, route values together with a body (`app.post["/users/{id}"](update_user)` with `def update_user(id: Int, body: CreateUser)`), `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, typed response conversion beyond `String` (decided in M2-007, section 5; `get_user(id: Int) -> User` from section 2 is not yet accepted), parameter-name checking, middleware, and state.
 
 Mojo facts discovered while proving the above:
 
@@ -159,7 +159,7 @@ Result: the registration shape is feasible on Mojo 1.1.0, so this document's syn
 | Function pointer + context, type-erased, with trampoline | works, provisional (unsafe) | The handler's thin function value (8 bytes, the same as `Int`) is stored as `Int` address bits. A trampoline instantiated for the same type restores and calls it. Erase and restore use one type parameter inside one private generic function, guarded by `comptime assert size_of[F]() == size_of[Int]()`. |
 | Compile-time generated wrapper / handler as compile-time parameter | works (fallback only) | `app.get["/users/{id}", get_user]()`. No unsafe code, but framework storage concerns leak into the public syntax. Consider only if the runtime-value approach proves unworkable. |
 
-Return conversion: a Muntin-owned conversion from typed return values to `Response` is the direction; the specific mechanism is decided in M2. The prototype `trait ToResponse` with `def to_response(self) -> Response` covers all three result types. `User` conforms directly. `String` and `Response` conform through `__extension String(ToResponse)` / `__extension Response(ToResponse)`, which compiles under `--Werror` on 1.1.0. The double-underscore spelling suggests the extension feature is not yet stable, so the trait and this way of conforming stdlib types are provisional; an overload per stdlib type is the fallback. No JSON.
+Return conversion: a Muntin-owned conversion from typed return values to `Response` is the direction. The M0.5 prototype below is history; the M2-007 decision (section 5) differs: the requirement is `def to_response(var self) -> Response`, `String` stays on its own overloads instead of conforming through `__extension`, and `Response` conforms in its own module. The M0.5 prototype `trait ToResponse` with `def to_response(self) -> Response` covers all three result types. `User` conforms directly. `String` and `Response` conform through `__extension String(ToResponse)` / `__extension Response(ToResponse)`, which compiles under `--Werror` on 1.1.0. The double-underscore spelling suggests the extension feature is not yet stable, so the trait and this way of conforming stdlib types are provisional; an overload per stdlib type is the fallback. No JSON.
 
 Other facts measured on Mojo 1.1.0:
 
@@ -331,6 +331,31 @@ def health() -> Response:
 ```
 
 Convenience must not eliminate low-level control.
+
+Status (M2-007, decision only; production still accepts only `String`-compatible returns): an application result type conforms to a Muntin-owned trait in its own module, as body types conform to `FromBody`; the next production slice implements it (`docs/ARCHITECTURE.md`, "Typed response decision (M2-007)"). Target shape: `-> User` is proven in a retained spike outside `src/muntin`; `-> Response` was shown only on an unretained scratch copy of the next slice, whose tests will first retain it:
+
+```mojo
+@fieldwise_init
+struct User(ToResponse):                  # defined by the application; may be move-only
+    var id: Int
+    var name: String
+
+    def to_response(deinit self) -> Response:   # the application chooses status and body
+        var name = self.name^                    # moved, not copied
+        return Response.text(String(self.id) + " " + name)
+
+
+def get_user(id: Int) -> User:
+    return User(id, "Ada")
+
+
+app.get["/users/{id}"](get_user)          # unchanged registration syntax
+app.get["/health"](health)                # def health() -> Response: Response conforms itself
+```
+
+- `-> String` handlers, and handlers whose function type converts to `def(...) -> String` such as `-> StaticString`, keep today's behavior: `String` needs no conformance.
+- The trait requirement is `def to_response(var self) -> Response`: Muntin hands the result over. An implementation may declare `self`, `var self`, or `deinit self` (to move fields out). It does not raise; fallible conversion waits for the application-error model.
+- The same rule applies to every argument shape: `def create_user(body: CreateUser) -> User` on `app.post` converts the same way.
 
 ## 6. Application errors
 

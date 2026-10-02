@@ -58,6 +58,15 @@ cp tests/extraction_spike.mojo tests/extraction_lib_only/driver.mojo "$tmp/lib_o
 "$tmp/lib_only/driver"
 echo "ok"
 
+# Same check for the typed-response spike (M2-007): its library side must
+# convert return types defined only by the application.
+step "response spike library builds without the application module"
+mkdir -p "$tmp/response_lib_only"
+cp tests/response_spike.mojo tests/response_lib_only/driver.mojo "$tmp/response_lib_only/"
+"${MOJO[@]}" build --Werror -I src -I "$tmp/response_lib_only" "$tmp/response_lib_only/driver.mojo" -o "$tmp/response_lib_only/driver"
+"$tmp/response_lib_only/driver"
+echo "ok"
+
 step "compile-time route checks (tests/compile_fail must not build)"
 for t in tests/compile_fail/*.mojo; do
     expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
@@ -85,8 +94,9 @@ done
 # supported handler shapes. tests/extraction_fail: evidence for
 # docs/ARCHITECTURE.md "Argument extraction decision" (M2-005).
 # tests/body_fail: App.post accepts only the body-only shape and App.get takes
-# no body handler (M2-006).
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail; do
+# no body handler (M2-006). tests/response_fail: evidence for
+# docs/ARCHITECTURE.md "Typed response decision (M2-007)".
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
