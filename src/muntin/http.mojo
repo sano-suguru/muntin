@@ -28,7 +28,29 @@ struct Request(Copyable, Movable):
         self.body = body
 
 
-struct Response(Copyable, Movable):
+trait ToResponse(Deinitable, Movable):
+    """A handler result type that converts itself to a `Response`.
+
+    The application conforms its own result type, in its own module, and
+    decides status and body; Muntin never names the type. A handler
+    declared `-> R` for such an `R` is accepted by `App.get`/`App.post`, and
+    its result is converted once, after the handler returns. `Response`
+    conforms, so a handler declared `-> Response` chooses its response
+    directly. `String` results need no conformance: they are 200 text.
+
+    `var self`: Muntin owns the result and hands it over, so a conversion
+    can move fields into the `Response`, and a move-only type works. An
+    implementation may declare `self`, `var self`, or `deinit self` (to move
+    one field out of a value with others). Non-raising: what a failed
+    conversion means belongs to the application-error model, which does not
+    exist yet.
+    """
+
+    def to_response(var self) -> Response:
+        ...
+
+
+struct Response(Copyable, Movable, ToResponse):
     """An application-level HTTP response, independent of any transport."""
 
     var status: Int
@@ -46,3 +68,8 @@ struct Response(Copyable, Movable):
     def text(self) -> String:
         """Returns the response body as text."""
         return self.body
+
+    def to_response(var self) -> Response:
+        """Returns this response unchanged, by move: a handler declared
+        `-> Response` is answered with exactly the response it built."""
+        return self^

@@ -401,6 +401,24 @@
         "7 planted mutations each red (borrowed-self requirement, raises requirement, wrong Int, library naming User, conversion ignored, unbounded generic, String overload removed).",
         "Fresh-context review: no material issue; minor findings (scratch-only Response evidence labelled, DX M0.5 paragraph, raw var-Request resolution, one mutation description, slice DX list, driver status check) fixed."
       ]
+    },
+    {
+      "id": "M2-008",
+      "priority": 208,
+      "category": "typed_response",
+      "description": "Make the M2-007 typed-response contract production behavior: public ToResponse, Response conforming, one R: ToResponse overload beside each existing String overload.",
+      "acceptance": [
+        "muntin exports trait ToResponse(Deinitable, Movable) with non-raising def to_response(var self) -> Response; Muntin Response conforms and returns itself by move, so -> Response is a direct escape hatch with no Response-specific registration overload.",
+        "Every existing String overload keeps its exact signature, checks and messages; -> String remains canonical and String-compatible returns such as -> StaticString resolve through the existing String overloads, not the generic ToResponse path.",
+        "_call_none, _call_int and _call_body are generic over the result R and a compile-time response policy (_text / _converted[R]); exactly one R: ToResponse overload is added beside each argument shape: GET def() -> R, GET def(Int) -> R, POST def(B: FromBody) -> R, with the same route-literal and body validation as its String twin.",
+        "Executable production evidence: an application-defined move-only User: ToResponse returned from no-arg GET, Int path GET, Int query GET and body-only POST; -> Response preserves the chosen status and body; -> StaticString keeps String behavior; the conversion runs exactly once after a successful handler call; 400/404 run neither handler nor conversion; App moves preserve mixed String/ToResponse handlers; result types live outside src/muntin and Muntin never names them.",
+        "TestClient and real loopback through Flare's HttpServer serving MuntinHandler agree for at least one -> User-style route and one -> Response route.",
+        "_handler_storage.mojo byte-identical, no new unsafe code, adapters/flare/muntin_flare.mojo unchanged. Not added: raising handlers or conversions, (Int, B), raw Request handlers (the recorded var Request overload issue stays open), JSON, headers, content negotiation, middleware/state, new HTTP methods.",
+        "Must-not-compile fixtures match the new surface: fixtures that rejected -> Response become positive tests; diagnostics change only where the added overloads change compiler output; a non-conforming result is rejected at registration with a note naming ToResponse; unrelated compile-fail coverage is not weakened.",
+        "Planted mutations (conversion skipped, Response status lost, StaticString routed through generic conversion, conversion on 400/404, extraction changed, generic overload without its trait bound, storage/unsafe expansion) turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass locally, and CI verify + flare pass on Ubuntu and macOS."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }

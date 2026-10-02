@@ -2,15 +2,22 @@
 
 from ._handler_storage import _Erased
 from .body import FromBody
-from .http import Request, Response
+from .http import Request, Response, ToResponse
 
-# Handler shapes App accepts: `def() -> String` and `def(Int) -> String` for
-# GET, and `def(B) -> String` for POST with `B: FromBody` (M2-006), all
-# non-raising. Mojo 1.1.0 function types spelled without `thin` are traits
-# and cannot be stored, so `App.get` takes thin function values; ordinary
-# `def` functions convert implicitly. Each shape has one `App.get` overload
-# and one adapter below, which converts a matched route's raw argument
-# strings and calls the handler. The handler and its adapter are stored
+# Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
+# for POST with `B: FromBody` (M2-006), all non-raising. Mojo 1.1.0 function
+# types spelled without `thin` are traits and cannot be stored, so `App.get`
+# takes thin function values; ordinary `def` functions convert implicitly.
+# Each argument shape has one adapter below, which converts a matched
+# route's raw argument strings and calls the handler, and two registration
+# overloads, one per return policy (M2-008): a handler whose function type
+# converts to `def(...) thin -> String` (declared `-> String`, or
+# `-> StaticString` by implicit conversion) gets a 200 text response
+# (`_text`); a handler returning `R: ToResponse` (an application type, or
+# `Response`) gets `R.to_response()` (`_converted[R]`). The policy is a
+# compile-time parameter of the adapter, so extraction never looks at the
+# result type. The generic overloads bound `R` by the trait, so a
+# `String`-compatible result is never a candidate for them. The handler and its adapter are stored
 # together in an `_Erased` box (`_handler_storage.mojo`), so dispatch is one
 # call whatever the shape. Where a value comes from (path segment or query
 # key) is route data, not part of the shape, so `_call_int` serves both
@@ -156,21 +163,41 @@ def _bad_request() -> Response:
     return Response.text("Bad Request", status=400)
 
 
-def _call_none(handler: def() thin -> String, args: List[String]) -> Response:
-    return Response.text(handler())
+comptime _Respond[R: AnyType] = def(var R) thin -> Response
+"""How an adapter turns a handler result of type `R` into a `Response`."""
 
 
-def _call_int(
-    handler: def(Int) thin -> String, args: List[String]
-) raises -> Response:
+def _text(var result: String) -> Response:
+    """The `String` policy: a 200 text response."""
+    return Response.text(result^)
+
+
+def _converted[R: ToResponse](var result: R) -> Response:
+    """The `ToResponse` policy: the result converts itself, by move."""
+    return result^.to_response()
+
+
+# Adapter parameters are explicit (no `//`): they are passed as `call=` to
+# `_Erased.__init__`, where there is no runtime argument to infer them from.
+
+
+def _call_none[
+    R: Movable & Deinitable, respond: _Respond[R]
+](handler: def() thin -> R, args: List[String]) -> Response:
+    return respond(handler())
+
+
+def _call_int[
+    R: Movable & Deinitable, respond: _Respond[R]
+](handler: def(Int) thin -> R, args: List[String]) raises -> Response:
     """Raises, without calling `handler`, if the one argument is not an
     integer."""
-    return Response.text(handler(_parse_int(args[0])))
+    return respond(handler(_parse_int(args[0])))
 
 
 def _call_body[
-    B: Movable & Deinitable
-](handler: def(var B) thin -> String, args: List[String]) -> Response:
+    B: Movable & Deinitable, R: Movable & Deinitable, respond: _Respond[R]
+](handler: def(var B) thin -> R, args: List[String]) -> Response:
     """Converts the one argument, the request body, with `B.from_body` and
     moves the value into `handler`; answers 400 itself, without calling
     `handler`, if `from_body` raises.
@@ -186,7 +213,7 @@ def _call_body[
         body = B.from_body(args[0])
     except:
         return _bad_request()
-    return Response.text(handler(body^))
+    return respond(handler(body^))
 
 
 struct _Route(Movable):
@@ -244,7 +271,34 @@ struct App(Movable):
             _query_params(path) == 0
         ), "route declares a query parameter but the handler takes none"
         self._routes.append(
-            _Route("GET", path, _Erased.__init__[call=_call_none](handler))
+            _Route(
+                "GET",
+                path,
+                _Erased.__init__[call=_call_none[String, _text]](handler),
+            )
+        )
+
+    def get[
+        R: ToResponse, //, path: StaticString
+    ](mut self, handler: def() thin -> R):
+        """Registers `handler` for `GET path`; its result converts itself
+        with `R.to_response()` after `handler` returns. `R` is an
+        application type conforming to `ToResponse`, or `Response`."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert (
+            _path_params(path) == 0
+        ), "route declares a path parameter but the handler takes none"
+        comptime assert (
+            _query_params(path) == 0
+        ), "route declares a query parameter but the handler takes none"
+        self._routes.append(
+            _Route(
+                "GET",
+                path,
+                _Erased.__init__[call=_call_none[R, _converted[R]]](handler),
+            )
         )
 
     def get[path: StaticString](mut self, handler: def(Int) thin -> String):
@@ -262,7 +316,34 @@ struct App(Movable):
             " path or query parameter"
         )
         self._routes.append(
-            _Route("GET", path, _Erased.__init__[call=_call_int](handler))
+            _Route(
+                "GET",
+                path,
+                _Erased.__init__[call=_call_int[String, _text]](handler),
+            )
+        )
+
+    def get[
+        R: ToResponse, //, path: StaticString
+    ](mut self, handler: def(Int) thin -> R):
+        """Registers `handler` for `GET path` with one `Int` route value, as
+        the `String` overload; its result converts itself with
+        `R.to_response()` after `handler` returns. A missing, duplicated or
+        non-integer value yields 400 without calling `handler` or the
+        conversion."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 1, (
+            "handler takes one Int parameter; route must declare exactly one"
+            " path or query parameter"
+        )
+        self._routes.append(
+            _Route(
+                "GET",
+                path,
+                _Erased.__init__[call=_call_int[R, _converted[R]]](handler),
+            )
         )
 
     def post[
@@ -293,7 +374,39 @@ struct App(Movable):
             _Route(
                 "POST",
                 path,
-                _Erased.__init__[call=_call_body[B]](handler),
+                _Erased.__init__[call=_call_body[B, String, _text]](handler),
+                body=True,
+            )
+        )
+
+    def post[
+        B: Movable & Deinitable, R: ToResponse, //, path: StaticString
+    ](mut self, handler: def(var B) thin -> R):
+        """Registers `handler` for `POST path` with the request body as its
+        one parameter, as the `String` overload; its result converts itself
+        with `R.to_response()` after `handler` returns. A conversion failure
+        of the body yields 400 without calling `handler` or the result
+        conversion."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 0, (
+            "handler takes only the request body; route must declare no path"
+            " or query parameter"
+        )
+        comptime assert not B == Int, (
+            "Int is a route-value type, never the request body; the body"
+            " parameter's type must conform to FromBody"
+        )
+        comptime assert conforms_to(B, FromBody), (
+            "the handler's parameter is the request body; its type must"
+            " conform to FromBody"
+        )
+        self._routes.append(
+            _Route(
+                "POST",
+                path,
+                _Erased.__init__[call=_call_body[B, R, _converted[R]]](handler),
                 body=True,
             )
         )

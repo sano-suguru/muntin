@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Flare checks (M1-001 to M1-003, M2-001, M2-002, M2-006). Builds and runs
-# compat/flare, the Flare adapter's contract tests and its real localhost round
-# trips (adapters/flare: GET /hello, typed GET /users/{id} and /items?{limit},
-# and body-only POST /users) against the Flare release
+# Flare checks (M1-001 to M1-003, M2-001, M2-002, M2-006, M2-008). Builds and
+# runs compat/flare, the Flare adapter's contract tests and its real localhost
+# round trips (adapters/flare: GET /hello, typed GET /users/{id} and
+# /items?{limit}, body-only POST /users, and ToResponse/Response results)
+# against the Flare release
 # pinned in pixi.toml's `flare` environment, and checks that the default
 # environment (which builds src/muntin) cannot see Flare. Exits nonzero on any
 # failure.

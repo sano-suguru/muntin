@@ -30,6 +30,11 @@ Flare's raw-bytes `post` (no `Content-Type`): the adapter only copies the body
 into Muntin's `Request`; `App.handle` converts it with `CreateUser.from_body`.
 Valid and invalid bodies, a wrong method and a missing route must equal
 `TestClient.post`.
+
+M2-008 registers typed results on that same server: `GET /people/{id}` and
+`POST /people` return `Person`, a move-only type defined here conforming to
+`muntin.ToResponse`, and `GET /teapot` returns a `Response` with status 418.
+`App.handle` converts the result; the adapter only carries the `Response`.
 """
 
 from std.ffi import c_uint, external_call
@@ -38,7 +43,7 @@ from std.testing import assert_equal, TestSuite
 from flare.http import HttpClient, HttpServer
 from flare.net import SocketAddr
 from flare.utils import SIGKILL, exit, fork, kill, waitpid
-from muntin import App, FromBody
+from muntin import App, FromBody, Response, ToResponse
 from muntin.testing import TestClient
 from muntin_flare import MuntinHandler
 
@@ -93,6 +98,33 @@ def echo(body: RawText) -> String:
     return "[" + body.text + "]"
 
 
+struct Person(ToResponse):
+    """A move-only handler result that converts itself (M2-008)."""
+
+    var id: Int
+    var name: String
+
+    def __init__(out self, id: Int, var name: String):
+        self.id = id
+        self.name = name^
+
+    def to_response(deinit self) -> Response:
+        var name = self.name^
+        return Response.text("Person(" + String(self.id) + ", " + name + ")")
+
+
+def get_person(id: Int) -> Person:
+    return Person(id, "Ada")
+
+
+def create_person(body: CreateUser) -> Person:
+    return Person(7, body.name)
+
+
+def teapot() -> Response:
+    return Response.text("short and stout", status=418)
+
+
 def hello_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -106,6 +138,9 @@ def users_app() -> App:
     app.get["/items?{limit}"](list_items)
     app.post["/users"](create_user)
     app.post["/echo"](echo)
+    app.get["/people/{id}"](get_person)
+    app.post["/people"](create_person)
+    app.get["/teapot"](teapot)
     return app^
 
 
@@ -203,6 +238,11 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/items?limit=abc"), 400, String("Bad Request")),
             (String("/items?limit=1&limit=2"), 400, String("Bad Request")),
             (String("/missing?limit=1"), 404, String("Not Found")),
+            # M2-008: "Person(42, Ada)" only if Muntin converted the typed
+            # result; 418 only if the handler's Response kept its status.
+            (String("/people/042"), 200, String("Person(42, Ada)")),
+            (String("/people/abc"), 400, String("Bad Request")),
+            (String("/teapot"), 418, String("short and stout")),
         ]
         for want in expected:
             var path = want[0]
@@ -238,6 +278,14 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/users/42"), String("name=Ada"), 404, String("Not Found")),
             (String("/hello"), String("name=Ada"), 404, String("Not Found")),
             (String("/missing"), String("name=Ada"), 404, String("Not Found")),
+            # M2-008: typed result from a body handler.
+            (
+                String("/people"),
+                String("name=Ada"),
+                200,
+                String("Person(7, Ada)"),
+            ),
+            (String("/people"), String("Ada"), 400, String("Bad Request")),
         ]
         for want in posts:
             var path = want[0]

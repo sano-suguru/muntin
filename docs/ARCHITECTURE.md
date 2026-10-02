@@ -153,7 +153,7 @@ HttpClient --TCP 127.0.0.1:<ephemeral>--> HttpServer.serve -> MuntinHandler.serv
 
 ### Routing and handler storage (M2-001)
 
-`App` stores each route as method, the route literal's path part (plus a query key since M2-002), and the handler: a `Variant[def() thin -> String, def(Int) thin -> String]` until M2-004, now a private typed box ("Production implementation (M2-004)" below). `App.get` is overloaded on those two shapes, so `app.get["/hello"](hello)` and `app.get["/users/{id}"](get_user)` are the same call syntax and both take the handler as a runtime value. `App.handle` scans routes in registration order; the first route whose method and segments match handles the request (later matches are not tried, even if conversion fails). A static segment matches by byte equality; a `{name}` segment matches one non-empty segment. For an `Int` handler, Muntin converts the captured segment (optional `-`, ASCII digits, `Int` range) before calling the handler; anything else returns 400 `Bad Request` and the handler is not called. No match is 404. Routing and extraction run only inside `App.handle`: `TestClient` and the Flare adapter pass the request target through unchanged and have no knowledge of `{name}`. Matching uses `Request.path`, which since M2-002 excludes the query (next section). Percent-encoded segments are not decoded.
+`App` stores each route as method, the route literal's path part (plus a query key since M2-002), and the handler: a `Variant[def() thin -> String, def(Int) thin -> String]` until M2-004, now a private typed box ("Production implementation (M2-004)" below). `App.get` is overloaded on those two shapes (each with a `ToResponse` twin since M2-008), so `app.get["/hello"](hello)` and `app.get["/users/{id}"](get_user)` are the same call syntax and both take the handler as a runtime value. `App.handle` scans routes in registration order; the first route whose method and segments match handles the request (later matches are not tried, even if conversion fails). A static segment matches by byte equality; a `{name}` segment matches one non-empty segment. For an `Int` handler, Muntin converts the captured segment (optional `-`, ASCII digits, `Int` range) before calling the handler; anything else returns 400 `Bad Request` and the handler is not called. No match is 404. Routing and extraction run only inside `App.handle`: `TestClient` and the Flare adapter pass the request target through unchanged and have no knowledge of `{name}`. Matching uses `Request.path`, which since M2-002 excludes the query (next section). Percent-encoded segments are not decoded.
 
 Until M2-004, `App.handle` selected the arm with `isa` for each shape and aborted on an unhandled one; since M2-004 each `App.get` overload pairs the handler with its adapter at registration and dispatch is one call, so there is no per-shape branch. `App.get` checks the route literal at compile time with the same segment classifier the runtime matcher uses (`_is_param`): a malformed literal, or a parameter count that differs from the handler's arity (0 or 1), fails to compile at the registration call. Because both use one classifier, an `Int` route always captures exactly one segment at runtime.
 
@@ -354,7 +354,7 @@ POST /users, body "name=Ada"
 
 ### Typed response decision (M2-007)
 
-Status: **decision** (M2-007). Production is unchanged; the only `src/muntin` edit in M2-007 is the wording of `FromBody`'s docstring. This section decides how a handler's result becomes a `Response` so that `def get_user(id: Int) -> User` can be registered with `app.get["/users/{id}"](get_user)` without Muntin naming `User`.
+Status: **decision** (M2-007), implemented in production by M2-008 ("Typed results in production (M2-008)" below). In M2-007 itself production was unchanged; its only `src/muntin` edit was the wording of `FromBody`'s docstring. This section decides how a handler's result becomes a `Response` so that `def get_user(id: Int) -> User` can be registered with `app.get["/users/{id}"](get_user)` without Muntin naming `User`.
 
 ```text
 handler result --(overload, selected by the handler's function type)--> return policy
@@ -417,6 +417,29 @@ Alternatives compared (all on Mojo 1.1.0 (8189361e)):
 - Docs: DX's "Proven vs. target status" sentences that list `-> Response` as `invalid call to 'post'` and the current handler shapes change with the slice.
 - Tests: `-> User` from a route without values, a path segment, a query value and a body; `-> Response` choosing its status; `-> StaticString` still on the `String` overload; a move-only result; no conversion on 400/404; `TestClient` and loopback parity through Flare for one `-> User` and one `-> Response` route.
 - Still out: raising handlers or conversions, `(Int, B)`, JSON, headers, raw `Request` handlers.
+
+Done in M2-008, below.
+
+### Typed results in production (M2-008)
+
+Production implements exactly the slice above. A handler returns `String` (or a `String`-compatible type such as `StaticString`) or a type conforming to the public `muntin.ToResponse`, on every existing argument shape:
+
+```text
+registration (6 overloads)                          adapter instantiation stored in _Erased
+get[path](def() thin -> String)                     _call_none[String, _text]
+get[R: ToResponse, //, path](def() thin -> R)       _call_none[R, _converted[R]]
+get[path](def(Int) thin -> String)                  _call_int[String, _text]
+get[R: ToResponse, //, path](def(Int) thin -> R)    _call_int[R, _converted[R]]
+post[B, //, path](def(var B) thin -> String)        _call_body[B, String, _text]
+post[B, R: ToResponse, //, path](def(var B) thin -> R)   _call_body[B, R, _converted[R]]
+```
+
+- **Trait and `Response`:** `trait ToResponse(Deinitable, Movable)` with `def to_response(var self) -> Response` is declared in `http.mojo` next to `Response`, which conforms with `return self^`, and exported from `muntin`. `-> Response` therefore resolves to the generic overloads with `R = Response`; no `Response`-specific overload exists.
+- **Overloads:** the three `String` overloads keep their exact signatures, checks and messages, and now instantiate `respond=_text`. Each generic twin repeats its twin's `comptime assert`s word for word (route literal, arity, `B` not `Int`, `conforms_to(B, FromBody)`), so a route or body mistake gives the same message whichever return policy the handler uses (`tests/compile_fail/typed_*.mojo`). The bound `R: ToResponse` keeps `String`-compatible results off the generic overloads: `-> StaticString` still resolves through implicit conversion to the `String` overloads, and `String`/`StaticString` do not conform (`test_result_types_are_application_defined`).
+- **Adapters:** `_call_none[R, respond]`, `_call_int[R, respond]`, `_call_body[B, R, respond]` keep their extraction code; only the last step changed, from `Response.text(handler(...))` to `respond(handler(...))`. `_call_body` still answers 400 itself before the handler on a `from_body` raise, and `_call_int` still raises (→ 400 in `App.handle`) before the handler on a bad value, so neither the handler nor the conversion runs on 400; a 404 never reaches an adapter.
+- **Storage and backends unchanged:** `_handler_storage.mojo` is byte-identical; `R` lives only in the typed trampoline instantiation, never erased. No unsafe operation was added (`check_unsafe.sh`). The Flare adapter is unchanged: `App.handle` returns the converted `Response` and the adapter carries it as before.
+- **Diagnostics changed by the extra candidates:** `app.post` shapes that match no overload (no parameter, `(Int, B)`, two bodies, `raises`) now report `no matching method in call to 'post'` with one note per candidate instead of `invalid call to 'post'`; the `String` candidate's note is unchanged and still checked (`tests/body_fail`). A raw `def(request: Request) -> Response` passed to `app.post` reaches the generic overload with `B = Request` and fails on the `FromBody` assert (`body_fail/post_raw_handler.mojo`), as recorded in the revisit conditions above; not addressed here. `app.get` notes gain the generic candidates (`argument type 'String' does not conform to trait 'ToResponse'` for a mismatched `String` handler); the `String` notes the fixtures check are unchanged. A non-conforming result (`-> Int`) fails at registration with `argument type 'Int' does not conform to trait 'ToResponse'` (`storage_fail/non_conforming_return_handler.mojo`, `body_fail/post_non_conforming_return.mojo`).
+- **Evidence:** `tests/test_response.mojo` (application-defined move-only `User` on no-argument, path, query and body routes, `Created` choosing 201, `-> Response` with 418/202/201 on GET and POST, `-> StaticString` on GET and POST, handler and conversion counts, 400/404 with neither, mixed handlers after `App` moves); the M2-007 fixtures `storage_fail/response_return_handler.mojo` and `body_fail/post_response_return.mojo` now compile and were retired in favor of those tests. Loopback through Flare: `GET /people/{id}` and `POST /people` (`-> Person`, defined in the test) and `GET /teapot` (`-> Response`, 418) equal `TestClient`. The M2-007 spike (`tests/response_spike.mojo` and its fixtures) is kept as decision evidence: it covers the rejected candidates and the widened `raises` requirement, which production tests do not.
 
 ## Request/Response ownership
 
