@@ -459,8 +459,13 @@
         "Production unchanged: src/muntin, adapters/, _Erased and the unsafe surface byte-identical; ToResponse stays non-raising; no raw Request handlers, JSON, headers, new methods, extra route values, middleware/state or fallible ToResponse.",
         "docs/ARCHITECTURE.md records the decision, rejected alternatives, compiler evidence, reconsideration conditions and the exact next production slice; DX/SPEC updated; retained probes and must-not-compile fixtures run under check.sh/test.sh; planted mutations turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "tests/error_spike.mojo (library: ErrorApp with production's eight overloads widened by an inferred E: Deinitable via parametric raises, adapters answering request failures 400 and handler errors a fixed 500, guard rejecting ToResponse error types, production _Erased unchanged) + tests/test_spike_error.mojo (9/9: non-raising unchanged, raises and raises NotFound on every shape with String and ToResponse results, 500 without conversion, message independence, no leak, 400 before handler, 404, app moves, widened candidate, typed catch converting); tests/error_lib_only/driver.mojo built without the app module.",
+        "tests/error_fail (7): raising twins ambiguous; raises NotFound rejected by a bare raises type; one try cannot mix _parse_int's Error with E; typed error cannot escape through _Call[F]; AnyType catch abandoned; ToResponse error type rejected with Muntin's message; notes spell raises Never. git diff main -- src adapters empty.",
+        "./scripts/check.sh -> exit 0; ./scripts/test.sh -> exit 0 (test_spike_error 9/9, earlier suites unchanged); ./scripts/check_flare.sh -> exit 0 (adapter 8/8, loopback 2/2); git diff --check clean. Scratch copy with the slice applied (not retained): test_app/test_body/test_int_body/test_response and check_flare.sh unchanged; only the fixtures and storage test listed in ARCHITECTURE change.",
+        "Mutations planted and reverted, each red: handler error -> 400, 500 -> 200, query gathering -> 500, _parse_int inside the handler try (compile error), guard removed (fixture compiles). Fresh-context review: no material issue; minors fixed in docs."
+      ]
     }
   ]
 }
