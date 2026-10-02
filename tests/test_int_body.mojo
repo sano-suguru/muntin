@@ -15,6 +15,7 @@ from muntin.testing import TestClient
 comptime FROM_BODY_CALLS = "MUNTIN_TEST_INT_BODY_FROM_BODY_CALLS"
 comptime HANDLER_CALLS = "MUNTIN_TEST_INT_BODY_HANDLER_CALLS"
 comptime CONVERSIONS = "MUNTIN_TEST_INT_BODY_CONVERSIONS"
+comptime SECOND_HANDLER_CALLED = "MUNTIN_TEST_INT_BODY_SECOND_HANDLER_CALLED"
 
 
 def _reset():
@@ -226,17 +227,35 @@ def test_bad_body_is_400_without_the_handler() raises:
 
 def test_unmatched_method_or_path_is_404_without_extraction() raises:
     var app = int_body_app()
+    _reset()
     for method in ["PUT", "PATCH", "DELETE"]:
-        _reset()
         var response = app.handle(Request(method, "/users/1", "name=Ada"))
         assert_equal(response.status, 404, method)
         assert_equal(response.text(), "Not Found", method)
     for target in ["/users/1/x", "/users/", "/missing/1", "/people/1/2"]:
-        _reset()
         _expect_post(app, target, "name=Ada", 404, "Not Found")
     assert_equal(_count(FROM_BODY_CALLS), 0)
     assert_equal(_count(HANDLER_CALLS), 0)
     assert_equal(_count(CONVERSIONS), 0)
+
+
+def second_note(id: Int, body: Note) -> String:
+    _ = setenv(SECOND_HANDLER_CALLED, "1")
+    return "second"
+
+
+def test_matched_route_failing_conversion_does_not_fall_through() raises:
+    # Both routes match path /notes; the first selects the request, and its
+    # missing `a` is 400 even though the second route's `b` is present.
+    var app = App()
+    app.post["/notes?{a}"](update_note)
+    app.post["/notes?{b}"](second_note)
+    _reset()
+    _ = unsetenv(SECOND_HANDLER_CALLED)
+    _expect_post(app, "/notes?b=1", "x", 400, "Bad Request")
+    assert_equal(_count(FROM_BODY_CALLS), 0)
+    assert_equal(_count(HANDLER_CALLS), 0)
+    assert_equal(getenv(SECOND_HANDLER_CALLED), "")
 
 
 def test_get_route_on_the_same_path_is_unaffected() raises:

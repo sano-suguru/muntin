@@ -1,6 +1,6 @@
 # Must not compile: a path placeholder on the body-only overload. The handler's
-# one parameter is the body, so {id} would have no parameter to fill; (Int, B)
-# is not supported.
+# one parameter is the body, so {id} would have no parameter to fill. A route
+# value with a body is the separate (Int, B) overload (M2-009).
 # Expected diagnostic (checked by scripts/check.sh): handler takes only the request body; route must declare no path or query parameter
 
 from muntin import App, FromBody, Request, Response

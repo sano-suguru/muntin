@@ -441,9 +441,9 @@
       "passes": false,
       "evidence": [
         "src/muntin/app.mojo: _call_int_body[B, R, respond] (_parse_int(args[0]) raising into App.handle's 400, then B.from_body(args[1]) answering 400, then respond(handler(id, body^))); two post overloads (String / R: ToResponse) with identical route-arity, Int-guard and FromBody asserts. _handler_storage.mojo and adapters/flare/muntin_flare.mojo unchanged vs main.",
-        "./scripts/check.sh -> exit 0 (36 compile_fail incl. 8 new {,typed_}post_int_*; 12 body_fail incl. 6 new (B, Int)/two bodies/var Int/raising/raising typed/non-conforming result; post_int_and_body retired into tests). ./scripts/test.sh -> exit 0 (test_int_body 12/12; earlier suites unchanged).",
+        "./scripts/check.sh -> exit 0 (36 compile_fail incl. 8 new {,typed_}post_int_*; 12 body_fail incl. 6 new (B, Int)/two bodies/var Int/raising/raising typed/non-conforming result; post_int_and_body retired into tests). ./scripts/test.sh -> exit 0 (test_int_body 13/13; earlier suites unchanged).",
         "./scripts/check_flare.sh -> exit 0 (adapter 8/8; loopback 2/2 incl. POST /accounts/{id}, /accounts?{id} and /profiles/{id} -> Person: valid path/query values, invalid value, missing query value, invalid body, typed result equal to TestClient). git diff --check clean.",
-        "21 mutations planted and reverted, each red: body before Int, body parsed as Int, route value as body, handler after either failure, body appended before the query value, response policy skipped, body flag dropped, registered as GET, each assert removed from either overload, R bound dropped, String overload removed, reversed overload added, unsafe import / storage edits (check_unsafe.sh, diff vs main)."
+        "22 mutations planted and reverted, each red: body before Int, fallthrough after a 400, body parsed as Int, route value as body, handler after either failure, body appended before the query value, response policy skipped, body flag dropped, registered as GET, each assert removed from either overload, R bound dropped, String overload removed, reversed overload added, unsafe import / storage edits (check_unsafe.sh, diff vs main). Fresh-context review: no material issue; minors fixed."
       ]
     }
   ]
