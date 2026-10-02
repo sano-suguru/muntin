@@ -445,6 +445,27 @@
         "./scripts/check_flare.sh -> exit 0 (adapter 8/8; loopback 2/2 incl. POST /accounts/{id}, /accounts?{id} and /profiles/{id} -> Person: valid path/query values, invalid value, missing query value, invalid body, typed result equal to TestClient). git diff --check clean. CI verify + flare green on ubuntu24 20260927.320.1 and macos26 20260907.0351.1.",
         "22 mutations planted and reverted, each red: body before Int, fallthrough after a 400, body parsed as Int, route value as body, handler after either failure, body appended before the query value, response policy skipped, body flag dropped, registered as GET, each assert removed from either overload, R bound dropped, String overload removed, reversed overload added, unsafe import / storage edits (check_unsafe.sh, diff vs main). Fresh-context review: no material issue; minors fixed."
       ]
+    },
+    {
+      "id": "M2-010",
+      "priority": 210,
+      "category": "feasibility_spike",
+      "description": "Decide with Mojo 1.1.0 compiler evidence how raising handlers (def get_user(id: Int) raises -> User) register with the existing syntax and where request errors (400) end and handler errors begin, keeping App.handle(Request) -> Response as the backend seam; production behavior unchanged.",
+      "acceptance": [
+        "Candidates compared with pinned-compiler results: widened raises function types, raising overload twins, and another compiler-supported mechanism keeping the current shapes; whether a non-raising function converts to a raises function type and whether twins are unambiguous are shown by the compiler, without relying on undocumented overload ranking.",
+        "The 400/500 boundary is exact and executable: a failed conversion of a matched route's path value, a failed query-value gathering or conversion, and a failed FromBody conversion stay 400 before the handler; no route match, including a missing path segment, stays 404; a handler raise never becomes 400; _parse_int/query gathering are caught at the extraction boundary consistently for _call_int and _call_int_body; request failures are distinguishable from handler failures in tests, independent of the error message.",
+        "The wire result of an unhandled handler error (status, body, whether error text is exposed) is decided; what Mojo exposes at a catch boundary (Error versus typed errors) is shown before any error-conversion contract, and application-defined error conversion is adopted or deferred with reasons.",
+        "Spikes outside src/muntin prove a raising no-argument handler and a raising handler with extraction and body, with String-compatible and ToResponse results, stored in the production _Erased; the library side never names the application's error types (built without the application module).",
+        "Production unchanged: src/muntin, adapters/, _Erased and the unsafe surface byte-identical; ToResponse stays non-raising; no raw Request handlers, JSON, headers, new methods, extra route values, middleware/state or fallible ToResponse.",
+        "docs/ARCHITECTURE.md records the decision, rejected alternatives, compiler evidence, reconsideration conditions and the exact next production slice; DX/SPEC updated; retained probes and must-not-compile fixtures run under check.sh/test.sh; planted mutations turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass."
+      ],
+      "passes": true,
+      "evidence": [
+        "tests/error_spike.mojo (library: ErrorApp with production's eight overloads widened by an inferred E: Deinitable via parametric raises, adapters answering request failures 400 and handler errors a fixed 500 whatever the error type, production _Erased unchanged) + tests/test_spike_error.mojo (10/10: non-raising unchanged, raises and raises NotFound on every shape with String and ToResponse results, 500 without conversion, message independence, no leak, 400 before handler, 404, app moves, widened candidate, a ToResponse type converted when returned and 500 when raised, typed catch evidence); tests/error_lib_only/driver.mojo built without the app module.",
+        "tests/error_fail (6): raising twins ambiguous; raises NotFound rejected by a bare raises type; one try cannot mix _parse_int's Error with E; typed error cannot escape through _Call[F]; AnyType catch abandoned; notes spell raises Never. git diff main -- src adapters empty.",
+        "./scripts/check.sh -> exit 0; ./scripts/test.sh -> exit 0 (test_spike_error 10/10, earlier suites unchanged); ./scripts/check_flare.sh -> exit 0 (adapter 8/8, loopback 2/2); git diff --check clean. Scratch copy with the slice applied (not retained): test_app/test_body/test_int_body/test_response and check_flare.sh unchanged; only the fixtures and storage test listed in ARCHITECTURE change.",
+        "Mutations planted and reverted, each red: handler error -> 400, 500 -> 200, query gathering -> 500, _parse_int inside the handler try (compile error), raised ToResponse value converted (1 test). Fresh-context review: no material issue; minors fixed in docs."
+      ]
     }
   ]
 }
