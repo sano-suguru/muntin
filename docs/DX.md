@@ -398,6 +398,25 @@ The durable requirement is simpler: domain/application failures must be converti
 
 A future API might resemble an application-level error mapping or result type, but the exact syntax must be derived from executable Mojo code rather than copied from another language.
 
+Status (M2-010): **decided, not production**. Decided in `docs/ARCHITECTURE.md` ("Application-error decision (M2-010)"); evidence in `tests/test_spike_error.mojo` and `tests/error_fail/`. Production handlers do not raise yet. The decided shape keeps today's registration syntax:
+
+```mojo
+def get_user(id: Int) raises -> User:        # or raises NotFound, an application error type
+    if id == 0:
+        raise Error("no such user")
+    return User(id, "Ada")
+
+
+app.get["/users/{id}"](get_user)              # unchanged registration
+# GET /users/1   -> 200, User converted as today
+# GET /users/0   -> 500 "Internal Server Error"   (the error text is not sent)
+# GET /users/abc -> 400 "Bad Request"             (get_user not called)
+```
+
+- Non-raising handlers keep working unchanged. Mojo infers the handler's error type (`Never`, `Error`, or the application's type).
+- Request failures stay 400 and are decided before the handler: route value, query value, body. Anything the handler raises is a fixed 500 with the body `Internal Server Error`, whatever the error says.
+- An error type that conforms to `ToResponse` is rejected at registration for now: application-defined error responses are deferred. Until then, a handler that wants a specific status returns a `Response` (or a `ToResponse` result) instead of raising.
+
 ## 7. Middleware
 
 The intended experience is explicit and composable:
