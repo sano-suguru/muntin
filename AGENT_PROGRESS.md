@@ -106,7 +106,7 @@ M2 — typed application ergonomics. M2-009 (one `Int` route value then a typed 
 - Toolchain: **Mojo 1.1.0 (8189361e)** via pixi 0.81.0, pinned by `pixi.lock`. The default environment is unchanged since M0; `pixi.toml` adds `check`/`test`/`check-flare` tasks and the separate `flare` environment (M1-001).
 - Core: `src/muntin/{__init__,http,body,app,testing,_handler_storage}.mojo`. Public exports `App`, `FromBody`, `Request`, `Response`, `ToResponse`; in-memory `muntin.testing.TestClient`.
 - Seam: `App.handle(self, Request) -> Response`. `TestClient.get`/`.post` build a `Request` and call it; no socket, no Flare.
-- Routing: method + path-segment match; at most one `Int` from a `{name}` segment or a `{key}` query item, optionally followed by the body on `POST`; unmatched → 404 `Not Found`; missing/invalid value → 400 `Bad Request`.
+- Routing: method + path-segment match; at most one `Int` from a `{name}` segment or a `{key}` query item, optionally followed by the body on `POST`; unmatched method or path (including a missing path segment) → 404 `Not Found`; invalid matched path value, missing/duplicated/empty/invalid query value, or body that fails `from_body` → 400 `Bad Request`.
 - `main.mojo` is the Hello World example (driven via TestClient because `app.run()` does not exist yet).
 - Placeholder `greet`/`core.mojo`/`tests/test_core.mojo` removed.
 - Docs moved to the locations every document already referenced: `docs/{DX,ARCHITECTURE,SPEC,DEVELOPMENT,CLAUDE_CODE,GOALS,REFERENCES}.md`; path-scoped rules to `.claude/rules/{mojo,public-api}.md` (they carry `paths:` frontmatter).
