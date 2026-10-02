@@ -76,6 +76,15 @@ cp tests/error_spike.mojo tests/error_lib_only/driver.mojo "$tmp/error_lib_only/
 "$tmp/error_lib_only/driver"
 echo "ok"
 
+# Same check for the error-response spike (M2-012): its library side must
+# detect an error-trait conformance declared only by the application.
+step "error-response spike library builds without the application module"
+mkdir -p "$tmp/error_response_lib_only"
+cp tests/error_response_spike.mojo tests/error_response_lib_only/driver.mojo "$tmp/error_response_lib_only/"
+"${MOJO[@]}" build --Werror -I src -I "$tmp/error_response_lib_only" "$tmp/error_response_lib_only/driver.mojo" -o "$tmp/error_response_lib_only/driver"
+"$tmp/error_response_lib_only/driver"
+echo "ok"
+
 step "compile-time route checks (tests/compile_fail must not build)"
 for t in tests/compile_fail/*.mojo; do
     expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
@@ -107,7 +116,9 @@ done
 # route-value-then-body (M2-009) shapes, and App.get takes no body handler. tests/response_fail: evidence for
 # docs/ARCHITECTURE.md "Typed response decision (M2-007)". tests/error_fail:
 # evidence for docs/ARCHITECTURE.md "Application-error decision (M2-010)".
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail; do
+# tests/error_response_fail: evidence for docs/ARCHITECTURE.md
+# "Error-response decision (M2-012)".
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"

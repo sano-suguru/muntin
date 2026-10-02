@@ -488,6 +488,27 @@
         "Mutations planted and reverted, each red: handler error -> 400 or 200, adapter 400 -> 500 (route value, body), query gathering -> 500, invoke raise -> 400, Writable error text leaked, raised ToResponse converted, _parse_int inside the handler try / except falling through / error re-raised (compile errors), response policy skipped, unsafe import and storage naming Request (check_unsafe.sh), _Call made non-raising, Flare adapter 500 -> 502 (check_flare.sh). respond inside the handler try is an equivalent mutant (non-raising).",
         "Known Mojo 1.1.0 limitation, accepted: a handler value typed without raises no longer registers ('TODO: function type conversions between closures not supported yet', storage_fail/typed_thin_value_handler.mojo, with a revisit condition); plain def handlers are compatible; workarounds: type it raises Never, or forward through a helper generic over E. Fresh-context review: no other material issue. CI verify + flare green on ubuntu24 20260927.320.1 and macos26 20260907.0351.1 (PR #19)."
       ]
+    },
+    {
+      "id": "M2-012",
+      "priority": 212,
+      "category": "feasibility_spike",
+      "description": "Decide with Mojo 1.1.0 compiler evidence whether and how a handler's typed error (raises T) explicitly opts into an application-defined Response instead of the fixed 500, without changing what any handler that compiles today answers; production behavior unchanged.",
+      "acceptance": [
+        "Per-error-type conversion (a dedicated error-response contract, not ToResponse by implication), application-level mapping and keeping the fixed 500 are compared with pinned-compiler results; an arbitrary E: Deinitable still means the fixed 500 while only opted-in error types convert, without ambiguous overloads and without requiring every E to conform; any compile-time trait detection is proven across a library/application module boundary (library built without the application module) and with move-only error types.",
+        "An application-level mapper is reduced to its smallest viable mechanism with measured costs, and rejected if it needs heterogeneous storage, run-time type IDs, new unsafe code, public App state or backend coupling.",
+        "Bare raises (Error) is decided without parsing error text; returned ToResponse values and raised errors stay separate channels, and a raised ToResponse value stays 500 unless the application explicitly adopts the new mechanism; ownership and fallibility of the conversion are decided.",
+        "Executable spikes outside src/muntin cover opted-in and non-opted-in raises T, a move-only application error, an error type also conforming to ToResponse, bare raises, and successful String/ToResponse results, with handlers stored in the production _Erased.",
+        "Production unchanged: src/muntin and adapters/ byte-identical; no _Erased redesign, new unsafe code, logging, raw Request handlers, JSON, headers, middleware/state, new route shapes, fallible ToResponse or overload redesign; App.handle(Request) -> Response remains the seam and backends never see application error types.",
+        "docs/ARCHITECTURE.md records the decision, exact opt-in rule, rejected alternatives, compiler evidence, revisit conditions and the exact next production slice; DX/SPEC updated; retained probes and must-not-compile fixtures run under check.sh/test.sh; planted mutations turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass."
+      ],
+      "passes": true,
+      "evidence": [
+        "tests/error_response_spike.mojo (library: candidate ToErrorResponse(Deinitable), non-raising to_error_response(var self); _handler_error converts when comptime conforms_to(E, ToErrorResponse), else the fixed 500; production _Erased and overload signatures) + tests/test_spike_error_response.mojo (8/8: successful String/ToResponse results, opted-in move-only/refinement/deinit-self types converted once, non-opted/ToResponse-only/lookalike 500, per-channel Stale, bare raises and erased type 500, 400/404, moves, application wrapper on production App); tests/error_response_lib_only/driver.mojo built without the app module.",
+        "tests/error_response_fail (5): bounded twins ambiguous; error-only type not a result; raising conversion does not conform; __extension cannot add the trait across modules (Error); App[on_error] rejected by a backend holding App. git diff main -- src adapters empty; scratch slice: every existing suite, fixture and check_flare.sh unchanged.",
+        "./scripts/check.sh -> exit 0; ./scripts/test.sh -> exit 0 (test_spike_error_response 8/8, other suites unchanged); ./scripts/check_flare.sh -> exit 0 (adapter 8/8, loopback 2/2); git diff --check clean.",
+        "Mutations planted and reverted, each red: detect ToResponse instead (4 tests), never convert (3), also convert ToResponse types (1), library names an app error type (lib-only build). Fresh-context review: no material issue; minors applied in docs."
+      ]
     }
   ]
 }
