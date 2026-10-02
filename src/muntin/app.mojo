@@ -441,10 +441,11 @@ struct App(Movable):
         one route value, a `{name}` segment (`/users/{id}`) or a `{key}`
         query item (`/users?{id}`), and the request body follows it. Binding
         is positional: the route value is the first parameter, as for
-        `get`, and the body the second, as for the body-only `post`. A
-        missing, duplicated or non-integer route value yields 400 before the
-        body is converted; a body conversion failure yields 400; neither
-        calls `handler`."""
+        `get`, and the body the second, as for the body-only `post`. An
+        invalid matched path value, or a missing, duplicated, empty or
+        invalid query value, yields 400 before the body is converted (a
+        missing path segment does not match the route: 404); a body
+        conversion failure yields 400; neither calls `handler`."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
