@@ -361,10 +361,10 @@ struct App(Movable):
     ](mut self, handler: def() thin raises E -> String):
         """Registers `handler` for `GET path`; its String result becomes a
         200 text response. `handler` may be non-raising or declare `raises`
-        or `raises T`. A raise is answered by `T.to_error_response()` if `T`
-        conforms to `ToErrorResponse`; anything else it raises becomes a
-        fixed 500 `Internal Server Error` (the error's text is never
-        sent)."""
+        or `raises T`. A raise is answered by the error's
+        `to_error_response()` if the declared error type `E` conforms to
+        `ToErrorResponse`; anything else it raises becomes a fixed 500
+        `Internal Server Error` (the error's text is never sent)."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"

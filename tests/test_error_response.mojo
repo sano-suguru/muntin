@@ -9,6 +9,7 @@
 # (M2-012)".
 
 from std.os import getenv, setenv, unsetenv
+from std.utils import Variant
 from std.testing import assert_equal, assert_false, TestSuite
 
 from muntin import App, FromBody, Request, Response, ToErrorResponse
@@ -361,6 +362,20 @@ def find_gone(id: Int) raises Gone -> Gone:
     return Gone(id)
 
 
+def raise_response(id: Int) raises Response -> String:
+    _bump(HANDLER)
+    if _failing():
+        raise Response.text("raised", status=404)
+    return "response " + String(id)
+
+
+def raise_variant(id: Int) raises Variant[Conflict, Stale] -> String:
+    _bump(HANDLER)
+    if _failing():
+        raise Variant[Conflict, Stale](Conflict(id))
+    return "variant " + String(id)
+
+
 def lookalike(id: Int) raises Lookalike -> String:
     _bump(HANDLER)
     if _failing():
@@ -392,6 +407,8 @@ def error_response_app() -> App:
     app.get["/erased/{id}"](erased)
     app.get["/gone/{id}"](find_gone)
     app.get["/lookalike/{id}"](lookalike)
+    app.get["/response/{id}"](raise_response)
+    app.get["/variant/{id}"](raise_variant)
     return app^
 
 
@@ -530,7 +547,8 @@ def test_conditional_conformance_decides_per_instantiation() raises:
 def test_errors_that_do_not_opt_in_stay_the_fixed_500() raises:
     # A non-opted `raises T`, bare `raises`, an opted-in type erased to
     # `Error` by a bare-`raises` handler, a raised `ToResponse`-only value
-    # and a same-named method: 500 with the fixed body, nothing converted.
+    # (also `Response` itself), a same-named method and a `Variant` of
+    # opted-in types: 500 with the fixed body, nothing converted.
     var app = error_response_app()
     var targets = [
         "/rejected/1",
@@ -538,6 +556,8 @@ def test_errors_that_do_not_opt_in_stay_the_fixed_500() raises:
         "/erased/1",
         "/gone/1",
         "/lookalike/1",
+        "/response/1",
+        "/variant/1",
     ]
     for target in targets:
         _reset()

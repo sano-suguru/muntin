@@ -387,7 +387,7 @@ app.get["/health"](health)                # def health() -> Response: Response c
 - The trait requirement is `def to_response(var self) -> Response`: Muntin hands the result over. An implementation may declare `self`, `var self`, or `deinit self` (to move fields out). It does not raise. Raising handlers (section 6) do not need fallible conversion: the conversion only sees a returned value.
 - The same rule applies to every argument shape: `def create_user(body: CreateUser) -> User` and, since M2-009, `def replace_user(id: Int, body: UpdateUser) -> User` on `app.post` convert the same way.
 - `-> Response` uses the same trait: `Response` conforms and returns itself by move, so the handler's status and body reach the client unchanged (`GET /teapot` -> 418). There is no separate `Response` overload.
-- The conversion runs once, after the handler returns. A 400 (route value or body failed to convert) or 404 calls neither the handler nor the conversion; a handler that raises (500, section 6) is not converted.
+- The conversion runs once, after the handler returns. A 400 (route value or body failed to convert) or 404 calls neither the handler nor the conversion; a handler that raises (section 6) skips the result conversion.
 - A result type that is neither `String`-compatible nor conforming fails at the registration call: `no matching method in call to 'get'` with the note `argument type 'Int' does not conform to trait 'ToResponse'`.
 
 ## 6. Application errors
@@ -401,7 +401,7 @@ A future API might resemble an application-level error mapping or result type, b
 Status (M2-011): **production**. Decided in M2-010 (`docs/ARCHITECTURE.md`, "Application-error decision (M2-010)"; evidence in `tests/test_spike_error.mojo` and `tests/error_fail/`); proven by `tests/test_error.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. Registration syntax is unchanged:
 
 ```mojo
-def get_user(id: Int) raises -> User:        # or raises NotFound, an application error type
+def get_user(id: Int) raises -> User:        # or raises T, an application error type that does not opt in
     if id == 0:
         raise Error("no such user")
     return User(id, "Ada")
