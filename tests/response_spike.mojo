@@ -45,8 +45,8 @@ trait ToResponse(Deinitable, Movable):
 trait ToResponseRaising(Deinitable, Movable):
     """The same requirement widened to `raises`, as the application-error
     model might need. Evidence only: an existing non-raising
-    `to_response` satisfies it unchanged, so widening later is additive for
-    conforming types."""
+    `to_response` satisfies it unchanged, so existing conformances would
+    survive; callers of `to_response()` through the trait would not."""
 
     def to_response(var self) raises -> Response:
         ...
