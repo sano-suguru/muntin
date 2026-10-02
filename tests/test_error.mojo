@@ -11,6 +11,8 @@ from std.os import getenv, setenv, unsetenv
 from std.testing import assert_equal, assert_false, TestSuite
 
 from muntin import App, FromBody, Request, Response, ToResponse
+from muntin._handler_storage import _Erased
+from muntin.app import _Route
 from muntin.testing import TestClient
 
 # Handlers are thin functions and cannot capture state, so calls are counted
@@ -523,6 +525,29 @@ def test_app_with_raising_routes_moves() raises:
     assert_equal(client.post("/ib_user/9", "Ada").status, 500)
     assert_equal(client.get("/hello").text(), "hello")
     _reset()
+
+
+def _broken_adapter(
+    handler: def() thin -> String, args: List[String]
+) raises -> Response:
+    """An adapter that breaks the rule that adapters do not raise, with a
+    request-like message."""
+    raise Error("Bad Request")
+
+
+def test_raise_out_of_invoke_is_500_never_400() raises:
+    # No production adapter raises, so a raise out of `invoke` is a server
+    # fault: `App.handle` answers 500, not 400.
+    var app = App()
+    var broken: def() thin -> String = hello
+    app._routes.append(
+        _Route("GET", "/broken", _Erased.__init__[call=_broken_adapter](broken))
+    )
+    _reset()
+    var response = app.handle(Request("GET", "/broken"))
+    assert_equal(response.status, 500)
+    assert_equal(response.text(), "Internal Server Error")
+    assert_equal(_count(HANDLER), 0)
 
 
 def main() raises:
