@@ -118,8 +118,9 @@ done
 # docs/ARCHITECTURE.md "Typed response decision (M2-007)". tests/error_fail:
 # evidence for docs/ARCHITECTURE.md "Application-error decision (M2-010)".
 # tests/error_response_fail: evidence for docs/ARCHITECTURE.md
-# "Error-response decision (M2-012)".
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail; do
+# "Error-response decision (M2-012)". tests/raw_fail: evidence for
+# docs/ARCHITECTURE.md "Raw Request decision (M2-014)".
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"

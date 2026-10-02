@@ -529,8 +529,24 @@
         "src/muntin/http.mojo: trait ToErrorResponse(Deinitable), non-raising to_error_response(var self) -> Response; exported from __init__.mojo. app.mojo: _handler_error[E] gains comptime if conforms_to(E, ToErrorResponse), else the unchanged fixed 500; comments/docstrings only otherwise. _handler_storage.mojo: _Call docstring wording. Overloads, adapters, App.handle, _Erased, unsafe code and adapters/flare/muntin_flare.mojo unchanged; tests/test_error.mojo byte-identical.",
         "tests/test_error_response.mojo 9/9: opted-in move-only raises NotFound on def(), def(Int) path/query, def(B), def(Int, B) path/query with String and ToResponse results (error conversion once, destructor once, result conversion 0); Copyable borrowed self, refining trait + deinit self (destructor 0), conditional Missing[Int]/Missing[Plain]; non-opted, bare raises, erased Writable, raised ToResponse-only/Response, lookalike, Variant -> fixed 500; Stale per channel; 400/404 run nothing; TestClient parity. storage_fail/{error_type_is_not_a_result,raising_error_conversion}.mojo.",
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh (adapter 8/8; loopback 2/2 incl. GET /stock/{id} raises OutOfStock -> 409/200/400 equal to TestClient) and git diff --check exit 0. CI verify + flare green on ubuntu24 20260927.320.1 and macos26 20260907.0351.1 (PR #21).",
-        "14 mutations planted and reverted, each red: detection removed, ToResponse detected, fallback 500 -> 200, Error mapped by message, raised ToResponse converted, conversion skipped, conversion doubled, route value/body 400 through _handler_error, _bad_request status, OwnedPointer in app.mojo, storage importing ToErrorResponse (check_unsafe.sh guard added), Flare adapter rewriting 409. Fresh-context review: no material issue; minors applied."
+        "14 mutations planted and reverted, each red: detection removed, ToResponse detected, fallback 500 -> 200, Error mapped by message, raised ToResponse converted, conversion skipped, conversion doubled, route value/body 400 through _handler_error, _bad_request status, OwnedPointer in app.mojo, storage importing ToErrorResponse (check_unsafe.sh guard added), Flare adapter rewriting 409. Fresh-context review: no material issue; minors applied. Merged (PR #21)."
       ]
+    },
+    {
+      "id": "M2-014",
+      "priority": 214,
+      "category": "feasibility_spike",
+      "description": "Decide with Mojo 1.1.0 compiler evidence the smallest public contract for a raw Request -> Response escape hatch (def webhook(req: Request) -> Response; app.post[\"/webhook\"](webhook)) without weakening typed handlers; production behavior unchanged.",
+      "acceptance": [
+        "Dedicated Request overloads on the existing get/post, explicit get_raw/post_raw and any other needed mechanism are compared with pinned-compiler results; unchanged syntax is chosen only if resolution is unambiguous by a documented rule and diagnostics stay understandable; the rule is pinned by a must-not-compile fixture.",
+        "Request ownership spelling, the result contract (Response only or broader) and the error contract (raises, raises T, ToErrorResponse under the existing model, no special case) are decided; Request stays Muntin-owned and no backend type or lifetime reaches handlers.",
+        "Raw handlers run only after route selection (method + path), receive the complete Request (method, path, query, body) and bypass typed path/query/body extraction; the current failure of def(var req: Request) -> Response on app.post (generic body overload, FromBody assert) is removed by the selected design without ambiguous calls, a weaker FromBody or ad-hoc overload exceptions.",
+        "Executable spikes outside src/muntin, against production's eight overload signatures and production _Erased, cover raw GET/POST, request fields, body-bearing POST, borrowed and owned requests, raising/non-raising handlers, ToErrorResponse, coexistence and ordering with typed shapes; diagnostics are recorded for wrong returns, extra parameters, typed body handlers and explicit function values.",
+        "Production unchanged: src/muntin and adapters/ byte-identical; no _Erased redesign, new unsafe code, headers, JSON, new methods, middleware/state, route expansion or Request redesign; TestClient and Flare depend only on App.handle(Request) -> Response.",
+        "docs/ARCHITECTURE.md records the decision, rejected alternatives, compiler evidence, revisit conditions and the exact next production slice; DX/SPEC updated; planted mutations turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }

@@ -1,8 +1,9 @@
 # Must not compile: a raw Request -> Response handler on App.post. Since
 # M2-008 it reaches the ToResponse overload with B = Request (Response
-# conforms to ToResponse) and fails on that overload's FromBody check. Raw
-# Request handlers are not decided yet (docs/ARCHITECTURE.md, "Typed
-# response decision (M2-007)", revisit conditions).
+# conforms to ToResponse) and fails on that overload's FromBody check.
+# Decided in M2-014 (docs/ARCHITECTURE.md, "Raw Request decision (M2-014)"): the
+# production slice adds a raw overload that this call selects, and this
+# fixture retires into a positive test.
 # Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody
 
 from muntin import App, FromBody, Request, Response
