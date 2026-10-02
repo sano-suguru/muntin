@@ -57,11 +57,13 @@ struct User(Movable, ToResponse):
 
 @fieldwise_init
 struct Gone(Movable, ToResponse):
-    """An error type that says how it wants to be answered (candidate 4)."""
+    """An application type that is both a result and an error: returned, it
+    converts like any `ToResponse` result; raised, it is a handler error."""
 
     var id: Int
 
     def to_response(var self) -> Response:
+        _bump(CONVERSIONS)
         return Response.text("gone " + String(self.id), status=410)
 
 
@@ -322,13 +324,33 @@ def test_widened_candidate_takes_error_and_non_raising_handlers() raises:
 
 
 def fail_gone() raises Gone -> User:
+    _bump(HANDLER)
     raise Gone(9)
 
 
+def show_gone(id: Int) -> Gone:
+    _bump(HANDLER)
+    return Gone(id)
+
+
+def test_raised_to_response_value_is_a_handler_error() raises:
+    # Control flow decides: `Gone` returned converts itself (410); `Gone`
+    # raised is a fixed 500 and its `to_response` never runs, although the
+    # type conforms to `ToResponse`.
+    var app = ErrorApp()
+    app.get["/gone/{id}"](show_gone)
+    app.get["/fail_gone"](fail_gone)
+    _reset()
+    _expect(app, "GET", "/gone/9", 410, "gone 9")
+    _expect_counts(from_body=0, handler=1, conversions=1)
+    _expect(app, "GET", "/fail_gone", 500, "Internal Server Error")
+    _expect_counts(from_body=0, handler=2, conversions=1)
+
+
 def test_typed_error_reaches_the_catch_boundary_with_its_type() raises:
-    # Candidate 4 (deferred): at the adapter's `except`, a `raises Gone`
-    # handler's error is a `Gone` value, which can convert itself; an
-    # `Error` is only its message, so it falls back to 500.
+    # Evidence for the deferred candidate 4: at an `except`, a `raises Gone`
+    # handler's error is a `Gone` value, which code can convert; an `Error`
+    # is only its message. `ErrorApp` does not do this (test above).
     comptime assert conforms_to(Gone, ToResponse)
     comptime assert not conforms_to(NotFound, ToResponse)
     assert_false(conforms_to(NotFound, Copyable))

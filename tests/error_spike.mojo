@@ -43,19 +43,12 @@ def _handler_error[E: Deinitable](var e: E) -> Response:
     """What a handler error of type `E` becomes: always `_internal_error()`.
 
     `E` is `Error` for a `raises` handler and the application's type for a
-    `raises T` handler. The value is dropped unread: an `Error`'s message
-    may carry internal details, and no observability hook exists yet.
-
-    An error type that conforms to `ToResponse` is rejected at
-    registration: such a type says how it wants to be answered, which is
-    the application-defined conversion this decision defers. Rejecting it
-    now keeps that later slice additive (no handler that compiles today
-    changes from 500 to another response).
+    `raises T` handler. The value is dropped unread, whatever traits `E`
+    has: an `Error`'s message may carry internal details, no observability
+    hook exists yet, and a raised value is an error even if its type also
+    conforms to `ToResponse` (a returned value of that type converts; a
+    raised one does not).
     """
-    comptime assert not conforms_to(E, ToResponse), (
-        "a handler error type that conforms to ToResponse is not supported"
-        " yet; return the response from the handler instead of raising it"
-    )
     return _internal_error()
 
 
@@ -359,9 +352,11 @@ struct ErrorApp(Movable):
 def catch_converting[
     E: Deinitable, R: ToResponse, //
 ](handler: def() thin raises E -> R) -> Response:
-    """Candidate 4: an error type conforming to `ToResponse` answers for
-    itself (refined by `comptime if conforms_to`, the documented 1.1.0
-    mechanism); any other error is 500. Compiles and works; deferred."""
+    """What a typed error exposes at the catch: a value of the application's
+    type, which the documented 1.1.0 `comptime if conforms_to` refinement
+    can convert. Evidence only, for the deferred candidate 4; not a
+    proposed contract (a later conversion would be an explicit opt-in, not
+    implied by `ToResponse`)."""
     var result: R
     try:
         result = handler()

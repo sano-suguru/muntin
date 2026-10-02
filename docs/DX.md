@@ -415,7 +415,7 @@ app.get["/users/{id}"](get_user)              # unchanged registration
 
 - Non-raising handlers keep working unchanged. Mojo infers the handler's error type (`Never`, `Error`, or the application's type).
 - Request failures stay 400 and are decided before the handler: route value, query value, body. Anything the handler raises is a fixed 500 with the body `Internal Server Error`, whatever the error says.
-- An error type that conforms to `ToResponse` is rejected at registration for now: application-defined error responses are deferred. Until then, a handler that wants a specific status returns a `Response` (or a `ToResponse` result) instead of raising.
+- Returning and raising mean different things. A returned value goes through the response conversion; a raised value is a handler error and gets 500, even if its type conforms to `ToResponse`. Application-defined error responses are deferred: a handler that wants a specific status returns a `Response` (or a `ToResponse` result) instead of raising.
 
 ## 7. Middleware
 
