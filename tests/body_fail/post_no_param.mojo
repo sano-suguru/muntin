@@ -3,7 +3,7 @@
 # def(var B) thin -> String with B: FromBody (M2-006); the ToResponse
 # overload (M2-008) and the two (Int, B) overloads (M2-009) add their own
 # notes, so the call is a 'no matching method'.
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h() thin -> String' to 'def(var B) thin -> String'
+# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h() thin -> String' to 'def(var B) raises Never thin -> String'
 
 from muntin import App, FromBody, Request, Response
 

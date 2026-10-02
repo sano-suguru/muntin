@@ -3,7 +3,7 @@
 # Expected text is the compiler's note for App.post's String (Int, B)
 # overload, def(Int, var B) thin -> String (M2-009); the other three post
 # overloads add their own notes ('no matching method').
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(var id: Int, body: UpdateUser) thin -> String' to 'def(Int, var B) thin -> String'
+# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(var id: Int, body: UpdateUser) thin -> String' to 'def(Int, var B) raises Never thin -> String'
 
 from muntin import App, FromBody
 

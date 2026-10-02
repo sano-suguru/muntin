@@ -11,7 +11,7 @@ def hello() -> String:
 
 
 def main() raises:
-    var a = _Erased.__init__[call=_call_none[String, _text]](hello)
+    var a = _Erased.__init__[call=_call_none[Never, String, _text]](hello)
     var b = a.copy()
     _ = a.invoke([])
     _ = b.invoke([])

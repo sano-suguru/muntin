@@ -1,6 +1,6 @@
 # Must not compile: a body handler on GET. Body-taking registrations belong to
 # App.post; App.get accepts only def() and def(Int) handlers.
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(body: CreateUser) thin -> String' to 'def(Int) thin -> String'
+# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(body: CreateUser) thin -> String' to 'def(Int) raises Never thin -> String'
 
 from muntin import App, FromBody, Request, Response
 

@@ -1,6 +1,6 @@
 # Must not compile: a String parameter. Not a supported handler shape, even
 # though the generic box could store it.
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def greet(name: String) thin -> String' to 'def(Int) thin -> String'
+# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def greet(name: String) thin -> String' to 'def(Int) raises Never thin -> String'
 
 from muntin import App
 

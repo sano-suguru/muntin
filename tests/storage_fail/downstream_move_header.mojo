@@ -13,6 +13,6 @@ def hello() -> String:
 
 
 def main():
-    var a = _Erased.__init__[call=_call_none[String, _text]](hello)
-    var b = _Erased.__init__[call=_call_none[String, _text]](hello)
+    var a = _Erased.__init__[call=_call_none[Never, String, _text]](hello)
+    var b = _Erased.__init__[call=_call_none[Never, String, _text]](hello)
     a._header = b._header^
