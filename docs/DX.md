@@ -123,14 +123,40 @@ app.post["/users"](create_user)
 Semantics:
 
 - `FromBody` is a public Muntin trait refining `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`. The application type conforms to it in its own module; Muntin never names the type. `from_body(body: String)` is the current public body-conversion input contract (the `Request` carries the body as one `String`, with no headers or content type); future body capabilities are added as new APIs without changing it.
-- `app.post[route](handler)` accepts exactly one argument shape: a non-raising handler with one parameter, the body, on a route literal with no path or query placeholder. It returns `String` (or a type that converts to it implicitly, such as `StaticString`, as for `app.get` since M2-001) or, since M2-008, a type conforming to `ToResponse` (section 5). Parameter names are not consulted.
+- The body-only shape of `app.post[route](handler)` is a non-raising handler with one parameter, the body, on a route literal with no path or query placeholder (the route-value-then-body shape is below, M2-009). It returns `String` (or a type that converts to it implicitly, such as `StaticString`, as for `app.get` since M2-001) or, since M2-008, a type conforming to `ToResponse` (section 5). Parameter names are not consulted.
 - Muntin calls `from_body(request.body)` before the handler. The body comes from the request body only, never from the path or query (`POST /users?name=Bob` with body `name=Ada` -> `created Ada`), byte for byte (an empty body or surrounding whitespace reaches `from_body` unchanged), and the `Request` is borrowed, not consumed. If `from_body` raises, the response is 400 `Bad Request` and the handler is not called. Routes are selected by method and path as for `GET`; no match is 404 and `from_body` is not called.
-- Compile-time errors at `app.post`: a type that does not conform, including `String` and `Request` (`constraint failed: the handler's parameter is the request body; its type must conform to FromBody`); an `Int` parameter (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a path or query placeholder (`constraint failed: handler takes only the request body; route must declare no path or query parameter`). Any other shape (no parameter, `(Int, B)`, two bodies, `raises`) is `no matching method in call to 'post'`, with a note per candidate: `value passed to 'handler' cannot be converted from '<handler type>' to 'def(var B) thin -> String'` and the `ToResponse` candidate's (since M2-008; until then the single candidate gave `invalid call to 'post'`). A raw `def(request: Request) -> Response` handler reaches the `ToResponse` overload with `Request` as the body type and fails with the `FromBody` message above. A body handler passed to `app.get` has no matching overload.
+- Compile-time errors at `app.post`: a type that does not conform, including `String` and `Request` (`constraint failed: the handler's parameter is the request body; its type must conform to FromBody`); an `Int` parameter (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a path or query placeholder (`constraint failed: handler takes only the request body; route must declare no path or query parameter`). Any other shape (no parameter, two bodies, `raises`) is `no matching method in call to 'post'`, with a note per candidate: `value passed to 'handler' cannot be converted from '<handler type>' to 'def(var B) thin -> String'`, the `ToResponse` candidate's (since M2-008; until then the single candidate gave `invalid call to 'post'`) and, since M2-009, the two `(Int, B)` candidates'. A raw `def(request: Request) -> Response` handler reaches the `ToResponse` overload with `Request` as the body type and fails with the `FromBody` message above. A body handler passed to `app.get` has no matching overload.
 - `TestClient.post(target, body)` sends `Request("POST", target, body)` through `App.handle`, like `TestClient.get`.
 
-Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` with `B: FromBody` for `app.post`, all non-raising. Each returns `String` (or a type that converts to it implicitly, such as `StaticString`) or a type conforming to `ToResponse`, including `Response` (M2-008, section 5). Other `get` shapes (more or non-`Int` parameters, `raises`) and other result types fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) thin -> String'` and, for the `ToResponse` candidate, `argument type 'Int' does not conform to trait 'ToResponse'`.
+Route value then body (M2-009), proven by `tests/test_int_body.mojo`, `tests/compile_fail/{,typed_}post_int_*.mojo` and `tests/body_fail/post_{body_then_int,int_and_two_bodies,int_body_*,owned_int_and_body}.mojo` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
 
-Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, route values together with a body (`app.post["/users/{id}"](update_user)` with `def update_user(id: Int, body: CreateUser)`), `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, response headers, parameter-name checking, middleware, and state.
+```mojo
+struct UpdateUser(FromBody):              # as CreateUser above; may be move-only
+    ...
+
+
+def update_user(id: Int, body: UpdateUser) -> String:   # `var body: UpdateUser` also works
+    return "user " + String(id) + " " + body.name
+
+
+app.post["/users/{id}"](update_user)      # route value from a path segment
+app.post["/users?{id}"](update_user)      # or from a query item
+# POST /users/042     "name=Ada"  -> 200 "user 42 Ada"
+# POST /users?id=042  "name=Ada"  -> 200 "user 42 Ada"
+# POST /users/abc, /users, /users?id=1&id=2  (any body) -> 400 "Bad Request"  (from_body and update_user not called)
+# POST /users/1       "Ada"       -> 400 "Bad Request"  (from_body raised; update_user not called)
+# PUT /users/1, POST /users/1/x   -> 404 "Not Found"    (nothing converted)
+```
+
+Semantics:
+
+- The handler takes exactly one `Int` route value, then one body. The route literal declares exactly one route value: one `{name}` path segment or one `{key}` query item, never both. Binding is positional (route value first, body second); parameter names are not consulted (`def update_note(n: Int, var text: Note)` on `/notes/{id}` works). The route value follows the `Int` rules of `app.get` (path and query sections above); the body follows the body-only rules (from the request body only, byte for byte, through `B.from_body`).
+- Order: no matching method and path is 404 with nothing converted. Otherwise the route value is gathered and converted first: a missing, duplicated, empty or non-integer value is 400 and `from_body` is not called. Then the body: a `from_body` raise is 400 and the handler is not called. Then the handler runs once, and its result is converted once: `String` (or `String`-compatible, such as `StaticString`) to a 200 text response, `R: ToResponse` (an application type or `Response`) by `to_response()`. A matched route that answers 400 never falls through to a later route.
+- Compile-time errors at `app.post`, on both result policies: no route value, two path values, or a path and a query value (`constraint failed: handler takes one Int parameter and the request body; route must declare exactly one path or query parameter`); `(Int, Int)` (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a second parameter that does not conform (`constraint failed: the handler's last parameter is the request body; its type must conform to FromBody`). The body before the route value `(B, Int)`, two bodies after it, a `var id: Int` route value, a raising handler and a result that is neither `String`-compatible nor `ToResponse` match no overload (`no matching method in call to 'post'`; the `(Int, B)` candidates' notes read `cannot be converted from '<handler type>' to 'def(Int, var B) thin -> String'`, and for the result `argument type 'Int' does not conform to trait 'ToResponse'`).
+
+Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` and `def(Int, B)` (M2-009) with `B: FromBody` for `app.post`, all non-raising. Each returns `String` (or a type that converts to it implicitly, such as `StaticString`) or a type conforming to `ToResponse`, including `Response` (M2-008, section 5). Other `get` shapes (more or non-`Int` parameters, `raises`) and other result types fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) thin -> String'` and, for the `ToResponse` candidate, `argument type 'Int' does not conform to trait 'ToResponse'`.
+
+Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), raising handlers, `def(Request) -> Response` raw handlers, more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, response headers, parameter-name checking, middleware, and state.
 
 Mojo facts discovered while proving the above:
 
@@ -284,7 +310,7 @@ HTTP body -> decode -> validate -> CreateUser -> handler
 
 Muntin should use Mojo's type system and reflection capabilities where they genuinely reduce duplication. Do not introduce opaque runtime reflection when compile-time information is available.
 
-Status (M2-006): the body-only shape is **production**: `app.post["/users"](create_user)` with `from muntin import FromBody` (semantics in "Proven vs. target status"). The extraction contract was decided in M2-005 (`docs/ARCHITECTURE.md`, "Argument extraction decision"); the route-value-plus-body line below is still spike evidence only, and JSON is not implemented:
+Status (M2-006, M2-009): the body-only shape and the route-value-then-body shape are **production**: `app.post["/users"](create_user)` and `app.post["/users/{id}"](update_user)` with `from muntin import FromBody` (semantics in "Proven vs. target status"). The extraction contract was decided in M2-005 (`docs/ARCHITECTURE.md`, "Argument extraction decision"); JSON is not implemented:
 
 ```mojo
 struct CreateUser(FromBody):            # the application type conforms; Muntin never names it
@@ -300,10 +326,10 @@ def create_user(body: CreateUser) -> String:      # `var body: CreateUser` also 
 
 
 app.post["/users"](create_user)          # production (M2-006): the one parameter is the body
-# app.post["/users/{id}"](update_user)   # def update_user(id: Int, body: CreateUser): route value, then body (spike evidence only)
+app.post["/users/{id}"](update_user)    # production (M2-009): def update_user(id: Int, body: CreateUser), route value then body
 ```
 
-- Binding is positional (the decided rule; production implements only the case with no route values): route values (path segments, then the query key) fill the first parameters, and one more parameter, last, is the body. Route values are Muntin builtins (`Int`), bodies are types that conform to the body trait, and the two never overlap, so a forgotten `{id}` or a misplaced body type is a compile error at `app.post`, not a silent rebinding.
+- Binding is positional (the decided rule; production implements no route value or exactly one `Int` route value before the body): route values (path segments, then the query key) fill the first parameters, and one more parameter, last, is the body. Route values are Muntin builtins (`Int`), bodies are types that conform to the body trait, and the two never overlap, so a forgotten `{id}` or a misplaced body type is a compile error at `app.post`, not a silent rebinding.
 - The application writes `from_body` and chooses the body format. Muntin does not decode JSON yet: a JSON codec will be a separate, later addition that fills `from_body`, so the "no manual decoding" goal above waits for it. Routing and binding do not change when it arrives.
 - A body that does not convert is 400 before the handler runs; a future raising handler's error is a different outcome (the application-error model).
 
@@ -358,7 +384,7 @@ app.get["/health"](health)                # def health() -> Response: Response c
 
 - `-> String` handlers, and handlers whose function type converts to `def(...) -> String` such as `-> StaticString`, keep today's behavior: `String` needs no conformance.
 - The trait requirement is `def to_response(var self) -> Response`: Muntin hands the result over. An implementation may declare `self`, `var self`, or `deinit self` (to move fields out). It does not raise; fallible conversion waits for the application-error model.
-- The same rule applies to every argument shape: `def create_user(body: CreateUser) -> User` on `app.post` converts the same way.
+- The same rule applies to every argument shape: `def create_user(body: CreateUser) -> User` and, since M2-009, `def replace_user(id: Int, body: UpdateUser) -> User` on `app.post` convert the same way.
 - `-> Response` uses the same trait: `Response` conforms and returns itself by move, so the handler's status and body reach the client unchanged (`GET /teapot` -> 418). There is no separate `Response` overload.
 - The conversion runs once, after the handler returns. A 400 (route value or body failed to convert) or 404 calls neither the handler nor the conversion.
 - A result type that is neither `String`-compatible nor conforming fails at the registration call: `no matching method in call to 'get'` with the note `argument type 'Int' does not conform to trait 'ToResponse'`.
