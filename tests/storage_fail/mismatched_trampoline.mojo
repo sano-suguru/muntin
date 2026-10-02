@@ -4,7 +4,7 @@
 # Expected diagnostic (checked by scripts/check.sh): value passed to 'value' cannot be converted from 'def hello() thin -> String' to 'def(Int) thin -> String'
 
 from muntin._handler_storage import _Erased
-from muntin.app import _call_int
+from muntin.app import _call_int, _text
 
 
 def hello() -> String:
@@ -12,4 +12,4 @@ def hello() -> String:
 
 
 def main():
-    _ = _Erased.__init__[call=_call_int](hello)
+    _ = _Erased.__init__[call=_call_int[String, _text]](hello)

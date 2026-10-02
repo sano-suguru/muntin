@@ -1,7 +1,9 @@
-# Must not compile: a raw Request -> Response handler on App.post.
-# Expected text is the compiler's: App.post has one overload,
-# def(var B) thin -> String with B: FromBody (M2-006).
-# Expected diagnostic (checked by scripts/check.sh): invalid call to 'post': value passed to 'handler' cannot be converted from 'def h(request: Request) thin -> Response' to 'def(var B) thin -> String'
+# Must not compile: a raw Request -> Response handler on App.post. Since
+# M2-008 it reaches the ToResponse overload with B = Request (Response
+# conforms to ToResponse) and fails on that overload's FromBody check. Raw
+# Request handlers are not decided yet (docs/ARCHITECTURE.md, "Typed
+# response decision (M2-007)", revisit conditions).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody
 
 from muntin import App, FromBody, Request, Response
 

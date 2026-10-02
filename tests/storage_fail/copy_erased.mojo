@@ -3,7 +3,7 @@
 # Expected diagnostic (checked by scripts/check.sh): '_Erased' value has no attribute 'copy'
 
 from muntin._handler_storage import _Erased
-from muntin.app import _call_none
+from muntin.app import _call_none, _text
 
 
 def hello() -> String:
@@ -11,7 +11,7 @@ def hello() -> String:
 
 
 def main() raises:
-    var a = _Erased.__init__[call=_call_none](hello)
+    var a = _Erased.__init__[call=_call_none[String, _text]](hello)
     var b = a.copy()
     _ = a.invoke([])
     _ = b.invoke([])
