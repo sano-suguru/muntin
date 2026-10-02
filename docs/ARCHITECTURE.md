@@ -891,7 +891,120 @@ No candidate is class 1.
 
 **Evidence.** All four commands passed on unmodified `main` after PR #23, and again on this change: `./scripts/check.sh` (every fixture directory), `./scripts/test.sh` (every suite, including `test_raw` 12/12), `./scripts/check_flare.sh` (adapter 8/8, loopback 2/2) and `git diff --check`. `git diff main -- src adapters tests` is empty. A fresh-context review was asked: "If M2 were tagged complete today, what concrete claim would be false or misleading?" It found no blocker and two material omissions, both applied: (1) handlers can read no runtime data, now the contract's first exclusion, with state reclassified; (2) bodies are lossless only for UTF-8 over Flare, now named. It also found minors, all applied: the M3 list lacked some deferred items; DX section 3 still said "M2 work"; parity differences and serving through Flare were left implicit; placeholder checks compare counts, not names; the `/users/ada` wording; the raw function-value limitation; `_` internals.
 
-**Next.** M3-001, the application state decision gate, then M3-002, the request/response headers decision gate (`docs/SPEC.md`, M3). State comes first because it is the M3 item most likely to reopen this decision. Both are decision only; neither is implemented here.
+**Next.** M3-001, the application state decision gate, then M3-002, the request/response headers decision gate (`docs/SPEC.md`, M3). State comes first because it is the M3 item most likely to reopen this decision. Both are decision only; neither is implemented here. (M2-016 merged as PR #24. M3-001 is decided below, "Application state decision (M3-001)", and does not reopen M2.)
+
+### Application state decision (M3-001)
+
+Status: **decision** (M3-001; production is unchanged in it). This section decides how a handler reaches long-lived application data (a repository, a connection, configuration). Muntin must still tell route values, the body and framework-injected state apart at compile time, without parameter names, runtime type identity or backend objects, and without changing the M2 contract.
+
+**Selected: A, handler-argument injection, with the state bound at registration.** The handler declares a Muntin-owned `State[S]` as its first parameter. The registration passes the state as its second argument:
+
+```mojo
+def get_user(users: State[Users], id: Int) raises NotFound -> User:
+    return users[].get(id)
+
+var users = State(Users(names^))
+app.get["/users/{id}"](get_user, users)       # (handler, state)
+app.get["/hello"](hello)                      # every M2 call: unchanged, one argument
+```
+
+Neither pure form of the candidates survives the compiler. Pure A (the handler declares `State[S]` and the registration is today's one-argument call) is ambiguous on `post` and has no static source for the value. Pure B (the `App` owns the state) needs `App[S]` or a runtime type check. Binding the state at the registration call keeps A's handler-side declaration and answers B's ownership question without either cost.
+
+**The static rule.**
+
+- *Injected:* a registration with two arguments, `(handler, state: State[S])`. The handler's first parameter is `State[S]`, and `S` is inferred from both arguments, so they must agree (`state_fail/mismatched_state_type.mojo`: `value passed to 'state' cannot be converted from 'State[Cache]' to 'State[Db]'`). After it comes exactly one M2 shape, bound by M2-005 unchanged: route values in the literal's order, then the body.
+- *Route value:* `Int` in a route-value position, as in M2. *Body:* the last parameter on `post`, `B: FromBody`, as in M2. *Raw:* `def(State[S], var Request) -> Response`, the M2-015 shape with the state first.
+- *Separation from M2:* every M2 call passes one argument, and Mojo filters candidates by argument count before ranking. The stateful family never competes with an M2 overload. A stateful handler registered without its state matches no `get` overload (`get_state_without_argument.mojo`: the stateful candidates' note `missing required argument: 'state'`). On `post` it reaches the generic body overload with `B = State[...]` and fails there. A stateless handler given a state also fails (`state_for_stateless_handler.mojo`), so the state is never silently ignored.
+- *Inside the family:* only `post` needs ranking. A stateful raw handler also satisfies the stateful `ToResponse` body overload (`B = Request`, `R = Response`). M2-014's shorter-list rule selects the raw overload: `[S, E, path]`, 3 parameters, against `[S, B, E, R, path]`, 5. The `String` body overload is not viable for a `Response` result. Mutation: two defaulted parameters on the raw overload make the lists equal, and the call becomes `ambiguous call to 'post'`. The two `get` overloads with one parameter after the state, `def(State[S], Int)` and `def(State[S], var Request)`, do not overlap.
+- *Disjointness kept:* `State` is a Muntin type in a fixed position. It is not `Int`, it does not conform to `FromBody`, and the stateful body overloads reject a second `State` in the body slot by its private marker trait (`two_states.mojo`: `a handler takes at most one State, as its first parameter`). The application's `S` may be any type, `Int` included: the wrapper is what marks the parameter, not `S`. The placeholder-count checks are unchanged: the state is not a route value (`route_count_with_state.mojo` gets `def()`'s message).
+- *Position:* state first is a design rule, not a compiler constraint. A state-last family (`def(Int, var B, State[S])`, DX section 8's old sketch) compiles and selects correctly in a scratch probe. It would make the body the second-to-last parameter on `post`, which restates M2-005's "the remaining last parameter is the body". State first leaves that sentence literal and gives one reading order: injected, route values, body. `state_last.mojo` and `state_after_body.mojo` pin that such handlers do not register.
+
+**Shapes measured** (spike: `StateApp` = production's ten overloads copied unchanged, plus ten stateful ones, all stored in production `_Erased`):
+
+| Method | Stateful shape | Results | Errors |
+|---|---|---|---|
+| `get` | `def(State[S])`, `def(State[S], Int)` | `String`-compatible, `R: ToResponse` | `thin raises E`, inferred, as M2-011 |
+| `post` | `def(State[S], var B)`, `def(State[S], Int, var B)` | same | same |
+| `get`, `post` | raw `def(State[S], var Request)` | `Response` | same |
+
+Every request rule is M2's, decided in the same places: 404 without a match; 400 for an invalid route value, a missing, duplicated or invalid query value, or a `from_body` raise, all before the handler (`Users.calls` stays 0); `ToErrorResponse` or the fixed 500 for a raise (`NotFound` 404, bare `raises` 500 without its text); first registration wins. Raw stateful handlers receive the whole `Request` with no pre-handler 400.
+
+**Overload cost: one factor of two, accepted.** The full family is 10 overloads, mirroring the 10 M2 ones: 5 shapes × 2 result policies, with the raw shapes `Response` only. This is the "one overload per permutation" red flag along exactly one axis. The judgment:
+
+- The state axis is binary: with or without. `S` is generic, so more state types add no overloads. `E` is inferred, so errors add none.
+- Mojo 1.1.0 offers two ways around the factor, and the compiler closes both. No variadic function types: `variadic_handler_type.mojo`, `expected a type, not a value`. No storable closures: `closure_handler_storage.mojo`, where a function generic over a closure trait is itself `capturing` and does not convert to `_Call[F]`.
+- Rule that bounds it: a handler has **one injected slot, the first parameter, and it holds one `State`**. A later injected kind (request context, typed headers) either goes through `S` or `Request`, or needs its own decision. Any new kind that adds a slot doubles the overload count again.
+
+**M2-005 rejected a registration argument before; why that does not carry over.** M2-005 candidate 2, a decoder passed at registration, was rejected for "a second argument on every body route and one decoder per position". The decoder restated something the body type can carry statically, its conversion, and the `FromBody` trait carries it. State is a runtime value, and on Mojo 1.1.0 nothing static can carry it to a thin handler: no globals (`module_level_state.mojo`, `global variables are not supported`), no captures, no generic `App` (below). The registration is the one place where the handler's type and the value meet statically. The repeated argument is the cost of that. A scoped registrar (`app.with_state(users).get[...](h)`) could remove the repetition without a new mechanism. It was not measured; it is additive sugar for later, not a candidate here.
+
+**Ownership and lifetime.**
+
+- `State[S]` holds an `ArcPointer[S]` (std, reference counted with atomic counts; no unsafe operation). `State(value)` moves the value in. The application keeps its handle. `app.get[...](h, users)` borrows `users` and moves a copy of the handle into the route's `_Erased` box, together with the handler, as one private `_Bound[H, S]` value. The value lives until the last handle goes. Pinned in the spike: `Tracked` is dropped exactly once, after the application dropped its handle and then the moved `App`.
+- Per request: the stateful adapter borrows the boxed `_Bound` (`_Erased.invoke` already borrows its value) and passes `bound.state` by borrow. No copy, no reference-count change, no allocation. In the spike, the count is the same inside a handler as between requests (4, for 3 routes and the application's handle). The mutation that copies the handle per request turns it red.
+- `App` moves: the value is on the heap, so moving `App` (`var moved = app^`, twice in the spike) moves only the routes' handles. `TestClient(app)` borrows the `App` immutably, and `App.handle(self)` is read-only. Scratch copy: `TestClient` serves a stateful production `App` repeatedly, also after a move, while the application still reads its own handle.
+- Read-only: `state[]` is `def __getitem__(self) -> ref[self._shared] S`. The receiver is a borrowed `self`, so the reference is immutable through every handle: borrowed, `mut` or owned (`mutate_through_state.mojo`, `expression must be mutable for in-place operator destination`). That line carries the guarantee; the mutation `ref self` makes the fixture compile. `ArcPointer[S][]` alone is mutable through a borrowed pointer (scratch probe), so `State` must not expose its pointer as API (Mojo 1.1.0 has no private fields; `_shared` is an internal by name). Read-only is shallow: a type `S` with interior mutability (the spike's `Users.calls`, its own `ArcPointer[Int]`) changes under its own rules, and Muntin does not synchronize it.
+- Concurrency: today `App.handle` is never called concurrently. Flare's multi-worker `serve` requires a `Copyable` handler (each worker gets `H.copy()`), and `MuntinHandler` holds a move-only `App`. A backend that calls `handle` concurrently, or a copyable `App`, would make interior mutability in `S` a data-race question (revisit conditions).
+- Several values: one `State` per handler. Several values are fields of one `S`. Different routes may bind different `S` (`State[Users]` and `State[Greeting]` in one app), and several routes may share one value (one count, both routes' calls visible through the application's handle). There is no registry, key or lookup.
+
+**Effect on existing machinery.** `App` stays non-generic. `App.handle(Request) -> Response`, `_Route`, `_Erased`, `_Call[F] = def(F, List[String]) raises thin -> Response` and the unsafe surface are unchanged: `_Bound[H, S]` is one more `F`, and the stateful adapters are `_Call[_Bound[H, S]]`. `check_unsafe.sh` passes unchanged: `ArcPointer` is not an unsafe API. The storage module still names neither request data nor state. `Request`, `Response`, `TestClient`, the Flare adapter and the seam are unchanged.
+
+**M2 stays closed.** No M2 public signature, binding rule or 400/404/500 boundary changes. Scratch copy of the repository with the full family applied to production `App` (`src/muntin/state.mojo` with `State`, ten overloads, `_Bound` and five adapters in `app.mojo`, the `State` guard in the four body overloads; not retained): `./scripts/check.sh`, `./scripts/test.sh` and `./scripts/check_flare.sh` exit 0 with every existing suite count, fixture and expected text unchanged, plus one scratch `TestClient` test. Diagnostics, compared in full for all 78 fixtures that build against production `App` (`compile_fail`, `storage_fail`, `body_fail`, `raw_fail`; normalized for paths and line numbers):
+- 62 are identical, every `constraint failed:` fixture among them.
+- 16 `no matching method` diagnostics gain five stateful candidates' notes, `missing required argument: 'state'`, after every M2 candidate's note.
+- In 12 of those 16, Mojo's cap of ten notes per diagnostic then drops one to five trailing detail notes (`(N more notes omitted.)`), such as `result type of the first type is 'String' but the second type is 'R'`.
+- No candidate note, constraint message or error line is lost, and every fixture's expected text still matches.
+
+The `get` slice below adds four notes, to `get` calls only. A scoped registrar would add none, which is one more reason to keep it as the later option.
+
+The body-overload guard, when it ships with the stateful `post` slice, changes only the message of calls that already fail, as M2-015's `Request` guard did.
+
+**Candidates** (Mojo 1.1.0 (8189361e)):
+
+| Candidate | Result | Verdict |
+|---|---|---|
+| A. `State[S]` handler parameter, bound at registration `(handler, state)` | every shape, result, error kind and raw form; separated from M2 by argument count; ownership by a shared read-only handle; `_Erased`/`_Call`/unsafe/backends unchanged; M2 suites and fixtures unchanged on a scratch copy | **chosen** |
+| A0. `State[S]` handler parameter through today's one-argument registration | `ambiguous call to 'post'` against the generic body overload, equal lists (`one_argument_injection_is_ambiguous.mojo`): a concrete wrapper does not outrank a generic `B`. Even with a ranking fix (bounding `B: FromBody` in the signature, M2-014 candidate 3), the value still needs a static source, which leads to B1 or B2 | rejected |
+| B1. `App[S]` owning the state (with a default `S`) | a backend storing `App` by name no longer names a concrete type (`generic_app_backend_field.mojo`: `'App[_]' is not concrete`); binding the default (`App[]`) serves only stateless apps (`generic_app_backend_default_only.mojo`: `cannot be converted from 'App[Db]' to 'App'`). `MuntinHandler`, `TestClient`'s `Pointer[App, origin]` and every `App` in application code become generic over `S`: the coupling M2-012 rejected for `App[on_error=m]` | rejected |
+| B2. non-generic `App` storing one erased state value (`app.state(v)`), handlers asking for `State[S]` | nothing links the stored type to a handler's `S` at compile time, so dispatch must check it at run time. Mojo 1.1.0's only runtime type identity is `reflect[T].name()`, a module-qualified `String` (`test_runtime_type_identity_is_only_a_name_string`). The check would be a string key and the recovery an unsafe cast outside `_handler_storage.mojo` | rejected (string type keys, downcast, unsafe expansion) |
+| C. no state feature | no application pattern exists: module-level variables do not compile, thin handlers cannot capture, raw handlers receive only the `Request`. The only process-wide mutable store a thin function reaches is the environment, which Muntin's own tests use as call counters (strings, global, not a state model) | rejected, because A meets the bar |
+| D. capturing closures as handlers (state by capture) | a closure passes through a parameter bounded by its function trait, but the generic trampoline becomes `capturing` and does not convert to `_Call[F]` (`closure_handler_storage.mojo`). It would change `_Call`/`_Erased` and every M2 registration signature (thin function types): an M2 reopen | rejected on 1.1.0; revisit condition |
+| E. one generic registration over all arities (variadic function type) | `expected a type, not a value` (`variadic_handler_type.mojo`) | not expressible |
+| state-last family | compiles in a scratch probe | rejected: the body stops being last (M2-005) |
+
+**Name.** `State` collides with nothing in the Mojo 1.1.0 prelude (`use of unknown declaration 'State'`) or in Muntin. Flare 0.11 has its own `flare.http.State[T]`, a registration-time field of Flare's struct handlers that is copied per request and requires `Copyable & Defaultable`. Application code never imports Flare, and the adapter imports names explicitly, so the names do not clash. Muntin's type is independent of Flare's.
+
+**Evidence.**
+- `tests/state_spike.mojo` (library side): `State`, `_InjectedState`, `_Bound`, five stateful adapters, and `StateApp` with production's ten overloads (signatures and asserts copied) plus the ten stateful ones. It imports production `_Erased`, adapters, route checks, matching, query gathering and `_handler_error`.
+- `tests/test_spike_state.mojo` (11 tests): every stateful shape and result; request failures with the handler not called; the error model; raw stateful `get`/`post` with borrowed and `var` requests; M2 shapes beside stateful routes in one app; two state types and a shared value; the reference count at registration, inside a request and after `App` is dropped; a drop exactly once across two `App` moves; the application's handle after requests; the runtime type-identity fact.
+- `tests/state_lib_only/driver.mojo`: built by `check.sh` without the application module, with every stateful shape on a state type the library has never seen.
+- `tests/state_fail` (17): one per rule and one per rejected candidate.
+- Mutations (planted in the spike, reverted; 7), each red:
+  - route value and body slots swapped;
+  - a bad route value calling the handler;
+  - the handle copied per request;
+  - the stateful raw route not marked raw (crash);
+  - `__getitem__(ref self)` (the read-only fixture compiles);
+  - the `State` guard removed (the fixture loses its message);
+  - the raw `post` list made as long as the body list (`ambiguous call`).
+
+**Revisit when:**
+- `variadic_handler_type.mojo` or `closure_handler_storage.mojo` compiles: a closure or variadic form could replace the stateful family. Re-decide before adding more stateful shapes;
+- `one_argument_injection_is_ambiguous.mojo` compiles, or the generic-`App` fixtures compile (a defaulted parameter no longer infects a field named `App`): A0 or B1 would need re-measuring;
+- `module_level_state.mojo` compiles: candidate C gains an application pattern, though a global still fails "no hidden globals" and testability;
+- a backend calls `App.handle` concurrently, or `App` becomes `Copyable` (Flare multi-worker): read-only `State` stays safe, but interior mutability in `S` needs a documented synchronization rule;
+- a second injected kind is proposed: it must not add a second slot without its own decision, because the overload count would double again;
+- the repeated state argument, or the truncated detail notes of failing M2 calls, is measured as a DX problem: a scoped registrar (its own type, no candidates on `App`) is the additive candidate;
+- a toolchain change alters `ArcPointer`'s interface, or the receiver rule that makes `state[]` immutable (`mutate_through_state.mojo` compiles).
+
+**Next production slice (M3-003): stateful `get`.**
+- `src/muntin/state.mojo` (new): public `struct State[S: Movable & Deinitable](Copyable, Movable)` with `_shared: ArcPointer[S]`, `__init__(out self, var value: S)` and `__getitem__(self) -> ref[self._shared] S`, exported from `muntin`. No marker trait yet: it is only needed by the `post` guard.
+- `src/muntin/app.mojo`: private `_Bound[H, S]`, `_call_state_none[S, E, R, respond]` and `_call_state_int[S, E, R, respond]` (the spike's, error handling and 400s as their M2 twins); four `App.get` overloads `(handler: def(State[S]) thin raises E -> String | R, state: State[S])` and `(def(State[S], Int) ..., state: State[S])`, each with its stateless twin's route asserts and messages, placed after the stateless `get` overloads; the module comment and docstrings.
+- Unchanged: `_handler_storage.mojo`, `_Erased`, `_Call`, `_Route`, `App.handle`, `http.mojo`, `body.mojo`, `testing.mojo`, `adapters/flare/muntin_flare.mojo`, `check_unsafe.sh`, and every existing test, fixture and expected text.
+- Fixtures: production counterparts of the `get` fixtures in `state_fail` (`mismatched_state_type`, `state_last`, `get_state_without_argument`, `state_for_stateless_handler`, `plain_value_as_state`, `owned_state_parameter`, `mutate_through_state`, `route_count_with_state`).
+- Tests (`tests/test_state.mojo`): the spike's `get` cases on production `App` through `TestClient`, plus the reference count, the drop and `App`-move cases. Loopback through Flare adds one stateful `GET /users/{id}`, equal to `TestClient`.
+- Docs: DX section 8 becomes a compilable, tested example (registering only `get` routes), and the status lines in sections 2, 19 and "Still targets" are updated.
+- Known gap until the next slice: a stateful handler on one-argument `post` reports the `FromBody` message. The `State` guard and its marker ship with the stateful `post` overloads, so no message points at an overload that does not exist yet.
+- Not in the slice: stateful `post` (body, route value then body), stateful raw handlers, the guard, a scoped registrar, middleware, headers.
 
 ## Request/Response ownership
 

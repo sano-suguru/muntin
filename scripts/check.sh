@@ -85,6 +85,15 @@ cp tests/error_response_spike.mojo tests/error_response_lib_only/driver.mojo "$t
 "$tmp/error_response_lib_only/driver"
 echo "ok"
 
+# Same check for the application-state spike (M3-001): its library side
+# must store and inject state types defined only by the application.
+step "state spike library builds without the application module"
+mkdir -p "$tmp/state_lib_only"
+cp tests/state_spike.mojo tests/state_lib_only/driver.mojo "$tmp/state_lib_only/"
+"${MOJO[@]}" build --Werror -I src -I "$tmp/state_lib_only" "$tmp/state_lib_only/driver.mojo" -o "$tmp/state_lib_only/driver"
+"$tmp/state_lib_only/driver"
+echo "ok"
+
 step "compile-time route checks (tests/compile_fail must not build)"
 for t in tests/compile_fail/*.mojo; do
     expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
@@ -122,8 +131,9 @@ done
 # evidence for docs/ARCHITECTURE.md "Application-error decision (M2-010)".
 # tests/error_response_fail: evidence for docs/ARCHITECTURE.md
 # "Error-response decision (M2-012)". tests/raw_fail: evidence for
-# docs/ARCHITECTURE.md "Raw Request decision (M2-014)".
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail; do
+# docs/ARCHITECTURE.md "Raw Request decision (M2-014)". tests/state_fail:
+# evidence for docs/ARCHITECTURE.md "Application state decision (M3-001)".
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
