@@ -550,7 +550,30 @@
         "tests/raw_spike.mojo (RawApp: production's eight overloads copied, plus get/post taking def(var Request) thin raises E -> Response, the body overloads' not B == Request guard, _call_raw rebuilding Request from four raw strings, production _Erased/adapters/_handler_error) + tests/test_spike_raw.mojo 8/8; tests/raw_fail (8) incl. equal_parameter_lists (ambiguous: list length decides).",
         "Scratch copy of src/muntin with the slice applied (not retained): check.sh, test.sh, check_flare.sh pass; only body_fail/post_raw_handler (retires) and compile_fail/post_request_param (guard message) change. src/muntin and adapters/ unchanged vs main.",
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh (adapter 8/8, loopback 2/2) and git diff --check exit 0.",
-        "8 spike mutations planted and reverted, each red. Fresh-context review: no material issue; minors applied in docs."
+        "8 spike mutations planted and reverted, each red. Fresh-context review: no material issue; minors applied in docs. Merged (PR #22)."
+      ]
+    },
+    {
+      "id": "M2-015",
+      "priority": 215,
+      "category": "raw_handlers",
+      "description": "Production raw Request -> Response handlers as decided in M2-014: app.get and app.post each accept def(var Request) thin raises E -> Response, selected by the documented shorter-parameter-list rule, with no typed extraction on a matched raw route; the typed API is not widened.",
+      "acceptance": [
+        "app.get[\"/x\"](handler) and app.post[\"/x\"](handler) each accept one raw shape, def(var Request) thin raises E -> Response with inferred E: Deinitable; def h(req: Request) -> Response is canonical and var req: Request also works; raw handlers return Response only.",
+        "Selection rests on Mojo 1.1.0's documented shorter-parameter-list rule: each raw overload's parameter list stays strictly shorter than every body overload a Request -> Response handler satisfies (no added defaults/generics); the equal-list ambiguity fixture is retained; the body overloads' not B == Request guard only improves diagnostics for already-invalid calls and takes no part in selection.",
+        "A matched raw route receives Muntin's Request (method, path, query, body exactly as received, including an empty body and adversarial query strings) rebuilt fresh and moved into the handler; no _query_value, _parse_int or FromBody runs, so Muntin generates no pre-handler 400; the handler or ToErrorResponse may return any status, including 400; no backend type or lifetime reaches the handler.",
+        "Errors use the existing model unchanged: an opted-in raises T answers with ToErrorResponse; bare raises and non-opted raises T are the fixed 500 with no error text.",
+        "Route selection stays method + path, first registration wins across raw and typed routes in both orders, 404 otherwise without calling the handler; a typed 400 does not fall through; raw route literals declare no path/query placeholders (def()'s messages); all existing typed shapes coexist unchanged; TestClient equals direct App.handle; Flare loopback adds one raw POST route observing body/query and exercising ToErrorResponse, equal to TestClient.",
+        "Fixtures: body_fail/post_raw_handler retired into positive coverage; compile_fail/post_request_param expects the guard; production fixtures for wrong raw return, (Int, Request), extra parameter, route placeholders and explicit function-value limitations; the M2-014 spike, raw_fail and the equal-list fixture retained as decision evidence.",
+        "Unchanged: _handler_storage.mojo, _Erased, _Call, unsafe surface, http.mojo, body.mojo, testing.mojo, __init__.mojo, Request/Response representation, TestClient, adapters/flare/muntin_flare.mojo and the seam App.handle(Request) -> Response.",
+        "Planted mutations (raw selection, query/body transport, typed extraction running, handler error -> 400, method corruption, guard removal, placeholder checks, first-registration ordering, storage/unsafe expansion, Flare rewriting the raw response) turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass locally, and CI verify + flare pass on Ubuntu and macOS."
+      ],
+      "passes": false,
+      "evidence": [
+        "src/muntin/app.mojo: _call_raw[E] (rebuilds Request from method/path/query/body, moves it in, handler alone in the try -> _handler_error[E], Response unconverted); _Route.raw; App.handle passes the four fields to a raw route and skips query gathering/body argument; get/post raw overloads [E, //, path] after the typed overloads with def()'s three route asserts; not B == Request before FromBody in the four body overloads. Every other src/muntin file, check_unsafe.sh and adapters/flare/muntin_flare.mojo unchanged.",
+        "tests/test_raw.mojo 12/12 (DX section 9 example; exact fields over 12 query forms x bodies on GET/POST; borrowed/owned/explicit value; no extraction counters with typed control; handler/ToErrorResponse 400; 404 without handler; fixed 500 without text; 401 ToErrorResponse; typed shapes beside raw; first registration both orders on GET/POST; TestClient parity). Fixtures: compile_fail/{post_request_param,raw_post_typed_return,raw_post_int_and_request{,_string},raw_{get,post}_{path,query}_placeholder,raw_malformed_route}, storage_fail/raw_{get_string_return,borrowed_function_value,function_value_without_raises}, body_fail/raw_extra_parameter; body_fail/post_raw_handler retired.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh (adapter 8/8; loopback 2/2 incl. raw POST /webhook 202/401/404 equal to TestClient) and git diff --check exit 0.",
+        "20 mutations planted and reverted, each red (docs/ARCHITECTURE.md \"Raw Request handlers in production (M2-015)\")."
       ]
     }
   ]

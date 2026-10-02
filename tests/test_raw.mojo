@@ -137,6 +137,13 @@ def verify_unmapped(req: Request) raises Unmapped -> Response:
     raise Unmapped("secret")
 
 
+def webhook(req: Request) -> Response:
+    """The docs/DX.md section 9 example, verbatim."""
+    if req.body != "signed":
+        return Response.text("unsigned", status=401)
+    return Response.text("ok")
+
+
 def raw_first(req: Request) -> Response:
     return Response.text("raw")
 
@@ -243,6 +250,23 @@ comptime ADVERSARIAL = [
     "?=&&=",
     "?%69d=%31 +1#frag",
 ]
+
+
+def test_dx_section_9_example() raises:
+    var app = App()
+    app.post["/webhook"](webhook)
+    var client = TestClient(app)
+    var ok = client.post("/webhook", "signed")
+    assert_equal(ok.status, 200)
+    assert_equal(ok.body, "ok")
+    var unsigned = client.post("/webhook", "forged")
+    assert_equal(unsigned.status, 401)
+    assert_equal(unsigned.body, "unsigned")
+    var query = client.post("/webhook?id=abc", "forged")
+    assert_equal(query.status, 401)
+    assert_equal(query.body, "unsigned")
+    assert_equal(client.get("/webhook").status, 404)
+    assert_equal(client.post("/webhook/x", "signed").status, 404)
 
 
 def test_raw_get_and_post_receive_the_whole_request() raises:
