@@ -507,8 +507,25 @@
         "tests/error_response_spike.mojo (library: candidate ToErrorResponse(Deinitable), non-raising to_error_response(var self); _handler_error converts when comptime conforms_to(E, ToErrorResponse), else the fixed 500; production _Erased and overload signatures) + tests/test_spike_error_response.mojo (8/8: successful String/ToResponse results, opted-in move-only/refinement/deinit-self types converted once, non-opted/ToResponse-only/lookalike 500, per-channel Stale, bare raises and erased type 500, 400/404, moves, application wrapper on production App); tests/error_response_lib_only/driver.mojo built without the app module.",
         "tests/error_response_fail (5): bounded twins ambiguous; error-only type not a result; raising conversion does not conform; __extension cannot add the trait across modules (Error); App[on_error] rejected by a backend holding App. git diff main -- src adapters empty; scratch slice: every existing suite, fixture and check_flare.sh unchanged.",
         "./scripts/check.sh -> exit 0; ./scripts/test.sh -> exit 0 (test_spike_error_response 8/8, other suites unchanged); ./scripts/check_flare.sh -> exit 0 (adapter 8/8, loopback 2/2); git diff --check clean.",
-        "Mutations planted and reverted, each red: detect ToResponse instead (4 tests), never convert (3), also convert ToResponse types (1), library names an app error type (lib-only build). Fresh-context review: no material issue; minors applied in docs."
+        "Mutations planted and reverted, each red: detect ToResponse instead (4 tests), never convert (3), also convert ToResponse types (1), library names an app error type (lib-only build). Fresh-context review: no material issue; minors applied in docs. Merged (PR #20)."
       ]
+    },
+    {
+      "id": "M2-013",
+      "priority": 213,
+      "category": "application_errors",
+      "description": "Production application-defined error responses as decided in M2-012: public ToErrorResponse(Deinitable) with non-raising to_error_response(var self) -> Response; _handler_error[E] converts when comptime conforms_to(E, ToErrorResponse), else the existing fixed 500.",
+      "acceptance": [
+        "muntin exports ToErrorResponse(Deinitable) with non-raising def to_error_response(var self) -> Response; the supported opt-in is a conformance declared on the handler's declared error type (raises T): directly, through a refining trait, or as a documented conditional conformance. Undocumented __extension behavior is compiler evidence only, not supported API.",
+        "An opted-in raises T converts on def(), def(Int) (path and query), def(B) and def(Int, B), with String-compatible and ToResponse success paths unchanged; move-only, refining-trait and deinit-self error types convert; the error conversion runs exactly once, consumes the caught error, and the result conversion does not run after a raise.",
+        "Bare raises (Error), a non-opted raises T and a raised ToResponse-only type stay the fixed 500 'Internal Server Error' with nothing converted and no error text; Error is never mapped by message. A type conforming to both traits converts a returned value with to_response and a raised one with to_error_response.",
+        "400 and 404 call neither the error conversion nor the result conversion; existing 400/404 and successful result behavior unchanged; TestClient and real loopback through Flare agree for one opted-in error response.",
+        "Production compile-fail fixtures: a ToErrorResponse-only type cannot be returned as a result; a raising to_error_response does not satisfy the trait. High-value M2-012 evidence for rejected designs and compiler limits is kept.",
+        "Only http.mojo (trait, export), app.mojo (_handler_error and affected comments/docstrings) and _handler_storage.mojo (docstring wording) change; overload shapes, adapters, App.handle, _Erased, _Call, unsafe code and adapters/flare/muntin_flare.mojo unchanged. Not added: Error mapping or message parsing, application-level or per-route mappers, logging, fallible conversion, raw Request handlers, JSON, headers, middleware/state, new methods/shapes, storage redesign.",
+        "Planted mutations (trait detection removed, ToResponse detected instead, fallback 500 removed, bare Error mapped, raised ToResponse converted, error conversion skipped/doubled, request 400 changed, storage/unsafe/backend expansion) turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass locally, and CI verify + flare pass on Ubuntu and macOS."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }

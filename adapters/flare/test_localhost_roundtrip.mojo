@@ -49,6 +49,12 @@ defined here. A handler that raises is the fixed 500 `Internal Server Error`
 (the error's text is not sent); one that returns answers as before; an
 invalid value is still 400. Muntin chooses the 500; the adapter only carries
 the `Response`. Each must equal `TestClient`.
+
+M2-013 registers `GET /stock/{id}` -> `reserve(id: Int) raises OutOfStock ->
+String`, with `OutOfStock` defined here and declaring `muntin.ToErrorResponse`:
+its raise is answered 409 by `to_error_response`, in Muntin; the adapter only
+carries the final `Response`. A return and an invalid value are unchanged.
+Each must equal `TestClient`.
 """
 
 from std.ffi import c_uint, external_call
@@ -57,7 +63,7 @@ from std.testing import assert_equal, TestSuite
 from flare.http import HttpClient, HttpServer
 from flare.net import SocketAddr
 from flare.utils import SIGKILL, exit, fork, kill, waitpid
-from muntin import App, FromBody, Response, ToResponse
+from muntin import App, FromBody, Response, ToErrorResponse, ToResponse
 from muntin.testing import TestClient
 from muntin_flare import MuntinHandler
 
@@ -166,6 +172,22 @@ def place_order(body: CreateUser) raises Rejected -> Person:
     return Person(9, body.name)
 
 
+@fieldwise_init
+struct OutOfStock(Movable, ToErrorResponse):
+    """An application-defined error type that opts into its own response."""
+
+    var id: Int
+
+    def to_error_response(var self) -> Response:
+        return Response.text("out of stock " + String(self.id), status=409)
+
+
+def reserve(id: Int) raises OutOfStock -> String:
+    if id == 0:
+        raise OutOfStock(id)
+    return "reserved " + String(id)
+
+
 def hello_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -187,6 +209,7 @@ def users_app() -> App:
     app.post["/profiles/{id}"](update_person)
     app.get["/orders/{id}"](find_order)
     app.post["/orders"](place_order)
+    app.get["/stock/{id}"](reserve)
     return app^
 
 
@@ -294,6 +317,10 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/orders/0"), 500, String("Internal Server Error")),
             (String("/orders/7"), 200, String("order 7")),
             (String("/orders/abc"), 400, String("Bad Request")),
+            # M2-013: an opted-in error answers with its own response.
+            (String("/stock/0"), 409, String("out of stock 0")),
+            (String("/stock/3"), 200, String("reserved 3")),
+            (String("/stock/abc"), 400, String("Bad Request")),
         ]
         for want in expected:
             var path = want[0]
