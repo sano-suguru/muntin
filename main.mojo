@@ -1,5 +1,5 @@
-# Hello World. Muntin has no network backend yet (`app.run()` arrives with
-# M1), so this drives the application through the in-memory TestClient.
+# Hello World. Muntin has no public run API yet (`app.run()` is an M3 target),
+# so this drives the application through the in-memory TestClient.
 from muntin import App
 from muntin.testing import TestClient
 

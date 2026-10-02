@@ -73,9 +73,11 @@ Connect the existing Muntin application seam to a pinned Flare release and prove
 
 ### M2 — typed application API
 
-Develop typed routes, path/query/body extraction, response conversion, errors, and schema foundations while preserving transport independence.
+Complete (M2-016). Typed routes, `Int` path/query extraction, typed request bodies, response conversion, an application-error model and a raw `Request -> Response` escape hatch, all independent of the transport. `docs/SPEC.md` ("M2 completion contract") lists what M2 guarantees and what it leaves out.
 
-Later milestones may add middleware, application state, OpenAPI, streaming, observability, and production hardening only after the application model earns those abstractions.
+### M3 — composition and production ergonomics
+
+Headers (the first item, M3-001), codecs and schema/OpenAPI output, more route values and methods, middleware, application state, observability, streaming, lifecycle (`app.run()`) and production hardening. Each is decided before it is built, and only once the application model earns the abstraction.
 
 ## Repository guide
 
@@ -105,4 +107,4 @@ git diff --check
 
 ## Current status
 
-M0 status lives in `feature_list.json` and `AGENT_PROGRESS.md`. Nothing is considered verified until the checks there have executable evidence. `docs/DX.md` separates syntax proven on the current toolchain from target syntax.
+M0, M1 and M2 are complete; M3 is active. Status lives in `feature_list.json` and `AGENT_PROGRESS.md`. Nothing is considered verified until the checks there have executable evidence. `docs/DX.md` separates syntax proven on the current toolchain from target syntax.

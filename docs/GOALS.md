@@ -20,6 +20,8 @@ Use only after all M0 and M0.5 features have executable passing evidence and the
 
 ## M2 — first typed-route vertical slice
 
+Done (M2-001), and M2 is complete (M2-016). Kept as an example of a goal for one vertical slice.
+
 Do not attempt all M2 ergonomics at once. Start with one typed path parameter:
 
 ```text
