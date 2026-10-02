@@ -439,7 +439,7 @@ app.get["/users/{id}"](get_user)
 # GET /users/abc -> 400 "Bad Request"        (get_user not called)
 ```
 
-- Only the handler's declared error type decides: `raises T` converts if `T` declares `ToErrorResponse` (directly or through a refining trait). Bare `raises` (`Error`) has no opt-in and stays the fixed 500; Muntin never maps by message. A type that conforms only to `ToResponse`, or merely has a `to_error_response` method, stays 500 when raised.
+- Only the handler's declared error type decides: `raises T` converts if `T` declares `ToErrorResponse` (directly or through a refining trait). Bare `raises` (`Error`) has no opt-in and stays the fixed 500; Muntin never maps by message. A type that conforms only to `ToResponse` (including `raise Response.text(...)`), merely has a `to_error_response` method, or is a `Variant` of opted-in types stays 500 when raised.
 - A type may conform to both traits: returned, it converts with `to_response`; raised, with `to_error_response`.
 - One central place: an application that wants one mapping uses one error type with several kinds (a Mojo function declares one error type), or a trait of its own that refines `ToErrorResponse`.
 - The conversion consumes the error, works for move-only types and cannot raise.

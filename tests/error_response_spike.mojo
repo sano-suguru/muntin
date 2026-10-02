@@ -35,8 +35,8 @@ trait ToErrorResponse(Deinitable):
     conforming to both answers each channel with its own method, and
     conforming to `ToResponse` alone never changes what a raise becomes.
     Refines only `Deinitable`, as the handler's `E` does: the conversion
-    consumes the caught value, so move-only and non-`Movable` error types
-    can conform. Non-raising: a fallible conversion is deferred.
+    consumes the caught value, so move-only error types conform and no
+    type must declare `Movable` (Mojo 1.1.0 makes every struct `Movable`). Non-raising: a fallible conversion is deferred.
     """
 
     def to_error_response(var self) -> Response:

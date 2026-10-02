@@ -502,8 +502,13 @@
         "Production unchanged: src/muntin and adapters/ byte-identical; no _Erased redesign, new unsafe code, logging, raw Request handlers, JSON, headers, middleware/state, new route shapes, fallible ToResponse or overload redesign; App.handle(Request) -> Response remains the seam and backends never see application error types.",
         "docs/ARCHITECTURE.md records the decision, exact opt-in rule, rejected alternatives, compiler evidence, revisit conditions and the exact next production slice; DX/SPEC updated; retained probes and must-not-compile fixtures run under check.sh/test.sh; planted mutations turn checks red; a fresh-context review finds no unresolved material issue; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check pass."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "tests/error_response_spike.mojo (library: candidate ToErrorResponse(Deinitable), non-raising to_error_response(var self); _handler_error converts when comptime conforms_to(E, ToErrorResponse), else the fixed 500; production _Erased and overload signatures) + tests/test_spike_error_response.mojo (8/8: successful String/ToResponse results, opted-in move-only/refinement/deinit-self types converted once, non-opted/ToResponse-only/lookalike 500, per-channel Stale, bare raises and erased type 500, 400/404, moves, application wrapper on production App); tests/error_response_lib_only/driver.mojo built without the app module.",
+        "tests/error_response_fail (5): bounded twins ambiguous; error-only type not a result; raising conversion does not conform; __extension cannot add the trait across modules (Error); App[on_error] rejected by a backend holding App. git diff main -- src adapters empty; scratch slice: every existing suite, fixture and check_flare.sh unchanged.",
+        "./scripts/check.sh -> exit 0; ./scripts/test.sh -> exit 0 (test_spike_error_response 8/8, other suites unchanged); ./scripts/check_flare.sh -> exit 0 (adapter 8/8, loopback 2/2); git diff --check clean.",
+        "Mutations planted and reverted, each red: detect ToResponse instead (4 tests), never convert (3), also convert ToResponse types (1), library names an app error type (lib-only build). Fresh-context review: no material issue; minors applied in docs."
+      ]
     }
   ]
 }
