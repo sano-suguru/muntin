@@ -4,18 +4,7 @@
 # type-equality guard names the raw shape instead of the FromBody constraint.
 # Expected diagnostic (checked by scripts/check.sh): Request is the whole request, not a body; a raw handler takes only the Request and returns Response
 
-from muntin import App, FromBody, Request, Response
-
-
-struct CreateUser(FromBody):
-    var name: String
-
-    def __init__(out self, name: String):
-        self.name = name
-
-    @staticmethod
-    def from_body(body: String) raises -> Self:
-        return Self(body)
+from muntin import App, Request
 
 
 def h(request: Request) -> String:

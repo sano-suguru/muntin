@@ -11,7 +11,7 @@ M2 — typed application ergonomics. M2-015 (raw `Request -> Response` handlers 
 - Dispatch: `_Route.raw`; `App.handle` passes method/path/query/body and skips query gathering/body argument; `_call_raw[E]` rebuilds a fresh `Request`, moves it in, catches only the handler call. No pre-handler 400 on raw routes. Guard `not B == Request` before `FromBody` in the four body overloads (diagnostics only).
 - Unchanged: `_handler_storage.mojo`, `_Erased`, `_Call`, unsafe surface, `check_unsafe.sh`, `http.mojo`, `body.mojo`, `testing.mojo`, `__init__.mojo`, `adapters/flare/muntin_flare.mojo`, seam.
 - Fixtures: `body_fail/post_raw_handler` retired; `compile_fail/post_request_param` expects the guard; added `compile_fail/raw_*` (8: typed return, `(Int, Request)` both results, four placeholders, malformed), `storage_fail/raw_*` (3: GET `-> String`, borrowed and raises-less function values), `body_fail/raw_extra_parameter`. M2-014 spike and `raw_fail` kept.
-- Evidence: `tests/test_raw.mojo` 12/12; loopback raw `POST /webhook` (`raises Unsigned: ToErrorResponse`) 202/401/404 equal to `TestClient`; 20 mutations each red. Details: `docs/ARCHITECTURE.md` "Raw Request handlers in production (M2-015)".
+- Evidence: `tests/test_raw.mojo` 12/12; loopback raw `POST /webhook` (`raises Unsigned: ToErrorResponse`) 202/401/404 equal to `TestClient`; 21 mutations each red; fresh-context review: no material issue, minors applied. Details: `docs/ARCHITECTURE.md` "Raw Request handlers in production (M2-015)".
 - Next smallest slice: not yet chosen; candidates are recorded as M2-014 revisit conditions (raw route values or broader raw results, `Request` headers).
 
 ## M2-014 result (decision only; merged, PR #22)

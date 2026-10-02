@@ -48,8 +48,8 @@ from .http import Request, Response, ToErrorResponse, ToResponse
 # Errors (M2-010, docs/ARCHITECTURE.md "Application-error decision"): a
 # request-side failure is answered 400 by the step that fails, before the
 # handler runs (query gathering in `App.handle`, `_parse_int` and
-# `from_body` in the adapters); a raw route has no such step. Only the handler call sits in an adapter's
-# handler `try`; whatever it raises goes to `_handler_error[E]`, and the
+# `from_body` in the adapters); a raw route has no such step. Only the
+# handler call sits in an adapter's handler `try`; whatever it raises goes to `_handler_error[E]`, and the
 # response policy runs only after it returns. `_handler_error` converts an
 # error whose declared type `E` conforms to `ToErrorResponse` (M2-012,
 # "Error-response decision") and answers every other one with a fixed 500.
