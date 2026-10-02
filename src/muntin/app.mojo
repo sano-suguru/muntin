@@ -5,7 +5,8 @@ from .body import FromBody
 from .http import Request, Response, ToResponse
 
 # Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
-# for POST with `B: FromBody` (M2-006), all non-raising. Mojo 1.1.0 function
+# (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody`, all
+# non-raising. Mojo 1.1.0 function
 # types spelled without `thin` are traits and cannot be stored, so `App.get`
 # takes thin function values; ordinary `def` functions convert implicitly.
 # Each argument shape has one adapter below, which converts a matched
@@ -23,7 +24,8 @@ from .http import Request, Response, ToResponse
 # key) is route data, not part of the shape, so `_call_int` serves both
 # `/users/{id}` and `/items?{limit}`. Whether a route takes the request body
 # is route data too (`_Route.body`): `App.handle` appends the body as the
-# last raw argument, and `_call_body` converts it.
+# last raw argument, after the route value if there is one, and
+# `_call_body`/`_call_int_body` convert it.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -216,6 +218,27 @@ def _call_body[
     return respond(handler(body^))
 
 
+def _call_int_body[
+    B: Movable & Deinitable, R: Movable & Deinitable, respond: _Respond[R]
+](handler: def(Int, var B) thin -> R, args: List[String]) raises -> Response:
+    """Converts the route value (`args[0]`) as `_call_int` does, then the
+    body (`args[1]`) as `_call_body` does, and calls `handler` with both, in
+    that order.
+
+    A bad route value raises (400 in `App.handle`) before the body is
+    converted; a `from_body` raise answers 400 here. Neither calls
+    `handler`. `B` is refined as in `_call_body`.
+    """
+    comptime assert conforms_to(B, FromBody)
+    var id = _parse_int(args[0])
+    var body: B
+    try:
+        body = B.from_body(args[1])
+    except:
+        return _bad_request()
+    return respond(handler(id, body^))
+
+
 struct _Route(Movable):
     var method: String
     var path: String
@@ -243,7 +266,7 @@ struct _Route(Movable):
             self.query_key = String()
         else:
             self.path = String(route[byte=:mark])
-            # The query part is exactly one `{key}` (checked in `App.get`).
+            # The query part is exactly one `{key}` (checked at registration).
             self.query_key = String(
                 route[byte = mark + 2 : route.byte_length() - 1]
             )
@@ -411,6 +434,76 @@ struct App(Movable):
             )
         )
 
+    def post[
+        B: Movable & Deinitable, //, path: StaticString
+    ](mut self, handler: def(Int, var B) thin -> String):
+        """Registers `handler` for `POST path`, where `path` declares exactly
+        one route value, a `{name}` segment (`/users/{id}`) or a `{key}`
+        query item (`/users?{id}`), and the request body follows it. Binding
+        is positional: the route value is the first parameter, as for
+        `get`, and the body the second, as for the body-only `post`. A
+        missing, duplicated or non-integer route value yields 400 before the
+        body is converted; a body conversion failure yields 400; neither
+        calls `handler`."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 1, (
+            "handler takes one Int parameter and the request body; route must"
+            " declare exactly one path or query parameter"
+        )
+        comptime assert not B == Int, (
+            "Int is a route-value type, never the request body; the body"
+            " parameter's type must conform to FromBody"
+        )
+        comptime assert conforms_to(B, FromBody), (
+            "the handler's last parameter is the request body; its type must"
+            " conform to FromBody"
+        )
+        self._routes.append(
+            _Route(
+                "POST",
+                path,
+                _Erased.__init__[call=_call_int_body[B, String, _text]](
+                    handler
+                ),
+                body=True,
+            )
+        )
+
+    def post[
+        B: Movable & Deinitable, R: ToResponse, //, path: StaticString
+    ](mut self, handler: def(Int, var B) thin -> R):
+        """Registers `handler` for `POST path` with one route value and the
+        request body, as the `String` overload; its result converts itself
+        with `R.to_response()` after `handler` returns. A 400 calls neither
+        `handler` nor the result conversion."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 1, (
+            "handler takes one Int parameter and the request body; route must"
+            " declare exactly one path or query parameter"
+        )
+        comptime assert not B == Int, (
+            "Int is a route-value type, never the request body; the body"
+            " parameter's type must conform to FromBody"
+        )
+        comptime assert conforms_to(B, FromBody), (
+            "the handler's last parameter is the request body; its type must"
+            " conform to FromBody"
+        )
+        self._routes.append(
+            _Route(
+                "POST",
+                path,
+                _Erased.__init__[call=_call_int_body[B, R, _converted[R]]](
+                    handler
+                ),
+                body=True,
+            )
+        )
+
     def handle(self, request: Request) -> Response:
         """Dispatches `request` through the application's routes.
 
@@ -418,8 +511,9 @@ struct App(Movable):
         network adapters) delivers requests through this method. The first
         registered route whose method and path match handles the request;
         the query takes no part in selecting it. A body route receives
-        `request.body` as its last raw argument; its call trampoline
-        (`_call_body`) converts it and answers 400 itself if that fails.
+        `request.body` as its last raw argument, after its route value if it
+        has one; its call trampoline (`_call_body`, `_call_int_body`)
+        converts it and answers 400 itself if that fails.
         """
         var args = List[String]()
         # Indexed, not `for route in self._routes`: on Mojo 1.1.0 List
