@@ -4,9 +4,10 @@
 # a line names an unsafe pointer/ownership operation or touches the box's
 # fields; if a module imports anything but `_Erased` from it; if the package
 # root exports it; if the module imports anything but the standard library
-# and `.http`; or if it names request or body data (M2-006). A confinement
-# guard, not a safety proof: the invariant itself is in the module docstring and
-# docs/ARCHITECTURE.md "Handler storage decision (M2)". tests/ is not checked
+# and `.http`; or if it names request or body data (M2-006) or result/error
+# conversion (M2-013). A confinement guard, not a safety proof: the invariant
+# itself is in the module docstring and docs/ARCHITECTURE.md "Handler storage
+# decision (M2)". tests/ is not checked
 # (spikes and storage tests use these operations on purpose).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -53,6 +54,13 @@ fi
 # strings: body conversion and request handling stay in app.mojo (M2-006).
 if grep -nE 'FromBody|from_body|Request|\.body\b' "$storage"; then
     echo "error: $storage handles request or body data; keep it in the adapters" >&2
+    status=1
+fi
+
+# Results and handler errors become a `Response` in the adapters too: the
+# storage module never converts them (M2-013).
+if grep -nE 'ToResponse|to_response|ToErrorResponse|to_error_response' "$storage"; then
+    echo "error: $storage converts results or errors; keep it in the adapters" >&2
     status=1
 fi
 
