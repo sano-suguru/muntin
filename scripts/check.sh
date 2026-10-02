@@ -110,7 +110,8 @@ done
 # must be revisited. tests/storage_fail: production handler storage (M2-004)
 # rejects a mismatched adapter and copies, App.get still accepts only the
 # supported handler shapes, and result types must be String-compatible or
-# conform to the non-raising ToResponse (M2-008). tests/extraction_fail: evidence for
+# conform to the non-raising ToResponse (M2-008); an error-only type is not a
+# result and ToErrorResponse is non-raising (M2-013). tests/extraction_fail: evidence for
 # docs/ARCHITECTURE.md "Argument extraction decision" (M2-005).
 # tests/body_fail: App.post accepts only the body-only (M2-006) and the
 # route-value-then-body (M2-009) shapes, and App.get takes no body handler. tests/response_fail: evidence for

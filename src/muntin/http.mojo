@@ -41,12 +41,36 @@ trait ToResponse(Deinitable, Movable):
     `var self`: Muntin owns the result and hands it over, so a conversion
     can move fields into the `Response`, and a move-only type works. An
     implementation may declare `self`, `var self`, or `deinit self` (to move
-    one field out of a value with others). Non-raising: what a failed
-    conversion means belongs to the application-error model, which does not
-    exist yet.
+    one field out of a value with others). Non-raising: a failed conversion
+    would need its own answer, which no error model decides yet.
+
+    Only returned values convert with `to_response`. A raised value is a
+    handler error even if its type conforms; see `ToErrorResponse`.
     """
 
     def to_response(var self) -> Response:
+        ...
+
+
+trait ToErrorResponse(Deinitable):
+    """A handler error type that converts itself to a `Response`.
+
+    A handler declared `raises T` for such a `T` is answered with
+    `T.to_error_response()` when it raises, instead of the fixed 500. The
+    application opts in by declaring the conformance on its own error type
+    (directly, through a trait that refines this one, or as a conditional
+    conformance); Muntin never names the type. Any other error type, and a
+    bare `raises` (`Error`), stays the fixed 500. Separate from
+    `ToResponse`: a type conforming to both converts a returned value with
+    `to_response` and a raised one with `to_error_response`.
+
+    `var self`: the caught error is handed over and consumed once, after the
+    handler raised; the result conversion does not run. Move-only types
+    work, and an implementation may declare `self`, `var self` or
+    `deinit self`. Non-raising: a raising implementation does not conform.
+    """
+
+    def to_error_response(var self) -> Response:
         ...
 
 

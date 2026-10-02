@@ -2,7 +2,7 @@
 
 from ._handler_storage import _Erased
 from .body import FromBody
-from .http import Request, Response, ToResponse
+from .http import Request, Response, ToErrorResponse, ToResponse
 
 # Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
 # (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody`. Mojo 1.1.0
@@ -34,8 +34,10 @@ from .http import Request, Response, ToResponse
 # request-side failure is answered 400 by the step that fails, before the
 # handler runs (query gathering in `App.handle`, `_parse_int` and
 # `from_body` in the adapters). Only the handler call sits in an adapter's
-# handler `try`; whatever it raises becomes a fixed 500
-# (`_handler_error`), and the response policy runs only after it returns.
+# handler `try`; whatever it raises goes to `_handler_error[E]`, and the
+# response policy runs only after it returns. `_handler_error` converts an
+# error whose declared type `E` conforms to `ToErrorResponse` (M2-012,
+# "Error-response decision") and answers every other one with a fixed 500.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -182,16 +184,22 @@ def _internal_error() -> Response:
 
 
 def _handler_error[E: Deinitable](var e: E) -> Response:
-    """What a handler error of type `E` becomes: always `_internal_error()`.
+    """What a handler error of type `E` becomes.
 
-    `E` is `Error` for a `raises` handler and the application's type for a
-    `raises T` handler. The value is dropped unread, whatever traits `E`
-    has: an `Error`'s message may carry internal details, no observability
-    hook exists yet, and a raised value is an error even if its type also
-    conforms to `ToResponse` (a returned value of that type converts; a
-    raised one does not).
+    `E` is the handler's declared error type: `Never` for a non-raising
+    handler, `Error` for `raises`, the application's type for `raises T`.
+    If `E` conforms to `ToErrorResponse`, the error converts itself, once,
+    by move. Otherwise the answer is `_internal_error()` and the value is
+    dropped unread: an `Error`'s message may carry internal details and is
+    never mapped, no observability hook exists yet, and `ToResponse` alone
+    does not convert a raised value (a returned value of that type
+    converts; a raised one does not). Resolved at compile time per
+    instantiation, so no error type must conform to anything.
     """
-    return _internal_error()
+    comptime if conforms_to(E, ToErrorResponse):
+        return e^.to_error_response()
+    else:
+        return _internal_error()
 
 
 comptime _Respond[R: AnyType] = def(var R) thin -> Response
@@ -353,8 +361,10 @@ struct App(Movable):
     ](mut self, handler: def() thin raises E -> String):
         """Registers `handler` for `GET path`; its String result becomes a
         200 text response. `handler` may be non-raising or declare `raises`
-        or `raises T`; anything it raises becomes a fixed 500 `Internal
-        Server Error` (the error's text is never sent)."""
+        or `raises T`. A raise is answered by the error's
+        `to_error_response()` if the declared error type `E` conforms to
+        `ToErrorResponse`; anything else it raises becomes a fixed 500
+        `Internal Server Error` (the error's text is never sent)."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -378,8 +388,10 @@ struct App(Movable):
         """Registers `handler` for `GET path`; its result converts itself
         with `R.to_response()` after `handler` returns. `R` is an
         application type conforming to `ToResponse`, or `Response`. If
-        `handler` raises, the response is the fixed 500 and nothing is
-        converted, even if the raised value conforms to `ToResponse`."""
+        `handler` raises, the result conversion does not run: the error
+        converts if its declared type conforms to `ToErrorResponse`, else
+        the response is the fixed 500, even if the raised value conforms to
+        `ToResponse`."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -405,7 +417,8 @@ struct App(Movable):
         item (`/items?{limit}`). Its value is converted to `Int` and passed
         to `handler` by position (names are not checked against the handler);
         a missing, duplicated or non-integer value yields 400 without calling
-        `handler`. Anything `handler` raises becomes the fixed 500."""
+        `handler`. A raise is converted or the fixed 500, as for `get` on
+        `def()`."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -428,8 +441,8 @@ struct App(Movable):
         the `String` overload; its result converts itself with
         `R.to_response()` after `handler` returns. A missing, duplicated or
         non-integer value yields 400 without calling `handler` or the
-        conversion; a raise from `handler` yields the fixed 500 without the
-        conversion."""
+        conversion; a raise from `handler` skips the conversion and is
+        converted by `ToErrorResponse` or the fixed 500."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -453,8 +466,8 @@ struct App(Movable):
         parameter. `B` is an application type conforming to `FromBody`; the
         body is converted with `B.from_body` before `handler` runs, and a
         conversion failure yields 400 without calling `handler`. A handler
-        may declare `body: B` or `var body: B`; `B` may be move-only.
-        Anything `handler` raises becomes the fixed 500."""
+        may declare `body: B` or `var body: B`; `B` may be move-only. A
+        raise is converted or the fixed 500, as for `get` on `def()`."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -490,8 +503,8 @@ struct App(Movable):
         one parameter, as the `String` overload; its result converts itself
         with `R.to_response()` after `handler` returns. A conversion failure
         of the body yields 400 without calling `handler` or the result
-        conversion; a raise from `handler` yields the fixed 500 without the
-        conversion."""
+        conversion; a raise from `handler` skips the conversion and is
+        converted by `ToErrorResponse` or the fixed 500."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -529,8 +542,8 @@ struct App(Movable):
         invalid matched path value, or a missing, duplicated, empty or
         invalid query value, yields 400 before the body is converted (a
         missing path segment does not match the route: 404); a body
-        conversion failure yields 400; neither calls `handler`. Anything
-        `handler` raises becomes the fixed 500."""
+        conversion failure yields 400; neither calls `handler`. A raise is
+        converted or the fixed 500, as for `get` on `def()`."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -567,8 +580,9 @@ struct App(Movable):
         """Registers `handler` for `POST path` with one route value and the
         request body, as the `String` overload; its result converts itself
         with `R.to_response()` after `handler` returns. A 400 calls neither
-        `handler` nor the result conversion; a raise from `handler` yields
-        the fixed 500 without the conversion."""
+        `handler` nor the result conversion; a raise from `handler` skips
+        the conversion and is converted by `ToErrorResponse` or the fixed
+        500."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -608,7 +622,8 @@ struct App(Movable):
 
         No matching route is 404. A missing or duplicated query value is 400
         here; the adapter answers its own 400s and turns a handler error
-        into 500. A raise out of `invoke` is 500, never 400.
+        into a response (`_handler_error`). A raise out of `invoke` is 500,
+        never 400.
         """
         var args = List[String]()
         # Indexed, not `for route in self._routes`: on Mojo 1.1.0 List
@@ -628,8 +643,8 @@ struct App(Movable):
             if route.body:
                 args.append(request.body)
             # No adapter raises: each answers its own 400s and turns a
-            # handler error into 500. A raise here is a server fault, never
-            # a client error.
+            # handler error into a response. A raise here is a server fault,
+            # never a client error.
             try:
                 return route.handler.invoke(args)
             except:
