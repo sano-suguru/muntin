@@ -5,10 +5,13 @@ from .body import FromBody
 from .http import Request, Response, ToResponse
 
 # Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
-# (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody`, all
-# non-raising. Mojo 1.1.0 function
-# types spelled without `thin` are traits and cannot be stored, so `App.get`
-# takes thin function values; ordinary `def` functions convert implicitly.
+# (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody`. Mojo 1.1.0
+# function types spelled without `thin` are traits and cannot be stored, so
+# `App.get` takes thin function values; ordinary `def` functions convert
+# implicitly. Each function type is `thin raises E` with the error type `E`
+# inferred (M2-011, Mojo's "parametric raises"): `Never` for a non-raising
+# handler, `Error` for `raises`, the application's type for `raises T`.
+# `E` is inferred in every overload, so it never decides between them.
 # Each argument shape has one adapter below, which converts a matched
 # route's raw argument strings and calls the handler, and two registration
 # overloads, one per return policy (M2-008): a handler whose function type
@@ -26,6 +29,13 @@ from .http import Request, Response, ToResponse
 # is route data too (`_Route.body`): `App.handle` appends the body as the
 # last raw argument, after the route value if there is one, and
 # `_call_body`/`_call_int_body` convert it.
+#
+# Errors (M2-010, docs/ARCHITECTURE.md "Application-error decision"): a
+# request-side failure is answered 400 by the step that fails, before the
+# handler runs (query gathering in `App.handle`, `_parse_int` and
+# `from_body` in the adapters). Only the handler call sits in an adapter's
+# handler `try`; whatever it raises becomes a fixed 500
+# (`_handler_error`), and the response policy runs only after it returns.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -165,6 +175,25 @@ def _bad_request() -> Response:
     return Response.text("Bad Request", status=400)
 
 
+def _internal_error() -> Response:
+    """The fixed answer to a handler error: status 500 and a fixed body.
+    The error's own text never reaches the client."""
+    return Response.text("Internal Server Error", status=500)
+
+
+def _handler_error[E: Deinitable](var e: E) -> Response:
+    """What a handler error of type `E` becomes: always `_internal_error()`.
+
+    `E` is `Error` for a `raises` handler and the application's type for a
+    `raises T` handler. The value is dropped unread, whatever traits `E`
+    has: an `Error`'s message may carry internal details, no observability
+    hook exists yet, and a raised value is an error even if its type also
+    conforms to `ToResponse` (a returned value of that type converts; a
+    raised one does not).
+    """
+    return _internal_error()
+
+
 comptime _Respond[R: AnyType] = def(var R) thin -> Response
 """How an adapter turns a handler result of type `R` into a `Response`."""
 
@@ -181,25 +210,46 @@ def _converted[R: ToResponse](var result: R) -> Response:
 
 # Adapter parameters are explicit (no `//`): they are passed as `call=` to
 # `_Erased.__init__`, where there is no runtime argument to infer them from.
+# Each adapter answers its own request-side 400s, then calls the handler
+# alone in a `try` (its error becomes `_handler_error`), then applies the
+# response policy. None of them raises.
 
 
 def _call_none[
-    R: Movable & Deinitable, respond: _Respond[R]
-](handler: def() thin -> R, args: List[String]) -> Response:
-    return respond(handler())
+    E: Deinitable, R: Movable & Deinitable, respond: _Respond[R]
+](handler: def() thin raises E -> R, args: List[String]) -> Response:
+    var result: R
+    try:
+        result = handler()
+    except e:
+        return _handler_error(e^)
+    return respond(result^)
 
 
 def _call_int[
-    R: Movable & Deinitable, respond: _Respond[R]
-](handler: def(Int) thin -> R, args: List[String]) raises -> Response:
-    """Raises, without calling `handler`, if the one argument is not an
-    integer."""
-    return respond(handler(_parse_int(args[0])))
+    E: Deinitable, R: Movable & Deinitable, respond: _Respond[R]
+](handler: def(Int) thin raises E -> R, args: List[String]) -> Response:
+    """Answers 400 itself, without calling `handler`, if the one argument is
+    not an integer."""
+    var id: Int
+    try:
+        id = _parse_int(args[0])
+    except:
+        return _bad_request()
+    var result: R
+    try:
+        result = handler(id)
+    except e:
+        return _handler_error(e^)
+    return respond(result^)
 
 
 def _call_body[
-    B: Movable & Deinitable, R: Movable & Deinitable, respond: _Respond[R]
-](handler: def(var B) thin -> R, args: List[String]) -> Response:
+    B: Movable & Deinitable,
+    E: Deinitable,
+    R: Movable & Deinitable,
+    respond: _Respond[R],
+](handler: def(var B) thin raises E -> R, args: List[String]) -> Response:
     """Converts the one argument, the request body, with `B.from_body` and
     moves the value into `handler`; answers 400 itself, without calling
     `handler`, if `from_body` raises.
@@ -215,28 +265,45 @@ def _call_body[
         body = B.from_body(args[0])
     except:
         return _bad_request()
-    return respond(handler(body^))
+    var result: R
+    try:
+        result = handler(body^)
+    except e:
+        return _handler_error(e^)
+    return respond(result^)
 
 
 def _call_int_body[
-    B: Movable & Deinitable, R: Movable & Deinitable, respond: _Respond[R]
-](handler: def(Int, var B) thin -> R, args: List[String]) raises -> Response:
+    B: Movable & Deinitable,
+    E: Deinitable,
+    R: Movable & Deinitable,
+    respond: _Respond[R],
+](handler: def(Int, var B) thin raises E -> R, args: List[String]) -> Response:
     """Converts the route value (`args[0]`) as `_call_int` does, then the
     body (`args[1]`) as `_call_body` does, and calls `handler` with both, in
     that order.
 
-    A bad route value raises (400 in `App.handle`) before the body is
-    converted; a `from_body` raise answers 400 here. Neither calls
-    `handler`. `B` is refined as in `_call_body`.
+    A bad route value answers 400 before the body is converted; a
+    `from_body` raise answers 400. Neither calls `handler`. `B` is refined
+    as in `_call_body`.
     """
     comptime assert conforms_to(B, FromBody)
-    var id = _parse_int(args[0])
+    var id: Int
+    try:
+        id = _parse_int(args[0])
+    except:
+        return _bad_request()
     var body: B
     try:
         body = B.from_body(args[1])
     except:
         return _bad_request()
-    return respond(handler(id, body^))
+    var result: R
+    try:
+        result = handler(id, body^)
+    except e:
+        return _handler_error(e^)
+    return respond(result^)
 
 
 struct _Route(Movable):
@@ -281,9 +348,13 @@ struct App(Movable):
     def __init__(out self):
         self._routes = List[_Route]()
 
-    def get[path: StaticString](mut self, handler: def() thin -> String):
+    def get[
+        E: Deinitable, //, path: StaticString
+    ](mut self, handler: def() thin raises E -> String):
         """Registers `handler` for `GET path`; its String result becomes a
-        200 text response."""
+        200 text response. `handler` may be non-raising or declare `raises`
+        or `raises T`; anything it raises becomes a fixed 500 `Internal
+        Server Error` (the error's text is never sent)."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -297,16 +368,18 @@ struct App(Movable):
             _Route(
                 "GET",
                 path,
-                _Erased.__init__[call=_call_none[String, _text]](handler),
+                _Erased.__init__[call=_call_none[E, String, _text]](handler),
             )
         )
 
     def get[
-        R: ToResponse, //, path: StaticString
-    ](mut self, handler: def() thin -> R):
+        E: Deinitable, R: ToResponse, //, path: StaticString
+    ](mut self, handler: def() thin raises E -> R):
         """Registers `handler` for `GET path`; its result converts itself
         with `R.to_response()` after `handler` returns. `R` is an
-        application type conforming to `ToResponse`, or `Response`."""
+        application type conforming to `ToResponse`, or `Response`. If
+        `handler` raises, the response is the fixed 500 and nothing is
+        converted, even if the raised value conforms to `ToResponse`."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -320,17 +393,19 @@ struct App(Movable):
             _Route(
                 "GET",
                 path,
-                _Erased.__init__[call=_call_none[R, _converted[R]]](handler),
+                _Erased.__init__[call=_call_none[E, R, _converted[R]]](handler),
             )
         )
 
-    def get[path: StaticString](mut self, handler: def(Int) thin -> String):
+    def get[
+        E: Deinitable, //, path: StaticString
+    ](mut self, handler: def(Int) thin raises E -> String):
         """Registers `handler` for `GET path`, where `path` declares exactly
         one parameter: a `{name}` segment (`/users/{id}`) or a `{key}` query
         item (`/items?{limit}`). Its value is converted to `Int` and passed
         to `handler` by position (names are not checked against the handler);
         a missing, duplicated or non-integer value yields 400 without calling
-        `handler`."""
+        `handler`. Anything `handler` raises becomes the fixed 500."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -342,17 +417,18 @@ struct App(Movable):
             _Route(
                 "GET",
                 path,
-                _Erased.__init__[call=_call_int[String, _text]](handler),
+                _Erased.__init__[call=_call_int[E, String, _text]](handler),
             )
         )
 
     def get[
-        R: ToResponse, //, path: StaticString
-    ](mut self, handler: def(Int) thin -> R):
+        E: Deinitable, R: ToResponse, //, path: StaticString
+    ](mut self, handler: def(Int) thin raises E -> R):
         """Registers `handler` for `GET path` with one `Int` route value, as
         the `String` overload; its result converts itself with
         `R.to_response()` after `handler` returns. A missing, duplicated or
         non-integer value yields 400 without calling `handler` or the
+        conversion; a raise from `handler` yields the fixed 500 without the
         conversion."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
@@ -365,19 +441,20 @@ struct App(Movable):
             _Route(
                 "GET",
                 path,
-                _Erased.__init__[call=_call_int[R, _converted[R]]](handler),
+                _Erased.__init__[call=_call_int[E, R, _converted[R]]](handler),
             )
         )
 
     def post[
-        B: Movable & Deinitable, //, path: StaticString
-    ](mut self, handler: def(var B) thin -> String):
+        B: Movable & Deinitable, E: Deinitable, //, path: StaticString
+    ](mut self, handler: def(var B) thin raises E -> String):
         """Registers `handler` for `POST path`, where `handler`'s one
         parameter is the request body and `path` declares no path or query
         parameter. `B` is an application type conforming to `FromBody`; the
         body is converted with `B.from_body` before `handler` runs, and a
         conversion failure yields 400 without calling `handler`. A handler
-        may declare `body: B` or `var body: B`; `B` may be move-only."""
+        may declare `body: B` or `var body: B`; `B` may be move-only.
+        Anything `handler` raises becomes the fixed 500."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -397,18 +474,23 @@ struct App(Movable):
             _Route(
                 "POST",
                 path,
-                _Erased.__init__[call=_call_body[B, String, _text]](handler),
+                _Erased.__init__[call=_call_body[B, E, String, _text]](handler),
                 body=True,
             )
         )
 
     def post[
-        B: Movable & Deinitable, R: ToResponse, //, path: StaticString
-    ](mut self, handler: def(var B) thin -> R):
+        B: Movable & Deinitable,
+        E: Deinitable,
+        R: ToResponse,
+        //,
+        path: StaticString,
+    ](mut self, handler: def(var B) thin raises E -> R):
         """Registers `handler` for `POST path` with the request body as its
         one parameter, as the `String` overload; its result converts itself
         with `R.to_response()` after `handler` returns. A conversion failure
         of the body yields 400 without calling `handler` or the result
+        conversion; a raise from `handler` yields the fixed 500 without the
         conversion."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
@@ -429,14 +511,16 @@ struct App(Movable):
             _Route(
                 "POST",
                 path,
-                _Erased.__init__[call=_call_body[B, R, _converted[R]]](handler),
+                _Erased.__init__[call=_call_body[B, E, R, _converted[R]]](
+                    handler
+                ),
                 body=True,
             )
         )
 
     def post[
-        B: Movable & Deinitable, //, path: StaticString
-    ](mut self, handler: def(Int, var B) thin -> String):
+        B: Movable & Deinitable, E: Deinitable, //, path: StaticString
+    ](mut self, handler: def(Int, var B) thin raises E -> String):
         """Registers `handler` for `POST path`, where `path` declares exactly
         one route value, a `{name}` segment (`/users/{id}`) or a `{key}`
         query item (`/users?{id}`), and the request body follows it. Binding
@@ -445,7 +529,8 @@ struct App(Movable):
         invalid matched path value, or a missing, duplicated, empty or
         invalid query value, yields 400 before the body is converted (a
         missing path segment does not match the route: 404); a body
-        conversion failure yields 400; neither calls `handler`."""
+        conversion failure yields 400; neither calls `handler`. Anything
+        `handler` raises becomes the fixed 500."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -465,7 +550,7 @@ struct App(Movable):
             _Route(
                 "POST",
                 path,
-                _Erased.__init__[call=_call_int_body[B, String, _text]](
+                _Erased.__init__[call=_call_int_body[B, E, String, _text]](
                     handler
                 ),
                 body=True,
@@ -473,12 +558,17 @@ struct App(Movable):
         )
 
     def post[
-        B: Movable & Deinitable, R: ToResponse, //, path: StaticString
-    ](mut self, handler: def(Int, var B) thin -> R):
+        B: Movable & Deinitable,
+        E: Deinitable,
+        R: ToResponse,
+        //,
+        path: StaticString,
+    ](mut self, handler: def(Int, var B) thin raises E -> R):
         """Registers `handler` for `POST path` with one route value and the
         request body, as the `String` overload; its result converts itself
         with `R.to_response()` after `handler` returns. A 400 calls neither
-        `handler` nor the result conversion."""
+        `handler` nor the result conversion; a raise from `handler` yields
+        the fixed 500 without the conversion."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -498,7 +588,7 @@ struct App(Movable):
             _Route(
                 "POST",
                 path,
-                _Erased.__init__[call=_call_int_body[B, R, _converted[R]]](
+                _Erased.__init__[call=_call_int_body[B, E, R, _converted[R]]](
                     handler
                 ),
                 body=True,
@@ -515,6 +605,10 @@ struct App(Movable):
         `request.body` as its last raw argument, after its route value if it
         has one; its call trampoline (`_call_body`, `_call_int_body`)
         converts it and answers 400 itself if that fails.
+
+        No matching route is 404. A missing or duplicated query value is 400
+        here; the adapter answers its own 400s and turns a handler error
+        into 500. A raise out of `invoke` is 500, never 400.
         """
         var args = List[String]()
         # Indexed, not `for route in self._routes`: on Mojo 1.1.0 List
@@ -526,12 +620,18 @@ struct App(Movable):
                 route.path, request.path, args
             ):
                 continue
-            try:
-                if route.query_key:
+            if route.query_key:
+                try:
                     args.append(_query_value(request.query, route.query_key))
-                if route.body:
-                    args.append(request.body)
+                except:
+                    return _bad_request()
+            if route.body:
+                args.append(request.body)
+            # No adapter raises: each answers its own 400s and turns a
+            # handler error into 500. A raise here is a server fault, never
+            # a client error.
+            try:
                 return route.handler.invoke(args)
             except:
-                return Response.text("Bad Request", status=400)
+                return _internal_error()
         return Response.text("Not Found", status=404)

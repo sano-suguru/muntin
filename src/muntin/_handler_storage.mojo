@@ -61,7 +61,8 @@ comptime _Box = MutOpaquePointer[MutUntrackedOrigin]
 
 comptime _Call[F: AnyType] = def(F, List[String]) raises thin -> Response
 """Calls a stored `F` with the raw argument strings of a matched route.
-Raising means an argument failed to convert."""
+No adapter raises (each answers its own 400s and turns a handler error into
+500), so a raise out of `invoke` is a server fault."""
 
 
 def _unsafe_erase[F: Movable & Deinitable](var owner: OwnedPointer[F]) -> _Box:

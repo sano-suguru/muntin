@@ -151,12 +151,11 @@ def test_app_routes_hold_erased_handlers() raises:
     assert_equal(app._routes[0].handler.invoke([]).text(), "hello")
     assert_equal(app._routes[1].handler.invoke(["042"]).text(), "42")
     assert_equal(app._routes[2].handler.invoke(["-3"]).text(), "items -3")
-    var raised = False
-    try:
-        _ = app._routes[1].handler.invoke(["4_2"])
-    except:
-        raised = True
-    assert_equal(raised, True)
+    # A bad value is answered 400 by the adapter itself (M2-011): no
+    # adapter raises out of `invoke`.
+    var bad = app._routes[1].handler.invoke(["4_2"])
+    assert_equal(bad.status, 400)
+    assert_equal(bad.text(), "Bad Request")
 
 
 def test_partly_matched_route_leaves_no_argument_behind() raises:

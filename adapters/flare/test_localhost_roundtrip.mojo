@@ -41,6 +41,14 @@ M2-009 registers one route value then the body on that same server:
 body: CreateUser) -> String`, and `POST /profiles/{id}` -> `update_person`
 returning `Person`. Valid path and query values, an invalid value, an invalid
 body and the typed result must equal `TestClient.post`.
+
+M2-011 registers raising handlers on that same server: `GET /orders/{id}` ->
+`find_order(id: Int) raises -> String` and `POST /orders` ->
+`place_order(body: CreateUser) raises Rejected -> Person`, with `Rejected`
+defined here. A handler that raises is the fixed 500 `Internal Server Error`
+(the error's text is not sent); one that returns answers as before; an
+invalid value is still 400. Muntin chooses the 500; the adapter only carries
+the `Response`. Each must equal `TestClient`.
 """
 
 from std.ffi import c_uint, external_call
@@ -139,6 +147,25 @@ def update_person(id: Int, var body: CreateUser) -> Person:
     return Person(id, body.name)
 
 
+def find_order(id: Int) raises -> String:
+    if id == 0:
+        raise Error("database password is hunter2")
+    return "order " + String(id)
+
+
+@fieldwise_init
+struct Rejected(Movable):
+    """An application-defined error type, raised by `place_order`."""
+
+    var reason: String
+
+
+def place_order(body: CreateUser) raises Rejected -> Person:
+    if body.name == "Mallory":
+        raise Rejected("blocked customer Mallory")
+    return Person(9, body.name)
+
+
 def hello_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -158,6 +185,8 @@ def users_app() -> App:
     app.post["/accounts/{id}"](update_account)
     app.post["/accounts?{id}"](update_account)
     app.post["/profiles/{id}"](update_person)
+    app.get["/orders/{id}"](find_order)
+    app.post["/orders"](place_order)
     return app^
 
 
@@ -260,6 +289,11 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/people/042"), 200, String("Person(42, Ada)")),
             (String("/people/abc"), 400, String("Bad Request")),
             (String("/teapot"), 418, String("short and stout")),
+            # M2-011: a raising handler that raises is the fixed 500, never
+            # its error text; one that returns, or a bad value, is unchanged.
+            (String("/orders/0"), 500, String("Internal Server Error")),
+            (String("/orders/7"), 200, String("order 7")),
+            (String("/orders/abc"), 400, String("Bad Request")),
         ]
         for want in expected:
             var path = want[0]
@@ -349,6 +383,20 @@ def test_typed_route_over_localhost_matches_test_client() raises:
                 400,
                 String("Bad Request"),
             ),
+            # M2-011: `raises Rejected` with a typed result.
+            (
+                String("/orders"),
+                String("name=Mallory"),
+                500,
+                String("Internal Server Error"),
+            ),
+            (
+                String("/orders"),
+                String("name=Ada"),
+                200,
+                String("Person(9, Ada)"),
+            ),
+            (String("/orders"), String("Ada"), 400, String("Bad Request")),
         ]
         for want in posts:
             var path = want[0]

@@ -1,7 +1,7 @@
 # Must not compile: an (Int, B) handler whose result is neither
 # String-compatible nor ToResponse. Expected text is the note for the
 # ToResponse (Int, B) overload, naming the trait (M2-009).
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(id: Int, body: UpdateUser) thin -> Int' to 'def(Int, var B) thin -> R', argument type 'Int' does not conform to trait 'ToResponse'
+# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(id: Int, body: UpdateUser) thin -> Int' to 'def(Int, var B) raises Never thin -> R', argument type 'Int' does not conform to trait 'ToResponse'
 
 from muntin import App, FromBody
 

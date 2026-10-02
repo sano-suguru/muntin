@@ -1,5 +1,5 @@
 # Must not compile: a handler with two parameters. Not a supported shape.
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def add(a: Int, b: Int) thin -> String' to 'def(Int) thin -> String'
+# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def add(a: Int, b: Int) thin -> String' to 'def(Int) raises Never thin -> String'
 
 from muntin import App
 
