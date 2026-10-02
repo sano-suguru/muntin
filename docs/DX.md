@@ -168,7 +168,7 @@ Mojo facts discovered while proving the above:
       var handler: def() -> String
   ```
 
-  fails with `error: struct fields do not support trait types; 'def() -> String' is a trait, use a concrete type or compile-time generic`, and passing `hello` to a parameter of that type fails with `cannot be converted from 'def hello() thin -> String' to 'def() -> String'`. Muntin therefore accepts `def() thin -> String` internally. Application code is unaffected: an ordinary `def hello() -> String` is passed as-is.
+  fails with `error: struct fields do not support trait types; 'def() -> String' is a trait, use a concrete type or compile-time generic`, and passing `hello` to a parameter of that type fails with `cannot be converted from 'def hello() thin -> String' to 'def() -> String'`. Muntin therefore accepts thin function types internally (`def() thin raises E -> String` since M2-011). Application code is unaffected: an ordinary `def hello() -> String` is passed as-is.
 - A `@staticmethod def text(body, status=200) -> Response` and an instance `def text(self) -> String` can coexist on `Response`, so both `Response.text("ok", status=200)` and `response.text()` from this document compile as written.
 - `TestClient(app)` borrows without copying via an inferred origin parameter (`struct TestClient[origin: Origin[mut=False]]` holding `Pointer[App, origin]`). The spellings `ImmutOrigin` and `ImmutableOrigin` do not exist in Mojo 1.1.0.
 - Overloading `get` on handler shape (`def() thin -> String` vs. `def(Request) thin -> ...`) resolves correctly in a scratch experiment, so the raw-request escape hatch does not require different registration syntax. Not implemented in M0.
@@ -332,7 +332,7 @@ app.post["/users/{id}"](update_user)    # production (M2-009): def update_user(i
 
 - Binding is positional (the decided rule; production implements no route value or exactly one `Int` route value before the body): route values (path segments, then the query key) fill the first parameters, and one more parameter, last, is the body. Route values are Muntin builtins (`Int`), bodies are types that conform to the body trait, and the two never overlap, so a forgotten `{id}` or a misplaced body type is a compile error at `app.post`, not a silent rebinding.
 - The application writes `from_body` and chooses the body format. Muntin does not decode JSON yet: a JSON codec will be a separate, later addition that fills `from_body`, so the "no manual decoding" goal above waits for it. Routing and binding do not change when it arrives.
-- A body that does not convert is 400 before the handler runs; a future raising handler's error is a different outcome (the application-error model).
+- A body that does not convert is 400 before the handler runs; a raising handler's error is a different outcome (500, section 6).
 
 ## 5. Typed responses
 
@@ -413,7 +413,9 @@ app.get["/users/{id}"](get_user)              # unchanged registration
 # GET /users/abc -> 400 "Bad Request"             (get_user not called)
 ```
 
-- Every argument shape (`def()`, `def(Int)`, `def(B)`, `def(Int, B)`) and both result policies (`String`-compatible, `ToResponse`) accept a non-raising handler, `raises`, or `raises T` for an application-defined `T`. Non-raising handlers keep working unchanged. Mojo infers the handler's error type (`Never`, `Error`, or the application's type); compiler notes print a non-raising candidate type as `def(Int) raises Never thin -> String`.
+- Every argument shape (`def()`, `def(Int)`, `def(B)`, `def(Int, B)`) and both result policies (`String`-compatible, `ToResponse`) accept a non-raising handler, `raises`, or `raises T` for an application-defined `T`. Non-raising `def` handlers keep working unchanged. Mojo infers the handler's error type (`Never`, `Error`, or the application's type); compiler notes print a non-raising candidate type as `def(Int) raises Never thin -> String`.
+- Exception, a Mojo 1.1.0 limitation: a handler *value* whose type is spelled without `raises` (`var f: def() thin -> String = hello`, or a helper parameter of that type forwarded to `app.get`) no longer registers: `TODO: function type conversions between closures not supported yet` (`tests/storage_fail/typed_thin_value_handler.mojo`; it compiled before M2-011). Spell the type `def() thin raises Never -> String`, or make the helper generic: `def register[E: Deinitable](mut app: App, h: def() thin raises E -> String)`.
+- An error type must be `Deinitable`, because Muntin drops it: a linear error type is rejected at registration (`tests/storage_fail/linear_error_type.mojo`).
 - Request failures stay 400 and are decided before the handler: an invalid value in a matched path segment, a missing, duplicated or invalid query value, a body that `from_body` rejects. No route match, including a missing path segment, stays 404. Anything the handler raises is a fixed 500 with the body `Internal Server Error`, whatever the error says: the same message raised by the handler and by a failing conversion step gives 500 and 400. The error value is dropped; Muntin has no logging hook yet.
 - Returning and raising mean different things. A returned value goes through the response conversion; a raised value is a handler error and gets 500, even if its type conforms to `ToResponse`. Application-defined error responses are deferred: a handler that wants a specific status returns a `Response` (or a `ToResponse` result) instead of raising.
 
