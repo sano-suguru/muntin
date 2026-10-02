@@ -157,7 +157,7 @@ Semantics:
 
 Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` and `def(Int, B)` (M2-009) with `B: FromBody` for `app.post`. Each may be non-raising or declare `raises` or `raises T` (M2-011, section 6; a `T` declaring `ToErrorResponse` chooses its own response, M2-013), and returns `String` (or a type that converts to it implicitly, such as `StaticString`) or a type conforming to `ToResponse`, including `Response` (M2-008, section 5). Other `get` shapes (more or non-`Int` parameters) and other result types fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) raises Never thin -> String'` and, for the `ToResponse` candidate, `argument type 'Int' does not conform to trait 'ToResponse'`.
 
-Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), `def(Request) -> Response` raw handlers, more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, response headers, parameter-name checking, middleware, and state.
+Still targets (not implemented yet): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), `def(Request) -> Response` raw handlers (decided in M2-014, section 9), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, response headers, parameter-name checking, middleware, and state.
 
 Mojo facts discovered while proving the above:
 
@@ -171,7 +171,7 @@ Mojo facts discovered while proving the above:
   fails with `error: struct fields do not support trait types; 'def() -> String' is a trait, use a concrete type or compile-time generic`, and passing `hello` to a parameter of that type fails with `cannot be converted from 'def hello() thin -> String' to 'def() -> String'`. Muntin therefore accepts thin function types internally (`def() thin raises E -> String` since M2-011). Application code is unaffected: an ordinary `def hello() -> String` is passed as-is.
 - A `@staticmethod def text(body, status=200) -> Response` and an instance `def text(self) -> String` can coexist on `Response`, so both `Response.text("ok", status=200)` and `response.text()` from this document compile as written.
 - `TestClient(app)` borrows without copying via an inferred origin parameter (`struct TestClient[origin: Origin[mut=False]]` holding `Pointer[App, origin]`). The spellings `ImmutOrigin` and `ImmutableOrigin` do not exist in Mojo 1.1.0.
-- Overloading `get` on handler shape (`def() thin -> String` vs. `def(Request) thin -> ...`) resolves correctly in a scratch experiment, so the raw-request escape hatch does not require different registration syntax. Not implemented in M0.
+- Overloading `get` on handler shape (`def() thin -> String` vs. `def(Request) thin -> ...`) resolves correctly in a scratch experiment, so the raw-request escape hatch does not require different registration syntax. Not implemented in M0 (decided in M2-014, section 9).
 
 ### Handler model (M0.5 spike)
 
@@ -486,14 +486,22 @@ Raw request handling is first-class:
 
 ```mojo
 def webhook(req: Request) -> Response:
-    var signature = req.headers.get("x-signature")
-    # verify and process...
+    if not verify(req.body, req.query):     # application code
+        return Response.text("unsigned", status=401)
     return Response.text("ok")
 
 app.post["/webhook"](webhook)
 ```
 
-The escape hatch matters for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints.
+The escape hatch matters for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. An earlier version of this example read `req.headers.get("x-signature")`; `Request` has no headers yet. Headers remain the target for exactly this case (a signature header is how most webhooks authenticate): when `Request` gains them, this example reads the signature from them.
+
+Decided in M2-014 (`docs/ARCHITECTURE.md`, "Raw Request decision (M2-014)"); not implemented yet, so production `app.post` still rejects this handler (with the `FromBody` message):
+
+- Same registration syntax on `app.get` and `app.post`: each gains one overload taking `def(var Request) thin raises E -> Response`. On `post` a raw handler also fits the generic body overload (`B = Request`); Mojo's documented resolution rule "shorter parameter list" selects the raw overload, and typed handlers never fit it, so they resolve as before.
+- The handler may declare `req: Request` (canonical) or `var req: Request` (it owns the request and can move `req.body` out). It returns `Response` only.
+- It may be non-raising, `raises` or `raises T`, under the error model of section 6: a `T` declaring `ToErrorResponse` answers its own response, anything else is the fixed 500.
+- The route is selected by method and path as usual (404 otherwise; first registration wins across raw and typed routes). The route literal declares no path or query parameter (`def()`'s rule and messages); the handler reads `req.method`, `req.path`, `req.query` and `req.body` as received, and Muntin runs no typed extraction, so it generates no 400 before the handler; the handler's `Response` (or its error's `to_error_response()`) may still use any status, 400 included.
+- A raw-shaped handler that fits no raw overload on `post` (`def(req: Request) -> String`, `def(id: Int, req: Request)`) reports `Request is the whole request, not a body; a raw handler takes only the Request and returns Response` instead of the `FromBody` message. An explicitly typed function value must be spelled `def(var Request) thin raises Never -> Response` on Mojo 1.1.0.
 
 ## 10. Testing without networking
 

@@ -1,5 +1,7 @@
 # Must not compile: a raw Request parameter on App.post. Request is not a body
-# type, and raw Request handlers are not supported.
+# type, and a raw handler returns Response. The M2-014 production slice
+# keeps this fixture and changes its expected text to the body overloads'
+# Request guard (docs/ARCHITECTURE.md, "Raw Request decision (M2-014)").
 # Expected diagnostic (checked by scripts/check.sh): the handler's parameter is the request body; its type must conform to FromBody
 
 from muntin import App, FromBody, Request, Response
