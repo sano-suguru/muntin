@@ -732,12 +732,13 @@
         "Negative fixtures on both methods discriminate a missing state, plain S instead of State[S], a wrong State type, State not first, var/mut State, Request not second or extra parameters, a non-Response result, placeholder routes, a stateless raw handler given a state and a stateful raw handler without its state; M3-006's raw_stateful_post known-gap fixture is retired; every pre-existing expected diagnostic still matches and note/caret changes are recorded.",
         "TestClient, App.handle and a Flare loopback agree for one stateful raw GET and POST with request and response headers and an application error; focused mutations of state binding, Request transport, GET/POST registration, error mapping and per-request State copying are each red; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; CI verify and flare pass on Ubuntu and macOS; a fresh-context review finds no unresolved material issue."
       ],
-      "passes": false,
+      "passes": true,
       "evidence": [
         "Production: _call_state_raw[S, E] and one stateful raw overload each on App.get and App.post (last in each group), storing _Bound[H, S] with raw=True; _call_raw's rebuild moved into _raw_request, called by both raw adapters; the four stateful body overloads' Request guard names the stateful raw shape. _Erased, _Call, _Route, _handler_storage.mojo, state.mojo, check_unsafe.sh, App.handle, http.mojo, body.mojo, testing.mojo and adapters/flare/muntin_flare.mojo unchanged.",
         "tests/test_state_raw.mojo 13/13; tests/state_raw_fail 26; tests/compile_fail/state_raw_* 6; loopback GET/POST /keyed equal App.handle and TestClient (202 with fields, 401, 404). 204 existing must-fail diagnostics: 171 identical; 33 gain one candidate note (19 one-argument calls a 'missing required argument: state' note, 14 two-argument calls the stateful raw candidate's), error lines and carets unchanged, 20 lose one trailing detail note to the ten-note cap; every expected text matches.",
         "14 planted mutations each red (GET as POST, POST as GET, raw flag dropped, headers/query/body dropped or path-only Request, errors as 400 or always 500, per-request handle copy, equal parameter lists on post, stateful guard text reverted, and over loopback the dropped headers and always-500 errors). ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0.",
-        "Fresh-context review: no material issue (overload probes incl. S = Request, S = Int, a FromBody state, keyword arguments; diagnostic counts and the _raw_request refactor reproduced); minors applied (ten-note budget revisit condition, DX note wording, function-value spelling, docstrings)."
+        "Fresh-context review: no material issue (overload probes incl. S = Request, S = Int, a FromBody state, keyword arguments; diagnostic counts and the _raw_request refactor reproduced); minors applied (ten-note budget revisit condition, DX note wording, function-value spelling, docstrings).",
+        "CI on PR #31 passes (verify and flare on ubuntu-latest and macos-latest)."
       ]
     }
   ]
