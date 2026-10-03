@@ -1174,7 +1174,7 @@ struct Headers(Copyable, Movable, Sized):
 - R2, passing the `Request` through `_Call`, is rejected without a spike: the storage module must not name `Request` (`check_unsafe.sh`, M2-006), and R1 needs no storage change.
 
 **Responses and defaults: no default headers (D0).** A handler returning `Response`, or a `ToResponse` result building one, sets fields on `response.headers`; a `String` result sets none. `Response.text` adds no `Content-Type`.
-- So no existing response's wire bytes change. Measured on a scratch copy with the slice applied: `GET /hello` through Flare still carries exactly Flare's own `Content-Length`, `Date` and `Connection: close` and no `Content-Type`, as before.
+- So a response that sets no field keeps its wire headers. (A request whose fields Muntin cannot represent is answered 400 by the inbound rule below; before, the adapter discarded its fields and routed it.) Measured on a scratch copy with the slice applied: `GET /hello` through Flare still carries exactly Flare's own `Content-Length`, `Date` and `Connection: close` and no `Content-Type`, as before.
 - A default `Content-Type` belongs with the codec decision (JSON), which needs it.
 
 **Validation: V1, at insertion.** An invalid field fails at the line that adds it. In a raising handler that is a handler error: the fixed 500, or its `ToErrorResponse` (M2-011/M2-013).
@@ -1260,7 +1260,8 @@ Status: **production**, exactly the M3-002 slice. Decision, semantics and Flare 
 - `src/muntin/http.mojo`: `Headers` (one list of `_Field` pairs; validation helpers `_valid_name`, `_valid_value` and ASCII `_same_name` are private) and the `headers` fields of `Request` (defaulted `var headers` initializer argument) and `Response`. `muntin` exports `Headers`.
 - `src/muntin/app.mojo`: `App.handle` appends each field's name and value after a raw route's four strings, and `_call_raw` rebuilds `Headers` with `add` (failure: the fixed 500). Typed routes, `_Call`, `_Erased`, `_Route`, the storage module, the unsafe surface, `App.handle`'s signature and `TestClient` are unchanged.
 - `adapters/flare/muntin_flare.mojo`: `to_muntin_headers` rebuilds and verifies inbound fields (400 on failure, in `MuntinHandler.serve`); `to_flare_response` applies the outbound rule and re-checks each field (500 on failure).
-- Unchanged behavior: every existing test, fixture and expected text. The 90 production fixtures' diagnostics are identical to `main`'s, and `Response.text` adds no field, so no existing response's wire bytes change (`GET /hello` over loopback still carries only Flare's three fields).
+- Unchanged behavior: every existing test, fixture and expected text. The 90 production fixtures' diagnostics are identical to `main`'s. For a request whose fields Muntin can represent, a response that sets no field keeps its previous wire headers, since `Response.text` adds none (`GET /hello` over loopback still carries only Flare's three fields).
+- Changed behavior: a request Flare accepts but Muntin cannot represent (such as a forged `x-user:admin` over h2c) was routed with its fields discarded and is now answered 400 before `App.handle`.
 - Evidence:
   - `tests/test_headers.mojo` (13): the spike's semantics on production `Headers`; raw handlers reading and writing fields through `App.handle`; every field kept through the raw transport; typed routes and `String` results setting none; a typed `ToResponse` result setting `Location`; an invalid field as the fixed 500; DX section 9's headers example.
   - `tests/headers_api_fail` (5): `tests/headers_fail`'s invariants on production types.
