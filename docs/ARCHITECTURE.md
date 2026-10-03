@@ -1240,7 +1240,7 @@ struct Headers(Copyable, Movable, Sized):
 - `src/muntin/http.mojo`: `Headers` as in the spike (validation helpers private), `Request.headers` with the defaulted `var headers` initializer argument, and `Response.headers`. `muntin` exports `Headers`.
 - `src/muntin/app.mojo`: in `App.handle`, a raw route appends each field's name and value after the four strings. `_call_raw` rebuilds `Headers` with `add`; a failure is the fixed 500. Typed routes are unchanged.
 - `adapters/flare/muntin_flare.mojo`:
-  - inbound fields rebuilt from `encode_to` and verified as in `inbound_rebuild.mojo` (count equals `len()`, per-name values equal `get_all` by position, each passes `add`); any failure answers 400;
+  - inbound fields rebuilt from `encode_to` and verified as in `inbound_rebuild.mojo` (count equals `len()`, per-name values equal `get_all` by position with ASCII case-insensitive names, each passes `add`); any failure answers 400. The check is quadratic in the number of fields, which Flare's 8 KB header limit bounds;
   - outbound fields appended in order, except `Content-Length`, `Transfer-Encoding` and `Connection`, each re-checked through `add`, with a failure or `HeaderInjectionError` answering 500;
   - the module comment updated.
 - Unchanged: `_Call`, `_Erased`, `_Route`, the storage module, the unsafe surface, `App.handle`'s signature, `TestClient`, `Response.text` (no default headers) and every existing test, fixture and expected text.

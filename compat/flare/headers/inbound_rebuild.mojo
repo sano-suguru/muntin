@@ -21,7 +21,7 @@ from std.collections import Optional
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from flare.http import Request as FlareRequest
-from headers_spike import Headers
+from headers_spike import Headers, _same_name
 
 
 def rebuild(request: FlareRequest) -> Optional[Headers]:
@@ -49,7 +49,7 @@ def rebuild(request: FlareRequest) -> Optional[Headers]:
     for i in range(len(names)):
         var seen = 0
         for j in range(i):
-            if names[j].lower() == names[i].lower():
+            if _same_name(names[j], names[i]):
                 seen += 1
         var flare_values = request.headers.get_all(names[i])
         if seen >= len(flare_values) or flare_values[seen] != values[i]:
