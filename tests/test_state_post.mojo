@@ -200,6 +200,16 @@ def handles_at(users: State[Users], id: Int, body: Note) -> String:
     return String(users._shared.count())
 
 
+def handles_typed(users: State[Users], body: Note) -> User:
+    # The same, from the `def(State[S], B) -> R: ToResponse` shape.
+    return User(Int(users._shared.count()), body.text)
+
+
+def handles_typed_at(users: State[Users], id: Int, body: Note) -> User:
+    # The same, from the `def(State[S], Int, B) -> R: ToResponse` shape.
+    return User(Int(users._shared.count()), body.text)
+
+
 def track(tracked: State[Tracked], body: Note) -> String:
     return String(tracked[].drops[]) + " " + body.text
 
@@ -398,10 +408,14 @@ def test_handles_change_at_registration_and_drop_only() raises:
     app.post["/handles/{id}"](handles_at, users)
     app.post["/reject"](reject, users)
     app.post["/users"](create_user, users)
-    assert_equal(_handles(users), 7)  # one per overload, each counted
+    app.post["/typed"](handles_typed, users)
+    app.post["/typed/{id}"](handles_typed_at, users)
+    assert_equal(_handles(users), 9)  # one per registration, every overload
     var client = TestClient(app)
-    assert_equal(client.post("/handles", "").body, "7")
-    assert_equal(client.post("/handles/1", "").body, "7")
+    assert_equal(client.post("/handles", "").body, "9")
+    assert_equal(client.post("/handles/1", "").body, "9")
+    assert_equal(client.post("/typed", "t").body, "9:t")
+    assert_equal(client.post("/typed/1", "t").body, "9:t")
     for _ in range(5):
         _ = client.post("/users/0", "name=cy")
         _ = client.post("/users/9", "name=cy")
@@ -411,7 +425,7 @@ def test_handles_change_at_registration_and_drop_only() raises:
         _ = client.post("/reject", "name=cy")
         _ = client.post("/users", "name=cy")
         _ = client.post("/users", "")
-        assert_equal(_handles(users), 7)
+        assert_equal(_handles(users), 9)
     assert_equal(_calls(users), 25)
     _ = app^  # the routes' handles go with the app
     assert_equal(_handles(users), 1)

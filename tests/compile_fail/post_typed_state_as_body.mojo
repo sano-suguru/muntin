@@ -1,5 +1,5 @@
 # Must not compile: as post_state_as_body, with a ToResponse result (M3-006).
-# Expected diagnostic (checked by scripts/check.sh): State is injected application state, not the request body; pass the state as the registration's second argument
+# Expected diagnostic (checked by scripts/check.sh): State is injected application state, not the request body; a stateful post handler takes State first and the body last, and the state is the registration's second argument
 from muntin import App, FromBody, Response, State, ToResponse
 
 

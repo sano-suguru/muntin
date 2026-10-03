@@ -54,8 +54,8 @@ from .state import State, _InjectedState
 # `post` registration with a second argument, `(handler, state: State[S])`,
 # takes a handler whose first parameter is `State[S]` and whose rest is the
 # `def()` or `def(Int)` shape on `get`, or the `def(var B)` or
-# `def(Int, var B)` shape on `post`, bound and checked exactly as its
-# stateless twin. Every M2 registration passes one
+# `def(Int, var B)` shape on `post`, bound and checked as its stateless
+# twin (plus the `State` guard below). Every M2 registration passes one
 # argument, so the two families never compete in overload resolution: the
 # argument count separates them, not ranking. `S` is inferred from both
 # arguments, so they must agree. The registration moves the handler and one
@@ -835,8 +835,9 @@ struct App(Movable):
             " only the Request and returns Response"
         )
         comptime assert not conforms_to(B, _InjectedState), (
-            "State is injected application state, not the request body; pass"
-            " the state as the registration's second argument"
+            "State is injected application state, not the request body; a"
+            " stateful post handler takes State first and the body last, and"
+            " the state is the registration's second argument"
         )
         comptime assert conforms_to(B, FromBody), (
             "the handler's parameter is the request body; its type must"
@@ -880,8 +881,9 @@ struct App(Movable):
             " only the Request and returns Response"
         )
         comptime assert not conforms_to(B, _InjectedState), (
-            "State is injected application state, not the request body; pass"
-            " the state as the registration's second argument"
+            "State is injected application state, not the request body; a"
+            " stateful post handler takes State first and the body last, and"
+            " the state is the registration's second argument"
         )
         comptime assert conforms_to(B, FromBody), (
             "the handler's parameter is the request body; its type must"
@@ -927,8 +929,9 @@ struct App(Movable):
             " only the Request and returns Response"
         )
         comptime assert not conforms_to(B, _InjectedState), (
-            "State is injected application state, not the request body; pass"
-            " the state as the registration's second argument"
+            "State is injected application state, not the request body; a"
+            " stateful post handler takes State first and the body last, and"
+            " the state is the registration's second argument"
         )
         comptime assert conforms_to(B, FromBody), (
             "the handler's last parameter is the request body; its type must"
@@ -974,8 +977,9 @@ struct App(Movable):
             " only the Request and returns Response"
         )
         comptime assert not conforms_to(B, _InjectedState), (
-            "State is injected application state, not the request body; pass"
-            " the state as the registration's second argument"
+            "State is injected application state, not the request body; a"
+            " stateful post handler takes State first and the body last, and"
+            " the state is the registration's second argument"
         )
         comptime assert conforms_to(B, FromBody), (
             "the handler's last parameter is the request body; its type must"
