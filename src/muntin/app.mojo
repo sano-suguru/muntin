@@ -68,6 +68,16 @@ from .state import State, _InjectedState
 # a second `State` in the body slot. Like the `Request` guard, the marker
 # only improves the message of calls that already fail.
 #
+# Stateful raw handlers (M3-007): `get` and `post` each take
+# `(handler: def(State[S], var Request) thin raises E -> Response, state)`,
+# the raw shape with the state first, stored as `_Bound[H, S]` on a raw
+# route; `_call_state_raw` rebuilds the `Request` as `_call_raw` does
+# (`_raw_request`) and passes the handle by borrow. On `post` such a
+# handler also satisfies the stateful `ToResponse` body overload
+# (`B = Request`, `R = Response`, list `[S, B, E, R, path]`); the raw
+# overload's `[S, E, path]` is shorter, so the same rule selects it. On
+# `get` no other stateful overload takes a `Request`.
+#
 # Errors (M2-010, docs/ARCHITECTURE.md "Application-error decision"): a
 # request-side failure is answered 400 by the step that fails, before the
 # handler runs (query gathering in `App.handle`, `_parse_int` and
@@ -352,24 +362,16 @@ def _call_int_body[
     return respond(result^)
 
 
-def _call_raw[
-    E: Deinitable
-](
-    handler: def(var Request) thin raises E -> Response,
-    args: List[String],
-) -> Response:
-    """Rebuilds the matched `Request` from its method, path, query and body
-    (`args[0]` to `args[3]`) and its header fields (name and value pairs
-    from `args[4]` on, in order) and moves it into `handler`; no typed
-    extraction runs, so this adapter answers no 400 of its own.
+def _raw_request(args: List[String]) raises -> Request:
+    """Rebuilds a raw route's `Request` from its method, path, query and
+    body (`args[0]` to `args[3]`) and its header fields (name and value
+    pairs from `args[4]` on, in order).
 
     `Request` splits its target at the first `?`, so the path never
     contains one, and `path + "?" + query` splits back into the same
     fields; an empty query is rebuilt without `?`, which gives the same
-    fields as a target ending in `?`. A raise becomes `_handler_error[E]`,
-    as for every typed shape; the result is the response, unconverted. The
-    fields came from a `Headers`, so rebuilding them cannot fail; if it
-    did, the answer would be the fixed 500.
+    fields as a target ending in `?`. The fields came from a `Headers`, so
+    rebuilding them cannot fail; if it did, this would raise.
     """
     var target = args[1]
     if args[2].byte_length() > 0:
@@ -377,12 +379,28 @@ def _call_raw[
     var headers = Headers()
     var i = 4
     while i + 1 < len(args):
-        try:
-            headers.add(args[i], args[i + 1])
-        except:
-            return _internal_error()
+        headers.add(args[i], args[i + 1])
         i += 2
-    var request = Request(args[0], target, args[3], headers^)
+    return Request(args[0], target, args[3], headers^)
+
+
+def _call_raw[
+    E: Deinitable
+](
+    handler: def(var Request) thin raises E -> Response,
+    args: List[String],
+) -> Response:
+    """Rebuilds the matched `Request` (`_raw_request`) and moves it into
+    `handler`; no typed extraction runs, so this adapter answers no 400 of
+    its own. A rebuild failure is the fixed 500. A raise becomes
+    `_handler_error[E]`, as for every typed shape; the result is the
+    response, unconverted.
+    """
+    var request: Request
+    try:
+        request = _raw_request(args)
+    except:
+        return _internal_error()
     var result: Response
     try:
         result = handler(request^)
@@ -506,6 +524,28 @@ def _call_state_int_body[
     return respond(result^)
 
 
+def _call_state_raw[
+    S: Movable & Deinitable, E: Deinitable
+](
+    bound: _Bound[def(State[S], var Request) thin raises E -> Response, S],
+    args: List[String],
+) -> Response:
+    """`_call_raw` with the route's state handle passed first, by borrow:
+    the same rebuilt `Request`, moved into the handler, no 400 of its own,
+    and the response unconverted."""
+    var request: Request
+    try:
+        request = _raw_request(args)
+    except:
+        return _internal_error()
+    var result: Response
+    try:
+        result = bound.handler(bound.state, request^)
+    except e:
+        return _handler_error(e^)
+    return result^
+
+
 struct _Route(Movable):
     var method: String
     var path: String
@@ -516,7 +556,8 @@ struct _Route(Movable):
     var body: Bool
     """Whether the handler's last argument is the request body."""
     var raw: Bool
-    """Whether the handler receives the whole request (`_call_raw`): its raw
+    """Whether the handler receives the whole request (`_call_raw`,
+    `_call_state_raw`): its raw
     arguments are the request's method, path, query and body, then each
     header field's name and value."""
     var handler: _Erased
@@ -809,6 +850,40 @@ struct App(Movable):
             )
         )
 
+    def get[
+        S: Movable & Deinitable, E: Deinitable, //, path: StaticString
+    ](
+        mut self,
+        handler: def(State[S], var Request) thin raises E -> Response,
+        state: State[S],
+    ):
+        """Registers the stateful raw `handler` for `GET path`, as the raw
+        `get`: it receives the whole `Request` after the state and its
+        `Response` is the answer, unconverted; `path` declares no path or
+        query parameter, and no typed extraction runs. `handler`'s first
+        parameter is `State[S]`, the type of `state`; the route keeps one
+        copy of `state`, and each request passes it to `handler` by
+        borrow."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert (
+            _path_params(path) == 0
+        ), "route declares a path parameter but the handler takes none"
+        comptime assert (
+            _query_params(path) == 0
+        ), "route declares a query parameter but the handler takes none"
+        self._routes.append(
+            _Route(
+                "GET",
+                path,
+                _Erased.__init__[call=_call_state_raw[S, E]](
+                    _Bound(handler, state)
+                ),
+                raw=True,
+            )
+        )
+
     def post[
         B: Movable & Deinitable, E: Deinitable, //, path: StaticString
     ](mut self, handler: def(var B) thin raises E -> String):
@@ -1058,8 +1133,8 @@ struct App(Movable):
             " parameter's type must conform to FromBody"
         )
         comptime assert not B == Request, (
-            "Request is the whole request, not a body; a raw handler takes"
-            " only the Request and returns Response"
+            "Request is the whole request, not a body; a stateful raw handler"
+            " takes State first, then only the Request, and returns Response"
         )
         comptime assert not conforms_to(
             B, _InjectedState
@@ -1107,8 +1182,8 @@ struct App(Movable):
             " parameter's type must conform to FromBody"
         )
         comptime assert not B == Request, (
-            "Request is the whole request, not a body; a raw handler takes"
-            " only the Request and returns Response"
+            "Request is the whole request, not a body; a stateful raw handler"
+            " takes State first, then only the Request, and returns Response"
         )
         comptime assert not conforms_to(
             B, _InjectedState
@@ -1158,8 +1233,8 @@ struct App(Movable):
             " parameter's type must conform to FromBody"
         )
         comptime assert not B == Request, (
-            "Request is the whole request, not a body; a raw handler takes"
-            " only the Request and returns Response"
+            "Request is the whole request, not a body; a stateful raw handler"
+            " takes State first, then only the Request, and returns Response"
         )
         comptime assert not conforms_to(
             B, _InjectedState
@@ -1208,8 +1283,8 @@ struct App(Movable):
             " parameter's type must conform to FromBody"
         )
         comptime assert not B == Request, (
-            "Request is the whole request, not a body; a raw handler takes"
-            " only the Request and returns Response"
+            "Request is the whole request, not a body; a stateful raw handler"
+            " takes State first, then only the Request, and returns Response"
         )
         comptime assert not conforms_to(
             B, _InjectedState
@@ -1229,6 +1304,43 @@ struct App(Movable):
             )
         )
 
+    def post[
+        S: Movable & Deinitable, E: Deinitable, //, path: StaticString
+    ](
+        mut self,
+        handler: def(State[S], var Request) thin raises E -> Response,
+        state: State[S],
+    ):
+        """Registers the stateful raw `handler` for `POST path`, as the raw
+        `post`: it receives the whole `Request` after the state and its
+        `Response` is the answer, unconverted; `path` declares no path or
+        query parameter, and no typed extraction runs. The state is passed
+        as for `get` on `def(State[S], var Request)`.
+
+        Keep this overload's parameter list strictly shorter than the
+        stateful body overloads' a `(State[S], Request) -> Response` handler
+        satisfies: Mojo selects it over them by the shorter list (module
+        comment)."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert (
+            _path_params(path) == 0
+        ), "route declares a path parameter but the handler takes none"
+        comptime assert (
+            _query_params(path) == 0
+        ), "route declares a query parameter but the handler takes none"
+        self._routes.append(
+            _Route(
+                "POST",
+                path,
+                _Erased.__init__[call=_call_state_raw[S, E]](
+                    _Bound(handler, state)
+                ),
+                raw=True,
+            )
+        )
+
     def handle(self, request: Request) -> Response:
         """Dispatches `request` through the application's routes.
 
@@ -1238,8 +1350,8 @@ struct App(Movable):
         raw or typed; the query takes no part in selecting it. A raw route
         receives `request.method`, `path`, `query` and `body`, then each
         header field's name and value, as its raw arguments, and nothing else
-        runs (no query gathering, no conversion); `_call_raw` rebuilds the
-        `Request`. Typed routes receive no headers. A body route receives
+        runs (no query gathering, no conversion); `_call_raw` or
+        `_call_state_raw` rebuilds the `Request` (`_raw_request`). Typed routes receive no headers. A body route receives
         `request.body` as its last raw argument, after its route value if it
         has one; its call trampoline (`_call_body`, `_call_int_body`)
         converts it and answers 400 itself if that fails.

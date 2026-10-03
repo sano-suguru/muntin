@@ -91,6 +91,17 @@ header from a handler is 500. Over cleartext HTTP/2 (a raw client using
 Flare's public HPACK encoder and decoder) the same route keeps the fields
 in order (lowercased by the protocol) without the omitted ones, and a
 request field named `x-user:admin`, which HTTP/2 admits, is answered 400.
+
+M3-007 registers the stateful raw `GET /keyed` and `POST /keyed` ->
+`keyed(signer: State[Signer], req: Request) raises Unsigned -> Response` on
+`headers_app()`, with `Signer` defined here and its `State` built inside
+`headers_app()`. The handler compares `X-Signature` with the state's secret
+and echoes the secret with the whole request (method, path, a query a typed
+route would answer 400, body, the repeated `X-A` count); it sets response
+fields, one of which (`Keep-Alive`) the adapter omits. Over HTTP/1.1 status,
+body and the kept fields equal `App.handle`; a missing signature (also
+through `TestClient`) and a wrong one raise `Unsigned`, answered 401 by
+`to_error_response` in Muntin. The adapter is unchanged.
 """
 
 from std.ffi import c_uint, external_call
@@ -326,12 +337,55 @@ def inject_header(req: Request) raises -> Response:
     return resp^
 
 
+struct Signer(Movable):
+    """Application state for `keyed`: the expected signature."""
+
+    var secret: String
+
+    def __init__(out self, secret: String):
+        self.secret = secret
+
+
+def keyed(signer: State[Signer], req: Request) raises Unsigned -> Response:
+    """A stateful raw handler (M3-007): checks `X-Signature` against the
+    state, echoes the whole request with the secret, and sets response
+    fields, one of which the adapter omits on the wire."""
+    var sig = req.headers.get("x-signature")
+    if not sig or sig.value() != signer[].secret:
+        raise Unsigned(req.query)
+    var resp = Response.text(
+        signer[].secret
+        + "|"
+        + req.method
+        + "|"
+        + req.path
+        + "|"
+        + req.query
+        + "|"
+        + req.body
+        + "|"
+        + String(len(req.headers.get_all("x-a"))),
+        status=202,
+    )
+    try:
+        resp.headers.add("X-Request-Id", "43")
+        resp.headers.add("Set-Cookie", "s=1")
+        resp.headers.add("Set-Cookie", "t=2")
+        resp.headers.add("Keep-Alive", "timeout=5")
+    except:
+        pass
+    return resp^
+
+
 def headers_app() -> App:
     var app = App()
     app.get["/hello"](hello)
     app.post["/signed"](signed)
     app.get["/signed"](signed)
     app.get["/inject"](inject_header)
+    var signer = State(Signer("sha256=k"))
+    app.get["/keyed"](keyed, signer)
+    app.post["/keyed"](keyed, signer)
     return app^
 
 
@@ -737,6 +791,107 @@ def test_headers_over_localhost_match_app_handle() raises:
         assert_equal(inj.status, 500)
         assert_equal(inj.status, app.handle(Request("GET", "/inject")).status)
         assert_false(inj.headers.contains("set-cookie"))
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+def _kept_on_wire(resp: Response) -> String:
+    """`resp`'s fields as the adapter writes them, in order: the omitted
+    connection-specific ones dropped."""
+    var out = String()
+    for i in range(len(resp.headers)):
+        var lower = resp.headers.name(i).lower()
+        if lower in ["transfer-encoding", "keep-alive", "upgrade"]:
+            continue
+        out += resp.headers.name(i) + ": " + resp.headers.value(i) + ";"
+    return out^
+
+
+def test_stateful_raw_over_localhost_matches_app_handle() raises:
+    # M3-007: stateful raw GET and POST /keyed read the state and the whole
+    # request, headers included, and set response fields (M3-005 composes
+    # with State); a missing or wrong signature raises `Unsigned` (401).
+    var child = _serve_in_child(headers_app())
+    var base = String("http://127.0.0.1:", child.port)
+    try:
+        var client = _client()
+        var app = headers_app()
+        var in_memory = TestClient(app)
+        for method in ["GET", "POST"]:
+            var body = String("b?=&") if method == "POST" else String()
+            var req = FlareRequest(
+                method, base + "/keyed?id=x&id=2", List(body.as_bytes())
+            )
+            req.headers.append("X-Signature", "sha256=k")
+            req.headers.append("X-A", "1")
+            req.headers.append("x-a", "2")
+            var resp = client.send(req)
+            var mh = Headers()
+            mh.add("X-Signature", "sha256=k")
+            mh.add("X-A", "1")
+            mh.add("x-a", "2")
+            var local = app.handle(
+                Request(method, "/keyed?id=x&id=2", body, mh^)
+            )
+            print("observed:", method, "/keyed", resp.status, repr(resp.text()))
+            assert_equal(resp.status, 202, method)
+            assert_equal(resp.status, local.status, method)
+            assert_equal(resp.text(), local.body, method)
+            assert_equal(
+                resp.text(),
+                "sha256=k|" + method + "|/keyed|id=x&id=2|" + body + "|2",
+            )
+            # The handler's fields in order, minus the omitted Keep-Alive
+            # (kept in memory), then Flare's own.
+            var wire = List[UInt8]()
+            resp.headers.encode_to(wire)
+            var kept = String()
+            for line in String(from_utf8_lossy=Span(wire)).split("\r\n"):
+                if line.byte_length() == 0 or line.startswith("Date: "):
+                    continue
+                kept += String(line) + ";"
+            assert_equal(
+                kept,
+                _kept_on_wire(local)
+                + "Content-Length: "
+                + String(local.body.byte_length())
+                + ";Connection: close;",
+                method,
+            )
+            assert_false(resp.headers.contains("keep-alive"), method)
+            assert_true(Bool(local.headers.get("keep-alive")), method)
+
+            # The application error, decided from the state: no signature
+            # (TestClient sends none) and a wrong one.
+            var unsigned = client.send(
+                FlareRequest(method, base + "/keyed?k", List(body.as_bytes()))
+            )
+            var local_unsigned = in_memory.get(
+                "/keyed?k"
+            ) if method == "GET" else in_memory.post("/keyed?k", body)
+            assert_equal(unsigned.status, 401, method)
+            assert_equal(unsigned.text(), "unsigned k", method)
+            assert_equal(unsigned.status, local_unsigned.status, method)
+            assert_equal(unsigned.text(), local_unsigned.body, method)
+            assert_equal(len(local_unsigned.headers), 0)
+            var forged = FlareRequest(method, base + "/keyed", List[UInt8]())
+            forged.headers.append("X-Signature", "sha256=forged")
+            var forged_resp = client.send(forged)
+            var fh = Headers()
+            fh.add("X-Signature", "sha256=forged")
+            var local_forged = app.handle(Request(method, "/keyed", "", fh^))
+            assert_equal(forged_resp.status, 401, method)
+            assert_equal(forged_resp.status, local_forged.status, method)
+            assert_equal(forged_resp.text(), local_forged.body, method)
+        # The route is GET and POST only; no other path reaches it.
+        assert_equal(
+            client.send(
+                FlareRequest("PUT", base + "/keyed", List[UInt8]())
+            ).status,
+            404,
+        )
+        assert_equal(client.get(base + "/keyed/x").status, 404)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
