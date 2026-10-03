@@ -699,6 +699,26 @@
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0.",
         "Fresh-context review: no material issue (port matches the M3-002 spike and inbound_rebuild code for code; ordinary HTTP/1.1, browser-like, HTTP/1.0 and h2c requests over loopback pass with every field; existing tests and fixtures unchanged); minors applied (stale doc lines, invalid UTF-8 inbound adapter test, full HTTP/1.1 field-list comparison)."
       ]
+    },
+    {
+      "id": "M3-006",
+      "priority": 306,
+      "category": "application_state",
+      "description": "Stateful POST handlers in production, the rest of the M3-001 typed family: App.post overloads taking (handler, state) for def(State[S], B) and def(State[S], Int, B) with B: FromBody, each returning String or ToResponse, plus the State-as-body guard deferred by M3-003.",
+      "acceptance": [
+        "App.post gains exactly four overloads taking (handler, state: State[S]): def(State[S], var B) thin raises E -> String or -> R: ToResponse, and def(State[S], Int, var B) thin raises E -> String or -> R: ToResponse, with S, B, E, R inferred as in their stateless twins and each repeating its twin's route checks and messages; State is the first parameter, the route value (if any) next, the body last.",
+        "The state is bound at registration with the existing _Bound[H, S]: each route stores one copied handle and requests borrow it (no per-request copy, reference-count change or allocation); the value is dropped once across App moves; App stays non-generic.",
+        "Stateful POST routes follow the stateless twin's request rules: route value first (400 before from_body), then the body (400 before the handler), ToErrorResponse or the fixed 500, 404, first registration wins; TestClient and a real loopback request through Flare agree on success, body 400, route-value 400 and application errors; request headers take no part.",
+        "A private marker on State lets the four stateless body overloads reject State as a body and the four stateful ones reject a second State, with compile-fail fixtures; no general injection abstraction. _Erased, _Call, _Route, the storage module, the unsafe surface, State's fields and API, App.handle, TestClient and the Flare adapter are unchanged; every existing expected diagnostic still matches and note changes are recorded.",
+        "Negative fixtures discriminate a missing state, a plain value or parameter instead of State, the state in the wrong position, owned/mutable State parameters, a body without FromBody, State as the body and placeholder/arity mismatches; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": true,
+      "evidence": [
+        "Production: _call_state_body, _call_state_int_body and four App.post (handler, state: State[S]) overloads in app.mojo (after the raw post), storing _Bound[H, S] with body=True; private trait _InjectedState in state.mojo, conformed by State; guards in the four stateless and four stateful body overloads. _Erased, _Call, _Route, _handler_storage.mojo, check_unsafe.sh, _Bound, App.handle, http.mojo, body.mojo, testing.mojo and adapters/flare/muntin_flare.mojo unchanged.",
+        "tests/test_state_post.mojo 12/12; tests/state_post_fail 13; tests/compile_fail/state_post_* 10 and post_*state_as_body 4; loopback POST /staff and /staff/{id} equal TestClient (200/400/409/404). 178 existing must-fail diagnostics: 170 identical, 8 failing one-argument post calls gain four 'missing required argument: state' notes (4 lose trailing detail notes); every expected text matches.",
+        "16 planted mutations each red (15 through TestClient and fixtures, plus the index swap over loopback; binding: GET method, missing body flag; extraction: swapped indices incl. loopback, body before route value, altered route value, from_body failure as 500; errors: handler error as 400 or always 500; per-request handle copy in each adapter; marker and guards removed; placeholder assert removed). ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0.",
+        "Fresh-context review: no material issue (overloads, adapters and guard texts match the M3-001 spike; keyword spellings, StaticString, S = Int, a FromBody type as both state and body, ref/mut/var state parameters probed; storage, unsafe surface and adapter diffs empty; doc counts and the 8 changed diagnostics reproduced); minors applied (guard message names the stateful shape, mutation count itemized, reference count read inside ToResponse handlers of both shapes, module comment wording)."
+      ]
     }
   ]
 }

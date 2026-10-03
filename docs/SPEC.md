@@ -195,7 +195,7 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: active after M2-016. M3-001 (application state decision gate) and M3-004 (state storage decision gate) are decided, and the M3-001 slice M3-003 (stateful `get`) is implemented on M3-004's sealed box. M3-002 (headers decision gate) is decided and its production slice M3-005 (headers in production) is implemented.
+Status: active after M2-016. M3-001 (application state decision gate) and M3-004 (state storage decision gate) are decided, and the M3-001 slices M3-003 (stateful `get`, on M3-004's sealed box) and M3-006 (stateful `post`) are implemented. M3-002 (headers decision gate) is decided and its production slice M3-005 (headers in production) is implemented.
 
 Potential work, each cut into its own decision-first item. These include the capabilities M2-016 deferred, with the reason each is additive:
 
@@ -208,7 +208,7 @@ Potential work, each cut into its own decision-first item. These include the cap
 - **fallible conversions and parameter-name checking:** a raising `to_response`/`to_error_response` needs its own error answer (M2-007, M2-012). Name checking needs function-parameter reflection, which Mojo 1.1.0 lacks;
 - **broader raw handlers:** raw route values, `String`/`ToResponse` raw results. Each is an additive overload under the M2-014 parameter-list rule;
 - middleware;
-- **application state/context:** M2 handlers can read no runtime data (no globals on Mojo 1.1.0, no captures). Decided in M3-001 as an addition to M2, with no signature or binding change: a `State[S]` first parameter, bound at registration with `app.get[route](handler, state)`. First slice M3-003 (stateful `get`, implemented); stateful `post` and stateful raw handlers come in a later slice;
+- **application state/context:** M2 handlers can read no runtime data (no globals on Mojo 1.1.0, no captures). Decided in M3-001 as an addition to M2, with no signature or binding change: a `State[S]` first parameter, bound at registration with `app.get[route](handler, state)`. Slices M3-003 (stateful `get`) and M3-006 (stateful `post`) are implemented; stateful raw handlers come in a later slice;
 - structured errors, including the application-level error mappers that M2-012 rejected on Mojo 1.1.0 (its revisit conditions apply);
 - observability hooks, including logging of dropped handler errors;
 - streaming;
@@ -247,7 +247,11 @@ M3-005, headers in production (the M3-002 slice): exactly the "Next production s
 
 M3-005 result: `muntin.Headers`, `Request.headers` and `Response.headers` are production, exactly the slice. Raw handlers read and write fields through `App.handle`'s raw strings; typed routes, `_Call`, `_Erased`, `_Route`, the storage module, the unsafe surface and `TestClient` are unchanged. The Flare adapter rebuilds and verifies inbound fields (400 for a field Muntin cannot represent, including a forged `x-user:admin` over cleartext HTTP/2) and applies the outbound rule (connection-specific and backend-owned fields, and `Connection`-named fields, omitted). Every existing test, fixture and expected diagnostic is unchanged. For a request whose fields Muntin can represent, a response that sets no field keeps its previous wire headers (`GET /hello` is pinned); a request Muntin cannot represent, which the adapter used to route with its fields discarded, is now answered 400. Evidence: `docs/ARCHITECTURE.md`, "Headers in production (M3-005)".
 
-Acceptance for the gates and for M3-003 and M3-005 is in `feature_list.json`.
+M3-006, stateful `post` in production (the rest of the M3-001 typed slice): four `App.post` overloads taking `(handler, state: State[S])`, for `def(State[S], B)` and `def(State[S], Int, B)` with `B: FromBody`, each returning `String` or `R: ToResponse` and raising as M2-011. State first, the route value next, the body last; the state is bound at registration with M3-003's `_Bound[H, S]`, and requests borrow the route's handle. Request handling, route checks and messages are the stateless twin's. It closes M3-003's deferred diagnostic gap: a private marker on `State` lets the body overloads reject a `State` in the body slot with a state message instead of the `FromBody` one. `_Erased`, `_Call`, `_Route`, the storage module, the unsafe surface, `State`'s fields and API, `App.handle`, `TestClient` and the Flare adapter are unchanged; `App` stays non-generic. Out of scope: stateful raw handlers, typed header extraction, codecs, new body types or route values, new methods, middleware, lifecycle. Acceptance is in `feature_list.json`.
+
+M3-006 result: the four stateful `App.post` overloads and the `State` guard are production, exactly the slice. `tests/test_state_post.mojo` (12, through `TestClient` and `App.handle`) measures them against the stateless twins: both shapes and results, state, route value and body each reaching their own parameter, 400 for a bad body before the handler and for a bad route value before `from_body`, `ToErrorResponse` or the fixed 500, 404, first registration wins across both families, the handle count rising once per registration and unchanged by requests (read inside handlers), drop once across two `App` moves, `TestClient` after a move, request fields taking no part. A Flare loopback `POST /staff` and `POST /staff/{id}` equal `TestClient` (200, 400, 409, 404). Fixtures: `tests/state_post_fail` (13), `tests/compile_fail/state_post_*` (10) and `post_*state_as_body` (4). Of the 178 existing must-fail fixtures, 170 diagnostics are identical; 8 failing one-argument `post` calls gain the four `missing required argument: 'state'` notes (caret moved to `post`), 4 of which lose trailing detail notes to the ten-note cap; every expected text still matches. `_Erased`, `_Call`, `_Route`, the storage module, the unsafe surface, `State`'s fields and API, `App.handle`, `TestClient` and the Flare adapter are unchanged. Details: `docs/ARCHITECTURE.md`, "Stateful POST in production (M3-006)".
+
+Acceptance for the gates and for M3-003, M3-005 and M3-006 is in `feature_list.json`.
 
 ## Long-term success criterion
 

@@ -3,7 +3,7 @@
 from ._handler_storage import _Erased
 from .body import FromBody
 from .http import Headers, Request, Response, ToErrorResponse, ToResponse
-from .state import State
+from .state import State, _InjectedState
 
 # Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
 # (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody`; and on
@@ -49,18 +49,24 @@ from .state import State
 # body overloads' `not B == Request` guard only improves the message for
 # calls no overload accepts; it takes no part in selection.
 #
-# Stateful handlers (M3-003, docs/ARCHITECTURE.md "Application state
-# decision (M3-001)"): a `get` registration with a second argument,
-# `(handler, state: State[S])`, takes a handler whose first parameter is
-# `State[S]` and whose rest is the `def()` or `def(Int)` shape, bound and
-# checked exactly as its stateless twin. Every M2 registration passes one
+# Stateful handlers (M3-003 for `get`, M3-006 for `post`;
+# docs/ARCHITECTURE.md "Application state decision (M3-001)"): a `get` or
+# `post` registration with a second argument, `(handler, state: State[S])`,
+# takes a handler whose first parameter is `State[S]` and whose rest is the
+# `def()` or `def(Int)` shape on `get`, or the `def(var B)` or
+# `def(Int, var B)` shape on `post`, bound and checked as its stateless
+# twin (plus the `State` guard below). Every M2 registration passes one
 # argument, so the two families never compete in overload resolution: the
 # argument count separates them, not ranking. `S` is inferred from both
 # arguments, so they must agree. The registration moves the handler and one
 # copy of the handle into the route's `_Erased` box as one `_Bound[H, S]`;
 # the stateful adapters borrow it and pass the handle by borrow, so a
 # request copies nothing, changes no reference count and allocates nothing
-# for the state.
+# for the state. `State` conforms to the private marker `_InjectedState`:
+# the four stateless body overloads reject it as a body (a stateful handler
+# registered on `post` without its state), and the four stateful ones reject
+# a second `State` in the body slot. Like the `Request` guard, the marker
+# only improves the message of calls that already fail.
 #
 # Errors (M2-010, docs/ARCHITECTURE.md "Application-error decision"): a
 # request-side failure is answered 400 by the step that fails, before the
@@ -441,6 +447,65 @@ def _call_state_int[
     return respond(result^)
 
 
+def _call_state_body[
+    S: Movable & Deinitable,
+    B: Movable & Deinitable,
+    E: Deinitable,
+    R: Movable & Deinitable,
+    respond: _Respond[R],
+](
+    bound: _Bound[def(State[S], var B) thin raises E -> R, S],
+    args: List[String],
+) -> Response:
+    """`_call_body` with the route's state handle passed first, by borrow:
+    answers 400 itself, without calling `handler`, if `from_body` raises."""
+    comptime assert conforms_to(B, FromBody)
+    var body: B
+    try:
+        body = B.from_body(args[0])
+    except:
+        return _bad_request()
+    var result: R
+    try:
+        result = bound.handler(bound.state, body^)
+    except e:
+        return _handler_error(e^)
+    return respond(result^)
+
+
+def _call_state_int_body[
+    S: Movable & Deinitable,
+    B: Movable & Deinitable,
+    E: Deinitable,
+    R: Movable & Deinitable,
+    respond: _Respond[R],
+](
+    bound: _Bound[def(State[S], Int, var B) thin raises E -> R, S],
+    args: List[String],
+) -> Response:
+    """`_call_int_body` with the route's state handle passed first, by
+    borrow: a bad route value (`args[0]`) answers 400 before the body
+    (`args[1]`) is converted, a `from_body` raise answers 400, and neither
+    calls `handler`."""
+    comptime assert conforms_to(B, FromBody)
+    var id: Int
+    try:
+        id = _parse_int(args[0])
+    except:
+        return _bad_request()
+    var body: B
+    try:
+        body = B.from_body(args[1])
+    except:
+        return _bad_request()
+    var result: R
+    try:
+        result = bound.handler(bound.state, id, body^)
+    except e:
+        return _handler_error(e^)
+    return respond(result^)
+
+
 struct _Route(Movable):
     var method: String
     var path: String
@@ -769,6 +834,11 @@ struct App(Movable):
             "Request is the whole request, not a body; a raw handler takes"
             " only the Request and returns Response"
         )
+        comptime assert not conforms_to(B, _InjectedState), (
+            "State is injected application state, not the request body; a"
+            " stateful post handler takes State first and the body last, and"
+            " the state is the registration's second argument"
+        )
         comptime assert conforms_to(B, FromBody), (
             "the handler's parameter is the request body; its type must"
             " conform to FromBody"
@@ -809,6 +879,11 @@ struct App(Movable):
         comptime assert not B == Request, (
             "Request is the whole request, not a body; a raw handler takes"
             " only the Request and returns Response"
+        )
+        comptime assert not conforms_to(B, _InjectedState), (
+            "State is injected application state, not the request body; a"
+            " stateful post handler takes State first and the body last, and"
+            " the state is the registration's second argument"
         )
         comptime assert conforms_to(B, FromBody), (
             "the handler's parameter is the request body; its type must"
@@ -853,6 +928,11 @@ struct App(Movable):
             "Request is the whole request, not a body; a raw handler takes"
             " only the Request and returns Response"
         )
+        comptime assert not conforms_to(B, _InjectedState), (
+            "State is injected application state, not the request body; a"
+            " stateful post handler takes State first and the body last, and"
+            " the state is the registration's second argument"
+        )
         comptime assert conforms_to(B, FromBody), (
             "the handler's last parameter is the request body; its type must"
             " conform to FromBody"
@@ -895,6 +975,11 @@ struct App(Movable):
         comptime assert not B == Request, (
             "Request is the whole request, not a body; a raw handler takes"
             " only the Request and returns Response"
+        )
+        comptime assert not conforms_to(B, _InjectedState), (
+            "State is injected application state, not the request body; a"
+            " stateful post handler takes State first and the body last, and"
+            " the state is the registration's second argument"
         )
         comptime assert conforms_to(B, FromBody), (
             "the handler's last parameter is the request body; its type must"
@@ -940,6 +1025,207 @@ struct App(Movable):
                 path,
                 _Erased.__init__[call=_call_raw[E]](handler),
                 raw=True,
+            )
+        )
+
+    def post[
+        S: Movable & Deinitable,
+        B: Movable & Deinitable,
+        E: Deinitable,
+        //,
+        path: StaticString,
+    ](
+        mut self,
+        handler: def(State[S], var B) thin raises E -> String,
+        state: State[S],
+    ):
+        """Registers the stateful `handler` for `POST path`, as `post` on
+        `def(var B)`: the request body is converted with `B.from_body`
+        before `handler` runs (400 without calling it on failure), its
+        String result becomes a 200 text response, and a raise is converted
+        or the fixed 500. `handler`'s first parameter is `State[S]`, the
+        type of `state`, and its last the body; the route keeps one copy of
+        `state`, and each request passes it to `handler` by borrow."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 0, (
+            "handler takes only the request body; route must declare no path"
+            " or query parameter"
+        )
+        comptime assert not B == Int, (
+            "Int is a route-value type, never the request body; the body"
+            " parameter's type must conform to FromBody"
+        )
+        comptime assert not B == Request, (
+            "Request is the whole request, not a body; a raw handler takes"
+            " only the Request and returns Response"
+        )
+        comptime assert not conforms_to(
+            B, _InjectedState
+        ), "a handler takes at most one State, as its first parameter"
+        comptime assert conforms_to(B, FromBody), (
+            "the handler's last parameter is the request body; its type must"
+            " conform to FromBody"
+        )
+        self._routes.append(
+            _Route(
+                "POST",
+                path,
+                _Erased.__init__[call=_call_state_body[S, B, E, String, _text]](
+                    _Bound(handler, state)
+                ),
+                body=True,
+            )
+        )
+
+    def post[
+        S: Movable & Deinitable,
+        B: Movable & Deinitable,
+        E: Deinitable,
+        R: ToResponse,
+        //,
+        path: StaticString,
+    ](
+        mut self,
+        handler: def(State[S], var B) thin raises E -> R,
+        state: State[S],
+    ):
+        """Registers the stateful `handler` for `POST path` with the request
+        body after the state, as the `String` overload; its result converts
+        itself with `R.to_response()` after `handler` returns, as for `post`
+        on `def(var B) -> R`."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 0, (
+            "handler takes only the request body; route must declare no path"
+            " or query parameter"
+        )
+        comptime assert not B == Int, (
+            "Int is a route-value type, never the request body; the body"
+            " parameter's type must conform to FromBody"
+        )
+        comptime assert not B == Request, (
+            "Request is the whole request, not a body; a raw handler takes"
+            " only the Request and returns Response"
+        )
+        comptime assert not conforms_to(
+            B, _InjectedState
+        ), "a handler takes at most one State, as its first parameter"
+        comptime assert conforms_to(B, FromBody), (
+            "the handler's last parameter is the request body; its type must"
+            " conform to FromBody"
+        )
+        self._routes.append(
+            _Route(
+                "POST",
+                path,
+                _Erased.__init__[
+                    call=_call_state_body[S, B, E, R, _converted[R]]
+                ](_Bound(handler, state)),
+                body=True,
+            )
+        )
+
+    def post[
+        S: Movable & Deinitable,
+        B: Movable & Deinitable,
+        E: Deinitable,
+        //,
+        path: StaticString,
+    ](
+        mut self,
+        handler: def(State[S], Int, var B) thin raises E -> String,
+        state: State[S],
+    ):
+        """Registers the stateful `handler` for `POST path`, as `post` on
+        `def(Int, var B)`: `path` declares exactly one path or query
+        parameter, converted to `Int` and passed after the state, and the
+        body comes last. An invalid route value yields 400 before the body
+        is converted; a body conversion failure yields 400; neither calls
+        `handler`. The state is passed as for `post` on
+        `def(State[S], var B)`."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 1, (
+            "handler takes one Int parameter and the request body; route must"
+            " declare exactly one path or query parameter"
+        )
+        comptime assert not B == Int, (
+            "Int is a route-value type, never the request body; the body"
+            " parameter's type must conform to FromBody"
+        )
+        comptime assert not B == Request, (
+            "Request is the whole request, not a body; a raw handler takes"
+            " only the Request and returns Response"
+        )
+        comptime assert not conforms_to(
+            B, _InjectedState
+        ), "a handler takes at most one State, as its first parameter"
+        comptime assert conforms_to(B, FromBody), (
+            "the handler's last parameter is the request body; its type must"
+            " conform to FromBody"
+        )
+        self._routes.append(
+            _Route(
+                "POST",
+                path,
+                _Erased.__init__[
+                    call=_call_state_int_body[S, B, E, String, _text]
+                ](_Bound(handler, state)),
+                body=True,
+            )
+        )
+
+    def post[
+        S: Movable & Deinitable,
+        B: Movable & Deinitable,
+        E: Deinitable,
+        R: ToResponse,
+        //,
+        path: StaticString,
+    ](
+        mut self,
+        handler: def(State[S], Int, var B) thin raises E -> R,
+        state: State[S],
+    ):
+        """Registers the stateful `handler` for `POST path` with one route
+        value and the request body after the state, as the `String`
+        overload; its result converts itself with `R.to_response()` after
+        `handler` returns. A 400 calls neither `handler` nor the result
+        conversion; a raise skips the conversion."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 1, (
+            "handler takes one Int parameter and the request body; route must"
+            " declare exactly one path or query parameter"
+        )
+        comptime assert not B == Int, (
+            "Int is a route-value type, never the request body; the body"
+            " parameter's type must conform to FromBody"
+        )
+        comptime assert not B == Request, (
+            "Request is the whole request, not a body; a raw handler takes"
+            " only the Request and returns Response"
+        )
+        comptime assert not conforms_to(
+            B, _InjectedState
+        ), "a handler takes at most one State, as its first parameter"
+        comptime assert conforms_to(B, FromBody), (
+            "the handler's last parameter is the request body; its type must"
+            " conform to FromBody"
+        )
+        self._routes.append(
+            _Route(
+                "POST",
+                path,
+                _Erased.__init__[
+                    call=_call_state_int_body[S, B, E, R, _converted[R]]
+                ](_Bound(handler, state)),
+                body=True,
             )
         )
 

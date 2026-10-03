@@ -159,7 +159,7 @@ Semantics:
 
 Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` and `def(Int, B)` (M2-009) with `B: FromBody` for `app.post`, plus, on both, the raw `def(req: Request) -> Response` (M2-015, section 9; `Response` only, under the same error model). Each may be non-raising or declare `raises` or `raises T` (M2-011, section 6; a `T` declaring `ToErrorResponse` chooses its own response, M2-013), and returns `String` (or a type that converts to it implicitly, such as `StaticString`) or a type conforming to `ToResponse`, including `Response` (M2-008, section 5). Other `get` shapes (more or non-`Int` parameters) and other result types fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) raises Never thin -> String'` and, for the `ToResponse` candidate, `argument type 'Int' does not conform to trait 'ToResponse'`. Since M3-003, `app.get` also takes a stateful handler with its state as a second argument, `def(State[S])` or `def(State[S], Int)` (section 8); a failing one-argument `get` call lists those four candidates too, each with `missing required argument: 'state'`.
 
-Still targets (not implemented yet; M3 or later, each placed in `docs/SPEC.md` "M3"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, typed header extraction and default response headers, parameter-name checking, middleware, and stateful `post` and raw handlers (decided in M3-001, section 8; stateful `get` is production since M3-003). Request and response headers are production since M3-005 (section 9); typed header extraction and default headers are not.
+Still targets (not implemented yet; M3 or later, each placed in `docs/SPEC.md` "M3"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, typed header extraction and default response headers, parameter-name checking, middleware, and stateful raw handlers (decided in M3-001, section 8; stateful `get` is production since M3-003 and stateful `post` since M3-006). Request and response headers are production since M3-005 (section 9); typed header extraction and default headers are not.
 
 Mojo facts discovered while proving the above:
 
@@ -469,7 +469,7 @@ Status: not implemented; M3 (`docs/SPEC.md`). `app.use` does not exist.
 
 Long-lived state should have explicit ownership and predictable lifetime behavior.
 
-Production for `get` since M3-003 (decided in M3-001, `docs/ARCHITECTURE.md` "Application state decision (M3-001)"), proven by `tests/test_state.mojo` (this example included), `tests/state_get_fail`, `tests/compile_fail/state_*.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
+Production for `get` since M3-003 and for `post` since M3-006 (decided in M3-001, `docs/ARCHITECTURE.md` "Application state decision (M3-001)"), proven by `tests/test_state.mojo` (this example included), `tests/test_state_post.mojo` (the `post` example below), `tests/state_get_fail`, `tests/state_post_fail`, `tests/compile_fail/state_*.mojo`, `tests/compile_fail/post_*state_as_body.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
 
 ```mojo
 from muntin import App, State
@@ -512,7 +512,25 @@ Status (M3-003): production for `get`. `app.get[route](handler, state)` takes `d
 - Compile-time errors at `app.get`: a state of another type (`value passed to 'state' cannot be converted from 'State[Cache]' to 'State[Db]'`), the value instead of a handle (`cannot be converted from 'Db' to 'State[Db]'`), a stateful handler without its state (`missing required argument: 'state'`), a state for a stateless handler, the state after the route value or `var db: State[Db]` (each `cannot be converted from '<handler type>' to 'def(State[S]) raises Never thin -> String'` or `'def(State[S], Int) ...'`), mutation through `db[]` (`expression must be mutable ...`), using a `ref r = db[]` after `db` is reassigned (`use of invalidated interior reference`), a second handle replacing or mutating the value (`'_Shared[Db]' is not subscriptable`, `invalid use of mutating method`), and a placeholder count that does not fit the shape (the stateless twin's `constraint failed: ...`; the state is not a route value).
 - Each registration copies the handle once, so the reference count rises by one per route and falls when the `App` is dropped. A request changes it by nothing. Moving the `App` moves the routes' handles, and the value is destroyed once, after the last handle. `TestClient(app)` serves a stateful `App` repeatedly, also after `var moved = app^` (a new client on `moved`).
 
-Stateful `post` shapes and stateful raw handlers come in a later slice. Until then, a stateful handler registered on `post` fails to compile: with its state, `app.post[...](h, users)`, as `no matching method in call to 'post'`; without it, `app.post[...](h)`, with the `FromBody` message.
+Status (M3-006): production for `post`. `app.post[route](handler, state)` takes `def(State[S], B)` or `def(State[S], Int, B)` with `B: FromBody`, each non-raising or raising and returning `String` (or `String`-compatible) or `R: ToResponse`. The state comes first, the route value (if any) next, the body last:
+
+```mojo
+def update_user(users: State[Users], id: Int, body: CreateUser) raises NotFound -> User:
+    return User(id, users[].get(id) + " as " + body.name)
+
+
+app.post["/users/{id}"](update_user, users)  # state, route value, body
+# POST /users/1 "name=bo" -> update_user(users, 1, CreateUser("bo")) -> User(1, "bob as bo")
+# POST /users/9 "name=bo" -> NotFound(9).to_error_response()
+# POST /users/x "name=bo" -> 400 "Bad Request"   (from_body and update_user not called)
+```
+
+Request handling is the stateless twin's (section 4): the route value is converted first (400 without calling `from_body`), then the body (`from_body` raising is 400 without calling the handler), then the handler runs once and its result is converted once; `ToErrorResponse` or the fixed 500 for a raise, 404 without a match, and the first registration wins. Registration copies the handle once and a request borrows it, as for `get`. Request headers take no part (typed routes receive none).
+
+- Compile-time errors at `app.post` with a state: the stateless twin's placeholder-count, malformed-route, `Int`-as-body and `FromBody` messages (`constraint failed: ...`; the state is not a route value); a second `State` as the body (`constraint failed: a handler takes at most one State, as its first parameter`); a state of another type, the value instead of a handle, a stateless handler given a state, the state after the body or the route value, `var db: State[Db]` or `mut db: State[Db]`, a plain `db: Db` parameter, and a `def(State[S])` handler without a body (`no matching method in call to 'post'`, with notes such as `cannot be converted from '<handler type>' to 'def(State[S], var B) raises Never thin -> String'` or `'def(State[S], Int, var B) ...'`).
+- Without a state, `app.post[...](h)`: a stateful handler with a body is `missing required argument: 'state'`; a handler whose body slot holds a `State` (`def(State[Db])`, `def(Int, State[Db])`) is `constraint failed: State is injected application state, not the request body; a stateful post handler takes State first and the body last, and the state is the registration's second argument`.
+
+Stateful raw handlers come in a later slice. Until then `def(State[S], Request) -> Response` on `post` with a state fails with the `Request` guard's message (`Request is the whole request, not a body; ...`).
 
 ## 9. Raw Request/Response escape hatch
 
@@ -743,10 +761,10 @@ Status after M2 (M2-016): the handler model of this example is production: `get_
 
 - `CreateUser` must conform to `FromBody` and parse its own body, because there is no JSON codec;
 - `User` must conform to `ToResponse`. The stdlib `List[User]` does not conform, so a list result needs an application type that does;
-- `users` is not a global: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`) and handlers cannot capture. Since M3-003 a `get` handler reaches it as `State` (section 8): `def get_user(users: State[Users], id: Int) -> User` registered as `app.get["/users/{id}"](get_user, users)`. A stateful `post` (`create_user`) is not production yet;
+- `users` is not a global: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`) and handlers cannot capture. Since M3-003 a `get` handler reaches it as `State` (section 8): `def get_user(users: State[Users], id: Int) -> User` registered as `app.get["/users/{id}"](get_user, users)`, and since M3-006 a `post` handler too: `def create_user(users: State[Users], body: CreateUser) -> User` registered as `app.post["/users"](create_user, users)`;
 - there is no `app.run()`.
 
-The first three are M3 items (codec, stateful `post`); `app.run()` is lifecycle work (M3, ownership undecided). The closest runnable form today is section 4's `CreateUser` and section 5's `User`, driven through `TestClient`.
+The first two are M3 items (codec); `app.run()` is lifecycle work (M3, ownership undecided). The closest runnable form today is section 4's `CreateUser` and section 5's `User`, driven through `TestClient`.
 
 ## 20. Non-goals
 

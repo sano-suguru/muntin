@@ -9,7 +9,14 @@ first parameter.
 from ._handler_storage import _Shared
 
 
-struct State[S: Movable & Deinitable](Copyable, Movable):
+trait _InjectedState:
+    """Marks `State`, so `App.post` can tell injected state from a request
+    body at compile time (M3-006). Private; it adds nothing to `State`."""
+
+    pass
+
+
+struct State[S: Movable & Deinitable](Copyable, Movable, _InjectedState):
     """A shared, read-only handle to one application value of type `S`.
 
     The application builds it once, `State(Users(...))`, and passes it at
