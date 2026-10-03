@@ -114,8 +114,42 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/roundtrip.log"; then
 fi
 echo "ok: no server process left behind"
 
+# M3-002 headers evidence (docs/ARCHITECTURE.md "Headers decision (M3-002)"):
+# a self-checking probe of what pinned Flare preserves in request and
+# response headers over loopback, and candidate D's fixture (a Flare
+# HeaderMap cannot be a field of Muntin's Copyable Request).
+step "Flare header probe (M3-002)"
+"${FLARE[@]}" build --Werror -I src -I "$adapter" compat/flare/headers/flare_header_probe.mojo -o build/flare_header_probe
+probe_status=0
+./build/flare_header_probe >"$tmp/header_probe.log" 2>&1 || probe_status=$?
+cat "$tmp/header_probe.log"
+leftover_probe='^\./build/flare_header_probe$'
+if pgrep -f "$leftover_probe"; then
+    pkill -KILL -f "$leftover_probe" || true
+    echo "error: the header probe left a server process behind" >&2
+    exit 1
+fi
+if ((probe_status != 0)); then
+    echo "error: Flare header behavior differs from the recorded M3-002 evidence" >&2
+    exit 1
+fi
+
+step "candidate D: Flare HeaderMap in a Copyable Request (must not build)"
+fixture_d=compat/flare/headers/headermap_in_request.mojo
+expected_d="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check_flare.sh): //p' "$fixture_d")"
+if "${FLARE[@]}" build -I src "$fixture_d" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
+    echo "error: $fixture_d built" >&2
+    exit 1
+fi
+if ! grep -qF "$expected_d" "$tmp/log"; then
+    cat "$tmp/log" >&2
+    echo "error: $fixture_d failed without '$expected_d'" >&2
+    exit 1
+fi
+echo "ok: $fixture_d"
+
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip"; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" compat/flare/headers/flare_header_probe.mojo; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1
