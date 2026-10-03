@@ -154,6 +154,19 @@ for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_
     done
 done
 
+# Known gaps the decision rests on (M3-001): each file must build and is
+# never run. A file that stops building means the toolchain changed what the
+# decision measured; docs/ARCHITECTURE.md lists the revisit condition.
+step "tests/state_known_gaps (must build, not run)"
+for t in tests/state_known_gaps/*.mojo; do
+    if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$tmp/known_gap" >"$tmp/log" 2>&1; then
+        cat "$tmp/log" >&2
+        echo "error: $t no longer builds; a revisit condition in docs/ARCHITECTURE.md has fired" >&2
+        exit 1
+    fi
+    echo "ok: $t"
+done
+
 step "build example"
 "${MOJO[@]}" build --Werror -I src main.mojo -o build/muntin
 echo "ok"
