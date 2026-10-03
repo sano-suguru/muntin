@@ -21,7 +21,8 @@ from muntin._handler_storage import _Erased
 # (RFC 9110 token names; field values of visible ASCII, SP, HTAB) and
 # additionally bytes >= 0x80, which a Mojo `String` holds as UTF-8. CR, LF,
 # NUL and the other control bytes are never accepted, so no `Headers`
-# value can carry a line break onto the wire.
+# value can carry a line break onto the wire. A value may not begin or end
+# with SP or HTAB (RFC 9110 field-value; receivers would trim them).
 
 
 def _is_token_byte(b: UInt8) -> Bool:
@@ -48,7 +49,13 @@ def _valid_name(name: String) -> Bool:
 
 
 def _valid_value(value: String) -> Bool:
-    for b in value.as_bytes():
+    var bytes = value.as_bytes()
+    if len(bytes) > 0:
+        var first = Int(bytes[0])
+        var last = Int(bytes[len(bytes) - 1])
+        if first == 32 or first == 9 or last == 32 or last == 9:
+            return False
+    for b in bytes:
         var c = Int(b)
         if c == 9:
             continue
@@ -74,21 +81,27 @@ def _same_name(a: String, b: String) -> Bool:
     return _lower_ascii(a) == _lower_ascii(b)
 
 
+@fieldwise_init
+struct _Field(Copyable, Movable):
+    var name: String
+    var value: String
+
+
 struct Headers(Copyable, Movable, Sized):
     """Candidate A: ordered header fields, as received or added.
 
     Each field keeps its name's original casing and its position; repeated
     names are separate fields in order. Lookup compares names ASCII
     case-insensitively. `add` and `set` reject an invalid name or value, so
-    a `Headers` value never holds a byte that could break a header line.
+    no field added through them holds a byte that could break a header line.
+    Fields are stored as one list of pairs, so a write through the internal
+    name cannot desynchronize names and values.
     """
 
-    var _names: List[String]
-    var _values: List[String]
+    var _fields: List[_Field]
 
     def __init__(out self):
-        self._names = List[String]()
-        self._values = List[String]()
+        self._fields = List[_Field]()
 
     def add(mut self, name: String, value: String) raises:
         """Appends a field; earlier fields with the same name stay."""
@@ -96,8 +109,7 @@ struct Headers(Copyable, Movable, Sized):
             raise Error("invalid header name")
         if not _valid_value(value):
             raise Error("invalid header value")
-        self._names.append(name)
-        self._values.append(value)
+        self._fields.append(_Field(name, value))
 
     def set(mut self, name: String, value: String) raises:
         """Removes every field named `name`, then appends one."""
@@ -105,42 +117,38 @@ struct Headers(Copyable, Movable, Sized):
             raise Error("invalid header name")
         if not _valid_value(value):
             raise Error("invalid header value")
-        var names = List[String]()
-        var values = List[String]()
-        for i in range(len(self._names)):
-            if not _same_name(self._names[i], name):
-                names.append(self._names[i])
-                values.append(self._values[i])
-        self._names = names^
-        self._values = values^
-        self._names.append(name)
-        self._values.append(value)
+        var fields = List[_Field]()
+        for i in range(len(self._fields)):
+            if not _same_name(self._fields[i].name, name):
+                fields.append(self._fields[i].copy())
+        self._fields = fields^
+        self._fields.append(_Field(name, value))
 
     def get(self, name: String) -> Optional[String]:
         """The first field's value, or `None` when there is none (an empty
         value is a value)."""
-        for i in range(len(self._names)):
-            if _same_name(self._names[i], name):
-                return self._values[i]
+        for i in range(len(self._fields)):
+            if _same_name(self._fields[i].name, name):
+                return self._fields[i].value
         return None
 
     def get_all(self, name: String) -> List[String]:
         """Every value for `name`, in order."""
         var out = List[String]()
-        for i in range(len(self._names)):
-            if _same_name(self._names[i], name):
-                out.append(self._values[i])
+        for i in range(len(self._fields)):
+            if _same_name(self._fields[i].name, name):
+                out.append(self._fields[i].value)
         return out^
 
     def __len__(self) -> Int:
-        return len(self._names)
+        return len(self._fields)
 
     def name(self, i: Int) -> String:
         """The `i`th field's name, as received or added."""
-        return self._names[i]
+        return self._fields[i].name
 
     def value(self, i: Int) -> String:
-        return self._values[i]
+        return self._fields[i].value
 
 
 struct HRequest(Copyable, Movable):
@@ -158,7 +166,7 @@ struct HRequest(Copyable, Movable):
         method: String,
         target: String,
         body: String = "",
-        headers: Headers = Headers(),
+        var headers: Headers = Headers(),
     ):
         self.method = method
         var mark = target.find("?")
@@ -169,7 +177,7 @@ struct HRequest(Copyable, Movable):
             self.path = String(target[byte=:mark])
             self.query = String(target[byte = mark + 1 :])
         self.body = body
-        self.headers = headers.copy()
+        self.headers = headers^
 
 
 struct HResponse(Copyable, Movable):
@@ -222,7 +230,7 @@ def _call_raw_h(
     while i + 1 < len(args):
         headers.add(args[i], args[i + 1])
         i += 2
-    var result = handler(HRequest(args[0], target, args[3], headers))
+    var result = handler(HRequest(args[0], target, args[3], headers^))
     var out = result.body
     for j in range(len(result.headers)):
         out += "|" + result.headers.name(j) + "=" + result.headers.value(j)

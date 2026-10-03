@@ -134,6 +134,19 @@ if ((probe_status != 0)); then
     exit 1
 fi
 
+step "inbound header mapping rule against Flare (M3-002)"
+"${FLARE[@]}" build --Werror -I src -I tests -I "$adapter" compat/flare/headers/inbound_rebuild.mojo -o build/inbound_rebuild
+if ! out="$(./build/inbound_rebuild 2>&1)"; then
+    printf '%s\n' "$out"
+    echo "error: the inbound header mapping rule failed" >&2
+    exit 1
+fi
+printf '%s\n' "$out"
+if ! grep -qE 'Summary .* [1-9][0-9]* tests run' <<<"$out"; then
+    echo "error: compat/flare/headers/inbound_rebuild.mojo ran no tests" >&2
+    exit 1
+fi
+
 step "candidate D: Flare HeaderMap in a Copyable Request (must not build)"
 fixture_d=compat/flare/headers/headermap_in_request.mojo
 expected_d="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check_flare.sh): //p' "$fixture_d")"
@@ -149,7 +162,7 @@ fi
 echo "ok: $fixture_d"
 
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" compat/flare/headers/flare_header_probe.mojo; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1

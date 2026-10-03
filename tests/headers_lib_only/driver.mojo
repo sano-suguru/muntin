@@ -16,7 +16,7 @@ def main() raises:
     h.add("X-Signature", "sha256=abc")
     var boxed = box_raw(signature)
     if (
-        boxed.invoke(raw_args(HRequest("POST", "/hook", "", h))).body
+        boxed.invoke(raw_args(HRequest("POST", "/hook", "", h^))).body
         != "sha256=abc"
     ):
         raise Error("signature header did not reach the handler")

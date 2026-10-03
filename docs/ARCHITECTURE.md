@@ -1154,17 +1154,17 @@ struct Headers(Copyable, Movable, Sized):
     def value(self, i: Int) -> String
 ```
 
-- **Fields:** each field keeps its position and its name's original casing. A repeated name is several fields, in order (`Set-Cookie`, `Vary`, `X-A` then `x-a`). Lookup compares names ASCII case-insensitively. There is no list joining and no reordering.
+- **Fields:** one list of name/value pairs. Each field keeps its position and its name's original casing. A repeated name is several fields, in order (`Set-Cookie`, `Vary`, `X-A` then `x-a`). Lookup compares names ASCII case-insensitively. There is no list joining and no reordering.
 - **Validation at insertion:**
   - Names must be RFC 9110 tokens (non-empty).
-  - Values may contain anything except control bytes: 0x00–0x1F except HTAB, and 0x7F. Bytes 0x80 and up are allowed as the UTF-8 a Mojo `String` holds.
-  - `add` and `set` raise otherwise, so no field added through the API can carry CR, LF or NUL. Values are stored as given; trimming optional whitespace is the parser's job.
-  - The accepted set is a superset of what pinned Flare's strict parser accepts inbound (tokens; VCHAR, SP, HTAB).
+  - Values may contain anything except control bytes (0x00–0x1F except HTAB, and 0x7F), and may not begin or end with SP or HTAB (RFC 9110 field-value; a receiver would trim them). Bytes 0x80 and up are allowed as the UTF-8 a Mojo `String` holds.
+  - `add` and `set` raise otherwise, so no field added through the API can carry CR, LF or NUL.
+  - The accepted set covers what pinned Flare's strict HTTP/1.1 parser accepts inbound (tokens; VCHAR, SP, HTAB, trimmed at both ends).
 - **Ownership:** `Copyable` with an explicit `.copy()`, not implicitly copyable (`headers_fail/implicit_copy.mojo`), like `Request` and `State`.
-  - `Request` gains `headers: Headers`, and its initializer gains a last, defaulted argument, `var headers: Headers = Headers()`, which moves it in. Every existing `Request(method, target[, body])` call is unchanged.
+  - `Request` gains `headers: Headers`, and its initializer gains a last, defaulted argument, `var headers: Headers = Headers()`, which moves it in: a caller passes `headers^` or `headers.copy()`, and a plain variable is a compile error (`headers_fail/request_headers_moved_in.mojo`). Every existing `Request(method, target[, body])` call is unchanged.
   - `Response` gains `headers: Headers`, empty from `Response(status, body)` and `Response.text`.
   - A raw handler that borrows its request cannot change the request's headers (`headers_fail/borrowed_request_headers.mojo`); `var req` owns a copy and can.
-- **Bytes:** values are `String`. Through Flare's default (strict) configuration, a request whose header value has a byte ≥ 0x80, a control byte, obs-fold or whitespace before the colon is answered 400 by Flare before Muntin sees it. Every value Muntin receives from Flare is therefore ASCII. A lenient Flare configuration would hand over invalid UTF-8 inside a `String`; the adapter rebuilds fields with `String(from_utf8_lossy=...)`, so such bytes would become U+FFFD, as in bodies. Arbitrary header bytes are not representable, a stated limitation.
+- **Bytes:** values are `String`, holding valid UTF-8. Over HTTP/1.1, Flare's default (strict) configuration answers 400 itself to a header value with a byte ≥ 0x80, a control byte, obs-fold or whitespace before the colon, so Muntin sees only ASCII. Over cleartext HTTP/2, which the default server also accepts, Flare admits bytes ≥ 0x80 (valid or not), most control bytes and a `:` inside a name. The adapter's inbound rule (below) answers 400 to anything Muntin cannot represent: invalid UTF-8, control bytes, non-token names. Valid UTF-8 is kept. Arbitrary header bytes are not representable, a stated limitation.
 
 **Raw handlers: R1, fields as raw argument strings.** For a raw route, `App.handle` appends each field's name and value, in order, after the four strings it already passes (method, path, query, body). `_call_raw` rebuilds a `Headers` with `add` (a failure is unreachable, because the fields came from a `Headers`; it would answer the fixed 500) and passes `Request(method, target, body, headers^)`.
 - `_Call`, `_Erased`, `_Route`, the storage module and the unsafe surface are unchanged, as is `App.handle(Request) -> Response`'s signature. `App.handle`'s body grows one loop.
@@ -1179,20 +1179,20 @@ struct Headers(Copyable, Movable, Sized):
 
 **Validation: V1, at insertion.** An invalid field fails at the line that adds it. In a raising handler that is a handler error: the fixed 500, or its `ToErrorResponse` (M2-011/M2-013).
 - The cost: `add` raises, so non-raising code needs `try`. That includes `ToResponse.to_response`, which must stay non-raising (`headers_fail/add_in_non_raising_code.mojo`; the scratch `Created.to_response` wraps `add`).
-- Rejected: V2, a non-raising `add` with `App.handle` checking every response afterwards (`UncheckedHeaders` and `seam_check` in the spike). It removes that `try`, but it reports an index after the handler returned instead of the failing line, and it puts a header invariant into dispatch for every response.
-- Mojo 1.1.0 has no private fields, so `headers._values.append(...)` bypasses `add` (`headers_known_gaps/internal_field_bypass.mojo`, must build). The backend is the second line: the adapter re-checks every outgoing field through `add` and answers the fixed 500 on failure. Flare itself rejects only CR and LF and would emit NUL, other control bytes or a non-token name raw.
+- Rejected: V2, a non-raising `add` with `App.handle` checking every response afterwards (`UncheckedHeaders` and `seam_check` in the spike). It removes that `try`, but the error surfaces as an index after the handler returned instead of at the line that added it. (Both need the adapter's re-check below, so the per-response cost does not separate them.)
+- Mojo 1.1.0 has no private fields, so `headers._fields.append(...)` bypasses `add` (`headers_known_gaps/internal_field_bypass.mojo`, must build). Fields are one list of pairs, so such a write cannot desynchronize names and values (a pair of lists could, and then crashed on an out-of-bounds index before any check ran). The backend is the second line: the adapter re-checks every outgoing field through `add` and answers the fixed 500 on failure. Flare itself rejects only CR and LF and would emit NUL, other control bytes or a non-token name raw.
 
 **Flare mapping (pinned v0.11.0, measured by `compat/flare/headers/flare_header_probe.mojo`, self-checking, run by `check_flare.sh`).**
-- **Inbound.** Flare's `HeaderMap` keeps order, original casing, repeated names and empty values, and trims SP/HTAB around values.
-  - It has no public iterator or index access (only `len`, `get`, `get_all`, `contains` by name).
-  - The adapter rebuilds every field, losslessly, from the public `encode_to` (`name: value\r\n` per field). Names are tokens and values cannot hold CR/LF, so the format parses back exactly. It never reads Flare's `_keys`/`_values`.
-  - A field that fails `add` (unreachable under the strict default) answers 400.
+- **Inbound.** Flare's `HeaderMap` keeps order, original casing, repeated names and empty values, and over HTTP/1.1 trims SP/HTAB around values.
+  - It has no public iterator or index access (only `len`, `get`, `get_all`, `contains` by name), so the adapter rebuilds fields from the public `encode_to` (`name: value\r\n` per field) and never reads Flare's `_keys`/`_values`.
+  - Over HTTP/1.1 that parses back exactly, because names are tokens. Over cleartext HTTP/2 a name may hold `:` after its first byte, and a parse at the first colon would forge a field: the client's `x-user:admin: zzz` read as `x-user` = `admin: zzz` (found by the review, measured over h2c).
+  - The inbound rule therefore verifies the parse against Flare's by-name view. The parsed count must equal `len()`; per name, the parsed values must equal `get_all(name)` position by position; and every field must pass `Headers.add`. Any failure answers 400. Executed in `compat/flare/headers/inbound_rebuild.mojo`: HTTP/1.1-shaped fields rebuild exactly, including UTF-8 and `a: b`; a forged name is rejected alone and beside a real field with the same value; control bytes and invalid UTF-8 are rejected.
 - **Outbound.** The adapter appends each field in order with its casing, so repeats, empty values and `Set-Cookie` pairs reach the wire as set.
   - It omits the fields the backend frames itself: `Content-Length`, `Transfer-Encoding`, `Connection`.
   - Flare already overrides a handler's `Content-Length`, `Connection` and `Date` silently, but it passes `Transfer-Encoding` through beside its own `Content-Length` with an unchunked body, a malformed response. A handler's `Date` is replaced by Flare's.
   - The adapter never uses Flare's `set`, which rewrites only the first case-insensitive match and leaves later duplicates.
   - A `HeaderInjectionError` from Flare (unreachable after the re-check) answers 500.
-- **What Flare cannot give Muntin.** Under defaults: nothing a `String` model needs. Under a lenient config, invalid UTF-8 (replaced). Outbound, Muntin can express backend-owned fields that the adapter omits.
+- **What Flare cannot give Muntin.** Over HTTP/1.1 defaults: nothing a `String` model needs. Over HTTP/2: fields Muntin rejects (400) rather than represents. Outbound, Muntin can express backend-owned fields that the adapter omits.
 
 **Candidates** (Mojo 1.1.0 (8189361e), Flare v0.11.0):
 
@@ -1201,15 +1201,16 @@ struct Headers(Copyable, Movable, Sized):
 | A. `Headers`: ordered fields, original casing, ASCII case-insensitive lookup, validated `add`/`set`, `Optional` `get` | lossless for order, casing, repeats and empty values, through Muntin and through R1; Flare's strict inbound set fits; copies explicitly | **chosen** |
 | B. `Dict[lowercase name, List[String]]` | regroups repeated names and loses casing: received `X-B, Content-Type, x-b` is emitted `x-b, x-b, content-type` (`test_candidate_b_loses_order_and_casing`) | rejected |
 | C. one comma-joined value per name (RFC 9110 list rule) | `Set-Cookie` is not a list field and its `Expires` contains commas, so two cookies cannot be split back (`test_candidate_c_breaks_set_cookie`) | rejected |
-| D. Flare's `HeaderMap` in `Request` | a backend type in the public API (A1); `Movable` only, so `Request` (Copyable) cannot hold it (`compat/flare/headers/headermap_in_request.mojo`: `cannot synthesize copy constructor`); `get` returns `""` for absent and empty alike; first-match `set` | rejected |
+| D. Flare's `HeaderMap` in `Request` | a backend type in the public API (A1), which decides it alone. Also measured: `Movable` only, so the compiler cannot synthesize `Request`'s copy (`compat/flare/headers/headermap_in_request.mojo`; a hand-written copy through `HeaderMap.copy()` would work); `get` returns `""` for absent and empty alike; first-match `set` | rejected |
 | V2. non-raising `add`, checked at `App.handle` | the error loses its line; dispatch gains a header check | rejected (V1 chosen) |
 | R2. `_Call` carries the `Request` | the storage module would name `Request` (guarded) | rejected (R1 chosen) |
 
 **Typed extraction: deferred.** Typed handlers read no headers in the first slice. A typed result sets headers through `Response`, which is enough for the coherent model above. Header extraction would compete for M3-001's single injected slot (or need a new binding rule), so it needs its own decision. Middleware, CORS and authentication are not designed here.
 
-**Testing.** `TestClient` gains nothing in the first slice. Header tests build `Request(method, target, body, headers^)` and call `App.handle`, the seam `TestClient` uses. In-memory and Flare differ only in two cases:
-- backend-owned fields stay in an in-memory `Response` but are omitted on the wire;
-- an internal-name bypass passes in memory but is a 500 on the wire.
+**Testing.** `TestClient` gains nothing in the first slice. Header tests build `Request(method, target, body, headers^)` and call `App.handle`, the seam `TestClient` uses. In-memory and Flare differ in these cases:
+- backend-owned fields (`Content-Length`, `Transfer-Encoding`, `Connection`) stay in an in-memory `Response` but are omitted on the wire, and a handler's `Date` is replaced by Flare's;
+- an internal-name bypass passes in memory but is a 500 on the wire;
+- a request field Muntin cannot represent never exists in memory (`Headers.add` rejects it), while over HTTP/2 Flare admits it and the adapter answers 400.
 
 **Evidence.**
 - `tests/headers_spike.mojo` + `tests/test_spike_headers.mojo` (11): order, casing and repeats; case-insensitive lookup; empty values; `set`; validation (CR/LF, NUL, DEL, non-token names; HTAB, `:` and UTF-8 accepted); explicit copies; defaults adding nothing; R1 through production `_Erased`; B's and C's losses; V2's deferred error.

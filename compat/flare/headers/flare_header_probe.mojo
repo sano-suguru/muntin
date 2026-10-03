@@ -16,6 +16,13 @@ Byte notation in requests and in the recorded output: printable ASCII is
 verbatim; CR, LF, HTAB, backslash are `\\r`, `\\n`, `\\t`, `\\\\`; any other
 byte is `\\xHH`. The varying `Date` value is replaced by `<date>`.
 
+The h2c cases (cleartext HTTP/2 with prior knowledge, which the default
+`ServerConfig()` server accepts on the same port) send the preface, an empty
+SETTINGS and one HEADERS frame encoded with Flare's public `HpackEncoder`
+(literal fields, no validation, so any bytes can be sent). Response HEADERS
+are decoded with `HpackDecoder` and rendered as `HEADERS{name: value; ...}`;
+SETTINGS, WINDOW_UPDATE and PING frames are left out of the rendering.
+
 The echo path reads request headers only through `HeaderMap.encode_to`,
 the one public whole-map accessor (besides `write_to`); `len`, `get`,
 `get_all`, `contains` are lookups by name. Iterating by index needs the
@@ -41,6 +48,17 @@ from flare.http import (
     ServerConfig,
 )
 from flare.http.proto import H1LeniencyConfig, ascii_unchecked_string
+from flare.http2 import (
+    Frame,
+    FrameFlags,
+    FrameType,
+    H2_PREFACE,
+    HpackDecoder,
+    HpackEncoder,
+    HpackHeader,
+    encode_frame,
+    parse_frame,
+)
 from flare.net import SocketAddr
 from flare.tcp import TcpStream
 from flare.utils import SIGKILL, exit, fork, kill, waitpid
@@ -156,6 +174,33 @@ struct ProbeHandler(Handler):
             )
             req.headers.encode_to(out)
             return Response(status=200, body=out^)
+        if url == "/h2echo":
+            # Like `/echo`, plus the version, for the h2c cases.
+            var out = _bytes(
+                String(
+                    "version=",
+                    req.version,
+                    " len=",
+                    req.headers.len(),
+                    " get_all(x-r)=",
+                    len(req.headers.get_all("x-r")),
+                    "\n",
+                )
+            )
+            req.headers.encode_to(out)
+            return Response(status=200, body=out^)
+        if url == "/h2out":
+            var r = Response(status=200, body=List("hi".as_bytes()))
+            r.headers.set("X-Mixed", "v")
+            r.headers.append("Set-Cookie", "a=1")
+            r.headers.append("Set-Cookie", "b=2")
+            r.headers.set("X-Empty", "")
+            r.headers.set("Connection", "keep-alive")
+            r.headers.set("Transfer-Encoding", "chunked")
+            r.headers.set("Content-Length", "999")
+            r.headers.set("Date", "handler-date")
+            r.headers.set("X-Last", "z")
+            return r^
         if url == "/plain":
             # Exactly what adapters/flare/muntin_flare.mojo builds today.
             return Response(status=200, body=List("hello".as_bytes()))
@@ -392,6 +437,7 @@ def main() raises:
         try:
             run_inbound(c, strict.port, lenient.port)
             run_outbound(c, strict.port)
+            run_h2c(c, strict.port)
         finally:
             _ = kill(lenient.pid, SIGKILL)
             waitpid(lenient.pid)
@@ -601,5 +647,236 @@ def run_outbound(mut c: Checks, port: UInt16) raises:
                 " 1';HeaderInjectionError: field='X-Inj\n' value='v';"
                 "HeaderInjectionError: field='X-Inj' value='a\rb'"
             ),
+        ),
+    )
+
+
+# ── h2c (prior knowledge) ──────────────────────────────────────────────────
+
+
+def _frame_bytes(
+    typ: FrameType, flags: UInt8, sid: Int, var payload: List[UInt8]
+) -> List[UInt8]:
+    var f = Frame()
+    f.header.type = typ.copy()
+    f.header.flags = FrameFlags(flags)
+    f.header.stream_id = sid
+    f.payload = payload^
+    return encode_frame(f)
+
+
+def _u32(p: List[UInt8], at: Int) -> Int:
+    return (
+        (Int(p[at]) << 24)
+        | (Int(p[at + 1]) << 16)
+        | (Int(p[at + 2]) << 8)
+        | Int(p[at + 3])
+    )
+
+
+def _render_fields(fields: List[HpackHeader]) raises -> String:
+    var out = String()
+    for i in range(len(fields)):
+        if i > 0:
+            out += "; "
+        var v = fields[i].value
+        if (
+            fields[i].name == "date"
+            and v.endswith(" GMT")
+            and v.byte_length() == 29
+        ):
+            v = "<date>"
+        out += esc(fields[i].name.as_bytes()) + ": " + esc(v.as_bytes())
+    return out
+
+
+def h2_exchange(
+    port: UInt16, path: String, fields: List[String]
+) raises -> String:
+    """One GET on stream 1 over h2c. `fields` alternates name, value, both
+    in the escaped notation. Returns the stream-1 frames (and any GOAWAY)
+    the server sent back, rendered, until END_STREAM, RST_STREAM or GOAWAY.
+    """
+    var hdrs = List[HpackHeader]()
+    hdrs.append(HpackHeader(":method", "GET"))
+    hdrs.append(HpackHeader(":scheme", "http"))
+    hdrs.append(HpackHeader(":path", path))
+    hdrs.append(HpackHeader(":authority", "probe"))
+    var i = 0
+    while i + 1 < len(fields):
+        hdrs.append(
+            HpackHeader(bytes_string(fields[i]), bytes_string(fields[i + 1]))
+        )
+        i += 2
+    var block = HpackEncoder().encode(Span[HpackHeader, _](hdrs))
+
+    var wire = List(H2_PREFACE.as_bytes())
+    wire.extend(Span(_frame_bytes(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
+    wire.extend(
+        Span(
+            _frame_bytes(
+                FrameType.HEADERS(),
+                FrameFlags.END_HEADERS() | FrameFlags.END_STREAM(),
+                1,
+                block^,
+            )
+        )
+    )
+
+    var stream = TcpStream.connect(SocketAddr.localhost(port))
+    stream.set_recv_timeout(TIMEOUT_MS)
+    stream.write_all(Span[UInt8, _](wire))
+
+    var decoder = HpackDecoder()
+    var acc = List[UInt8]()
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    var pos = 0
+    var out = String()
+    while True:
+        var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
+        if not maybe:
+            var n = stream.read(buf.unsafe_ptr(), len(buf))
+            if n == 0:
+                out += " EOF"
+                break
+            for k in range(n):
+                acc.append(buf[k])
+            continue
+        var f = maybe.value().copy()
+        pos += 9 + f.header.length
+        var t = f.header.type.value
+        if (
+            t == FrameType.SETTINGS().value
+            or t == FrameType.WINDOW_UPDATE().value
+            or t == FrameType.PING().value
+        ):
+            continue
+        if out.byte_length() > 0:
+            out += " "
+        if t == FrameType.GOAWAY().value:
+            out += String("GOAWAY(", _u32(f.payload, 4), ")")
+            break
+        if f.header.stream_id != 1:
+            out += String(f.header.type.name(), "@", f.header.stream_id)
+            continue
+        if t == FrameType.HEADERS().value:
+            var decoded = decoder.decode(Span[UInt8, _](f.payload))
+            out += "HEADERS{" + _render_fields(decoded) + "}"
+        elif t == FrameType.DATA().value:
+            out += "DATA{" + esc(Span[UInt8, _](f.payload)) + "}"
+        elif t == FrameType.RST_STREAM().value:
+            out += String("RST_STREAM(", _u32(f.payload, 0), ")")
+            break
+        else:
+            out += f.header.type.name()
+        if f.header.flags.has(FrameFlags.END_STREAM()):
+            break
+    return out
+
+
+def h2_echo(body: String) -> String:
+    """The frames `/h2echo` answers with; `body` as in `echo_ok`."""
+    var raw = unesc(body)
+    return "HEADERS{:status: 200} DATA{" + esc(Span[UInt8, _](raw)) + "}"
+
+
+comptime H2_REFUSED = "RST_STREAM(1)"
+"""RST_STREAM(PROTOCOL_ERROR): the handler is never called."""
+
+
+def run_h2c(mut c: Checks, port: UInt16) raises:
+    c.eq(
+        (
+            "h2. what reaches the handler: ':' in a name, controls, DEL, high"
+            " bytes (invalid UTF-8 replaced), empty value, order, cookie merge"
+        ),
+        h2_exchange(
+            port,
+            "/h2echo",
+            [
+                "x-user:admin",
+                "zzz",
+                "x-r",
+                "1",
+                "x-ctl",
+                "a\\x01b\\x1Fc\td",
+                "x-del",
+                "a\\x7Fb",
+                "cookie",
+                "c=1",
+                "x-utf8",
+                "\\xC3\\xA9",
+                "x-bad",
+                "a\\xFFb",
+                "x-e",
+                "",
+                "x-r",
+                "2",
+                "cookie",
+                "d=2",
+                "x-\\xC3\\xA9",
+                "high-name",
+            ],
+        ),
+        h2_echo(
+            "version=HTTP/2 len=11 get_all(x-r)=2\nHost: probe\r\n"
+            "x-user:admin: zzz\r\nx-r: 1\r\nx-ctl: a\\x01b\\x1Fc\td\r\n"
+            "x-del: a\\x7Fb\r\nx-utf8: \\xC3\\xA9\r\n"
+            "x-bad: a\\xEF\\xBF\\xBDb\r\nx-e: \r\nx-r: 2\r\n"
+            "x-\\xC3\\xA9: high-name\r\ncookie: c=1; d=2\r\n"
+        ),
+    )
+    c.eq(
+        "h2. uppercase name refused",
+        h2_exchange(port, "/h2echo", ["X-Upper", "v"]),
+        H2_REFUSED,
+    )
+    c.eq(
+        "h2. leading space in a value refused",
+        h2_exchange(port, "/h2echo", ["x-w", " v"]),
+        H2_REFUSED,
+    )
+    c.eq(
+        "h2. trailing HTAB in a value refused",
+        h2_exchange(port, "/h2echo", ["x-w", "v\t"]),
+        H2_REFUSED,
+    )
+    c.eq(
+        "h2. NUL in a value refused",
+        h2_exchange(port, "/h2echo", ["x-n", "a\\x00b"]),
+        H2_REFUSED,
+    )
+    c.eq(
+        "h2. LF in a value refused",
+        h2_exchange(port, "/h2echo", ["x-n", "a\nb"]),
+        H2_REFUSED,
+    )
+    c.eq(
+        "h2. space in a name refused",
+        h2_exchange(port, "/h2echo", ["x y", "v"]),
+        H2_REFUSED,
+    )
+    c.eq(
+        "h2. connection-specific request field refused",
+        h2_exchange(port, "/h2echo", ["connection", "close"]),
+        H2_REFUSED,
+    )
+    c.eq(
+        "h2. adapter-shaped Response(200, body=hello): Flare adds nothing",
+        h2_exchange(port, "/plain", []),
+        "HEADERS{:status: 200} DATA{hello}",
+    )
+    c.eq(
+        (
+            "h2. outbound: names lowercased, order and duplicates kept,"
+            " connection/transfer-encoding dropped, handler content-length and"
+            " date passed through unchanged"
+        ),
+        h2_exchange(port, "/h2out", []),
+        (
+            "HEADERS{:status: 200; x-mixed: v; set-cookie: a=1; set-cookie:"
+            " b=2; x-empty: ; content-length: 999; date: handler-date; x-last:"
+            " z} DATA{hi}"
         ),
     )

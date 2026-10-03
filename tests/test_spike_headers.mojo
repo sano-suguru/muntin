@@ -77,6 +77,11 @@ def test_invalid_names_and_values_are_rejected() raises:
         h.add("X-Nul", String("a") + chr(0) + "b")
     with assert_raises(contains="invalid header value"):
         h.set("X-Del", String("a") + chr(127))
+    # RFC 9110 field-value: no leading or trailing SP/HTAB.
+    with assert_raises(contains="invalid header value"):
+        h.add("X-Lead", " a")
+    with assert_raises(contains="invalid header value"):
+        h.add("X-Trail", "a\t")
     assert_equal(len(h), 0)
     # Accepted: HTAB, colons, quotes, and UTF-8 text.
     h.add("X-Ok", 'a\tb: "c" é')
@@ -124,7 +129,9 @@ def test_raw_transport_is_lossless_through_erased() raises:
     h.add("x-b", "")
     h.add("X-Odd", "a:b\tc")
     var boxed = box_raw(echo)
-    var got = boxed.invoke(raw_args(HRequest("POST", "/hook?k=v", "data", h)))
+    var got = boxed.invoke(
+        raw_args(HRequest("POST", "/hook?k=v", "data", h.copy()))
+    )
     assert_equal(got.status, 202)
     assert_equal(
         got.body,
@@ -135,7 +142,7 @@ def test_raw_transport_is_lossless_through_erased() raises:
     )
     var none = boxed.invoke(raw_args(HRequest("GET", "/hook")))
     assert_equal(none.body, "GET /hook? ")
-    assert_equal(len(raw_args(HRequest("GET", "/hook", "", h))), 4 + 2 * 4)
+    assert_equal(len(raw_args(HRequest("GET", "/hook", "", h^))), 4 + 2 * 4)
 
 
 def test_candidate_b_loses_order_and_casing() raises:
