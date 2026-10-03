@@ -103,6 +103,15 @@ cp tests/state_storage_spike.mojo tests/state_storage_lib_only/driver.mojo "$tmp
 "$tmp/state_storage_lib_only/driver"
 echo "ok"
 
+# Same check for the headers spike (M3-002): its raw transport must carry
+# headers to handlers defined only by the application.
+step "headers spike library builds without the application module"
+mkdir -p "$tmp/headers_lib_only"
+cp tests/headers_spike.mojo tests/headers_lib_only/driver.mojo "$tmp/headers_lib_only/"
+"${MOJO[@]}" build --Werror -I src -I "$tmp/headers_lib_only" "$tmp/headers_lib_only/driver.mojo" -o "$tmp/headers_lib_only/driver"
+"$tmp/headers_lib_only/driver"
+echo "ok"
+
 step "compile-time route checks (tests/compile_fail must not build)"
 for t in tests/compile_fail/*.mojo; do
     expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
@@ -143,11 +152,12 @@ done
 # docs/ARCHITECTURE.md "Raw Request decision (M2-014)". tests/state_fail:
 # evidence for docs/ARCHITECTURE.md "Application state decision (M3-001)".
 # tests/state_storage_fail: evidence for docs/ARCHITECTURE.md "State storage
-# decision (M3-004)". tests/state_get_fail: production App.get takes a
+# decision (M3-004)". tests/headers_fail: evidence for docs/ARCHITECTURE.md
+# "Headers decision (M3-002)". tests/state_get_fail: production App.get takes a
 # stateful handler only with its State, first, borrowed and read-only; a
 # reference from state[] cannot outlive its handle; a second handle cannot
 # replace or mutate the shared value (M3-003).
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail; do
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/headers_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
@@ -168,12 +178,12 @@ for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_
     done
 done
 
-# Known gaps the decisions rest on (M3-001, M3-004): each file must build
+# Known gaps the decisions rest on (M3-001, M3-004, M3-002): each file must build
 # and is never run. A file that stops building means the toolchain changed
 # what the decision measured; docs/ARCHITECTURE.md lists the revisit
 # condition.
-step "tests/state_known_gaps, tests/state_storage_known_gaps (must build, not run)"
-for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo; do
+step "tests/state_known_gaps, tests/state_storage_known_gaps, tests/headers_known_gaps (must build, not run)"
+for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo tests/headers_known_gaps/*.mojo; do
     if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$tmp/known_gap" >"$tmp/log" 2>&1; then
         cat "$tmp/log" >&2
         echo "error: $t no longer builds; a revisit condition in docs/ARCHITECTURE.md has fired" >&2
