@@ -1128,7 +1128,7 @@ The invariant the compiler does not check: every `ThinAllocation` of a header is
 - `arc_alias_swap.mojo` or `arc_alias_clear.mojo` stops building: `ArcPointer` no longer hands out mutable references through shared handles (its FIXME is resolved). Re-measure B, which needs no unsafe code;
 - Mojo gets private fields: `_shared` and `_header` can be sealed by visibility, and the guard rule can narrow again.
 
-**Next production slice (M3-003, PR #26, rebased).**
+**Next production slice (M3-003, PR #26, rebased).** Implemented in M3-003 as listed (`docs/SPEC.md`, "M3-003 result").
 - `_handler_storage.mojo` gains `_SharedHeader` and `_Shared` as in the spike, its docstring's scope, unsafe list and downstream paragraph updated to the boundary above (ordinary paths closed; the forged-header replacement of `_Erased._header` named among the toolchain-wide gaps);
 - `state.mojo` holds `_Shared[S]`, with `__getitem__(self) -> ref[origin_of(self._shared.owned()[])] S`, and imports `_Shared` instead of `ArcPointer`/`OwnedPointer`;
 - `check_unsafe.sh` drops the `state.mojo` exemption and allows importing `_Shared`;
