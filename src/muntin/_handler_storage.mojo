@@ -37,8 +37,10 @@ frees the header. Its accessor `owned(self)` borrows its receiver, so every
 reference it yields is immutable, and the `OwnedPointer` makes a reference
 to the value interior to the handle it was reached through. On ordinary
 paths, code holding another handle cannot replace, mutate, swap, copy or
-move the value or the header; the same escape hatches as for `_Erased`
-remain outside that boundary.
+move the value, nor copy or move a header over another (swapping two real
+handles' headers only re-pairs them, and the compiler invalidates the
+references that depended on them); the same escape hatches as for
+`_Erased` remain outside that boundary.
 
 Unsafe operations, all in this module:
 - `OwnedPointer.unsafe_take_allocation` + `Allocation.unsafe_leak`: the
