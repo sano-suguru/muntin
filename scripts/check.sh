@@ -179,6 +179,22 @@ for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo; do
     echo "ok: $t"
 done
 
+# Mojo 1.1.0 toolchain-wide soundness gaps (M3-004): primitives that break
+# the State alias property for std types and existing Muntin storage too.
+# Each must build and is never run. Warnings are allowed: the deprecated
+# `memmove` warns. A file that stops building means the toolchain improved;
+# docs/ARCHITECTURE.md "State storage decision (M3-004)" says what to
+# reevaluate.
+step "tests/toolchain_soundness_gaps (must build, not run)"
+for t in tests/toolchain_soundness_gaps/*.mojo; do
+    if ! "${MOJO[@]}" build -I src -I tests "$t" -o "$tmp/toolchain_gap" >"$tmp/log" 2>&1; then
+        cat "$tmp/log" >&2
+        echo "error: $t no longer builds; the toolchain improved, see docs/ARCHITECTURE.md" >&2
+        exit 1
+    fi
+    echo "ok: $t"
+done
+
 step "build example"
 "${MOJO[@]}" build --Werror -I src main.mojo -o build/muntin
 echo "ok"
