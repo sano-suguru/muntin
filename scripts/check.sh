@@ -89,7 +89,7 @@ echo "ok"
 # must store and inject state types defined only by the application.
 step "state spike library builds without the application module"
 mkdir -p "$tmp/state_lib_only"
-cp tests/state_spike.mojo tests/state_lib_only/driver.mojo "$tmp/state_lib_only/"
+cp tests/state_spike.mojo tests/scoped_state_spike.mojo tests/state_lib_only/driver.mojo "$tmp/state_lib_only/"
 "${MOJO[@]}" build --Werror -I src -I "$tmp/state_lib_only" "$tmp/state_lib_only/driver.mojo" -o "$tmp/state_lib_only/driver"
 "$tmp/state_lib_only/driver"
 echo "ok"
