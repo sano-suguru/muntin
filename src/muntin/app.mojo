@@ -556,7 +556,8 @@ struct _Route(Movable):
     var body: Bool
     """Whether the handler's last argument is the request body."""
     var raw: Bool
-    """Whether the handler receives the whole request (`_call_raw`): its raw
+    """Whether the handler receives the whole request (`_call_raw`,
+    `_call_state_raw`): its raw
     arguments are the request's method, path, query and body, then each
     header field's name and value."""
     var handler: _Erased
@@ -1349,8 +1350,8 @@ struct App(Movable):
         raw or typed; the query takes no part in selecting it. A raw route
         receives `request.method`, `path`, `query` and `body`, then each
         header field's name and value, as its raw arguments, and nothing else
-        runs (no query gathering, no conversion); `_call_raw` rebuilds the
-        `Request`. Typed routes receive no headers. A body route receives
+        runs (no query gathering, no conversion); `_call_raw` or
+        `_call_state_raw` rebuilds the `Request` (`_raw_request`). Typed routes receive no headers. A body route receives
         `request.body` as its last raw argument, after its route value if it
         has one; its call trampoline (`_call_body`, `_call_int_body`)
         converts it and answers 400 itself if that fails.

@@ -11,7 +11,8 @@ M3 (composition and production ergonomics) is active. M3-007 (stateful raw `get`
 - Unchanged: `_Erased`, `_Call`, `_Route`, `_handler_storage.mojo`, `state.mojo`, unsafe surface, `App.handle`, `http.mojo`, `body.mojo`, `testing.mojo`, Flare adapter. `App` non-generic.
 - Diagnostics: 204 existing must-fail fixtures (`state_post_fail/raw_stateful_post.mojo` retired): 171 identical; 33 gain one candidate note (19 one-argument calls a fifth `missing required argument: 'state'`, 14 two-argument calls the stateful raw candidate's), error lines and carets unchanged, 20 lose one trailing detail note (ten-note cap); every expected text matches. List in ARCHITECTURE.
 - Evidence: `tests/test_state_raw.mojo` 13/13; `tests/state_raw_fail` (26); `tests/compile_fail/state_raw_*` (6); loopback stateful raw `GET`/`POST /keyed` with request and response fields and `Unsigned` (401) equal `App.handle` and `TestClient`; 14 mutations each red; `check.sh`, `test.sh`, `check_flare.sh`, `git diff --check` exit 0. Details: `docs/ARCHITECTURE.md` "Stateful raw handlers in production (M3-007)".
-- Pending: CI (verify, flare; Ubuntu and macOS) and the fresh-context review; then `passes: true` in `feature_list.json`.
+- Review: fresh-context review found no material issue; minors applied (note-budget revisit condition in ARCHITECTURE: `get`/`post` now have ten overloads, the next one drops candidate notes; DX notes for wrong state type/value; function-value spelling; docstrings, comments only; check.sh comment).
+- Pending: CI (verify, flare; Ubuntu and macOS); then `passes: true` in `feature_list.json`.
 - Next smallest slice: none chosen; candidates in SPEC M3 (codec/Content-Type default, typed header extraction).
 
 ## M3-006 result (stateful POST in production; merged, PR #30)
