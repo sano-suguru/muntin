@@ -635,6 +635,31 @@ def test_headers_over_localhost_match_app_handle() raises:
             assert_false(resp.headers.contains(name), name)
             assert_true(Bool(local.headers.get(name)), name)
         assert_equal(resp.headers.get("connection"), "close")
+        # The whole kept list: App.handle's fields in order, minus the
+        # omitted ones, then Flare's own three.
+        var wire = List[UInt8]()
+        resp.headers.encode_to(wire)
+        var kept = String()
+        for line in String(from_utf8_lossy=Span(wire)).split("\r\n"):
+            if line.byte_length() == 0 or line.startswith("Date: "):
+                continue
+            kept += String(line) + ";"
+        var expected = String()
+        for i in range(len(local.headers)):
+            var lower = local.headers.name(i).lower()
+            if lower in [
+                "transfer-encoding",
+                "keep-alive",
+                "upgrade",
+                "connection",
+                "x-hop",
+            ]:
+                continue
+            expected += (
+                local.headers.name(i) + ": " + local.headers.value(i) + ";"
+            )
+        expected += "Content-Length: 12;Connection: close;"
+        assert_equal(kept, expected)
         assert_equal(client.post(base + "/signed", "b").status, 401)
         var inj = client.get(base + "/inject")
         assert_equal(inj.status, 500)

@@ -534,7 +534,7 @@ app.post["/webhook"](webhook)                # same syntax as typed handlers; ap
 # GET /webhook, POST /webhook/x    -> 404 "Not Found"  (webhook not called)
 ```
 
-The escape hatch is meant for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. Today it covers what can be decided from the method, path, query and body, as in the example above. Streaming, content types and header-based authentication also need `Request`/`Response` capabilities that do not exist yet: headers (M3-002) and streaming (M3). Since M3-005 a raw handler also reads request headers and sets response headers (below); the example above is kept as the body-only form.
+The escape hatch is meant for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. Today it covers what can be decided from the method, path, query and body, as in the example above. Header-based authentication and custom content types use headers, production since M3-005 (below); streaming still needs a `Request`/`Response` capability that does not exist yet (M3). The example above is kept as the body-only form.
 
 Headers (M3-005, production; decided in M3-002, `docs/ARCHITECTURE.md` "Headers decision (M3-002)"), proven by `tests/test_headers.mojo` (which registers this handler as `dx_webhook` and checks the responses below), `tests/headers_api_fail`, `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`:
 

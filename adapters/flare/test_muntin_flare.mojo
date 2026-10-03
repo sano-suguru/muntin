@@ -238,6 +238,14 @@ def test_unrepresentable_request_headers_answer_400() raises:
     assert_equal(beside.status, 400)
     var ctl = _served([(String("x-ctl"), String("a") + chr(1) + String("b"))])
     assert_equal(ctl.status, 400)
+    # Invalid UTF-8, as a lenient HTTP/1.1 configuration would store it.
+    var bad = List[UInt8]()
+    bad.append(0x61)
+    bad.append(0xFF)
+    var invalid = _served(
+        [(String("x-obs"), String(unsafe_from_utf8=Span(bad)))]
+    )
+    assert_equal(invalid.status, 400)
 
 
 def test_response_headers_follow_the_outbound_rule() raises:
