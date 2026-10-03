@@ -77,7 +77,7 @@ Complete (M2-016). Typed routes, `Int` path/query extraction, typed request bodi
 
 ### M3 — composition and production ergonomics
 
-Application state (decided in M3-001 as a `State[S]` handler parameter bound through `app.with_state(state)`; first production slice M3-003), headers (M3-002), codecs and schema/OpenAPI output, more route values and methods, middleware, observability, streaming, lifecycle (`app.run()`) and production hardening. Each is decided before it is built, and only once the application model earns the abstraction.
+Application state (decided in M3-001 as a `State[S]` handler parameter bound at registration; first production slice M3-003), headers (M3-002), codecs and schema/OpenAPI output, more route values and methods, middleware, observability, streaming, lifecycle (`app.run()`) and production hardening. Each is decided before it is built, and only once the application model earns the abstraction.
 
 ## Repository guide
 

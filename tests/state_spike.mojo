@@ -1,8 +1,8 @@
 # M3-001 application-state decision spike, library side. Not production
-# code: it models production `App` with candidate A1's state registration
-# (`app.get[route](handler, state)`; the selected A2 is
-# tests/scoped_state_spike.mojo, which reuses this file's shared parts)
-# added, separately from the application module (tests/test_spike_state.mojo)
+# code: it models production `App` with the selected state registration
+# (candidate A1, `app.get[route](handler, state)`; the rejected scoped
+# registrar A2 is tests/scoped_state_spike.mojo, which reuses this file's
+# shared parts) added, separately from the application module (tests/test_spike_state.mojo)
 # that defines the state types and handlers. Production's ten overloads are
 # copied with their signatures and asserts unchanged (docstrings dropped),
 # so overload resolution is measured against the real set; adapters, route

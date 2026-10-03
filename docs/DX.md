@@ -469,7 +469,7 @@ Status: not implemented; M3 (`docs/SPEC.md`). `app.use` does not exist.
 
 Long-lived state should have explicit ownership and predictable lifetime behavior.
 
-Decided shape (M3-001; `docs/ARCHITECTURE.md`, "Application state decision (M3-001)"), proven in the decision spike (`tests/test_spike_scoped_state.mojo`, `tests/state_fail`), not yet production:
+Decided shape (M3-001; `docs/ARCHITECTURE.md`, "Application state decision (M3-001)"), proven in the decision spike (`tests/test_spike_state.mojo`, `tests/state_fail`), not yet production:
 
 ```mojo
 from muntin import App, State
@@ -490,22 +490,21 @@ def main():
     var users = State(Users(load_names()))   # the application builds the value once
     var app = App()                          # App stays non-generic
     app.get["/hello"](hello)                 # stateless handlers: unchanged
-    var api = app.with_state(users)          # a registrar for handlers taking State[Users]
-    api.get["/users/{id}"](get_user)
-    api.get["/users"](list_users)
-    app.with_state(config).get["/version"](version)   # one-off, chained
+    app.get["/users/{id}"](get_user, users)  # the state is the registration's second argument
 ```
 
 Rules:
 
-- **Which parameter is injected:** a handler takes application state exactly when it is registered through `app.with_state(state)`. Its first parameter is then `State[S]` (the registrar's `S`), and the rest is one of the M2 shapes, bound as before: route values in the literal's order, then the body. So `def(State[Users], Int, CreateUser)` on `post` is state, route value, body. The state is never a route value or a body, and parameter names are never read.
-- **Ownership:** `State(value)` takes the value. `State` is a shared handle: the application keeps its own, the registrar and each route keep a copy, and the value is destroyed when the last handle goes. The registrar borrows the `App` while it is used, so the `App` cannot move in the meantime. A request borrows the route's handle, so it copies nothing and allocates nothing. `users[]` is read-only through every handle (the handle's internal pointer is reachable by name, since Mojo 1.1.0 has no private fields; it is not API). A value that must change while the application serves keeps that mutability in its own fields, and its rules are the application's.
-- **Several values:** one `State` per handler. Several values are the fields of one state type, and different routes may take different state types through different registrars (`State[Users]` on some routes, `State[Config]` on others).
-- **Unchanged:** every M2 handler and registration (and, in the first slice, their compiler messages), `App()`, `App.handle(Request) -> Response`, `TestClient(app)` and the backends. There are no globals and no hidden lookup: the state reaches the handler only through the registrar it was registered with.
+- **Which parameter is injected:** a handler takes application state exactly when its registration passes a second argument, a `State[S]`. Its first parameter is then `State[S]` (the same `S`), and the rest is one of the M2 shapes, bound as before: route values in the literal's order, then the body. So `def(State[Users], Int, CreateUser)` on `post` is state, route value, body. The state is never a route value or a body, and parameter names are never read.
+- **Ownership:** `State(value)` takes the value. `State` is a shared handle: the application keeps its own, each registration keeps a copy, and the value is destroyed when the last handle goes. A request borrows the route's handle, so it copies nothing and allocates nothing. `users[]` is read-only through every handle (the handle's internal pointer is reachable by name, since Mojo 1.1.0 has no private fields; it is not API). A value that must change while the application serves keeps that mutability in its own fields, and its rules are the application's.
+- **Several values:** one `State` per handler. Several values are the fields of one state type, and different routes may take different state types (`State[Users]` on some routes, `State[Config]` on others).
+- **Unchanged:** every M2 handler and registration, `App()`, `App.handle(Request) -> Response`, `TestClient(app)` and the backends. There are no globals and no hidden lookup: the state reaches the handler only through the registration that passed it.
+
+A scoped registrar, `app.with_state(users).get[...](h)`, was measured too. It states the state once and leaves `App`'s compiler messages unchanged, but it is rejected on Mojo 1.1.0: the compiler does not track mutation through the registrar's stored pointer. With the decided form, every registration is an ordinary `mut` call on `App`, which the compiler tracks.
 
 DX's earlier sketch put the state last (`def get_user(id: Int, state: State[AppState])`) and read it as `state.users`. A state-last family compiles on Mojo 1.1.0, but it is not the decided shape. State goes first so the body stays the last parameter (M2-005). Access is `state[]` because a struct cannot forward field access to the value it holds.
 
-Status: decided, not implemented. The first production slice is `app.with_state` with the two `get` shapes, `def(State[S])` and `def(State[S], Int)`, each returning `String` or `ToResponse` (M3-003). The registrar's `post` shapes and stateful raw handlers come in a later slice. Until then, a stateful handler registered on `app.post` fails to compile, and the message points at `FromBody`. A stateful handler registered on `app.get` fails with the M2 candidates' notes, which do not mention the state.
+Status: decided, not implemented. The first production slice is the two `get` shapes, `def(State[S])` and `def(State[S], Int)`, each returning `String` or `ToResponse` (M3-003). Stateful `post` shapes and stateful raw handlers come in a later slice. Until then, a stateful handler registered on `post` fails to compile, and the message points at `FromBody`.
 
 ## 9. Raw Request/Response escape hatch
 
@@ -709,7 +708,7 @@ Status after M2 (M2-016): the handler model of this example is production: `get_
 
 - `CreateUser` must conform to `FromBody` and parse its own body, because there is no JSON codec;
 - `User` must conform to `ToResponse`. The stdlib `List[User]` does not conform, so a list result needs an application type that does;
-- `users` cannot exist yet: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`), handlers cannot capture, and there is no state API in production, so a handler can read only its arguments and compile-time constants. The decided form (M3-001, section 8) is `def get_user(users: State[Users], id: Int) -> User` registered as `app.with_state(users).get["/users/{id}"](get_user)`;
+- `users` cannot exist yet: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`), handlers cannot capture, and there is no state API in production, so a handler can read only its arguments and compile-time constants. The decided form (M3-001, section 8) is `def get_user(users: State[Users], id: Int) -> User` registered as `app.get["/users/{id}"](get_user, users)`;
 - there is no `app.run()`.
 
 The first three are M3 items (codec, state); `app.run()` is lifecycle work (M3, ownership undecided). The closest runnable form today is section 4's `CreateUser` and section 5's `User`, driven through `TestClient`.

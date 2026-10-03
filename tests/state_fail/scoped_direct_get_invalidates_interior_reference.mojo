@@ -3,9 +3,9 @@
 # before it. The same write made through a live registrar's stored
 # `Pointer` compiles (scratch probe; it reads freed memory after the route
 # list reallocates): the checker does not see writes inside the registrar's
-# methods as mutations of the app. Safe only while `App`'s public API
-# returns no reference into `App` (docs/ARCHITECTURE.md, "Application state
-# decision (M3-001)").
+# methods as mutations of the app. That blind mutation path is why A2 is
+# rejected on Mojo 1.1.0 (docs/ARCHITECTURE.md, "Application state decision
+# (M3-001)").
 # Expected diagnostic (checked by scripts/check.sh): use of invalidated interior reference
 
 from muntin import Request, Response

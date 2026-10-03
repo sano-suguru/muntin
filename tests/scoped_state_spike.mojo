@@ -1,5 +1,6 @@
-# M3-001 scoped-registrar spike (candidate A2), library side. Not
-# production code. Candidate A1 (tests/state_spike.mojo) adds the stateful
+# M3-001 scoped-registrar spike (candidate A2, measured and rejected on
+# Mojo 1.1.0: writes through the registrar's stored `Pointer` escape
+# interior-reference invalidation), library side. Not production code. Candidate A1 (tests/state_spike.mojo) adds the stateful
 # overloads to `App` itself, `app.get[route](handler, state)`; this models
 # A2, `app.with_state(state).get[route](handler)`, where they live on a
 # separate registrar type and `App` gains only `with_state`. It reuses A1's
