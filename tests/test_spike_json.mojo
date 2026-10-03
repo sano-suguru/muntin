@@ -28,6 +28,7 @@ from json_spike import (
     Json,
     JsonValue,
     JsonWriter,
+    MAX_BODY_BYTES,
     MAX_DEPTH,
     ToJson,
     json_content_type,
@@ -518,6 +519,8 @@ def test_writer_escapes_and_structure() raises:
                 out.name("a")
                 out.int(1)
                 out.name("a")
+                out.int(2)
+                out.end_object()
             elif i == 5:
                 out.begin_array()
                 _ = out^.finish()
@@ -695,6 +698,63 @@ def test_selected_order_on_the_adapter_mirror() raises:
     assert_equal(model_post(note, Request("POST", "/n", "hi")).body, "hi")
 
 
+def test_body_size_cap() raises:
+    # A JSON body is capped at MAX_BODY_BYTES (1 MiB). On the adapter
+    # mirror: 415 first, then 413 before parsing, then 400; a route value
+    # converts before both. `parse_json` (so `Json[T].from_body` from a raw
+    # handler) raises on it too. Production `App` has no 413 step yet: a
+    # `from_body` raise is 400 there, which is why the step is the
+    # adapters'.
+    var at_cap = "[" + String(" ") * (MAX_BODY_BYTES - 2) + "]"
+    var over = "[" + String(" ") * (MAX_BODY_BYTES - 1) + "]"
+    assert_equal(at_cap.byte_length(), MAX_BODY_BYTES)
+    assert_equal(len(parse_json(at_cap)), 0)
+    var raised = False
+    try:
+        _ = parse_json(over)
+    except:
+        raised = True
+    assert_true(raised)
+    _reset()
+    var big = model_post(
+        create_user_model, Request("POST", "/users", over, _json_headers())
+    )
+    assert_equal(big.status, 413)
+    assert_equal(big.body, "Content Too Large")
+    assert_equal(len(big.headers), 0)
+    assert_equal(
+        model_post(
+            create_user_model,
+            Request("POST", "/users", over, _json_headers("text/plain")),
+        ).status,
+        415,
+    )
+    assert_equal(
+        model_post_int(
+            update_user_model,
+            "x",
+            Request("POST", "/users/x", over, _json_headers()),
+        ).status,
+        400,
+    )
+    assert_equal(
+        model_post_int(
+            update_user_model,
+            "7",
+            Request("POST", "/users/7", over, _json_headers()),
+        ).status,
+        413,
+    )
+    assert_equal(_count(HANDLER), 0)
+    # A non-JSON body type has no cap.
+    assert_equal(
+        model_post(note, Request("POST", "/n", over)).body.byte_length(),
+        MAX_BODY_BYTES + 1,
+    )
+    var app = json_app()
+    assert_equal(TestClient(app).post("/users", over).status, 400)
+
+
 def _bits(x: Float64) -> UInt64:
     return bitcast[DType.uint64](x)
 
@@ -731,11 +791,11 @@ def test_float_rounding_gaps_on_mojo_1_1_0() raises:
 
 
 def test_parsing_and_access_are_linear() raises:
-    # Cost oracle for hostile bodies: a 100k-member object (duplicate-name
+    # Cost oracle for hostile bodies: an 80k-member object (duplicate-name
     # check) and a 200k-element array read by index. A quadratic parser or
     # element access takes minutes here; the bound is generous.
     var members = List[String]()
-    for i in range(100_000):
+    for i in range(80_000):
         members.append('"k' + String(i) + '":0')
     var obj = "{" + ",".join(members) + "}"
     var elements = List[String]()
@@ -748,9 +808,9 @@ def test_parsing_and_access_are_linear() raises:
     var total = 0
     for i in range(len(a)):
         total += a[i].string().byte_length()
-    _ = o["k99999"].int()
+    _ = o["k79999"].int()
     var ms = Int((perf_counter_ns() - t0) // 1_000_000)
-    assert_equal(len(o), 100_000)
+    assert_equal(len(o), 80_000)
     assert_equal(total, 200_000)
     assert_true(ms < 2_000, String(ms) + " ms")
 

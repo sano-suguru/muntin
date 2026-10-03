@@ -385,7 +385,8 @@ app.post["/users/{id}"](replace_user)    # the existing def(Int, B) overload
 # POST /users  Content-Type: application/json  {"name":"Ada","age":36}
 #   -> 200, Content-Type: application/json, {"id":1,"name":"Ada"}
 # Content-Type missing, text/plain, two fields, or application/problem+json
-#   -> 415 "Unsupported Media Type" (before the body is read)
+#   -> 415 "Unsupported Media Type" (before parsing and the handler)
+# a body over 1 MiB -> 413 "Content Too Large" (after the 415 check, before parsing)
 # application/json; charset=utf-8 -> accepted (parameters are not interpreted)
 # malformed JSON, a missing member, a wrong kind -> 400 "Bad Request"
 ```
@@ -393,10 +394,10 @@ app.post["/users/{id}"](replace_user)    # the existing def(Int, B) overload
 - `def create_user(body: CreateUser) -> User`, with no wrapper, is not the JSON form: a `FromJson` type is not a body by itself (`tests/json_fail/from_json_alone_is_not_a_body.mojo`: `the handler's parameter is the request body; its type must conform to FromBody`). Making it one would need an overload that is ambiguous with the existing body overload, a trait refining `FromBody` that implements its parent's requirement (compiles, not documented by the Mojo manual), or relaxed bounds in every typed overload; all are measured and rejected in ARCHITECTURE. Fields are mapped by hand: Mojo 1.1.0 reflection has no constructor, so a derived `from_json` would need a dummy `Defaultable` initializer in every type.
 - `body.value^` does not compile (`field 'body.value...' destroyed out of the middle of a value`); `body^.take()` on a `var body` moves the whole value out (a move-only `T` works). As for any Mojo 1.1.0 struct, moving one field out of that value needs a `deinit` method on the type; otherwise copy the field.
 - `Json[T]` requires `T: FromJson` as a body and `T: ToJson` as a result; otherwise the registration fails with the existing messages (`its type must conform to FromBody`; `argument type 'Json[In]' does not conform to trait 'ToResponse'`).
-- Strict RFC 8259: comments, trailing commas, leading zeros, `NaN`, duplicate member names, a byte order mark, lone surrogates and nesting deeper than 64 are 400. Extra members are ignored. `int()` takes integer literals that fit `Int`, exactly. `float()` goes through Mojo 1.1.0's `atof`: long literals (`100000000000000000000000`) raise (400), and some values come back 1 ulp off (`-2.7546748226290886e+20`, `123456789012345678`); `String(Float64)` in the writer likewise does not always print text that reads back to the same double. Known toolchain gaps, pinned in the spike; read exact values with `int()`.
+- The RFC 8259 grammar, strictly, with Muntin's limits: comments, trailing commas, leading zeros, `NaN`, duplicate member names, a byte order mark, lone surrogates and nesting deeper than 64 are 400. Extra members are ignored. `int()` takes integer literals that fit `Int`, exactly. `float()` goes through Mojo 1.1.0's `atof`: long literals (`100000000000000000000000`) raise (400), and some values come back 1 ulp off (`-2.7546748226290886e+20`, `123456789012345678`); `String(Float64)` in the writer likewise does not always print text that reads back to the same double. Known toolchain gaps, pinned in the spike; read exact values with `int()`.
 - Through the Flare backend, invalid UTF-8 in a body arrives as U+FFFD and is not rejected.
-- Parsing is linear in the body; a document of one-byte values costs up to about 37 bytes of memory per body byte (typical records about 5), and Muntin sets no body limit of its own (the backend's applies; Flare's default is 10 MB).
-- `TestClient.post` sends no `Content-Type`, so a JSON route answers it 415 (an accepted cost of requiring the field, until `TestClient` can send fields); tests send `app.handle(Request("POST", "/users", body, headers^))` with the field set.
+- JSON bodies are capped at 1 MiB (fixed; 413 above it, and `Json[T].from_body` raises on a larger body in a raw handler). Parsing is linear; at the cap it adds at most about 28 MB of memory. Other body types have no Muntin cap.
+- `TestClient.post` sends no `Content-Type`, so a JSON-body route answers it 415 (an accepted cost of requiring the field, until `TestClient` can send fields); tests send JSON bodies with `app.handle(Request("POST", "/users", body, headers^))` and the field set. Routes that only return `Json[T]` test through `TestClient` as usual.
 
 ## 5. Typed responses
 

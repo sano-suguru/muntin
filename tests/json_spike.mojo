@@ -1,9 +1,9 @@
 # M3-008 JSON codec decision spike, library side. Not production code: it
 # models the selected contract (candidate A with the application traits of
-# candidate B: a Muntin-owned `Json[T]` wrapper that is a `FromBody` and a
+# candidate 2: a Muntin-owned `Json[T]` wrapper that is a `FromBody` and a
 # `ToResponse` through the existing traits, for `T: FromJson` / `T: ToJson`),
-# the Muntin-owned strict codec the wrapper uses (`JsonValue`, `parse_json`,
-# `JsonWriter`), the request Content-Type rule, and a mirror of the body
+# the Muntin-owned codec the wrapper uses (`JsonValue`, `parse_json`,
+# `JsonWriter`), the request Content-Type rule and body cap, and a mirror of the body
 # adapters' steps with the selected order (`model_post`, `model_post_int`).
 # The application module is tests/test_spike_json.mojo; check.sh builds this
 # file through it (--Werror) and through tests/json_lib_only/driver.mojo;
@@ -14,7 +14,7 @@
 # `where`-gated methods (manual/generics.mdx, "Conditional trait
 # conformance"), `conforms_to` in `comptime if`, and safe std types.
 
-from std.collections import Optional, Set
+from std.collections import Optional
 from muntin import FromBody, Headers, Request, Response, ToResponse
 from muntin._handler_storage import _Shared
 
@@ -23,6 +23,13 @@ from muntin._handler_storage import _Shared
 # is rejected (400 through `from_body`), so the recursive parser's stack is
 # bounded.
 comptime MAX_DEPTH = 64
+
+# Body cap for a JSON request (decided: a fixed 1 MiB). A parsed document
+# costs up to about 37 bytes per body byte, so the cap bounds one parse at
+# about 40 MB. Typed JSON routes answer a larger body 413 before parsing
+# (`model_post`); `parse_json`, and so `Json[T].from_body` from a raw handler,
+# raises on it too.
+comptime MAX_BODY_BYTES = 1_048_576
 
 # Node kinds of the parsed tape.
 comptime _NULL = 0
@@ -151,7 +158,8 @@ def _decode(text: String, start: Int, end: Int) raises -> String:
 
 
 struct _Parser:
-    """Strict RFC 8259 recursive descent over the body's bytes. Rejects:
+    """Recursive descent over the body's bytes: the RFC 8259 grammar,
+    strictly, plus Muntin's limits (duplicate names, depth, size). Rejects:
     comments, trailing commas, single quotes, leading zeros, `+` signs,
     `NaN`/`Infinity`, a byte order mark, unescaped control bytes in strings,
     bad escapes, lone surrogates, duplicate member names, trailing content,
@@ -357,11 +365,12 @@ struct _Parser:
 
 
 def parse_json(text: String) raises -> JsonValue:
-    """Parses one JSON text (RFC 8259, strict; see `_Parser`). Raises on
-    anything else; through `Json.from_body` that is 400. Keeps one copy of
-    the text (production would hold the request body it already has)."""
-    if text.byte_length() >= 4294967296:
-        # Spans are `UInt32`: refuse rather than truncate.
+    """Parses one JSON text (strict RFC 8259 grammar with Muntin's limits;
+    see `_Parser`). Raises on anything else, and on a text longer than
+    `MAX_BODY_BYTES` (which also keeps the `UInt32` spans exact). Keeps one
+    copy of the text (production would hold the request body it already
+    has)."""
+    if text.byte_length() > MAX_BODY_BYTES:
         raise Error("JSON body too large")
     var p = _Parser(text)
     _ = p.value(0, 0, 0, 0)
@@ -523,14 +532,14 @@ comptime _IN_OBJECT = 1
 struct JsonWriter(Movable):
     """Builds one JSON text. Separators are its job; it raises on a
     structural misuse (a value without a member name inside an object, a
-    name outside one, a name repeated in one object, which Muntin's parser
-    rejects, an unmatched close, a second top-level value) and on a
+    name outside one, a name repeated in one object, found at `end_object`,
+    which Muntin's parser rejects, an unmatched close, a second top-level value) and on a
     non-finite number, which JSON cannot represent."""
 
     var _out: String
     var _stack: List[Int]
     var _counts: List[Int]
-    var _names: List[Set[String]]
+    var _names: List[List[String]]
     var _named: Bool
     var _done: Bool
 
@@ -538,7 +547,7 @@ struct JsonWriter(Movable):
         self._out = String()
         self._stack = List[Int]()
         self._counts = List[Int]()
-        self._names = List[Set[String]]()
+        self._names = List[List[String]]()
         self._named = False
         self._done = False
 
@@ -565,9 +574,7 @@ struct JsonWriter(Movable):
             raise Error("JSON writer: member name outside an object")
         if self._named:
             raise Error("JSON writer: member name without a value")
-        if name in self._names[len(self._names) - 1]:
-            raise Error("JSON writer: duplicate member name")
-        self._names[len(self._names) - 1].add(name)
+        self._names[len(self._names) - 1].append(name)
         if self._counts[len(self._counts) - 1] > 0:
             self._out += ","
         self._counts[len(self._counts) - 1] += 1
@@ -580,7 +587,7 @@ struct JsonWriter(Movable):
         self._out += "{"
         self._stack.append(_IN_OBJECT)
         self._counts.append(0)
-        self._names.append(Set[String]())
+        self._names.append(List[String]())
 
     def end_object(mut self) raises:
         if (
@@ -589,9 +596,16 @@ struct JsonWriter(Movable):
             or self._named
         ):
             raise Error("JSON writer: unmatched end_object")
+        # Repeated names: sorted and compared as neighbours, as the parser
+        # does (a hash set's cost would depend on a predictable seed, and
+        # names may come from request data).
+        var names = self._names.pop()
+        sort(names)
+        for k in range(1, len(names)):
+            if names[k] == names[k - 1]:
+                raise Error("JSON writer: duplicate member name")
         _ = self._stack.pop()
         _ = self._counts.pop()
-        _ = self._names.pop()
         self._out += "}"
 
     def begin_array(mut self) raises:
@@ -766,17 +780,24 @@ def _unsupported_media_type() -> Response:
     return Response.text("Unsupported Media Type", status=415)
 
 
+def _content_too_large() -> Response:
+    return Response.text("Content Too Large", status=413)
+
+
 def model_post[
     B: FromBody, R: ToResponse, E: Deinitable
 ](handler: def(var B) thin raises E -> R, request: Request) -> Response:
-    """Mirror of `_call_body` with the selected Content-Type step: for a JSON
-    body (`_JsonBody`), a request without `application/json` is 415 before
-    `from_body`; other bodies are unchanged. A handler error is the fixed
+    """Mirror of `_call_body` with the selected JSON steps: for a JSON body
+    (`_JsonBody`), a request without `application/json` is 415, then a body
+    over `MAX_BODY_BYTES` is 413, both before `from_body` parses anything;
+    other bodies are unchanged. A handler error is the fixed
     500 here (the production adapter's `_handler_error` is unchanged by the
     decision)."""
     comptime if conforms_to(B, _JsonBody):
         if not json_content_type(request.headers):
             return _unsupported_media_type()
+        if request.body.byte_length() > MAX_BODY_BYTES:
+            return _content_too_large()
     var body: B
     try:
         body = B.from_body(request.body)
@@ -796,7 +817,8 @@ def model_post_int[
     request: Request,
 ) -> Response:
     """Mirror of `_call_int_body`: the route value converts first (400),
-    then the Content-Type step (415), then the body (400)."""
+    then the Content-Type step (415), the size step (413), then the body
+    (400)."""
     var id: Int
     try:
         id = Int(segment)
@@ -805,6 +827,8 @@ def model_post_int[
     comptime if conforms_to(B, _JsonBody):
         if not json_content_type(request.headers):
             return _unsupported_media_type()
+        if request.body.byte_length() > MAX_BODY_BYTES:
+            return _content_too_large()
     var body: B
     try:
         body = B.from_body(request.body)
