@@ -6,5 +6,5 @@ application through `App.handle` and never appear in this package's API.
 
 from .app import App
 from .body import FromBody
-from .http import Request, Response, ToErrorResponse, ToResponse
+from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .state import State

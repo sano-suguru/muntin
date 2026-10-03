@@ -2,7 +2,7 @@
 
 from ._handler_storage import _Erased
 from .body import FromBody
-from .http import Request, Response, ToErrorResponse, ToResponse
+from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .state import State
 
 # Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
@@ -41,8 +41,11 @@ from .state import State
 # tests/raw_fail/equal_parameter_lists.mojo), so each raw overload's list
 # must stay strictly shorter than every body overload a raw handler can
 # satisfy. A raw route (`_Route.raw`) gets the request's method, path,
-# query and body as its four raw arguments and nothing else runs;
-# `_call_raw` rebuilds the `Request` and moves it into the handler. The
+# query and body as its first four raw arguments, then each header field's
+# name and value (M3-005; docs/ARCHITECTURE.md "Headers decision (M3-002)",
+# R1), and nothing else runs; `_call_raw` rebuilds the `Request`, headers
+# included, and moves it into the handler. Typed routes get no header
+# strings. The
 # body overloads' `not B == Request` guard only improves the message for
 # calls no overload accepts; it takes no part in selection.
 #
@@ -350,19 +353,30 @@ def _call_raw[
     args: List[String],
 ) -> Response:
     """Rebuilds the matched `Request` from its method, path, query and body
-    (`args[0]` to `args[3]`) and moves it into `handler`; no typed
+    (`args[0]` to `args[3]`) and its header fields (name and value pairs
+    from `args[4]` on, in order) and moves it into `handler`; no typed
     extraction runs, so this adapter answers no 400 of its own.
 
     `Request` splits its target at the first `?`, so the path never
     contains one, and `path + "?" + query` splits back into the same
     fields; an empty query is rebuilt without `?`, which gives the same
     fields as a target ending in `?`. A raise becomes `_handler_error[E]`,
-    as for every typed shape; the result is the response, unconverted.
+    as for every typed shape; the result is the response, unconverted. The
+    fields came from a `Headers`, so rebuilding them cannot fail; if it
+    did, the answer would be the fixed 500.
     """
     var target = args[1]
     if args[2].byte_length() > 0:
         target += "?" + args[2]
-    var request = Request(args[0], target, args[3])
+    var headers = Headers()
+    var i = 4
+    while i + 1 < len(args):
+        try:
+            headers.add(args[i], args[i + 1])
+        except:
+            return _internal_error()
+        i += 2
+    var request = Request(args[0], target, args[3], headers^)
     var result: Response
     try:
         result = handler(request^)
@@ -438,7 +452,8 @@ struct _Route(Movable):
     """Whether the handler's last argument is the request body."""
     var raw: Bool
     """Whether the handler receives the whole request (`_call_raw`): its raw
-    arguments are the request's method, path, query and body."""
+    arguments are the request's method, path, query and body, then each
+    header field's name and value."""
     var handler: _Erased
 
     def __init__(
@@ -935,9 +950,10 @@ struct App(Movable):
         network adapters) delivers requests through this method. The first
         registered route whose method and path match handles the request,
         raw or typed; the query takes no part in selecting it. A raw route
-        receives `request.method`, `path`, `query` and `body` as its four raw
-        arguments and nothing else runs (no query gathering, no conversion);
-        `_call_raw` rebuilds the `Request`. A body route receives
+        receives `request.method`, `path`, `query` and `body`, then each
+        header field's name and value, as its raw arguments, and nothing else
+        runs (no query gathering, no conversion); `_call_raw` rebuilds the
+        `Request`. Typed routes receive no headers. A body route receives
         `request.body` as its last raw argument, after its route value if it
         has one; its call trampoline (`_call_body`, `_call_int_body`)
         converts it and answers 400 itself if that fails.
@@ -962,6 +978,9 @@ struct App(Movable):
                 args.append(request.path)
                 args.append(request.query)
                 args.append(request.body)
+                for h in range(len(request.headers)):
+                    args.append(request.headers.name(h))
+                    args.append(request.headers.value(h))
             else:
                 if route.query_key:
                     try:
