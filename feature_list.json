@@ -644,8 +644,13 @@
         "Copy, drop exactly once, moves, the reference count (atomic, ArcPointer's orderings) and per-request borrowing through production _Erased (no copy, count change or allocation) are executable tests; the library side builds without the application module.",
         "The decision names the module, the unsafe operations it adds, the invariant the compiler does not check, the check_unsafe.sh change, the cost and the exact M3-003 changes; a scratch copy of the M3-003 branch with them passes check.sh, test.sh and check_flare.sh. Spikes run outside src/muntin; src/muntin, adapters/ and App.handle are unchanged; canonical checks pass and a fresh-context review finds no unresolved material issue."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "Decision: a sealed _Shared[S] in the private storage module (one ThinAllocation field; header = Atomic count with ArcPointer's orderings + OwnedPointer[S]; owned(self) immutable) behind M3-001's unchanged State[S] API. Rejected: ArcPointer[S] (M3-001) and ArcPointer[OwnedPointer[S]] (PR #26), each reachable from a second handle through an ordinary path; scoped access and opaque handles (API change) not pursued; toolchain wait not needed. Details: docs/ARCHITECTURE.md \"State storage decision (M3-004)\".",
+        "Guarantee restated after the fresh-context review showed the literal bar unmeetable for every type on Mojo 1.1.0: no Muntin-specific safe-code path lets one State alias replace, mutate, take, swap or prematurely destroy the payload another alias observes; rebind, forged alloc headers, memmove and stdlib-private fields are pinned in tests/toolchain_soundness_gaps (5, must build; alloc_forge_erased also breaks _Erased on main). M2-004's wording corrected to the same boundary.",
+        "Evidence: tests/state_storage_spike.mojo + tests/test_spike_state_storage.mojo 5/5; tests/state_storage_lib_only/driver.mojo; tests/state_storage_fail 11; tests/state_storage_known_gaps 2 (B, B'); 6 spike mutations each red; scratch copy of the M3-003 branch with the box applied: check.sh, test.sh (test_state 11/11), check_flare.sh exit 0 with 14 state_get_fail fixtures (not retained).",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; git diff main -- src adapters empty. Fresh-context review: one material finding (the bar as first stated), resolved by the user's restatement; re-check found no material issue; minors applied."
+      ]
     },
     {
       "id": "M3-002",
