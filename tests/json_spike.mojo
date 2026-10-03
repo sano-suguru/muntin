@@ -14,14 +14,14 @@
 # `where`-gated methods (manual/generics.mdx, "Conditional trait
 # conformance"), `conforms_to` in `comptime if`, and safe std types.
 
-from std.collections import Optional
+from std.collections import Optional, Set
 from muntin import FromBody, Headers, Request, Response, ToResponse
 from muntin._handler_storage import _Shared
 
 
 # Nesting cap for untrusted input: an array or object nested deeper than this
-# is rejected (400 through `from_body`), so a hostile body cannot exhaust the
-# parser's stack.
+# is rejected (400 through `from_body`), so the recursive parser's stack is
+# bounded.
 comptime MAX_DEPTH = 64
 
 # Node kinds of the parsed tape.
@@ -33,21 +33,49 @@ comptime _STRING = 4
 comptime _ARRAY = 5
 comptime _OBJECT = 6
 
+# `_Node.flags` bits.
+comptime _ESCAPED = 1  # the string value holds escapes
+comptime _KEY_ESCAPED = 2  # the member name holds escapes
+comptime _HAS_KEY = 4  # the node is an object member
+
 
 @fieldwise_init
 struct _Node(Copyable, Movable):
-    """One value of a parsed document, in document order. A container's
-    children follow it; `end` is the index one past its subtree, so the next
-    sibling of a child at `i` is at `nodes[i].end`."""
+    """One value of a parsed document, in document order, owning no text:
+    spans point into the document's copy of the body (decoded on access).
+    About 24 bytes, plus 4 in the child table."""
 
-    var kind: Int
-    # Decoded text of a string; the literal of a number; empty otherwise.
+    var kind: UInt8
+    var flags: UInt8
+    # Byte span of a number literal, or of a string's contents (inside the
+    # quotes, escapes undecoded).
+    var start: UInt32
+    var end: UInt32
+    # Byte span of the member name's contents, when `_HAS_KEY`.
+    var key_start: UInt32
+    var key_end: UInt32
+    # Elements or members, and where their node indices start in `kids`.
+    var count: UInt32
+    var kids: UInt32
+
+
+struct _Doc(Movable):
+    """A parsed document: the body text, the nodes, and one table of child
+    node indices, contiguous per container (O(1) element access)."""
+
     var text: String
-    # Decoded member name when the node is an object member; empty otherwise.
-    var key: String
-    # Number of children (array elements or object members).
-    var count: Int
-    var end: Int
+    var nodes: List[_Node]
+    var kids: List[UInt32]
+
+    def __init__(
+        out self,
+        var text: String,
+        var nodes: List[_Node],
+        var kids: List[UInt32],
+    ):
+        self.text = text^
+        self.nodes = nodes^
+        self.kids = kids^
 
 
 def _is_ws(c: Int) -> Bool:
@@ -68,31 +96,89 @@ def _hex(c: Int) raises -> Int:
     raise Error("invalid JSON: bad \\u escape")
 
 
+def _u4(text: String, at: Int) raises -> Int:
+    var b = text.as_bytes()
+    if at + 4 > len(b):
+        raise Error("invalid JSON: bad \\u escape")
+    var v = 0
+    for k in range(4):
+        v = v * 16 + _hex(Int(b[at + k]))
+    return v
+
+
+def _decode(text: String, start: Int, end: Int) raises -> String:
+    """Decodes the escapes of a string's contents `text[start:end]`, which
+    the parser has already validated. Runs between escapes are copied as
+    they are (the text is valid UTF-8)."""
+    var b = text.as_bytes()
+    var out = String()
+    var run = start
+    var i = start
+    while i < end:
+        if Int(b[i]) != ord("\\"):
+            i += 1
+            continue
+        out += String(text[byte=run:i])
+        var e = Int(b[i + 1])
+        i += 2
+        if e == ord('"'):
+            out += '"'
+        elif e == ord("\\"):
+            out += "\\"
+        elif e == ord("/"):
+            out += "/"
+        elif e == ord("b"):
+            out += chr(0x08)
+        elif e == ord("f"):
+            out += chr(0x0C)
+        elif e == ord("n"):
+            out += "\n"
+        elif e == ord("r"):
+            out += "\r"
+        elif e == ord("t"):
+            out += "\t"
+        else:
+            var cp = _u4(text, i)
+            i += 4
+            if cp >= 0xD800 and cp <= 0xDBFF:
+                var lo = _u4(text, i + 2)
+                i += 6
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
+            out += chr(cp)
+        run = i
+    out += String(text[byte=run:end])
+    return out^
+
+
 struct _Parser:
     """Strict RFC 8259 recursive descent over the body's bytes. Rejects:
     comments, trailing commas, single quotes, leading zeros, `+` signs,
     `NaN`/`Infinity`, a byte order mark, unescaped control bytes in strings,
     bad escapes, lone surrogates, duplicate member names, trailing content,
-    an empty body, and nesting deeper than `MAX_DEPTH`."""
+    an empty body, and nesting deeper than `MAX_DEPTH`. Linear in the body:
+    duplicate names are found with a hash set per object, and nodes store
+    spans, not copies."""
 
     var text: String
-    var b: List[UInt8]
     var i: Int
+    var n: Int
     var nodes: List[_Node]
+    var kids: List[UInt32]
 
     def __init__(out self, text: String):
         self.text = text
-        self.b = List[UInt8](text.as_bytes())
         self.i = 0
+        self.n = text.byte_length()
         self.nodes = List[_Node]()
+        self.kids = List[UInt32]()
 
     def _peek(self) -> Int:
-        if self.i >= len(self.b):
+        if self.i >= self.n:
             return -1
-        return Int(self.b[self.i])
+        return Int(self.text.as_bytes()[self.i])
 
     def _ws(mut self):
-        while self.i < len(self.b) and _is_ws(Int(self.b[self.i])):
+        while self.i < self.n and _is_ws(Int(self.text.as_bytes()[self.i])):
             self.i += 1
 
     def _expect_word(mut self, word: StaticString) raises:
@@ -101,76 +187,56 @@ struct _Parser:
                 raise Error("invalid JSON: bad literal")
             self.i += 1
 
-    def _string(mut self) raises -> String:
-        # At the opening quote. The input is a valid UTF-8 `String`, so runs
-        # between ASCII delimiters are copied as they are.
+    def _string(mut self) raises -> Bool:
+        """Validates a string at its opening quote and moves past its
+        closing quote. Returns whether it holds escapes."""
         self.i += 1
-        var out = String()
-        var run = self.i
+        var escaped = False
         while True:
             var c = self._peek()
             if c < 0:
                 raise Error("invalid JSON: unterminated string")
             if c == ord('"'):
-                out += String(self.text[byte = run : self.i])
                 self.i += 1
-                return out^
+                return escaped
             if c < 0x20:
                 raise Error("invalid JSON: control byte in string")
-            if c != ord("\\"):
-                self.i += 1
-                continue
-            out += String(self.text[byte = run : self.i])
             self.i += 1
+            if c != ord("\\"):
+                continue
+            escaped = True
             var e = self._peek()
             self.i += 1
-            if e == ord('"'):
-                out += '"'
-            elif e == ord("\\"):
-                out += "\\"
-            elif e == ord("/"):
-                out += "/"
-            elif e == ord("b"):
-                out += chr(0x08)
-            elif e == ord("f"):
-                out += chr(0x0C)
-            elif e == ord("n"):
-                out += "\n"
-            elif e == ord("r"):
-                out += "\r"
-            elif e == ord("t"):
-                out += "\t"
-            elif e == ord("u"):
-                var cp = self._u4()
-                if cp >= 0xD800 and cp <= 0xDBFF:
-                    if self._peek() != ord("\\"):
-                        raise Error("invalid JSON: lone surrogate")
-                    self.i += 1
-                    if self._peek() != ord("u"):
-                        raise Error("invalid JSON: lone surrogate")
-                    self.i += 1
-                    var lo = self._u4()
-                    if lo < 0xDC00 or lo > 0xDFFF:
-                        raise Error("invalid JSON: lone surrogate")
-                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
-                elif cp >= 0xDC00 and cp <= 0xDFFF:
-                    raise Error("invalid JSON: lone surrogate")
-                out += chr(cp)
-            else:
+            if (
+                e == ord('"')
+                or e == ord("\\")
+                or e == ord("/")
+                or e == ord("b")
+                or e == ord("f")
+                or e == ord("n")
+                or e == ord("r")
+                or e == ord("t")
+            ):
+                continue
+            if e != ord("u"):
                 raise Error("invalid JSON: bad escape")
-            run = self.i
+            var cp = _u4(self.text, self.i)
+            self.i += 4
+            if cp >= 0xD800 and cp <= 0xDBFF:
+                if self._peek() != ord("\\"):
+                    raise Error("invalid JSON: lone surrogate")
+                self.i += 1
+                if self._peek() != ord("u"):
+                    raise Error("invalid JSON: lone surrogate")
+                self.i += 1
+                var lo = _u4(self.text, self.i)
+                self.i += 4
+                if lo < 0xDC00 or lo > 0xDFFF:
+                    raise Error("invalid JSON: lone surrogate")
+            elif cp >= 0xDC00 and cp <= 0xDFFF:
+                raise Error("invalid JSON: lone surrogate")
 
-    def _u4(mut self) raises -> Int:
-        if self.i + 4 > len(self.b):
-            raise Error("invalid JSON: bad \\u escape")
-        var v = 0
-        for _ in range(4):
-            v = v * 16 + _hex(Int(self.b[self.i]))
-            self.i += 1
-        return v
-
-    def _number(mut self) raises -> String:
-        var start = self.i
+    def _number(mut self) raises:
         if self._peek() == ord("-"):
             self.i += 1
         if self._peek() == ord("0"):
@@ -194,44 +260,63 @@ struct _Parser:
                 raise Error("invalid JSON: bad number")
             while _is_digit(self._peek()):
                 self.i += 1
-        return String(self.text[byte = start : self.i])
 
-    def value(mut self, key: String, depth: Int) raises:
+    def value(
+        mut self, key_start: Int, key_end: Int, key_flags: Int, depth: Int
+    ) raises -> Int:
+        """Parses one value and returns its node index."""
         self._ws()
         var c = self._peek()
         var at = len(self.nodes)
+        self.nodes.append(
+            _Node(
+                UInt8(_NULL),
+                UInt8(key_flags),
+                UInt32(self.i),
+                UInt32(self.i),
+                UInt32(key_start),
+                UInt32(key_end),
+                UInt32(0),
+                UInt32(0),
+            )
+        )
+        var kind = _NULL
         if c == ord("{") or c == ord("["):
             if depth >= MAX_DEPTH:
                 raise Error("invalid JSON: nesting too deep")
             var obj = c == ord("{")
-            self.nodes.append(
-                _Node(_OBJECT if obj else _ARRAY, String(), key, 0, 0)
-            )
+            kind = _OBJECT if obj else _ARRAY
             self.i += 1
             self._ws()
             var close = ord("}") if obj else ord("]")
-            var count = 0
-            var names = List[String]()
+            var children = List[UInt32]()
+            var names = Set[String]()
             if self._peek() == close:
                 self.i += 1
             else:
                 while True:
-                    var name = String()
+                    var ks = 0
+                    var ke = 0
+                    var kf = 0
                     if obj:
                         self._ws()
                         if self._peek() != ord('"'):
                             raise Error("invalid JSON: expected member name")
-                        name = self._string()
-                        for n in names:
-                            if n == name:
-                                raise Error("invalid JSON: duplicate member")
-                        names.append(name)
+                        ks = self.i + 1
+                        var esc = self._string()
+                        ke = self.i - 1
+                        kf = _HAS_KEY | (_KEY_ESCAPED if esc else 0)
+                        var name = _decode(
+                            self.text, ks, ke
+                        ) if esc else String(self.text[byte=ks:ke])
+                        if name in names:
+                            raise Error("invalid JSON: duplicate member")
+                        names.add(name^)
                         self._ws()
                         if self._peek() != ord(":"):
                             raise Error("invalid JSON: expected ':'")
                         self.i += 1
-                    self.value(name, depth + 1)
-                    count += 1
+                    children.append(UInt32(self.value(ks, ke, kf, depth + 1)))
                     self._ws()
                     var d = self._peek()
                     self.i += 1
@@ -239,58 +324,76 @@ struct _Parser:
                         break
                     if d != ord(","):
                         raise Error("invalid JSON: expected ',' or close")
-            self.nodes[at].count = count
+            self.nodes[at].count = UInt32(len(children))
+            self.nodes[at].kids = UInt32(len(self.kids))
+            self.kids.extend(children^)
         elif c == ord('"'):
-            var s = self._string()
-            self.nodes.append(_Node(_STRING, s^, key, 0, 0))
+            kind = _STRING
+            self.nodes[at].start = UInt32(self.i + 1)
+            if self._string():
+                self.nodes[at].flags |= UInt8(_ESCAPED)
+            self.nodes[at].end = UInt32(self.i - 1)
         elif c == ord("t"):
+            kind = _TRUE
             self._expect_word("true")
-            self.nodes.append(_Node(_TRUE, String(), key, 0, 0))
         elif c == ord("f"):
+            kind = _FALSE
             self._expect_word("false")
-            self.nodes.append(_Node(_FALSE, String(), key, 0, 0))
         elif c == ord("n"):
             self._expect_word("null")
-            self.nodes.append(_Node(_NULL, String(), key, 0, 0))
         elif c == ord("-") or _is_digit(c):
-            var n = self._number()
-            self.nodes.append(_Node(_NUMBER, n^, key, 0, 0))
+            kind = _NUMBER
+            self._number()
+            self.nodes[at].end = UInt32(self.i)
         else:
             raise Error("invalid JSON: unexpected byte")
-        self.nodes[at].end = len(self.nodes)
+        self.nodes[at].kind = UInt8(kind)
+        return at
 
 
 def parse_json(text: String) raises -> JsonValue:
     """Parses one JSON text (RFC 8259, strict; see `_Parser`). Raises on
-    anything else; through `Json.from_body` that is 400."""
+    anything else; through `Json.from_body` that is 400. Keeps one copy of
+    the text (production would hold the request body it already has)."""
     var p = _Parser(text)
-    p.value(String(), 0)
+    _ = p.value(0, 0, 0, 0)
     p._ws()
-    if p.i != len(p.b):
+    if p.i != p.n:
         raise Error("invalid JSON: trailing content")
     var nodes = List[_Node]()
+    var kids = List[UInt32]()
     swap(nodes, p.nodes)
-    return JsonValue(_Shared(nodes^), 0)
+    swap(kids, p.kids)
+    return JsonValue(_doc=_Shared(_Doc(text, nodes^, kids^)), _at=0)
 
 
 struct JsonValue(Copyable, Movable, Sized):
-    """A read-only position in a parsed JSON document. The tape is held in
-    M3-004's sealed `_Shared` box: copies share it (one reference count
-    increment, no tape copy), and no handle can replace or mutate it on an
-    ordinary path, so a position stays valid. Accessors return values,
-    never references into it. Every accessor raises when the value
-    is not of the asked kind, so a `from_json` that reads a wrong or missing
-    field raises, and `Json.from_body` answers 400."""
+    """A read-only position in a parsed JSON document. The document is held
+    in M3-004's sealed `_Shared` box: copies share it (one reference count
+    increment, no copy), and no handle can replace or mutate it on an
+    ordinary path, so a position stays valid. Positions are made only by
+    the parser and the accessors (the initializer's arguments are internal).
+    Accessors return values, never references into the document. Every
+    accessor raises when the value is not of the asked kind, so a
+    `from_json` that reads a wrong or missing field raises, and
+    `Json.from_body` answers 400."""
 
-    var _doc: _Shared[List[_Node]]
+    var _doc: _Shared[_Doc]
     var _at: Int
 
-    def __init__(out self, doc: _Shared[List[_Node]], at: Int):
-        self._doc = doc.copy()
-        self._at = at
+    def __init__(out self, *, _doc: _Shared[_Doc], _at: Int):
+        self._doc = _doc.copy()
+        self._at = _at
+
+    def _node(self) -> _Node:
+        return self._doc.owned()[].nodes[self._at].copy()
 
     def _kind(self) -> Int:
-        return self._doc.owned()[][self._at].kind
+        return Int(self._node().kind)
+
+    def _child(self, k: Int) -> JsonValue:
+        var at = Int(self._doc.owned()[].kids[Int(self._node().kids) + k])
+        return JsonValue(_doc=self._doc, _at=at)
 
     def is_null(self) -> Bool:
         return self._kind() == _NULL
@@ -303,22 +406,28 @@ struct JsonValue(Copyable, Movable, Sized):
             return False
         raise Error("JSON value is not a boolean")
 
+    def _literal(self) -> String:
+        var n = self._node()
+        return String(
+            self._doc.owned()[].text[byte = Int(n.start) : Int(n.end)]
+        )
+
     def int(self) raises -> Int:
         """An integer literal (no fraction, no exponent) that fits `Int`."""
         if self._kind() != _NUMBER:
             raise Error("JSON value is not a number")
-        ref t = self._doc.owned()[][self._at].text
+        var t = self._literal()
         if t.find(".") >= 0 or t.find("e") >= 0 or t.find("E") >= 0:
             raise Error("JSON number is not an integer")
         return Int(t)
 
     def float(self) raises -> Float64:
-        """Any number literal, as a finite `Float64`. Raises when it
-        overflows, and (Mojo 1.1.0 `atof`) when it has more significant
-        digits than `atof` supports."""
+        """A number literal as a finite `Float64`, through Mojo 1.1.0's
+        `atof`: not always correctly rounded, and raising on long literals
+        (docs/ARCHITECTURE.md, "JSON codec decision (M3-008)")."""
         if self._kind() != _NUMBER:
             raise Error("JSON value is not a number")
-        var x = atof(self._doc.owned()[][self._at].text)
+        var x = atof(self._literal())
         if x != x or x > Float64.MAX_FINITE or x < -Float64.MAX_FINITE:
             raise Error("JSON number is out of range")
         return x
@@ -326,36 +435,48 @@ struct JsonValue(Copyable, Movable, Sized):
     def string(self) raises -> String:
         if self._kind() != _STRING:
             raise Error("JSON value is not a string")
-        return self._doc.owned()[][self._at].text
+        var n = self._node()
+        if n.flags & UInt8(_ESCAPED):
+            return _decode(self._doc.owned()[].text, Int(n.start), Int(n.end))
+        return self._literal()
 
     def __len__(self) -> Int:
         """Elements of an array, members of an object, 0 otherwise."""
         var k = self._kind()
         if k == _ARRAY or k == _OBJECT:
-            return self._doc.owned()[][self._at].count
+            return Int(self._node().count)
         return 0
 
     def __getitem__(self, index: Int) raises -> JsonValue:
-        """The `index`th array element."""
+        """The `index`th array element, in constant time."""
         if self._kind() != _ARRAY:
             raise Error("JSON value is not an array")
-        if index < 0 or index >= self._doc.owned()[][self._at].count:
+        if index < 0 or index >= Int(self._node().count):
             raise Error("JSON array index out of range")
-        var at = self._at + 1
-        for _ in range(index):
-            at = self._doc.owned()[][at].end
-        return JsonValue(self._doc, at)
+        return self._child(index)
 
     def get(self, name: String) raises -> Optional[JsonValue]:
         """The member `name` of an object, or `None` when it is absent. A
-        member present as `null` is a value (`is_null()`)."""
+        member present as `null` is a value (`is_null()`). Linear in the
+        object's members."""
         if self._kind() != _OBJECT:
             raise Error("JSON value is not an object")
-        var at = self._at + 1
-        for _ in range(self._doc.owned()[][self._at].count):
-            if self._doc.owned()[][at].key == name:
-                return JsonValue(self._doc, at)
-            at = self._doc.owned()[][at].end
+        ref doc = self._doc.owned()[]
+        for k in range(Int(self._node().count)):
+            var at = Int(doc.kids[Int(self._node().kids) + k])
+            ref m = doc.nodes[at]
+            var ks = Int(m.key_start)
+            var ke = Int(m.key_end)
+            var same: Bool
+            if m.flags & UInt8(_KEY_ESCAPED):
+                same = _decode(doc.text, ks, ke) == name
+            else:
+                same = (
+                    ke - ks == name.byte_length()
+                    and String(doc.text[byte=ks:ke]) == name
+                )
+            if same:
+                return JsonValue(_doc=self._doc, _at=at)
         return None
 
     def __getitem__(self, name: String) raises -> JsonValue:
@@ -394,12 +515,14 @@ comptime _IN_OBJECT = 1
 struct JsonWriter(Movable):
     """Builds one JSON text. Separators are its job; it raises on a
     structural misuse (a value without a member name inside an object, a
-    name outside one, an unmatched close, a second top-level value) and on
-    a non-finite number, which JSON cannot represent."""
+    name outside one, a name repeated in one object, which Muntin's parser
+    rejects, an unmatched close, a second top-level value) and on a
+    non-finite number, which JSON cannot represent."""
 
     var _out: String
     var _stack: List[Int]
     var _counts: List[Int]
+    var _names: List[Set[String]]
     var _named: Bool
     var _done: Bool
 
@@ -407,6 +530,7 @@ struct JsonWriter(Movable):
         self._out = String()
         self._stack = List[Int]()
         self._counts = List[Int]()
+        self._names = List[Set[String]]()
         self._named = False
         self._done = False
 
@@ -433,6 +557,9 @@ struct JsonWriter(Movable):
             raise Error("JSON writer: member name outside an object")
         if self._named:
             raise Error("JSON writer: member name without a value")
+        if name in self._names[len(self._names) - 1]:
+            raise Error("JSON writer: duplicate member name")
+        self._names[len(self._names) - 1].add(name)
         if self._counts[len(self._counts) - 1] > 0:
             self._out += ","
         self._counts[len(self._counts) - 1] += 1
@@ -445,6 +572,7 @@ struct JsonWriter(Movable):
         self._out += "{"
         self._stack.append(_IN_OBJECT)
         self._counts.append(0)
+        self._names.append(Set[String]())
 
     def end_object(mut self) raises:
         if (
@@ -455,6 +583,7 @@ struct JsonWriter(Movable):
             raise Error("JSON writer: unmatched end_object")
         _ = self._stack.pop()
         _ = self._counts.pop()
+        _ = self._names.pop()
         self._out += "}"
 
     def begin_array(mut self) raises:
@@ -596,7 +725,8 @@ def _serialization_failure() -> Response:
 def json_content_type(headers: Headers) -> Bool:
     """The selected request rule: exactly one `Content-Type` field whose
     media type (the text before any `;`, SP/HTAB trimmed) is
-    `application/json`, ASCII case-insensitively. Parameters (such as
+    `application/json`, ASCII case-insensitively (bytes, not Unicode case
+    folding: `applİcation/json` is not it). Parameters (such as
     `charset=utf-8`) are not interpreted: RFC 8259 defines none, and the
     body is read as UTF-8."""
     var fields = headers.get_all("content-type")
@@ -612,7 +742,16 @@ def json_content_type(headers: Headers) -> Bool:
         a += 1
     while z > a and (Int(bytes[z - 1]) == 0x20 or Int(bytes[z - 1]) == 0x09):
         z -= 1
-    return String(media[byte=a:z]).lower() == "application/json"
+    var want = "application/json".as_bytes()
+    if z - a != len(want):
+        return False
+    for k in range(len(want)):
+        var c = Int(bytes[a + k])
+        if c >= ord("A") and c <= ord("Z"):
+            c += 32
+        if c != Int(want[k]):
+            return False
+    return True
 
 
 def _unsupported_media_type() -> Response:

@@ -7,7 +7,9 @@
 # Decision: docs/ARCHITECTURE.md, "JSON codec decision (M3-008)".
 
 from std.collections import Optional
+from std.memory import bitcast
 from std.os import getenv, setenv, unsetenv
+from std.time import perf_counter_ns
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from muntin import (
@@ -455,14 +457,17 @@ def test_nesting_cap() raises:
 
 
 def test_number_limits_on_mojo_1_1_0() raises:
-    # `float()` rejects overflow, and Mojo 1.1.0 `atof` rejects literals with
-    # more significant digits than it supports: both raise (400 through a
-    # body). A pinned gap: valid JSON numbers a future `atof` may accept.
+    # `float()` rejects overflow, and Mojo 1.1.0 `atof` rejects long literals
+    # (by length and magnitude, even with one significant digit): both raise
+    # (400 through a body). A pinned gap: valid JSON numbers a future `atof`
+    # may accept.
     for s in [
         "1e400",
         "-1e400",
         "123456789012345678901234",
         "1.2345678901234567890123",
+        "100000000000000000000000",
+        "0.000000000000000000000000000001",
     ]:
         var raised = False
         try:
@@ -490,7 +495,7 @@ def test_writer_escapes_and_structure() raises:
     )
     # Structural misuse and non-finite numbers raise.
     var cases = List[Int]()
-    for i in range(7):
+    for i in range(8):
         cases.append(i)
     for i in cases:
         var out = JsonWriter()
@@ -508,6 +513,11 @@ def test_writer_escapes_and_structure() raises:
                 out.int(2)
             elif i == 4:
                 out.float(Float64(0) / Float64(0))
+            elif i == 6:
+                out.begin_object()
+                out.name("a")
+                out.int(1)
+                out.name("a")
             elif i == 5:
                 out.begin_array()
                 _ = out^.finish()
@@ -592,6 +602,8 @@ def test_request_content_type_rule() raises:
         "multipart/form-data; boundary=x",
         "application",
         "",
+        "applİcation/json",
+        "APPLİCATION/JSON",
     ]:
         assert_false(json_content_type(_json_headers(v)), v)
     assert_false(json_content_type(Headers()))
@@ -681,6 +693,66 @@ def test_selected_order_on_the_adapter_mirror() raises:
     )
     # A non-JSON body type is unchanged: no Content-Type is required.
     assert_equal(model_post(note, Request("POST", "/n", "hi")).body, "hi")
+
+
+def _bits(x: Float64) -> UInt64:
+    return bitcast[DType.uint64](x)
+
+
+def test_float_rounding_gaps_on_mojo_1_1_0() raises:
+    # Pinned Mojo 1.1.0 behavior, each 1 ulp from the correctly rounded
+    # value (Python's in the comments). `float()` uses `atof`; the writer
+    # uses `String(Float64)`. A fix in the toolchain turns these red: revisit
+    # (docs/ARCHITECTURE.md, "JSON codec decision (M3-008)").
+    # Shortest-repr doubles as JS/Python clients send them: correct
+    # 0xc42dddc22f41f7cd and 0x4429c9f9333a6521.
+    assert_equal(
+        _bits(parse_json("-2.7546748226290886e+20").float()),
+        UInt64(0xC42DDDC22F41F7CC),
+    )
+    assert_equal(
+        _bits(parse_json("2.3786116091973052e+20").float()),
+        UInt64(0x4429C9F9333A6520),
+    )
+    # A long integer literal read as a float: correct 0x437b69b4ba630f35
+    # (`int()` is exact).
+    assert_equal(
+        _bits(parse_json("123456789012345678").float()),
+        UInt64(0x437B69B4BA630F34),
+    )
+    assert_equal(parse_json("123456789012345678").int(), 123456789012345678)
+    # The writer's text does not always read back to the same double.
+    var x = bitcast[DType.float64](UInt64(0xC360B3B71251310B))
+    var w = JsonWriter()
+    w.float(x)
+    var text = w^.finish()
+    assert_equal(text, "-3.760958796054742e+16")
+    assert_equal(_bits(parse_json(text).float()), UInt64(0xC360B3B71251310C))
+
+
+def test_parsing_and_access_are_linear() raises:
+    # Cost oracle for hostile bodies: a 100k-member object (duplicate-name
+    # check) and a 200k-element array read by index. A quadratic parser or
+    # element access takes minutes here; the bound is generous.
+    var members = List[String]()
+    for i in range(100_000):
+        members.append('"k' + String(i) + '":0')
+    var obj = "{" + ",".join(members) + "}"
+    var elements = List[String]()
+    for _ in range(200_000):
+        elements.append('"a"')
+    var arr = "[" + ",".join(elements) + "]"
+    var t0 = perf_counter_ns()
+    var o = parse_json(obj)
+    var a = parse_json(arr)
+    var total = 0
+    for i in range(len(a)):
+        total += a[i].string().byte_length()
+    _ = o["k99999"].int()
+    var ms = Int((perf_counter_ns() - t0) // 1_000_000)
+    assert_equal(len(o), 100_000)
+    assert_equal(total, 200_000)
+    assert_true(ms < 2_000, String(ms) + " ms")
 
 
 def test_json_value_copies_share_the_document() raises:
