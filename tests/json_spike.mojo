@@ -155,9 +155,9 @@ struct _Parser:
     comments, trailing commas, single quotes, leading zeros, `+` signs,
     `NaN`/`Infinity`, a byte order mark, unescaped control bytes in strings,
     bad escapes, lone surrogates, duplicate member names, trailing content,
-    an empty body, and nesting deeper than `MAX_DEPTH`. Linear in the body:
-    duplicate names are found with a hash set per object, and nodes store
-    spans, not copies."""
+    an empty body, and nesting deeper than `MAX_DEPTH`. Linear in the body
+    up to an O(m log m) sort of each object's m member names (duplicates),
+    and nodes store spans, not copies."""
 
     var text: String
     var i: Int
@@ -290,7 +290,7 @@ struct _Parser:
             self._ws()
             var close = ord("}") if obj else ord("]")
             var children = List[UInt32]()
-            var names = Set[String]()
+            var names = List[String]()
             if self._peek() == close:
                 self.i += 1
             else:
@@ -309,9 +309,7 @@ struct _Parser:
                         var name = _decode(
                             self.text, ks, ke
                         ) if esc else String(self.text[byte=ks:ke])
-                        if name in names:
-                            raise Error("invalid JSON: duplicate member")
-                        names.add(name^)
+                        names.append(name^)
                         self._ws()
                         if self._peek() != ord(":"):
                             raise Error("invalid JSON: expected ':'")
@@ -324,6 +322,13 @@ struct _Parser:
                         break
                     if d != ord(","):
                         raise Error("invalid JSON: expected ',' or close")
+            # Duplicate names: sort and compare neighbours, O(m log m) and
+            # deterministic (a hash set's cost would depend on a hash seed
+            # an attacker can precompute collisions for).
+            sort(names)
+            for k in range(1, len(names)):
+                if names[k] == names[k - 1]:
+                    raise Error("invalid JSON: duplicate member")
             self.nodes[at].count = UInt32(len(children))
             self.nodes[at].kids = UInt32(len(self.kids))
             self.kids.extend(children^)
@@ -355,6 +360,9 @@ def parse_json(text: String) raises -> JsonValue:
     """Parses one JSON text (RFC 8259, strict; see `_Parser`). Raises on
     anything else; through `Json.from_body` that is 400. Keeps one copy of
     the text (production would hold the request body it already has)."""
+    if text.byte_length() >= 4294967296:
+        # Spans are `UInt32`: refuse rather than truncate.
+        raise Error("JSON body too large")
     var p = _Parser(text)
     _ = p.value(0, 0, 0, 0)
     p._ws()
