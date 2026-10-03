@@ -676,7 +676,7 @@
         "Evidence: tests/headers_spike.mojo + tests/test_spike_headers.mojo 12/12 (incl. R1 lossless through production _Erased, B's and C's losses, V2's deferred error, the outbound rule); tests/headers_lib_only/driver.mojo; tests/headers_fail 5; tests/headers_known_gaps 1 (internal-name bypass, must build); 16 mutations each red. Scratch copy with the slice applied (not retained, HTTP/1.1): check.sh, test.sh, check_flare.sh exit 0, every suite count and the 90 production fixtures' diagnostics unchanged, GET /hello's wire headers unchanged, loopback header parity.",
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; git diff main -- src adapters empty.",
         "Fresh-context review: one material finding (cleartext HTTP/2 inbound fields could be forged by the first-colon parse) resolved by the verified inbound rule and h2c measurements; minors applied (pair storage, var initializer fixture, RFC whitespace, D and parity wording, V2 argument). Re-check: no material issue (the verification held against adversarial h2 field sets); minors applied.",
-        "PR review: one material finding (outbound connection-specific policy covered only three fields) resolved by measuring hop-by-hop fields over HTTP/1.1 and h2c and adopting the outbound rule above; minor (_values wording) fixed."
+        "PR review: one material finding (outbound connection-specific policy covered only three fields) resolved by measuring hop-by-hop fields over HTTP/1.1 and h2c and adopting the outbound rule above; minor (_values wording) fixed. Merged as PR #28."
       ]
     },
     {
