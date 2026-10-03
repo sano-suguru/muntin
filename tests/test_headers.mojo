@@ -238,5 +238,31 @@ def test_invalid_header_is_a_handler_error() raises:
     assert_equal(len(got.headers), 0)
 
 
+# DX section 9's headers example, registered as `dx_webhook`.
+
+
+def dx_webhook(req: Request) raises -> Response:
+    var signature = req.headers.get("x-signature")  # Optional[String]
+    if not signature or signature.value() != "sha256=valid":
+        return Response.text("unsigned", status=401)
+    var resp = Response.text("ok")
+    resp.headers.add("X-Request-Id", "42")  # raises if invalid
+    return resp^
+
+
+def test_dx_section_9_headers_example() raises:
+    var app = App()
+    app.post["/webhook"](dx_webhook)
+    var h = Headers()
+    h.add("X-Signature", "sha256=valid")
+    var ok = app.handle(Request("POST", "/webhook", "", h^))
+    assert_equal(ok.status, 200)
+    assert_equal(ok.body, "ok")
+    assert_equal(ok.headers.get("x-request-id").value(), "42")
+    var unsigned = app.handle(Request("POST", "/webhook"))
+    assert_equal(unsigned.status, 401)
+    assert_equal(unsigned.body, "unsigned")
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

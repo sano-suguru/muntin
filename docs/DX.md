@@ -159,7 +159,7 @@ Semantics:
 
 Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` and `def(Int, B)` (M2-009) with `B: FromBody` for `app.post`, plus, on both, the raw `def(req: Request) -> Response` (M2-015, section 9; `Response` only, under the same error model). Each may be non-raising or declare `raises` or `raises T` (M2-011, section 6; a `T` declaring `ToErrorResponse` chooses its own response, M2-013), and returns `String` (or a type that converts to it implicitly, such as `StaticString`) or a type conforming to `ToResponse`, including `Response` (M2-008, section 5). Other `get` shapes (more or non-`Int` parameters) and other result types fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) raises Never thin -> String'` and, for the `ToResponse` candidate, `argument type 'Int' does not conform to trait 'ToResponse'`. Since M3-003, `app.get` also takes a stateful handler with its state as a second argument, `def(State[S])` or `def(State[S], Int)` (section 8); a failing one-argument `get` call lists those four candidates too, each with `missing required argument: 'state'`.
 
-Still targets (not implemented yet; M3 or later, each placed in `docs/SPEC.md` "M3"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, response headers, parameter-name checking, middleware, and stateful `post` and raw handlers (decided in M3-001, section 8; stateful `get` is production since M3-003).
+Still targets (not implemented yet; M3 or later, each placed in `docs/SPEC.md` "M3"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, typed header extraction and default response headers, parameter-name checking, middleware, and stateful `post` and raw handlers (decided in M3-001, section 8; stateful `get` is production since M3-003). Request and response headers are production since M3-005 (section 9); typed header extraction and default headers are not.
 
 Mojo facts discovered while proving the above:
 
@@ -534,7 +534,34 @@ app.post["/webhook"](webhook)                # same syntax as typed handlers; ap
 # GET /webhook, POST /webhook/x    -> 404 "Not Found"  (webhook not called)
 ```
 
-The escape hatch is meant for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. Today it covers what can be decided from the method, path, query and body, as in the example above. Streaming, content types and header-based authentication also need `Request`/`Response` capabilities that do not exist yet: headers (M3-002) and streaming (M3). An earlier version of this example read `req.headers.get("x-signature")`; `Request` has no headers yet. Headers are decided (M3-002, `docs/ARCHITECTURE.md` "Headers decision (M3-002)"), not yet production: `req.headers.get("x-signature")` returns an `Optional[String]` (absent and empty differ), names compare case-insensitively, repeated fields stay in order, and a handler sets response fields with `resp.headers.add(name, value)`, which raises on an invalid name or value. The production slice is M3-005; when it lands, this example reads the signature from them.
+The escape hatch is meant for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. Today it covers what can be decided from the method, path, query and body, as in the example above. Streaming, content types and header-based authentication also need `Request`/`Response` capabilities that do not exist yet: headers (M3-002) and streaming (M3). Since M3-005 a raw handler also reads request headers and sets response headers (below); the example above is kept as the body-only form.
+
+Headers (M3-005, production; decided in M3-002, `docs/ARCHITECTURE.md` "Headers decision (M3-002)"), proven by `tests/test_headers.mojo` (which registers this handler as `dx_webhook` and checks the responses below), `tests/headers_api_fail`, `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`:
+
+```mojo
+from muntin import App, Headers, Request, Response
+
+
+def webhook(req: Request) raises -> Response:
+    var signature = req.headers.get("x-signature")      # Optional[String]
+    if not signature or signature.value() != "sha256=valid":
+        return Response.text("unsigned", status=401)
+    var resp = Response.text("ok")
+    resp.headers.add("X-Request-Id", "42")               # raises if invalid
+    return resp^
+
+
+app.post["/webhook"](webhook)
+# POST /webhook  X-Signature: sha256=valid  -> 200 "ok", X-Request-Id: 42
+# POST /webhook  (no X-Signature)           -> 401 "unsigned"
+```
+
+- `muntin.Headers` is the header fields in order. Each keeps its name's casing, and a repeated name (`Set-Cookie`) is several fields. `get(name)` returns the first value as `Optional[String]` (an absent field and an empty value differ), `get_all(name)` every value, and `len`, `name(i)`, `value(i)` walk them. Names compare ASCII case-insensitively.
+- `add(name, value)` appends; `set(name, value)` removes every field with that name, then appends. Both raise on a name that is not an RFC 9110 token, or on a value with a control byte (other than HTAB) or SP/HTAB at either end. In a raising handler that error is the fixed 500, or its `ToErrorResponse`. Code that must not raise, such as `to_response`, wraps `add` in `try`.
+- `Request` has `headers` (as the backend received them); `Request(method, target, body, headers^)` builds one, and existing calls without headers are unchanged. `Response` has `headers`, empty from `Response(status, body)` and `Response.text`: Muntin adds no `Content-Type` or other default field.
+- Raw handlers read `req.headers` (a `var req` handler owns a copy it may change) and set fields on the `Response` they return. Typed handlers read no headers; a typed result sets fields through the `Response` its `to_response` builds. `String` results set none.
+- `TestClient` sends no headers; a test builds `Request(..., headers^)` and calls `app.handle`, the same seam.
+- Through Flare, a request field Muntin cannot represent is answered 400 before the handler: over HTTP/2 Flare admits a `:` inside a name or a control byte in a value. Fields the backend owns or that are connection-specific (`Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`, `TE`, `Trailer`), and any field a `Connection` value names, are not written to the wire; they stay in the in-memory `Response`. Over HTTP/2, names go out lowercase. Header values are text: Flare answers 400 to an HTTP/1.1 header byte ≥ 0x80 itself.
 
 Semantics (decided in M2-014, `docs/ARCHITECTURE.md` "Raw Request decision (M2-014)"; production facts in "Raw Request handlers in production (M2-015)"):
 

@@ -691,8 +691,13 @@
         "The Flare adapter rebuilds inbound fields from HeaderMap.encode_to verified against len/get_all and Headers.add (any failure answers 400, including a forged name over h2c) and appends outbound fields in order, omitting Content-Length, Transfer-Encoding, Connection, Keep-Alive, Proxy-Connection, Upgrade, TE, Trailer and every field a Connection value names, re-checking each through Headers.add and answering 500 on failure; a real loopback request with request and response headers agrees with App.handle except for the documented backend-owned fields.",
         "Production fixtures pin the compiler-enforced invariants of tests/headers_fail; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; a fresh-context review finds no unresolved material issue."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "Production: muntin.Headers (one list of name/value pairs; private validation; ASCII case-insensitive lookup; get -> Optional[String]; add/set raise) exported from muntin; Request.headers (defaulted var initializer argument) and Response.headers; App.handle appends a raw route's fields after its four raw strings and _call_raw rebuilds them; the Flare adapter rebuilds and verifies inbound fields (400 on failure) and applies the outbound rule with a re-check (500 on failure). _Call, _Erased, _Route, storage, unsafe surface, App.handle's signature, TestClient and Response.text unchanged.",
+        "Tests: tests/test_headers.mojo 13/13 (semantics, raw handlers through App.handle, every field kept through the raw transport, typed routes and String results setting none, a ToResponse result setting a header, an invalid field as 500, DX section 9's headers example); tests/headers_api_fail 5; adapters/flare/test_muntin_flare.mojo 13/13 (+5: inbound rebuild, forged and control-byte fields as 400, the outbound rule, internal-name write as 500, no added fields); test_localhost_roundtrip.mojo 4/4 (+2: HTTP/1.1 headers equal App.handle except omitted fields, GET /hello still Flare's three fields, injection 500; h2c fields in order without omitted ones, forged x-user:admin as 400).",
+        "Unchanged: every existing suite count and expected text; the 90 production fixtures' diagnostics identical to main's. 15 planted mutations each red (Headers semantics, raw transport, defaults, inbound verification, outbound rule, re-check).",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0."
+      ]
     }
   ]
 }
