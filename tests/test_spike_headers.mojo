@@ -5,7 +5,8 @@ from std.testing import assert_equal, assert_false, assert_raises
 from std.testing import assert_true, TestSuite
 
 from headers_spike import DictHeaders, HRequest, HResponse, Headers
-from headers_spike import JoinedHeaders, box_raw, raw_args
+from headers_spike import JoinedHeaders, UncheckedHeaders, box_raw
+from headers_spike import raw_args, seam_check
 
 
 def _fields(h: Headers) -> String:
@@ -161,6 +162,25 @@ def test_candidate_c_breaks_set_cookie() raises:
     var joined = j.get("set-cookie")
     assert_equal(joined, "a=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT, b=2")
     assert_equal(len(joined.split(", ")), 3)
+
+
+def located(h: UncheckedHeaders) -> Int:
+    # V2's DX gain: a non-raising function (such as `to_response`) adds a
+    # field without `try`; under V1 this needs `try` (headers_fail).
+    var copy = UncheckedHeaders()
+    for i in range(len(h.names)):
+        copy.add(h.names[i], h.values[i])
+    copy.add("X-Late", "a\r\nb")
+    return seam_check(copy)
+
+
+def test_candidate_v2_defers_the_error_to_the_seam() raises:
+    # V2 accepts the invalid value where it is added; only the seam sees
+    # it, as an index, after the handler returned.
+    var h = UncheckedHeaders()
+    h.add("X-Ok", "1")
+    assert_equal(seam_check(h), -1)
+    assert_equal(located(h), 1)
 
 
 def main() raises:

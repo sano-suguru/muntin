@@ -288,3 +288,29 @@ struct JoinedHeaders(Movable):
             if self.names[i] == key:
                 return self.values[i]
         return ""
+
+
+struct UncheckedHeaders(Movable):
+    """Rejected validation variant V2: `add` never raises; the dispatch seam
+    checks a response's fields afterwards (`seam_check`)."""
+
+    var names: List[String]
+    var values: List[String]
+
+    def __init__(out self):
+        self.names = List[String]()
+        self.values = List[String]()
+
+    def add(mut self, name: String, value: String):
+        self.names.append(name)
+        self.values.append(value)
+
+
+def seam_check(h: UncheckedHeaders) -> Int:
+    """What `App.handle` would run on every response under V2: the index of
+    the first invalid field, or -1. The handler line that added it is no
+    longer known here."""
+    for i in range(len(h.names)):
+        if not _valid_name(h.names[i]) or not _valid_value(h.values[i]):
+            return i
+    return -1
