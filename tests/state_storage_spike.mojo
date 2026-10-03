@@ -20,9 +20,11 @@
 #               `_SharedHeader` (an atomic count and an `OwnedPointer[S]`).
 #               Its only accessors return immutable references. Copying it
 #               increments the count; dropping the last copy drops the
-#               value and frees the header. Reaching the header otherwise
-#               takes `unsafe_ptr()` or the stdlib's private
-#               `ThinAllocation._ptr`, as for `_Erased`.
+#               value and frees the header. No ordinary path from another
+#               handle reaches the value mutably; the toolchain-wide
+#               primitives (`rebind`, a forged `alloc` header, `memmove`,
+#               stdlib-private fields) still do, as they do for `_Erased`
+#               (tests/toolchain_soundness_gaps).
 #   State[S]    the public API of M3-001, unchanged: `State(value)`,
 #               `.copy()`, `state[]` read-only. The `OwnedPointer` gives the
 #               reference from `state[]` an origin interior to the handle,
@@ -51,10 +53,12 @@ struct _SharedHeader[S: Movable & Deinitable](Movable):
 
 
 struct _Shared[S: Movable & Deinitable](Copyable, Movable):
-    """A reference-counted handle to one value of type `S`, sealed: code
-    outside the storage module gets only immutable references to the value
-    and cannot replace, alias or move the header without an `unsafe_`-named
-    call (or the stdlib's private `ThinAllocation._ptr`)."""
+    """A reference-counted handle to one value of type `S`. Code outside
+    the storage module gets only immutable references to the value; on
+    ordinary paths it cannot replace, mutate, swap, copy or move the value
+    or the header. Mojo 1.1.0's toolchain-wide primitives (origin `rebind`,
+    a forged `alloc` header swapped in, `memmove`, stdlib-private fields)
+    are outside that guarantee (tests/toolchain_soundness_gaps)."""
 
     var _header: ThinAllocation[_SharedHeader[Self.S]]
 

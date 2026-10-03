@@ -1128,7 +1128,7 @@ The invariant the compiler does not check: every `ThinAllocation` of a header is
 - Mojo gets private fields: `_shared` and `_header` can be sealed by visibility, and the guard rule can narrow again.
 
 **Next production slice (M3-003, PR #26, rebased).**
-- `_handler_storage.mojo` gains `_SharedHeader` and `_Shared` as in the spike, its docstring's scope and unsafe list updated;
+- `_handler_storage.mojo` gains `_SharedHeader` and `_Shared` as in the spike, its docstring's scope, unsafe list and downstream paragraph updated to the boundary above (ordinary paths closed; the forged-header replacement of `_Erased._header` named among the toolchain-wide gaps);
 - `state.mojo` holds `_Shared[S]`, with `__getitem__(self) -> ref[origin_of(self._shared.owned()[])] S`, and imports `_Shared` instead of `ArcPointer`/`OwnedPointer`;
 - `check_unsafe.sh` drops the `state.mojo` exemption and allows importing `_Shared`;
 - `tests/state_get_fail` gains `alias_payload_swap` and `alias_value_mutation`, and keeps the `ref_after_*` fixtures;
