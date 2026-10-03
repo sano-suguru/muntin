@@ -201,6 +201,21 @@ struct ProbeHandler(Handler):
             r.headers.set("Date", "handler-date")
             r.headers.set("X-Last", "z")
             return r^
+        if url == "/hopout" or url == "/hoptoken":
+            # Connection-specific / hop-by-hop response fields, appended.
+            var r = Response(status=200, body=List("hi".as_bytes()))
+            r.headers.append("Keep-Alive", "timeout=5")
+            r.headers.append("Proxy-Connection", "keep-alive")
+            r.headers.append("Upgrade", "websocket")
+            r.headers.append("TE", "gzip")
+            r.headers.append("Trailer", "X-Trail")
+            if url == "/hopout":
+                r.headers.append("Connection", "X-Hop")
+            else:
+                r.headers.append("Connection", "keep-alive, X-Hop")
+            r.headers.append("X-Hop", "secret")
+            r.headers.append("X-Keep", "k")
+            return r^
         if url == "/plain":
             # Exactly what adapters/flare/muntin_flare.mojo builds today.
             return Response(status=200, body=List("hello".as_bytes()))
@@ -438,6 +453,7 @@ def main() raises:
             run_inbound(c, strict.port, lenient.port)
             run_outbound(c, strict.port)
             run_h2c(c, strict.port)
+            run_hop_by_hop(c, strict.port)
         finally:
             _ = kill(lenient.pid, SIGKILL)
             waitpid(lenient.pid)
@@ -878,5 +894,62 @@ def run_h2c(mut c: Checks, port: UInt16) raises:
             "HEADERS{:status: 200; x-mixed: v; set-cookie: a=1; set-cookie:"
             " b=2; x-empty: ; content-length: 999; date: handler-date; x-last:"
             " z} DATA{hi}"
+        ),
+    )
+
+
+def run_hop_by_hop(mut c: Checks, port: UInt16) raises:
+    """Outbound connection-specific fields, over HTTP/1.1 and h2c."""
+    c.eq(
+        (
+            "hop. h1: handler Connection dropped whole (tokens ignored, X-Hop"
+            " kept); Keep-Alive, Proxy-Connection, Upgrade, TE, Trailer kept"
+        ),
+        exchange(port, get("/hopout")),
+        (
+            "HTTP/1.1 200 OK\\r\\nKeep-Alive: timeout=5\\r\\n"
+            "Proxy-Connection: keep-alive\\r\\nUpgrade: websocket\\r\\n"
+            "TE: gzip\\r\\nTrailer: X-Trail\\r\\nX-Hop: secret\\r\\n"
+            "X-Keep: k\\r\\nContent-Length: 2\\r\\nDate: <date>\\r\\n"
+            "Connection: close\\r\\n\\r\\nhi"
+        ),
+    )
+    c.eq(
+        "hop. h1: Connection: keep-alive, X-Hop also dropped whole",
+        exchange(port, get("/hoptoken")),
+        (
+            "HTTP/1.1 200 OK\\r\\nKeep-Alive: timeout=5\\r\\n"
+            "Proxy-Connection: keep-alive\\r\\nUpgrade: websocket\\r\\n"
+            "TE: gzip\\r\\nTrailer: X-Trail\\r\\nX-Hop: secret\\r\\n"
+            "X-Keep: k\\r\\nContent-Length: 2\\r\\nDate: <date>\\r\\n"
+            "Connection: close\\r\\n\\r\\nhi"
+        ),
+    )
+    c.eq(
+        (
+            "hop. h1 keep-alive request: Flare's Connection: keep-alive"
+            " (handler's still dropped; the server closes on idle timeout)"
+        ),
+        exchange(
+            port,
+            "GET /hopout HTTP/1.1\r\nHost: probe\r\n\r\n",
+        ),
+        (
+            "HTTP/1.1 200 OK\\r\\nKeep-Alive: timeout=5\\r\\n"
+            "Proxy-Connection: keep-alive\\r\\nUpgrade: websocket\\r\\n"
+            "TE: gzip\\r\\nTrailer: X-Trail\\r\\nX-Hop: secret\\r\\n"
+            "X-Keep: k\\r\\nContent-Length: 2\\r\\nDate: <date>\\r\\n"
+            "Connection: keep-alive\\r\\n\\r\\nhi"
+        ),
+    )
+    c.eq(
+        (
+            "hop. h2c: keep-alive, proxy-connection, upgrade, connection"
+            " dropped; te, trailer, x-hop kept; stream served"
+        ),
+        h2_exchange(port, "/hopout", []),
+        (
+            "HEADERS{:status: 200; te: gzip; trailer: X-Trail; x-hop: secret;"
+            " x-keep: k} DATA{hi}"
         ),
     )

@@ -6,7 +6,7 @@ from std.testing import assert_true, TestSuite
 
 from headers_spike import DictHeaders, HRequest, HResponse, Headers
 from headers_spike import JoinedHeaders, UncheckedHeaders, box_raw
-from headers_spike import raw_args, seam_check
+from headers_spike import outbound_fields, raw_args, seam_check
 
 
 def _fields(h: Headers) -> String:
@@ -169,6 +169,31 @@ def test_candidate_c_breaks_set_cookie() raises:
     var joined = j.get("set-cookie")
     assert_equal(joined, "a=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT, b=2")
     assert_equal(len(joined.split(", ")), 3)
+
+
+def test_outbound_rule_strips_backend_owned_and_nominated_fields() raises:
+    var h = Headers()
+    h.add("X-First", "1")
+    h.add("Keep-Alive", "timeout=5")
+    h.add("Proxy-Connection", "keep-alive")
+    h.add("upgrade", "websocket")
+    h.add("TE", "gzip")
+    h.add("Trailer", "X-Trail")
+    h.add("Content-Length", "999")
+    h.add("Transfer-Encoding", "chunked")
+    h.add("Connection", "keep-alive, X-Hop ,\tx-other")
+    h.add("x-hop", "secret")
+    h.add("X-Other", "o")
+    h.add("Set-Cookie", "a=1")
+    h.add("Set-Cookie", "b=2")
+    h.add("X-Hopper", "kept")
+    assert_equal(
+        _fields(outbound_fields(h)),
+        "X-First=1;Set-Cookie=a=1;Set-Cookie=b=2;X-Hopper=kept;",
+    )
+    var plain = Headers()
+    plain.add("X-A", "1")
+    assert_equal(_fields(outbound_fields(plain)), "X-A=1;")
 
 
 def located(h: UncheckedHeaders) -> Int:

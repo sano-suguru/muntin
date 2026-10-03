@@ -241,6 +241,60 @@ def box_raw(handler: def(var HRequest) thin -> HResponse) -> _Erased:
     return _Erased.__init__[call=_call_raw_h](handler)
 
 
+# The outbound rule a backend adapter applies before writing a response:
+# fields the backend owns or that are connection-specific never reach the
+# wire, on any protocol, and neither do the fields a `Connection` value
+# names (RFC 9110 sec. 7.6.1: they are hop-by-hop). `Trailer` goes too:
+# Muntin sends no trailers, so announcing them would be false. Measured on
+# pinned Flare, which drops only some of these itself
+# (compat/flare/headers/flare_header_probe.mojo).
+
+
+def _backend_owned(name: String) -> Bool:
+    var lower = _lower_ascii(name)
+    return (
+        lower == "content-length"
+        or lower == "transfer-encoding"
+        or lower == "connection"
+        or lower == "keep-alive"
+        or lower == "proxy-connection"
+        or lower == "upgrade"
+        or lower == "te"
+        or lower == "trailer"
+    )
+
+
+def _trim_ows(s: StringSlice) -> String:
+    var b = s.as_bytes()
+    var start = 0
+    var end = len(b)
+    while start < end and (Int(b[start]) == 32 or Int(b[start]) == 9):
+        start += 1
+    while end > start and (Int(b[end - 1]) == 32 or Int(b[end - 1]) == 9):
+        end -= 1
+    return String(s[byte=start:end])
+
+
+def outbound_fields(h: Headers) raises -> Headers:
+    """The fields of `h` a backend writes, in order."""
+    var nominated = List[String]()
+    for value in h.get_all("connection"):
+        for token in value.split(","):
+            var name = _trim_ows(token)
+            if name.byte_length() > 0:
+                nominated.append(name)
+    var out = Headers()
+    for i in range(len(h)):
+        var name = h.name(i)
+        var drop = _backend_owned(name)
+        for n in nominated:
+            if _same_name(name, n):
+                drop = True
+        if not drop:
+            out.add(name, h.value(i))
+    return out^
+
+
 # Rejected candidates, modeled to show what they lose.
 
 
