@@ -43,7 +43,7 @@ comptime _HAS_KEY = 4  # the node is an object member
 struct _Node(Copyable, Movable):
     """One value of a parsed document, in document order, owning no text:
     spans point into the document's copy of the body (decoded on access).
-    About 24 bytes, plus 4 in the child table."""
+    28 bytes, plus 4 in the child table."""
 
     var kind: UInt8
     var flags: UInt8
