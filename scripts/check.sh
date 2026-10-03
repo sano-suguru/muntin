@@ -159,8 +159,10 @@ done
 # reference from state[] cannot outlive its handle; a second handle cannot
 # replace or mutate the shared value (M3-003). tests/state_post_fail: the
 # same for production App.post, whose stateful shapes take the body last
-# (M3-006).
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/headers_fail tests/headers_api_fail; do
+# (M3-006). tests/state_raw_fail: the same for the stateful raw shape on
+# both methods, which takes the Request right after the State and returns
+# Response (M3-007).
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
