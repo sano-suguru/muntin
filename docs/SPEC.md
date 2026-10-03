@@ -195,7 +195,7 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: active after M2-016. M3-001 (application state decision gate) is decided; its production slice M3-003 (stateful `get`) comes next, then M3-002 (headers decision gate), below.
+Status: active after M2-016. M3-001 (application state decision gate) is decided. Its production slice M3-003 (stateful `get`) is waiting on M3-004 (state storage decision gate), which decides how `State` stores the shared value; then M3-002 (headers decision gate), below.
 
 Potential work, each cut into its own decision-first item. These include the capabilities M2-016 deferred, with the reason each is additive:
 
@@ -235,7 +235,11 @@ M3-003, stateful `get` in production (the M3-001 slice): `muntin.State[S]` and f
 
 M3-002 is the request/response headers decision gate. Three other candidates depend on headers: a JSON response needs a Content-Type, middleware such as CORS or authentication reads and writes headers, and the DX section 9 webhook reads its signature header. Headers also change the backend seam and the raw-handler transport. M3-002 decides with pinned-compiler evidence: the Muntin-owned representation (type, case-insensitive names, repeated fields, ownership and copying, invalid bytes); how `Request` and `Response` carry headers without any backend type or lifetime; how a raw handler receives them, given `_Call`'s `List[String]` transport; what the Flare adapter maps in each direction; whether a `String` or `ToResponse` result gets a default Content-Type, and whether any wire bytes of existing responses change; and whether typed handlers get header extraction in the first production slice. The gate does not change production or `adapters/`.
 
-Acceptance for both gates and for M3-003 is in `feature_list.json`.
+M3-004, the state storage decision gate, comes from the M3-003 review. With an `ArcPointer` field, code holding a second `State` handle could free memory a `state[]` reference points into, with public std API alone (`ArcPointer.__getitem__` is mutable through any handle, and Mojo 1.1.0 has no private fields). The gate keeps M3-001's public API and decides only the representation. Its bar is M2-004's: Muntin's internal names plus public std API must not reach memory corruption without an `unsafe_`-named call, and reach through the stdlib's private fields is pinned as the stdlib's own. It is not an M2 reopen, but it reverses M3-001's internal "no unsafe code" choice.
+
+M3-004 result: **selected a sealed shared box** in the private storage module. `_Shared[S]` holds one field, a `ThinAllocation` of a header with an atomic count and an `OwnedPointer[S]`; its accessor borrows its receiver, so every reference is immutable. Through a second handle, replacing, mutating or taking the value is a compile error; reassigning or moving a handle invalidates its references, as in PR #26. The only residual is the stdlib's private `ThinAllocation._ptr`, as for `_Erased`. `check_unsafe.sh` changes one rule (`_Shared` may be imported), and PR #26's `OwnedPointer` exemption goes. A scratch copy of the M3-003 branch with the box passes `check.sh`, `test.sh` and `check_flare.sh`. Details, candidates and revisit conditions: `docs/ARCHITECTURE.md`, "State storage decision (M3-004)".
+
+Acceptance for the gates and for M3-003 is in `feature_list.json`.
 
 ## Long-term success criterion
 

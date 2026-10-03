@@ -619,7 +619,7 @@
     },
     {
       "id": "M3-003",
-      "priority": 302,
+      "priority": 303,
       "category": "application_state",
       "description": "Stateful GET handlers in production, exactly the M3-001 slice: public muntin.State[S] and App.get overloads taking (handler, state) for def(State[S]) and def(State[S], Int), each returning String or ToResponse.",
       "acceptance": [
@@ -633,8 +633,23 @@
       "evidence": []
     },
     {
+      "id": "M3-004",
+      "priority": 302,
+      "category": "application_state",
+      "description": "Decide with pinned-compiler evidence how State[S] stores the shared value so that code holding another handle cannot free or replace memory a state[] reference points into, keeping M3-001's public API; production and adapters unchanged.",
+      "acceptance": [
+        "The public State[S] API of M3-001 (State(value), copy(), read-only state[], a State[S] first handler parameter bound by app.get[route](handler, state)) is unchanged by the decision.",
+        "The bar is stated and compiler-backed: Muntin's internal names plus public std API must not reach memory corruption without an unsafe_-named call; reach through the stdlib's private fields is re-probed on current main and pinned as must-build evidence, as M2-004 did for _Erased.",
+        "The review's cases are measured for each candidate: a second handle replacing the shared value, mutating it, or taking it; a header copied or moved over another; and a state[] reference used after its handle is reassigned (directly, through mut, by assigning a new box) or returned from it. The selected candidate rejects each at compile time; rejected candidates' cases are retained as must-build evidence.",
+        "Copy, drop exactly once, moves, the reference count (atomic, ArcPointer's orderings) and per-request borrowing through production _Erased (no copy, count change or allocation) are executable tests; the library side builds without the application module.",
+        "The decision names the module, the unsafe operations it adds, the invariant the compiler does not check, the check_unsafe.sh change, the cost and the exact M3-003 changes; a scratch copy of the M3-003 branch with them passes check.sh, test.sh and check_flare.sh. Spikes run outside src/muntin; src/muntin, adapters/ and App.handle are unchanged; canonical checks pass and a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
+    },
+    {
       "id": "M3-002",
-      "priority": 303,
+      "priority": 304,
       "category": "headers",
       "description": "Decide with pinned-compiler evidence how Muntin-owned Request and Response carry HTTP headers, before any header enters production; production and adapters unchanged.",
       "acceptance": [

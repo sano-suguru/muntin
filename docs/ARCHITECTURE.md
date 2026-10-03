@@ -956,7 +956,7 @@ Every request rule is M2's, decided in the same places: 404 without a match; 400
 
 **Ownership and lifetime.**
 
-- `State[S]` holds an `ArcPointer[S]` (std, reference counted with atomic counts; no unsafe operation). `State(value)` moves the value in. The application keeps its handle. `app.get[...](h, users)` borrows `users` and moves a copy of the handle into the route's `_Erased` box, together with the handler, as one private `_Bound[H, S]` value. The value lives until the last handle goes. Pinned in the spike: `Tracked` is dropped exactly once, after the application dropped its handle and then the moved `App`.
+- `State[S]` holds an `ArcPointer[S]` (std, reference counted with atomic counts; no unsafe operation). Superseded by M3-004 ("State storage decision (M3-004)"): through a second handle, `ArcPointer` lets code free memory a `state[]` reference points into, so production stores the value in a sealed box in the storage module; the public API below is unchanged. `State(value)` moves the value in. The application keeps its handle. `app.get[...](h, users)` borrows `users` and moves a copy of the handle into the route's `_Erased` box, together with the handler, as one private `_Bound[H, S]` value. The value lives until the last handle goes. Pinned in the spike: `Tracked` is dropped exactly once, after the application dropped its handle and then the moved `App`.
 - Per request: the stateful adapter borrows the boxed `_Bound` (`_Erased.invoke` already borrows its value) and passes `bound.state` by borrow. No copy, no reference-count change, no allocation. In the spike, the count is the same inside a handler as between requests (4, for 3 routes and the application's handle). The mutation that copies the handle per request turns it red.
 - `App` moves: the value is on the heap, so moving `App` (`var moved = app^`, twice in the spike) moves only the routes' handles. `TestClient(app)` borrows the `App` immutably, and `App.handle(self)` is read-only. Scratch copy: `TestClient` serves a stateful production `App` repeatedly, also after a move, while the application still reads its own handle.
 - The compiler tracks every registration: each is a `mut self` call on `App`, so a reference into `App` taken before it is invalidated (`scoped_direct_get_invalidates_interior_reference.mojo`). No project invariant about references into `App` is needed (contrast A2).
@@ -1034,7 +1034,7 @@ A fresh-context review of A2 then found the interior-reference gap. A second PR 
 - the truncated detail notes of failing M2 calls, or the repeated state argument, are measured as a DX problem before that: improve the diagnostics or add sugar without a stored mutable `Pointer`;
 - a toolchain change alters `ArcPointer`'s interface, or the receiver rule that makes `state[]` immutable (`mutate_through_state.mojo` compiles).
 
-**Next production slice (M3-003): stateful `get`.**
+**Next production slice (M3-003): stateful `get`.** (`State`'s representation is decided again in M3-004.)
 - `src/muntin/state.mojo` (new): public `struct State[S: Movable & Deinitable](Copyable, Movable)` with `_shared: ArcPointer[S]`, `__init__(out self, var value: S)` and `__getitem__(self) -> ref[self._shared] S`, exported from `muntin`. No marker trait yet: it is only needed by the `post` guard.
 - `src/muntin/app.mojo`: private `_Bound[H, S]`, `_call_state_none[S, E, R, respond]` and `_call_state_int[S, E, R, respond]` (the spike's, error handling and 400s as their M2 twins); four `App.get` overloads `(handler: def(State[S]) thin raises E -> String | R, state: State[S])` and `(def(State[S], Int) ..., state: State[S])`, each with its stateless twin's route asserts and messages, placed after the stateless `get` overloads; the module comment and docstrings.
 - Unchanged: `_handler_storage.mojo`, `_Erased`, `_Call`, `_Route`, `App.handle`, `http.mojo`, `body.mojo`, `testing.mojo`, `adapters/flare/muntin_flare.mojo`, `check_unsafe.sh`, and every existing test, fixture and expected text.
@@ -1044,6 +1044,90 @@ A fresh-context review of A2 then found the interior-reference gap. A second PR 
 - Notes: the slice places the stateful overloads after the stateless ones (the spike declares them first), so candidate notes appear in a different order. The fixtures' expected texts are substrings and do not depend on it. Comments in `state.mojo` must not use the word "unsafe": `check_unsafe.sh` matches comments too.
 - Known gap until the next slice: a stateful handler on one-argument `post` reports the `FromBody` message. The `State` guard and its marker ship with the stateful `post` overloads, so no message points at an overload that does not exist yet.
 - Not in the slice: stateful `post` (body, route value then body), stateful raw handlers, the guard, a scoped registrar (rejected above), middleware, headers.
+
+### State storage decision (M3-004)
+
+Status: **decision** (M3-004; production is unchanged in it). It decides how `State[S]` stores the shared value. The public API decided in M3-001 is frozen: `State(value)`, `.copy()`, `state[]` read-only, a `State[S]` first handler parameter bound by `app.get[route](handler, state)`. Only the representation behind it changes.
+
+**Why it was reopened.** M3-001 put an `ArcPointer[S]` in `State` and called it "safe std, no unsafe code". The PR #26 review of the M3-003 slice showed that this does not hold on Mojo 1.1.0:
+- `ArcPointer.__getitem__` returns a mutable reference through any handle, borrowed ones included. Its source at the 1.1.0 tag has a FIXME saying the origin it returns is not the right model.
+- Mojo 1.1.0 has no private fields, so `_shared` is reachable by name.
+- Together: code holding a second copy frees memory a reference from `state[]` points into, through public std API alone and without writing `unsafe`. With `ArcPointer[S]`, `b._shared[].names.clear()` leaves `ref first = a[].names[0]` dangling (`tests/state_storage_known_gaps/arc_alias_clear.mojo`). With PR #26's `ArcPointer[OwnedPointer[S]]`, `b._shared[] = OwnedPointer(Db(2))` drops the value `ref r = a[]` reads (`arc_alias_swap.mojo`, the review's case).
+
+This is the hazard class A2 was rejected for (M3-001): a stale reference the compiler does not see, reached through Muntin's names and public std API. It is not an M2 reopen: `App.handle`, `_Erased`, `_Call`, binding and 400/404/500 are untouched.
+
+**The bar.** The review asked that no name or safe pointer API reach the payload. Taken literally, Mojo 1.1.0 cannot meet it for any type, and M2-004 already measured why. Re-probed on current `main`, application code compiles `app._routes._len = 1000`, `List._len = 1_000_000`, `OwnedPointer._inner._ptr = ...` and `ArcPointer._inner = ...` without writing `unsafe`. This gate adopts M2-004's bar for `_Erased` unchanged: **Muntin's internal names plus public std API must not reach memory corruption without an `unsafe_`-named call. Reach through the stdlib's private fields is the stdlib's own, and is pinned, not claimed sealed.**
+
+**Selected: A, a sealed shared box in the private storage module.**
+
+```mojo
+struct _SharedHeader[S: Movable & Deinitable](Movable):
+    var count: Atomic[UInt64]
+    var value: OwnedPointer[S]
+
+struct _Shared[S: Movable & Deinitable](Copyable, Movable):
+    var _header: ThinAllocation[_SharedHeader[S]]   # the only field
+    def owned(self) -> ref[origin_of(self._header.unsafe_ptr()[].value)] OwnedPointer[S]
+
+struct State[S: Movable & Deinitable](Copyable, Movable):   # public API unchanged
+    var _shared: _Shared[S]
+    def __getitem__(self) -> ref[origin_of(self._shared.owned()[])] S
+```
+
+- **Sharing:** the copy constructor increments the count; `__deinit__` decrements it, and the last handle drops the value and frees the header. The count is atomic with `ArcPointer`'s orderings (relaxed increment, release decrement, acquire fence before freeing), so copying a `State` across threads keeps `ArcPointer`'s guarantee.
+- **Read-only:** `owned(self)` borrows its receiver, so every reference it yields is immutable, whatever handle it is reached through. That one line carries the guarantee: making it `ref self` lets a second handle assign the value (`alias_owned_assign.mojo` compiles). `State.__getitem__` adds nothing to it, so it no longer needs PR #26's `ImmOrigin(...)` wrapper (the mutation removing that wrapper stays green in A).
+- **Lifetime:** the `OwnedPointer` inside the header gives the reference from `state[]` an origin interior to the handle (`a._shared._header.value["value"]`). Using it after the handle is reassigned, directly, through `mut`, or by assigning a new box to `_shared`, is `use of invalidated interior reference`. Using it after a move is `use of uninitialized value`, and returning it as a reference into the handle is `cannot return reference with incompatible origin`. With the value inline in the header instead, those fixtures compile (mutation), so the `OwnedPointer` is load-bearing.
+- **Second handles:** pointing `b` at a new box (`b._shared = _Shared(...)` or `b = State(...)`) only drops `b`'s share; a reference from `a` keeps reading its value (`test_repointing_another_handle_keeps_the_value`). Code holding `b` cannot reach the shared value mutably through Muntin's names and public std API:
+  - `b._shared[] = ...` is `'_Shared[Db]' is not subscriptable`;
+  - `b._shared.owned() = ...` is `expression must be mutable in assignment`;
+  - `b._shared.owned()[].names.clear()` is `invalid use of mutating method`;
+  - `b._shared.owned()^.into_inner()` is rejected;
+  - copying a header over another is `cannot be implicitly copied`, and moving one is `abandoned without being explicitly destroyed`.
+- **Residual (pinned):** `b._shared._header._ptr[].value = OwnedPointer(...)` compiles and drops the value `r` reads. `ThinAllocation._ptr` is the stdlib's private field, a safe `Pointer[T, MutUntrackedOrigin]`. That is exactly where `_Erased`'s seal ends too (M2-004). `tests/state_storage_known_gaps/std_private_ptr_residual.mojo` must build; if the toolchain seals std-private fields it stops building.
+- **Per request:** unchanged from M3-001. A registration stores one copy of the handle with the handler in `_Erased`, and a request borrows it. In the spike, five calls through production `_Erased` leave the count at 3, and dropping the two boxes brings it back to 1.
+
+**Cost.** Two allocations per `State` when it is built (header, `OwnedPointer`), as with PR #26's representation. Each access goes through two pointers. There is no request-path cost.
+
+**Location and guard.** `_SharedHeader` and `_Shared` go into `src/muntin/_handler_storage.mojo`, which stays the only module allowed unsafe operations. Its docstring's scope widens from handler storage to Muntin's private storage. `scripts/check_unsafe.sh` changes in one rule: other modules may import `_Erased` or `_Shared` from it (`from ._handler_storage import _Erased` stays, and `state.mojo` adds `from ._handler_storage import _Shared`). `state.mojo` names no `OwnedPointer`, `ArcPointer` or unsafe API, so PR #26's one-word exemption for `state.mojo` is removed. Unsafe operations added to the storage module:
+- `OwnedPointer.unsafe_take_allocation` + `Allocation.into_thin`: create the header;
+- `ThinAllocation.unsafe_ptr`: read the header (count, accessor);
+- `Pointer.unsafe_mut_cast` + `unsafe_origin_cast[MutUntrackedOrigin]` + `ThinAllocation(unsafe_owned_ptr=)`: the copy constructor's second owning handle on the same header;
+- `ThinAllocation.unsafe_leak` + `OwnedPointer(unsafe_from_raw_pointer=)`: release the last handle.
+
+The invariant the compiler does not check: every `ThinAllocation` of a header is counted exactly once, created only by `_Shared.__init__` (count 1) or its copy constructor (count + 1) and leaked only by `__deinit__` (count - 1), and the header and value are freed only at zero. `_Shared` exposes `owned` and `count` and nothing mutable.
+
+**Candidates** (Mojo 1.1.0 (8189361e)):
+
+| Candidate | Result | Verdict |
+|---|---|---|
+| A. sealed `_Shared` (`ThinAllocation` header, atomic count, `OwnedPointer[S]`) in the storage module | public API unchanged; the review's alias cases rejected at compile time; reference lifetime and read-only compiler-checked; residual only through std-private `_ptr`, as `_Erased`; two allocations per `State`; one guard rule widened | **chosen** |
+| B. `ArcPointer[S]` (M3-001) | a second handle frees memory a `state[]` reference points into (`arc_alias_clear.mojo`); reassigning the last handle leaves a `ref` dangling | rejected |
+| B′. `ArcPointer[OwnedPointer[S]]` (PR #26) | reassignment checked, but a second handle replaces the shared `OwnedPointer` (`arc_alias_swap.mojo`, the review's case) | rejected |
+| C. scoped access (`state.read[f]()`) or a handler-only opaque handle | not measured: both change M3-001's public API, which A keeps | not pursued |
+| D. narrow the contract to "safe through public API" | contradicts the A2 and M2-004 bar | rejected |
+| E. wait for the toolchain (`ArcPointer` indirect origins, private fields) | the fallback had A failed | not needed |
+
+**Evidence.**
+- `tests/state_storage_spike.mojo` (library side: `_SharedHeader`, `_Shared`, `State`, and a `_Bound`-like box in production `_Erased`) + `tests/test_spike_state_storage.mojo` (5 tests): copies share one value and count; the value is dropped once after the last handle, also after a move; repointing a second handle keeps the first's value; reassigning releases one share; requests borrow the boxed handle.
+- `tests/state_storage_lib_only/driver.mojo`: built by `check.sh` without the application module; boxes and shares a state type the library has never seen.
+- `tests/state_storage_fail` (11): the alias cases above (payload swap, accessor assignment, value mutation, value take), header copy and move, mutation through `state[]`, the reference after reassignment (direct, through `mut`, of the box) and returned from a handle.
+- `tests/state_storage_known_gaps` (3, must build): B and B′ as above, and A's std-private residual.
+- Mutations (planted in the spike, reverted; 6), each red: `owned(ref self)`; a mutable subscript on `_Shared`; a copy without the increment (crash); a drop that frees on every handle (crash); the value inline in the header (the three reassignment fixtures compile); the handle copied per call.
+- Scratch copy of the M3-003 branch with A applied (not retained): `_Shared` in the storage module, `State` over it, the exemption removed and the import rule widened, plus the two alias fixtures in `tests/state_get_fail`. `./scripts/check.sh`, `./scripts/test.sh` (`test_state` 11/11, every suite unchanged) and `./scripts/check_flare.sh` exit 0, with 14 `state_get_fail` fixtures passing.
+
+**Revisit when:**
+- `std_private_ptr_residual.mojo` stops building: std-private fields are sealed, and the residual note goes;
+- `arc_alias_swap.mojo` or `arc_alias_clear.mojo` stops building: `ArcPointer` no longer hands out mutable references through shared handles (its FIXME is resolved). Re-measure B, which needs no unsafe code;
+- Mojo gets private fields: `_shared` and `_header` can be sealed by visibility, and the guard rule can narrow again.
+
+**Next production slice (M3-003, PR #26, rebased).**
+- `_handler_storage.mojo` gains `_SharedHeader` and `_Shared` as in the spike, its docstring's scope and unsafe list updated;
+- `state.mojo` holds `_Shared[S]`, with `__getitem__(self) -> ref[origin_of(self._shared.owned()[])] S`, and imports `_Shared` instead of `ArcPointer`/`OwnedPointer`;
+- `check_unsafe.sh` drops the `state.mojo` exemption and allows importing `_Shared`;
+- `tests/state_get_fail` gains `alias_payload_swap` and `alias_value_mutation`, and keeps the `ref_after_*` fixtures;
+- tests read the count through `_shared.count()`.
+
+Everything else in PR #26 stands.
 
 ## Request/Response ownership
 
