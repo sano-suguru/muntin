@@ -94,6 +94,15 @@ cp tests/state_spike.mojo tests/scoped_state_spike.mojo tests/state_lib_only/dri
 "$tmp/state_lib_only/driver"
 echo "ok"
 
+# Same check for the state-storage spike (M3-004): its sealed box must
+# share state types defined only by the application.
+step "state-storage spike library builds without the application module"
+mkdir -p "$tmp/state_storage_lib_only"
+cp tests/state_storage_spike.mojo tests/state_storage_lib_only/driver.mojo "$tmp/state_storage_lib_only/"
+"${MOJO[@]}" build --Werror -I src -I "$tmp/state_storage_lib_only" "$tmp/state_storage_lib_only/driver.mojo" -o "$tmp/state_storage_lib_only/driver"
+"$tmp/state_storage_lib_only/driver"
+echo "ok"
+
 step "compile-time route checks (tests/compile_fail must not build)"
 for t in tests/compile_fail/*.mojo; do
     expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
@@ -133,7 +142,9 @@ done
 # "Error-response decision (M2-012)". tests/raw_fail: evidence for
 # docs/ARCHITECTURE.md "Raw Request decision (M2-014)". tests/state_fail:
 # evidence for docs/ARCHITECTURE.md "Application state decision (M3-001)".
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail; do
+# tests/state_storage_fail: evidence for docs/ARCHITECTURE.md "State storage
+# decision (M3-004)".
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
@@ -154,11 +165,12 @@ for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_
     done
 done
 
-# Known gaps the decision rests on (M3-001): each file must build and is
-# never run. A file that stops building means the toolchain changed what the
-# decision measured; docs/ARCHITECTURE.md lists the revisit condition.
-step "tests/state_known_gaps (must build, not run)"
-for t in tests/state_known_gaps/*.mojo; do
+# Known gaps the decisions rest on (M3-001, M3-004): each file must build
+# and is never run. A file that stops building means the toolchain changed
+# what the decision measured; docs/ARCHITECTURE.md lists the revisit
+# condition.
+step "tests/state_known_gaps, tests/state_storage_known_gaps (must build, not run)"
+for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo; do
     if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$tmp/known_gap" >"$tmp/log" 2>&1; then
         cat "$tmp/log" >&2
         echo "error: $t no longer builds; a revisit condition in docs/ARCHITECTURE.md has fired" >&2
