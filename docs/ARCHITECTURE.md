@@ -1313,6 +1313,127 @@ Status: **production**, the raw member of the M3-001 family on M3-004's storage;
   - Mutations (planted, reverted; 14), each red. State binding and methods: the stateful raw `get` registered as `POST`, the `post` as `GET`, the `get` without `raw=True` (crash). Request transport: the rebuilt request without its headers, query or body, or built from the path alone. Errors: a handler error answered 400, or always the fixed 500. Per-request copying: the handle copied per request (the count read inside handlers rises). Selection: two defaulted parameters on the stateful raw `post` (`ambiguous call to 'post'`). Diagnostics: the stateful guard reverted to the stateless text (three `state_raw_fail` fixtures lose their expected text). Over loopback: the dropped headers and the always-500 errors.
 - Fresh-context review: no material issue (overload probes with `S = Request`, `S = Int`, a `FromBody` type as state, keyword arguments and `raises T` dispatch correctly; the selection mutation, the 33 changed diagnostics and the `_raw_request` refactor reproduced; storage, unsafe surface and adapter diffs empty). Minors applied: the note-budget revisit condition and what the fixtures prove (above); DX's notes for a wrong state type or a value instead of a handle; the explicit function-value spelling in DX section 8; the `_Route.raw` and `App.handle` docstrings name both raw adapters (comments only); the `check.sh` comment for `tests/state_raw_fail`.
 
+### JSON codec decision (M3-008)
+
+Status: **decision** (M3-008; production and adapters are unchanged in it). It decides Muntin's first JSON API, who owns the codec, the request and response `Content-Type` rules, where JSON failures go in the error model, and the production slice that follows.
+
+**Selected: A, a Muntin-owned `Json[T]` wrapper over application `FromJson`/`ToJson` traits, with a Muntin-owned strict codec.** `Json[T]` is a body through the existing `FromBody` and a result through the existing `ToResponse`, so no `App` overload, adapter shape or storage changes for it to register.
+
+```mojo
+trait FromJson(Deinitable, Movable):
+    @staticmethod
+    def from_json(value: JsonValue) raises -> Self       # raise -> 400
+
+trait ToJson:
+    def write_json(self, mut out: JsonWriter) raises     # raise -> fixed 500 (serialization failure)
+
+struct Json[T: Movable & Deinitable](
+    Deinitable, Movable,
+    FromBody where conforms_to(T, FromJson),
+    ToResponse where conforms_to(T, ToJson),
+    _JsonBody,                                            # private marker: the Content-Type step
+):
+    var value: T
+    def __init__(out self, var value: T)
+    def take(deinit self) -> T                            # body^.take(): moves the value out
+
+struct JsonValue(Copyable, Movable, Sized):               # a read-only position in a parsed document
+    def is_null(self) -> Bool
+    def bool(self) raises -> Bool
+    def int(self) raises -> Int                           # integer literal (no fraction/exponent) that fits Int
+    def float(self) raises -> Float64                     # any number literal, finite
+    def string(self) raises -> String
+    def __len__(self) -> Int                              # elements or members; 0 for scalars
+    def __getitem__(self, index: Int) raises -> JsonValue # array element
+    def __getitem__(self, name: String) raises -> JsonValue  # object member; raises when absent
+    def get(self, name: String) raises -> Optional[JsonValue]  # None when absent; null is a value
+
+struct JsonWriter(Movable):
+    def begin_object / end_object / begin_array / end_array (mut self) raises
+    def name(mut self, name: String) raises
+    def null / bool / int / float / string (mut self, ...) raises   # float raises on NaN/infinity
+    def value[T: ToJson](mut self, value: T) raises       # a nested application value
+```
+
+```mojo
+def create_user(body: Json[CreateUser]) -> Json[User]:   # or `var body` and body^.take()
+    return Json(User(1, body.value.name))
+
+app.post["/users"](create_user)                          # existing overload; unchanged syntax
+```
+
+- **Opt-in is explicit, per type.** The application declares `FromJson` and/or `ToJson` on its own types and maps fields itself; Muntin never names them. `Json[T]` conforms to `FromBody` only when `T: FromJson` and to `ToResponse` only when `T: ToJson` (documented conditional conformance with `where`-gated methods, Mojo manual "Conditional trait conformance"). A wrong `T` fails at the registration with the existing messages (`json_fail/body_without_from_json`: the production `FromBody` assert; `result_without_to_json`: `argument type 'Json[In]' does not conform to trait 'ToResponse'`).
+- **Ownership.** `Json` moves its value in (`Json(v^)`) and out (`body^.take()`, `deinit self`). A field cannot be moved out of the middle of a `Json` on Mojo 1.1.0 (`json_fail/move_value_out_of_json`), so `take` exists. Move-only `T` works as body and as result (`test_move_only_body_and_result`). A handler may borrow (`body: Json[T]`, read `body.value`) or own (`var body`).
+- **Parsed document.** Mojo 1.1.0 rejects a struct that holds a list of itself (`json_fail/recursive_value_tree`), so a document is a flat tape of nodes in document order (each container records its child count and the index past its subtree), and `JsonValue` is a position in it. The tape is held in M3-004's sealed `_Shared` box: copies of a `JsonValue` share it, and no copy can clear or replace it on an ordinary path (`json_fail/second_handle_mutates_document`; with `ArcPointer`, `v2._doc[].clear()` compiles and empties the tape another position indexes, measured). Accessors return values, never references into the tape. This adds no unsafe code outside `_handler_storage.mojo` (`check_unsafe.sh` already allows importing `_Shared`).
+- **No `rebind`, no reflection, no `__extension` in the selected codec.** It uses safe std types, `conforms_to` and conditional conformance only.
+
+**Codec source.** Mojo 1.1.0's standard library has no JSON module (`import std.json`: `unable to locate module 'json'`). The only JSON package on the pinned lock is `json` vendored inside Flare's conda package (`lib/mojo/json`, with `lib/libsimdjson_wrapper.so`), so it exists only in the `flare` environment (`json_fail/flare_json_package_in_default_env`), its reflection serde relies on `__extension` (undocumented retroactive conformance, never a supported opt-in here) and `MaybeUninit`, and depending on it would make core depend on the backend's package (A2). Flare's own JSON extractors (`flare/http/extract.mojo`) are not used either. So Muntin owns a small strict codec: no new dependency, and it is replaceable later behind `FromJson`/`ToJson`, whose requirements name only Muntin types.
+
+**Parsing (RFC 8259, strict; the slice's supported set).**
+- Accepted: one JSON text of any kind (objects, arrays, strings, numbers, `true`, `false`, `null`), with SP/HTAB/LF/CR whitespace; string escapes `\" \\ \/ \b \f \n \r \t \uXXXX`, surrogate pairs combined; nesting up to 64 arrays/objects (`MAX_DEPTH`); unknown object members are kept and ignored unless `from_json` reads them.
+- Rejected (400 through `from_body`): an empty body, trailing content or a second text, comments, trailing commas, single quotes, unquoted names, leading zeros, `+`, `.5`, `1.`, `NaN`/`Infinity`, a byte order mark, unescaped control bytes in strings, bad escapes, lone surrogates, duplicate member names (parser differentials), nesting past 64.
+- Field access: a missing member, a wrong kind, `int()` on `1.5`/`1e2` or beyond `Int`, `float()` overflowing to infinity all raise, so `from_json` raises and the request is 400. Absent and `null` are told apart (`get` -> `None` vs `is_null()`), which is how an `Optional` field is read.
+- Mojo 1.1.0 `atof` is lenient (it accepts `1.`, `.5`, `01`, `+1`, ` 1`, `nan`, `inf`) and rejects literals with more significant digits than it supports (`123456789012345678901234` raises), so the parser validates the RFC grammar itself and `float()` raises on those long literals (pinned in `test_number_limits_on_mojo_1_1_0`): a known gap, 400 for valid JSON numbers beyond `atof`.
+- Invalid UTF-8 is not representable in `Request.body` (a `String`); through Flare it arrives replaced by U+FFFD (the M2-016 fact, measured again in `compat/flare/json/json_loopback_probe.mojo`), so the codec cannot reject it.
+
+**Writing.** `JsonWriter` emits separators itself and raises on structural misuse (a value without a name in an object, a name outside one, an unmatched close, a second top-level value, an unfinished document) and on NaN or infinity, which JSON cannot represent (`String(Float64)` prints `nan`/`inf`). Strings escape `"`, `\` and every byte below 0x20 (`\n`, `\r`, `\t`, else `\u00XX`); other bytes are written as the UTF-8 they are. Finite floats use `String(Float64)`, which is valid JSON (`1e+16`, `1e-07`, `5e-324`, `-150.0`).
+
+**Content-Type.**
+- Responses: `Json[T].to_response()` answers 200 with exactly one field, `Content-Type: application/json` (no `charset`: RFC 8259 defines none). `String` results and `Response.text` still add no field (`test_text_results_keep_no_default_fields`), so no existing wire byte changes. Override: the application converts and edits, `var r = Json(v^).to_response(); r.status = 201; r.headers.set("Content-Type", "application/problem+json")`, returning `Response`; a `set` after the conversion wins and Muntin never re-adds or checks the field. The adapter's outbound rule does not touch `Content-Type` (measured over loopback).
+- Requests: a `Json[T]` body requires exactly one `Content-Type` field whose media type, the text before any `;` with SP/HTAB trimmed, is `application/json`, compared ASCII case-insensitively. Parameters are not interpreted (`application/json; charset=utf-8` is accepted; the body is read as UTF-8 per RFC 8259 §8.1). A missing field, two fields, `text/plain`, `application/x-www-form-urlencoded`, `application/problem+json` and other `+json` types are 415 `Unsupported Media Type` (body `Unsupported Media Type`, no fields), before `from_body`. Why require it: browsers send cross-site "simple" requests without a preflight with `text/plain`, a form type, or no `Content-Type` at all (a `Blob` body with an empty type), the known CSRF path into JSON endpoints that accept any type; and starting strict is reversible, since accepting `+json` or a missing field later is additive while tightening later breaks deployed clients. Why 415 rather than 400: it is the status for this condition (RFC 9110 §15.5.16), and it keeps "the body is not valid JSON" (400) distinguishable. Other bodies are unchanged: an application `FromBody` type still sees no headers and requires no `Content-Type`.
+- `FromBody.from_body(String)` cannot see headers, so the step is the body adapters', keyed on the private marker `_JsonBody` (as M3-006 keys the `State` guard on `_InjectedState`). Order on a JSON body route: 404 → query value 400 (`App.handle`) → route value 400 (adapter) → 415 (adapter) → JSON 400 (`from_body`: parse or `from_json`) → handler → result conversion. Measured on the spike's mirror (`model_post`, `model_post_int`; `test_selected_order_on_the_adapter_mirror`): a malformed body with a wrong type is 415, a bad `Int` segment with a wrong type is 400.
+- M2 stays closed: the M2 contract's "a request failure ... `from_body` raise is 400" is about application-defined `B: FromBody`, and every such route keeps its 400/404/500 boundaries; 415 exists only for `Json[T]`, a new Muntin-owned body type.
+
+**Errors.** Malformed JSON and `from_json` raises are request failures: 400 before the handler, handler not called (`test_malformed_json_is_400_before_the_handler`, 34 texts; `test_field_errors_are_400_and_extra_members_are_ignored`). Handler raises are unchanged: `ToErrorResponse` or the fixed 500. A response-serialization failure (`write_json` raises, NaN, infinity, an unbalanced writer) happens after the handler returned, inside the non-raising `ToResponse.to_response`; `Json` answers it itself with the fixed 500's bytes (`Internal Server Error`, no `Content-Type`), and the handler's `ToErrorResponse` is not called (`test_serialization_failure_is_not_a_handler_error`: a handler declared `raises AppError` whose conversion is 418 still gets 500, and the conversion counter stays 0). It is the same answer as an unconverted handler error but a different path: it is not a handler error, and no partial body is sent.
+
+**Allocation and copies visible to Muntin.** Request: `App.handle` already copies `request.body` into the adapter's arguments; parsing walks the bytes once and builds one tape (one `List` of nodes, one `String` per string, number and member name) in one `_Shared` (two allocations, as for `State`); `JsonValue` copies add a reference, not a tape copy (`test_json_value_copies_share_the_document`); `string()` copies out. The spike copies the body into a `List[UInt8]`; production indexes `as_bytes()` instead. Response: one `String` grown by the writer plus its small stacks, then one header field (two `String`s); the body moves into the `Response`.
+
+**Overload budget.** None added: `get` and `post` keep ten overloads each, and no existing diagnostic changes (the first slice adds a `_Route` field and an adapter step, no signature). Every typed shape takes `Json[T]` where it takes a `FromBody` body or a `ToResponse` result, stateful shapes included (`test_production_app_accepts_json_through_existing_overloads`).
+
+**Candidates** (Mojo 1.1.0 (8189361e), Flare v0.11.0):
+
+| Candidate | Result | Verdict |
+|---|---|---|
+| A. `Json[T]` wrapper, `FromBody`/`ToResponse` through conditional conformance | registers on every existing shape with no App change; documented features only; the Content-Type step is exact because the conversion is Muntin's; DX cost: `Json[...]` in the signature and `.value`/`take()` | **chosen** |
+| 2. `FromJson`/`ToJson` application traits | used by A as its requirements, over Muntin-owned `JsonValue`/`JsonWriter` | **chosen, inside A** |
+| B. `FromJson` refining `FromBody` (and `ToJson` refining `ToResponse`) with the parent's requirement as a default | compiles and gives DX section 4's exact `def create_user(body: CreateUser) -> User` (`json_known_gaps/refining_trait_default`, must build). The manual documents defaults for a trait's own methods and refinement inheriting requirements, not a refining trait implementing its parent's requirement. Also: the manual's conflicting-defaults rule makes a type that conforms to `ToJson` and another trait defaulting `to_response` an error; the format is bound to the type in every route; a Content-Type step keyed on `FromJson` would fire even where the application overrides `from_body` | rejected (undocumented basis) |
+| C. `Response.json(...)`/helper only | same bytes as A (`test_candidate_c_helper_moves_serialization_failure_into_the_handler`), but no request side; the handler must return `Response` and raise, and a serialization failure becomes a handler error (418 through the handler's `ToErrorResponse` in the test) | rejected (A covers it: `Json(v^).to_response()`) |
+| 4a. blanket JSON-capable bodies through an 11th `post` overload (`B: FromJson`) | `ambiguous call to 'post'` for every JSON type, including one conforming to nothing else: the existing `def(var B) -> R` overload bounds `B` by `Movable & Deinitable` and asserts `FromBody` inside (scratch copy) | rejected |
+| 4b. blanket through relaxed bounds in the existing overloads (asserts accept `FromJson`; `R: Movable & Deinitable` with `ToResponse`-or-`ToJson` asserted) | compiles on a scratch copy (a `String` handler still selects the `String` overload, the shorter list) but needs the handler's function type `rebind`-ed to a `downcast` result inside `App`, puts the codec into the adapters, changes 16 bounds/asserts, turns a non-conforming result from `no matching method ... does not conform to trait 'ToResponse'` into `constraint failed` (6 pinned fixtures), and needs a precedence rule for a type that is both `FromBody` and `FromJson` | rejected |
+| 5. no built-in codec | the Muntin-owned codec is small and needs no new dependency, toolchain feature or unsafe code; without it ordinary JSON requires every application to write a parser | rejected |
+| Derived codec (reflection defaults) | encoding by `std.reflection` works for a fixed field set (scalars, `List[String]`, `Optional[String]`, nested structs) but not `List[<struct>]` without `__extension` (`json_fail/reflection_list_of_structs`), and an unsupported field fails only at first use, deep in instantiation notes (`json_known_gaps/derived_encode_declared` builds; `json_fail/derived_encode_unsupported_field_at_use`); decoding has no constructor (`reflection_decode_needs_a_constructor`) and needs `Defaultable` dummy initializers (`reflection_decode_requires_defaultable`) or unsafe uninitialized storage | deferred (additive later: a default added to a requirement breaks no conformer) |
+| Flare-bundled `json` package | only in the `flare` environment, `__extension`, native library, backend dependency in core | rejected |
+
+**Evidence.**
+- `tests/json_spike.mojo` (library side: traits, `Json`, `JsonValue` on `_Shared`, parser, writer, the Content-Type rule, the adapter mirror, C's helper) and `tests/test_spike_json.mojo` (15): production `App` and `TestClient` registering `Json` on `def(B)`, `def(Int, B)`, `def(Int) -> R` and stateful `def(State[S], Int) -> R`; a representative struct with string (escapes, `é`, a surrogate pair), integer, boolean, float, `List[String]`, an optional member as `null` and absent, a nested object and a list of objects (explicit `write_json` loop), extra members ignored; 34 malformed texts; field errors; the nesting cap; number limits; writer escapes and structure; serialization failure vs handler error; move-only body and result; the explicit override; no default fields on text results; the Content-Type rule (14 values, missing, duplicated); the order on the mirror; document sharing; candidate C.
+- `tests/test_spike_json_dx.mojo` (1): DX sections 4 and 5's JSON examples as written there, against the spike.
+- `tests/json_lib_only/driver.mojo`: built by `check.sh` without the application module.
+- `tests/json_fail` (12) and `tests/json_known_gaps` (2), checked by `check.sh`.
+- `compat/flare/json/json_loopback_probe.mojo` (`check_flare.sh`): over loopback through the unchanged adapter, a request `Content-Type` (with `charset`) reaches `Request` unchanged and a missing one stays missing; Flare's `HttpClient.post(url, String)` sets `Content-Type: application/json` itself, so a test meaning "no Content-Type" must build its request; a JSON body with UTF-8 and escapes round-trips and equals `App.handle`, with `Content-Type: application/json` on the wire beside Flare's `Content-Length`; malformed JSON is 400 on both paths; invalid UTF-8 arrives as U+FFFD and parses.
+- Scratch copies (not retained): 4a and 4b above.
+- Mutations (planted, reverted; 22), each red: the Content-Type rule accepting a missing field, a second field or `+json`, or rejecting parameters; the step after `from_body`, before the route value, or applied to every body type; the result without its field; a serialization failure answered 200; the parser accepting trailing commas, duplicate members, leading zeros, lone low surrogates, control bytes, trailing content, or one level past the cap; `int()` accepting fractions; `float()` accepting infinity; the writer accepting non-finite numbers, leaving control bytes unescaped or finishing an open container; an absent member returned as a value.
+
+**Revisit when:**
+- the Mojo manual documents a refining trait implementing its parent's requirement (or `json_known_gaps/refining_trait_default` stops building): re-measure B against A;
+- `std` gains a JSON module, or a standalone JSON package for the default environment needs only documented features: weigh replacing the codec behind `FromJson`/`ToJson`;
+- `std.reflection` gains a constructor, or reflection exposes a field type's parameters (or `__extension` is documented): a derived `from_json`, and a derived `write_json` covering `List[<struct>]`, become possible; a derived `write_json` for the fixed set is possible now, and needs a decision on its late diagnostics;
+- `atof` accepts long literals: `test_number_limits_on_mojo_1_1_0` flips and `float()` accepts them;
+- Muntin gains a bytes body: the codec should reject invalid UTF-8 itself;
+- clients need `+json` media types or a missing `Content-Type`: an additive relaxation of the request rule;
+- `TestClient` gains a way to send header fields (the slice adds none, below);
+- `get`/`post` gain an 11th overload for any reason: re-run the note-budget measurement (this decision adds none).
+
+**Next production slice (M3-009): JSON in production.**
+- `src/muntin/json.mojo` (new): `FromJson`, `ToJson`, `Json[T]` (with `take`), `JsonValue` (tape in `_Shared`), `JsonWriter`, as in the spike; the parser private and indexing `as_bytes()` (no body copy); private `_JsonBody` and `_json_content_type(headers) -> Bool`. `muntin` exports `Json`, `FromJson`, `ToJson`, `JsonValue` and `JsonWriter`; no `parse_json` export (a raw handler decodes with `Json[T].from_body(req.body)`).
+- `src/muntin/app.mojo`: `_Route` gains `json: Bool` (default `False`), set by the eight body overloads (stateless and stateful, `def(B)`/`def(Int, B)`, both result policies) to `conforms_to(B, _JsonBody)`. In `App.handle`, a JSON route appends one more raw argument after the body, `"1"` when `_json_content_type(request.headers)` holds and `""` otherwise; non-JSON body routes get no extra argument, so existing indexing is unchanged. `_call_body`, `_call_int_body`, `_call_state_body` and `_call_state_int_body`, under `comptime if conforms_to(B, _JsonBody)`, convert the route value first, then answer 415 (`Response.text("Unsupported Media Type", status=415)`) when the last argument is empty, then call `from_body`. `_Call`, `_Erased`, the storage module, `check_unsafe.sh`, every overload signature and every existing message are unchanged; `App` stays non-generic.
+- Unchanged: `http.mojo`, `body.mojo` (`FromBody` still sees only the body), `state.mojo`, `testing.mojo` (no header-sending method: JSON route tests send `App.handle(Request("POST", target, body, headers^))`, the seam `TestClient` uses), the Flare adapter.
+- Tests: `tests/test_json.mojo`, the spike's semantics on production through `App.handle` and `TestClient` (every typed shape, stateful included; the supported and rejected sets; field errors; 415 cases and the full order with a query route and an `Int` segment; serialization failure vs handler error; move-only; override; text results with no field; a raw handler decoding with `Json[T].from_body`; DX sections 4 and 5's examples). Loopback in `adapters/flare/test_localhost_roundtrip.mojo`: `POST` with `application/json; charset=utf-8` 200 and `Content-Type: application/json` on the wire, missing and `text/plain` 415, malformed 400, each equal to `App.handle`.
+- Negative fixtures, `tests/json_api_fail` against production: `Json[T]` without `FromJson` as a body and without `ToJson` as a result, a `FromJson` type as a bare body, moving `body.value` out, a non-raising writer call, a second `JsonValue` mutating the tape.
+- Mutations: the spike's 22 on production, plus the verdict appended for every body route (non-JSON indexing shifts), the `json` flag missing on a stateful overload, the step missing in one of the four adapters, 415 answered as 400.
+- Diagnostics: every existing must-fail fixture's text identical (no signature changes; to be confirmed in full).
+- Docs: DX sections 4 and 5 production status, `docs/SPEC.md`, `feature_list.json`, `AGENT_PROGRESS.md`.
+- Not in the slice: derived codecs, `+json` or missing `Content-Type`, `TestClient` header methods, `Json(value, status=)`, top-level `List` results, schema/OpenAPI, streaming, typed header extraction, new methods or handler shapes.
+
 ## Request/Response ownership
 
 M0 should choose the simplest ownership model that compiles cleanly and supports deterministic tests. Do not prematurely optimize around zero-copy wire buffers if that leaks backend lifetimes into Muntin's durable API.

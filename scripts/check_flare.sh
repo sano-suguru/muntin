@@ -163,8 +163,31 @@ if ! grep -qF "$expected_d" "$tmp/log"; then
 fi
 echo "ok: $fixture_d"
 
+# M3-008 JSON evidence (docs/ARCHITECTURE.md "JSON codec decision (M3-008)"):
+# the request and response fields and body bytes the JSON contract relies on,
+# over loopback through the adapter, with the decision spike's Json[T].
+step "Flare JSON loopback probe (M3-008)"
+"${FLARE[@]}" build --Werror -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo -o build/json_loopback_probe
+json_status=0
+NO_PROXY=127.0.0.1 ./build/json_loopback_probe >"$tmp/json_probe.log" 2>&1 || json_status=$?
+cat "$tmp/json_probe.log"
+leftover_json='^\./build/json_loopback_probe$'
+if pgrep -f "$leftover_json"; then
+    pkill -KILL -f "$leftover_json" || true
+    echo "error: the JSON probe left a server process behind" >&2
+    exit 1
+fi
+if ((json_status != 0)); then
+    echo "error: Flare JSON behavior differs from the recorded M3-008 evidence" >&2
+    exit 1
+fi
+if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/json_probe.log"; then
+    echo "error: compat/flare/json/json_loopback_probe.mojo ran no tests" >&2
+    exit 1
+fi
+
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1

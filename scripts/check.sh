@@ -112,6 +112,15 @@ cp tests/headers_spike.mojo tests/headers_lib_only/driver.mojo "$tmp/headers_lib
 "$tmp/headers_lib_only/driver"
 echo "ok"
 
+# Same check for the JSON codec spike (M3-008): `Json[T]` and the codec must
+# convert application types defined only by the application.
+step "JSON spike library builds without the application module"
+mkdir -p "$tmp/json_lib_only"
+cp tests/json_spike.mojo tests/json_lib_only/driver.mojo "$tmp/json_lib_only/"
+"${MOJO[@]}" build --Werror -I src -I "$tmp/json_lib_only" "$tmp/json_lib_only/driver.mojo" -o "$tmp/json_lib_only/driver"
+"$tmp/json_lib_only/driver"
+echo "ok"
+
 step "compile-time route checks (tests/compile_fail must not build)"
 for t in tests/compile_fail/*.mojo; do
     expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
@@ -162,8 +171,9 @@ done
 # (M3-006). tests/state_raw_fail: the stateful raw shape on both methods
 # takes its State, first, borrowed and read-only, then only the Request, and
 # returns Response (M3-007); the reference-lifetime and second-handle cases
-# are the shared State's, pinned in tests/state_get_fail.
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail; do
+# are the shared State's, pinned in tests/state_get_fail. tests/json_fail:
+# evidence for docs/ARCHITECTURE.md "JSON codec decision (M3-008)".
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
@@ -184,12 +194,12 @@ for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_
     done
 done
 
-# Known gaps the decisions rest on (M3-001, M3-004, M3-002): each file must build
+# Known gaps the decisions rest on (M3-001, M3-004, M3-002, M3-008): each file must build
 # and is never run. A file that stops building means the toolchain changed
 # what the decision measured; docs/ARCHITECTURE.md lists the revisit
 # condition.
-step "tests/state_known_gaps, tests/state_storage_known_gaps, tests/headers_known_gaps (must build, not run)"
-for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo tests/headers_known_gaps/*.mojo; do
+step "tests/state_known_gaps, tests/state_storage_known_gaps, tests/headers_known_gaps, tests/json_known_gaps (must build, not run)"
+for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo tests/headers_known_gaps/*.mojo tests/json_known_gaps/*.mojo; do
     if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$tmp/known_gap" >"$tmp/log" 2>&1; then
         cat "$tmp/log" >&2
         echo "error: $t no longer builds; a revisit condition in docs/ARCHITECTURE.md has fired" >&2

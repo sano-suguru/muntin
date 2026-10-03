@@ -159,7 +159,7 @@ Semantics:
 
 Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` and `def(Int, B)` (M2-009) with `B: FromBody` for `app.post`, plus, on both, the raw `def(req: Request) -> Response` (M2-015, section 9; `Response` only, under the same error model). Each may be non-raising or declare `raises` or `raises T` (M2-011, section 6; a `T` declaring `ToErrorResponse` chooses its own response, M2-013), and returns `String` (or a type that converts to it implicitly, such as `StaticString`) or a type conforming to `ToResponse`, including `Response` (M2-008, section 5). Other `get` shapes (more or non-`Int` parameters) and other result types fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) raises Never thin -> String'` and, for the `ToResponse` candidate, `argument type 'Int' does not conform to trait 'ToResponse'`. Since M3-003, `app.get` also takes a stateful handler with its state as a second argument, `def(State[S])` or `def(State[S], Int)`, and since M3-007 the stateful raw `def(State[S], req: Request) -> Response` (section 8); a failing one-argument `get` call lists those five candidates too, each with `missing required argument: 'state'`.
 
-Still targets (not implemented yet; M3 or later, each placed in `docs/SPEC.md` "M3"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, typed header extraction and default response headers, parameter-name checking and middleware. Application state (section 8) is production for `get` since M3-003, for `post` since M3-006 and for raw handlers on both since M3-007. Request and response headers are production since M3-005 (section 9); typed header extraction and default headers are not.
+Still targets (not implemented yet; M3 or later, each placed in `docs/SPEC.md` "M3"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, typed header extraction and default response headers, parameter-name checking and middleware. Application state (section 8) is production for `get` since M3-003, for `post` since M3-006 and for raw handlers on both since M3-007. Request and response headers are production since M3-005 (section 9); typed header extraction and default headers are not. JSON bodies and results are decided (M3-008, section 4) but not production: the exact API below is the target of the next slice (M3-009).
 
 Mojo facts discovered while proving the above:
 
@@ -333,8 +333,69 @@ app.post["/users/{id}"](update_user)    # production (M2-009): def update_user(i
 ```
 
 - Binding is positional (the decided rule; production implements no route value or exactly one `Int` route value before the body): route values (path segments, then the query key) fill the first parameters, and one more parameter, last, is the body. Route values are Muntin builtins (`Int`), bodies are types that conform to the body trait, and the two never overlap, so a forgotten `{id}` or a misplaced body type is a compile error at `app.post`, not a silent rebinding.
-- The application writes `from_body` and chooses the body format. Muntin does not decode JSON yet: a JSON codec will be a separate, later addition that fills `from_body`, so the "no manual decoding" goal above waits for it. Routing and binding do not change when it arrives.
+- The application writes `from_body` and chooses the body format. Muntin does not decode JSON in production yet; the JSON API is decided (M3-008, below) and fills `from_body` through a Muntin-owned wrapper. Routing and binding do not change when it arrives.
 - A body that does not convert is 400 before the handler runs; a raising handler's error is a different outcome (500, section 6).
+
+JSON, status (M3-008): **decided, not production** (`docs/ARCHITECTURE.md`, "JSON codec decision (M3-008)"; evidence in `tests/test_spike_json.mojo`, `tests/json_fail/` and `tests/json_known_gaps/`; production is the M3-009 slice). The application declares `FromJson`/`ToJson` on its own types and wraps them in Muntin's `Json[T]`, which is a body and a result through the existing traits, so registration is unchanged and no new handler shape exists:
+
+```mojo
+from muntin import App, FromJson, Json, JsonValue, JsonWriter, ToJson
+
+
+@fieldwise_init
+struct CreateUser(FromJson):
+    var name: String
+    var age: Int
+    var nickname: Optional[String]
+
+    @staticmethod
+    def from_json(value: JsonValue) raises -> Self:   # raise -> 400, handler not called
+        var nick = Optional[String]()
+        var n = value.get("nickname")                  # None when absent
+        if n and not n.value().is_null():
+            nick = n.value().string()
+        return Self(value["name"].string(), value["age"].int(), nick^)
+
+
+@fieldwise_init
+struct User(ToJson):
+    var id: Int
+    var name: String
+
+    def write_json(self, mut out: JsonWriter) raises:  # raise -> fixed 500, not the handler's error
+        out.begin_object()
+        out.name("id")
+        out.int(self.id)
+        out.name("name")
+        out.string(self.name)
+        out.end_object()
+
+
+def create_user(body: Json[CreateUser]) -> Json[User]:    # borrow and read body.value
+    return Json(User(1, body.value.name))
+
+
+def replace_user(id: Int, var body: Json[CreateUser]) -> Json[User]:
+    var c = body^.take()                                  # own: the whole value, moved out
+    return Json(User(id, c.name))
+
+
+app.post["/users"](create_user)          # the existing def(B) overload
+app.post["/users/{id}"](replace_user)    # the existing def(Int, B) overload
+# POST /users  Content-Type: application/json  {"name":"Ada","age":36}
+#   -> 200, Content-Type: application/json, {"id":1,"name":"Ada"}
+# Content-Type missing, text/plain, two fields, or application/problem+json
+#   -> 415 "Unsupported Media Type" (before the body is read)
+# application/json; charset=utf-8 -> accepted (parameters are not interpreted)
+# malformed JSON, a missing member, a wrong kind -> 400 "Bad Request"
+```
+
+- `def create_user(body: CreateUser) -> User`, with no wrapper, is not the JSON form: a `FromJson` type is not a body by itself (`tests/json_fail/from_json_alone_is_not_a_body.mojo`: `the handler's parameter is the request body; its type must conform to FromBody`). Making it one would need an overload that is ambiguous with the existing body overload, a trait refining `FromBody` that implements its parent's requirement (compiles, not documented by the Mojo manual), or relaxed bounds in every typed overload; all are measured and rejected in ARCHITECTURE. Fields are mapped by hand: Mojo 1.1.0 reflection has no constructor, so a derived `from_json` would need a dummy `Defaultable` initializer in every type.
+- `body.value^` does not compile (`field 'body.value...' destroyed out of the middle of a value`); `body^.take()` on a `var body` moves the whole value out (a move-only `T` works). As for any Mojo 1.1.0 struct, moving one field out of that value needs a `deinit` method on the type; otherwise copy the field.
+- `Json[T]` requires `T: FromJson` as a body and `T: ToJson` as a result; otherwise the registration fails with the existing messages (`its type must conform to FromBody`; `argument type 'Json[In]' does not conform to trait 'ToResponse'`).
+- Strict RFC 8259: comments, trailing commas, leading zeros, `NaN`, duplicate member names, a byte order mark, lone surrogates and nesting deeper than 64 are 400. Extra members are ignored. `int()` takes integer literals that fit `Int`; `float()` takes any finite number, except literals with more digits than Mojo 1.1.0's `atof` supports (400, a known gap).
+- Through the Flare backend, invalid UTF-8 in a body arrives as U+FFFD and is not rejected.
+- `TestClient.post` sends no `Content-Type`, so a JSON route answers it 415; tests send `app.handle(Request("POST", "/users", body, headers^))` with the field set.
 
 ## 5. Typed responses
 
@@ -391,6 +452,18 @@ app.get["/health"](health)                # def health() -> Response: Response c
 - `-> Response` uses the same trait: `Response` conforms and returns itself by move, so the handler's status and body reach the client unchanged (`GET /teapot` -> 418). There is no separate `Response` overload.
 - The conversion runs once, after the handler returns. A 400 (route value or body failed to convert) or 404 calls neither the handler nor the conversion; a handler that raises (section 6) skips the result conversion.
 - A result type that is neither `String`-compatible nor conforming fails at the registration call: `no matching method in call to 'get'` with the note `argument type 'Int' does not conform to trait 'ToResponse'`.
+
+JSON results (M3-008, decided, not production): a handler returns `Json[T]` with `T: ToJson` (section 4). The response is 200 with exactly one field, `Content-Type: application/json`; `String` results and `Response.text` still add no field. Another status or media type is an explicit edit of the converted response:
+
+```mojo
+def create() raises -> Response:
+    var r = Json(User(7, "Ada")).to_response()
+    r.status = 201
+    r.headers.set("Content-Type", "application/problem+json")   # a set after the conversion wins
+    return r^
+```
+
+If `write_json` raises (including NaN or infinity, which JSON cannot represent) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`; the handler's `ToErrorResponse` is not called, because the handler did not fail.
 
 ## 6. Application errors
 
@@ -686,7 +759,7 @@ Compile-time machinery must earn its complexity through simpler application code
 
 The same type information used for request parsing and response serialization should eventually feed API schema generation. Application authors should not maintain a second copy of their data model solely for OpenAPI.
 
-Status: not part of M2. M2-016 moved schema/OpenAPI foundations to M3: `FromBody` and `ToResponse` leave the body format to the application, so there is no type-level schema source until a codec defines the mapping.
+Status: not part of M2. M2-016 moved schema/OpenAPI foundations to M3: `FromBody` and `ToResponse` leave the body format to the application, so there is no type-level schema source until a codec defines the mapping. The M3-008 codec does not define one either: `FromJson`/`ToJson` map fields by hand, so a schema source waits for a derived codec (its revisit conditions are in ARCHITECTURE, "JSON codec decision (M3-008)").
 
 ## 14. Async and streaming
 
