@@ -195,7 +195,7 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: active after M2-016. M3-001 (application state decision gate) and M3-004 (state storage decision gate) are decided, and the M3-001 slice M3-003 (stateful `get`) is implemented on M3-004's sealed box; M3-002 (headers decision gate) is next, below.
+Status: active after M2-016. M3-001 (application state decision gate) and M3-004 (state storage decision gate) are decided, and the M3-001 slice M3-003 (stateful `get`) is implemented on M3-004's sealed box. M3-002 (headers decision gate) is decided; its production slice M3-005 (headers in production) is next, below.
 
 Potential work, each cut into its own decision-first item. These include the capabilities M2-016 deferred, with the reason each is additive:
 
@@ -241,7 +241,11 @@ M3-004 result: **selected a sealed shared box** in the private storage module. `
 
 M3-003 result: `muntin.State[S]` (`src/muntin/state.mojo`) and the four stateful `App.get` overloads are production, exactly the slice. Measured against the stateless twins in `tests/test_state.mojo` (11 tests, through `TestClient`): the same route checks and messages, `Int` from a path segment or a query item, the 400s before the handler (the handler's call counter stays 0), `ToErrorResponse` or the fixed 500, 404, first registration wins. Each registration raises the handle's reference count by one; requests, whatever their outcome, leave it unchanged; dropping the `App` releases the routes' handles; the value is destroyed once across two `App` moves; `TestClient` serves the `App` before and after a move. A Flare loopback `GET /staff/{id}` equals `TestClient`. Of the 70 existing `compile_fail`, `storage_fail` and `body_fail` fixtures, 62 diagnostics are unchanged and 8 failing `get` calls gain the four `missing required argument: 'state'` notes, 3 of which lose trailing detail notes to Mojo's ten-note cap; every expected text still matches. `_Erased`, `_Call`, `_Route`, `App.handle`, `http.mojo`, `body.mojo`, `testing.mojo` and the Flare adapter are unchanged. `State` stores its value in M3-004's sealed `_Shared[S]`, added to `_handler_storage.mojo`: a `state[]` reference is immutable and interior to its handle (using it after the handle is reassigned is a compile error, `tests/state_get_fail/ref_after_*`), and a second handle cannot replace or mutate the shared value (`alias_payload_swap`, `alias_value_mutation`). `check_unsafe.sh` changes only to let other modules import `_Shared`.
 
-Acceptance for the gates and for M3-003 is in `feature_list.json`.
+M3-002 result: **selected `muntin.Headers`**, an ordered list of fields with original casing, repeated names kept in order, ASCII case-insensitive lookup, `add`/`set` that validate (token names; no control bytes in values) and raise, and `get` returning `Optional[String]`. `Request` and `Response` each gain a `headers` field; `Request`'s initializer gains a defaulted last argument, so every existing call is unchanged. Raw handlers receive fields through the existing raw transport: `App.handle` appends names and values after the four raw strings. `_Call`, `_Erased`, `_Route`, the storage module and the unsafe surface are unchanged. No default headers: `Response.text` sets no `Content-Type`, so no existing response's wire bytes change. Typed header extraction is deferred. The Flare adapter rebuilds inbound fields from Flare's public `encode_to`; outbound it appends fields in order, omits the backend-owned `Content-Length`, `Transfer-Encoding` and `Connection`, and re-checks each field. Values are `String`: through Flare's strict default, header bytes ≥ 0x80 are answered 400 by Flare before Muntin sees them. A scratch copy with the slice applied leaves every suite, the 90 production fixtures' diagnostics and `GET /hello`'s wire headers unchanged. Details: `docs/ARCHITECTURE.md`, "Headers decision (M3-002)".
+
+M3-005, headers in production (the M3-002 slice): exactly the "Next production slice (M3-005)" in that section. Acceptance is in `feature_list.json`.
+
+Acceptance for the gates and for M3-003 and M3-005 is in `feature_list.json`.
 
 ## Long-term success criterion
 
