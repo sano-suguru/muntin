@@ -27,7 +27,9 @@
 #               `.copy()`, `state[]` read-only. The `OwnedPointer` gives the
 #               reference from `state[]` an origin interior to the handle,
 #               so using it after the handle is reassigned or moved is a
-#               compile error.
+#               compile error. Read-only rests on one line: `owned(self)`
+#               borrows its receiver, so every reference it yields is
+#               immutable.
 
 from std.atomic import Atomic, Ordering, fence
 from std.memory import OwnedPointer
@@ -98,9 +100,9 @@ struct State[S: Movable & Deinitable](Copyable, Movable):
     def __init__(out self, var value: Self.S):
         self._shared = _Shared(value^)
 
-    def __getitem__(
-        self,
-    ) -> ref[ImmOrigin(origin_of(self._shared.owned()[]))] Self.S:
+    def __getitem__(self) -> ref[origin_of(self._shared.owned()[])] Self.S:
+        """Read-only because `_Shared.owned` borrows its receiver; interior
+        to this handle because `OwnedPointer[]` is."""
         return self._shared.owned()[]
 
 
