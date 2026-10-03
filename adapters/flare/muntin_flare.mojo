@@ -3,7 +3,8 @@
 Depends inward on Muntin's backend seam, `App.handle(Request) -> Response`,
 and never routes on its own. Builds only in the `flare` pixi environment.
 
-Conversion policy (M1; target handling restated for M2-002):
+Conversion policy (M1; target handling restated for M2-002; headers M3-005,
+decided in docs/ARCHITECTURE.md "Headers decision (M3-002)"):
 - method: copied verbatim.
 - request target: Flare's `url` (path plus any query, undecoded) passed
   verbatim to Muntin's `Request`, which splits path from query, exactly as
@@ -11,9 +12,23 @@ Conversion policy (M1; target handling restated for M2-002):
   query, and does not use Flare's query helpers.
 - request body: bytes copied into a `String`, decoded as UTF-8 with invalid
   sequences replaced by U+FFFD (Flare's `Request.text()`).
-- headers, version and peer: dropped; Muntin `Request` has none.
-- response: status and body bytes copied; reason left unset, so Flare's
-  default applies; no headers set (Muntin `Response` has none).
+- request headers: every field, in order and casing, rebuilt from Flare's
+  public `HeaderMap.encode_to` (Flare has no public field iterator) and
+  verified against Flare's by-name view: the parsed count is `len()`, and
+  per name the parsed values equal `get_all(name)` position by position.
+  Over HTTP/1.1 the parse is exact; over cleartext HTTP/2 Flare admits a
+  name with `:` inside, which a first-colon parse would misread as another
+  field. A field that fails the check or `Headers.add` (a control byte, a
+  non-token name) cannot be represented: the answer is 400.
+- version and peer: dropped.
+- response: status, body bytes and header fields copied; reason left unset,
+  so Flare's default applies. Header fields go out in order, except those
+  the backend owns or that are connection-specific (`Content-Length`,
+  `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`,
+  `Upgrade`, `TE`, `Trailer`) and every field a `Connection` value names:
+  Flare filters a different subset on each protocol, so the adapter applies
+  one rule for both. Each field is re-checked with `Headers.add` before it
+  is handed to Flare; a failure answers 500.
 """
 
 from flare.http import (
@@ -21,17 +36,125 @@ from flare.http import (
     Request as FlareRequest,
     Response as FlareResponse,
 )
-from muntin import App, Request, Response
+from muntin import App, Headers, Request, Response
 
 
-def to_muntin_request(request: FlareRequest) -> Request:
-    return Request(request.method, request.url, request.text())
+def _ascii_lower(s: String) -> String:
+    var out = String()
+    for b in s.as_bytes():
+        var c = Int(b)
+        if c >= ord("A") and c <= ord("Z"):
+            out += chr(c + 32)
+        else:
+            out += chr(c)
+    return out^
+
+
+def _same_name(a: String, b: String) -> Bool:
+    return a.byte_length() == b.byte_length() and _ascii_lower(
+        a
+    ) == _ascii_lower(b)
+
+
+def _trim_ows(s: StringSlice) -> String:
+    var b = s.as_bytes()
+    var start = 0
+    var end = len(b)
+    while start < end and (Int(b[start]) == 32 or Int(b[start]) == 9):
+        start += 1
+    while end > start and (Int(b[end - 1]) == 32 or Int(b[end - 1]) == 9):
+        end -= 1
+    return String(s[byte=start:end])
+
+
+def to_muntin_headers(request: FlareRequest) raises -> Headers:
+    """Exactly the request's fields, or a raise when they cannot be
+    represented."""
+    var buf = List[UInt8]()
+    request.headers.encode_to(buf)
+    var text = String(from_utf8_lossy=Span(buf))
+    var names = List[String]()
+    var values = List[String]()
+    for line in text.split("\r\n"):
+        if line.byte_length() == 0:
+            continue
+        var colon = line.find(":")
+        if colon <= 0:
+            raise Error("unparsable header line")
+        names.append(String(line[byte=:colon]))
+        if line.byte_length() >= colon + 2:
+            values.append(String(line[byte = colon + 2 :]))
+        else:
+            values.append(String())
+    if len(names) != request.headers.len():
+        raise Error("header count mismatch")
+    var headers = Headers()
+    for i in range(len(names)):
+        var seen = 0
+        for j in range(i):
+            if _same_name(names[j], names[i]):
+                seen += 1
+        var flare_values = request.headers.get_all(names[i])
+        if seen >= len(flare_values) or flare_values[seen] != values[i]:
+            raise Error("header field cannot be represented")
+        headers.add(names[i], values[i])
+    return headers^
+
+
+def to_muntin_request(request: FlareRequest) raises -> Request:
+    return Request(
+        request.method, request.url, request.text(), to_muntin_headers(request)
+    )
+
+
+def _backend_owned(name: String) -> Bool:
+    var lower = _ascii_lower(name)
+    return (
+        lower == "content-length"
+        or lower == "transfer-encoding"
+        or lower == "connection"
+        or lower == "keep-alive"
+        or lower == "proxy-connection"
+        or lower == "upgrade"
+        or lower == "te"
+        or lower == "trailer"
+    )
+
+
+def _internal_error() -> FlareResponse:
+    return FlareResponse(
+        status=500, body=List(String("Internal Server Error").as_bytes())
+    )
 
 
 def to_flare_response(response: Response) -> FlareResponse:
-    return FlareResponse(
+    var out = FlareResponse(
         status=response.status, body=List(response.body.as_bytes())
     )
+    var nominated = List[String]()
+    for value in response.headers.get_all("connection"):
+        for token in value.split(","):
+            var name = _trim_ows(token)
+            if name.byte_length() > 0:
+                nominated.append(name)
+    for i in range(len(response.headers)):
+        var name = response.headers.name(i)
+        var value = response.headers.value(i)
+        var omit = _backend_owned(name)
+        for n in nominated:
+            if _same_name(name, n):
+                omit = True
+        if omit:
+            continue
+        try:
+            # Second line: `Headers` fields are valid unless written
+            # through an internal name; re-check before Flare sees them.
+            var check = Headers()
+            check.add(name, value)
+            out.headers.append(name, value)
+        except:
+            return _internal_error()
+    return out^
 
 
 struct MuntinHandler(Handler):
@@ -43,4 +166,11 @@ struct MuntinHandler(Handler):
         self.app = app^
 
     def serve(self, request: FlareRequest) -> FlareResponse:
-        return to_flare_response(self.app.handle(to_muntin_request(request)))
+        var muntin_request: Request
+        try:
+            muntin_request = to_muntin_request(request)
+        except:
+            return FlareResponse(
+                status=400, body=List(String("Bad Request").as_bytes())
+            )
+        return to_flare_response(self.app.handle(muntin_request))

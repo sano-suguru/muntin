@@ -1174,7 +1174,7 @@ struct Headers(Copyable, Movable, Sized):
 - R2, passing the `Request` through `_Call`, is rejected without a spike: the storage module must not name `Request` (`check_unsafe.sh`, M2-006), and R1 needs no storage change.
 
 **Responses and defaults: no default headers (D0).** A handler returning `Response`, or a `ToResponse` result building one, sets fields on `response.headers`; a `String` result sets none. `Response.text` adds no `Content-Type`.
-- So no existing response's wire bytes change. Measured on a scratch copy with the slice applied: `GET /hello` through Flare still carries exactly Flare's own `Content-Length`, `Date` and `Connection: close` and no `Content-Type`, as before.
+- So a response that sets no field keeps its wire headers. (A request whose fields Muntin cannot represent is answered 400 by the inbound rule below; before, the adapter discarded its fields and routed it.) Measured on a scratch copy with the slice applied: `GET /hello` through Flare still carries exactly Flare's own `Content-Length`, `Date` and `Connection: close` and no `Content-Type`, as before.
 - A default `Content-Type` belongs with the codec decision (JSON), which needs it.
 
 **Validation: V1, at insertion.** An invalid field fails at the line that adds it. In a raising handler that is a handler error: the fixed 500, or its `ToErrorResponse` (M2-011/M2-013).
@@ -1242,7 +1242,7 @@ struct Headers(Copyable, Movable, Sized):
 - Flare's HTTP/2 path validates names as tokens, or exposes a public field iterator: the inbound verification can be simplified;
 - Muntin gains trailers or streaming responses: decide `Trailer` and `TE` instead of omitting them.
 
-**Next production slice (M3-005): headers in production.**
+**Next production slice (M3-005): headers in production.** Implemented as listed ("Headers in production (M3-005)" below).
 - `src/muntin/http.mojo`: `Headers` as in the spike (validation helpers private), `Request.headers` with the defaulted `var headers` initializer argument, and `Response.headers`. `muntin` exports `Headers`.
 - `src/muntin/app.mojo`: in `App.handle`, a raw route appends each field's name and value after the four strings. `_call_raw` rebuilds `Headers` with `add`; a failure is the fixed 500. Typed routes are unchanged.
 - `adapters/flare/muntin_flare.mojo`:
@@ -1253,6 +1253,21 @@ struct Headers(Copyable, Movable, Sized):
 - Tests: the spike's semantics on production `Headers`; raw handlers reading and writing headers through `App.handle`; a typed `ToResponse` result setting a header; existing routes setting none. Loopback through Flare covers request fields (order, casing, repeats, empty values), response fields (`Set-Cookie` twice, an empty value), `Transfer-Encoding` omitted, an injection attempt as 500, `GET /hello`'s headers unchanged, over h2c a forged `x-user:admin` name answered 400, and `Connection: X-Hop` with `X-Hop` omitting both on HTTP/1.1 and h2c. Production fixtures counterpart to `tests/headers_fail`.
 - Docs: DX section 9's webhook reads `req.headers.get("x-signature")`, and DX gains a headers section.
 - Not in the slice: typed header extraction, a default `Content-Type`, `TestClient` header methods, middleware, CORS and authentication.
+
+### Headers in production (M3-005)
+
+Status: **production**, exactly the M3-002 slice. Decision, semantics and Flare measurements: "Headers decision (M3-002)" above.
+- `src/muntin/http.mojo`: `Headers` (one list of `_Field` pairs; validation helpers `_valid_name`, `_valid_value` and ASCII `_same_name` are private) and the `headers` fields of `Request` (defaulted `var headers` initializer argument) and `Response`. `muntin` exports `Headers`.
+- `src/muntin/app.mojo`: `App.handle` appends each field's name and value after a raw route's four strings, and `_call_raw` rebuilds `Headers` with `add` (failure: the fixed 500). Typed routes, `_Call`, `_Erased`, `_Route`, the storage module, the unsafe surface, `App.handle`'s signature and `TestClient` are unchanged.
+- `adapters/flare/muntin_flare.mojo`: `to_muntin_headers` rebuilds and verifies inbound fields (400 on failure, in `MuntinHandler.serve`); `to_flare_response` applies the outbound rule and re-checks each field (500 on failure).
+- Unchanged behavior: every existing test, fixture and expected text. The 90 production fixtures' diagnostics are identical to `main`'s. For a request whose fields Muntin can represent, a response that sets no field keeps its previous wire headers, since `Response.text` adds none (`GET /hello` over loopback still carries only Flare's three fields).
+- Changed behavior: a request Flare accepts but Muntin cannot represent (such as a forged `x-user:admin` over h2c) was routed with its fields discarded and is now answered 400 before `App.handle`.
+- Evidence:
+  - `tests/test_headers.mojo` (13): the spike's semantics on production `Headers`; raw handlers reading and writing fields through `App.handle`; every field kept through the raw transport; typed routes and `String` results setting none; a typed `ToResponse` result setting `Location`; an invalid field as the fixed 500; DX section 9's headers example.
+  - `tests/headers_api_fail` (5): `tests/headers_fail`'s invariants on production types.
+  - `adapters/flare/test_muntin_flare.mojo` (+5, 13 in all): inbound fields rebuilt in order; a forged `x-user:admin` (alone and beside a real field) and a control byte answered 400; the outbound rule; an internal-name write answered 500; no fields added to a response without any.
+  - `adapters/flare/test_localhost_roundtrip.mojo` (+2): over HTTP/1.1, `X-Signature` and repeated `X-A`/`x-a` reach a raw handler; `X-Request-Id`, two `Set-Cookie` and an empty value come back; `Transfer-Encoding`, `Keep-Alive`, `Upgrade` and the `Connection`-named `X-Hop` are omitted on the wire but kept in memory; an injection attempt is 500 on both. Over cleartext HTTP/2 the same route answers its fields in order (lowercase) without the omitted ones, and a forged `x-user:admin` name is answered 400.
+  - Mutations (planted, reverted; 15), each red: in `Headers`, names lowercased, dedupe on `add`, first-match `set`, case-sensitive names, an empty value treated as absent, the whitespace rule removed; in `app.mojo`, no header strings for raw routes, `_call_raw` dropping fields; a default header on `Request`, a default `Content-Type` on `Response`; in the adapter, inbound verification removed, an inbound `add` failure skipped, `Connection`-named fields kept, `Upgrade` kept, the outbound re-check removed.
 
 ## Request/Response ownership
 

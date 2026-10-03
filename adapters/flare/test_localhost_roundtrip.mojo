@@ -71,16 +71,41 @@ the in-memory one each own a value, moved with its `App` into
 `MuntinHandler`. The handler reads the state, receives the converted `Int`
 or is not called (400), and an out-of-range id raises `OutOfStock` (409).
 Each must equal `TestClient`.
+
+M3-005 serves `headers_app()`: a raw `POST /signed` reads `X-Signature` and
+repeated `X-A`, and answers with `X-Request-Id`, two `Set-Cookie`, an empty
+value, and connection-specific fields (`Transfer-Encoding`, `Keep-Alive`,
+`Upgrade`, `Connection: X-Hop` with `X-Hop`) that the adapter omits. Over
+HTTP/1.1 (Flare's client) status, body and the kept fields equal
+`App.handle`; `GET /hello` carries only Flare's own fields; an invalid
+header from a handler is 500. Over cleartext HTTP/2 (a raw client using
+Flare's public HPACK encoder and decoder) the same route keeps the fields
+in order (lowercased by the protocol) without the omitted ones, and a
+request field named `x-user:admin`, which HTTP/2 admits, is answered 400.
 """
 
 from std.ffi import c_uint, external_call
-from std.testing import assert_equal, TestSuite
+from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from flare.http import HttpClient, HttpServer
+from flare.http import Request as FlareRequest
+from flare.http2 import (
+    Frame,
+    FrameFlags,
+    FrameType,
+    H2_PREFACE,
+    HpackDecoder,
+    HpackEncoder,
+    HpackHeader,
+    encode_frame,
+    parse_frame,
+)
+from flare.tcp import TcpStream
 from flare.net import SocketAddr
 from flare.utils import SIGKILL, exit, fork, kill, waitpid
 from muntin import (
     App,
+    Headers,
     FromBody,
     Request,
     Response,
@@ -246,6 +271,41 @@ def find_staff(staff: State[Staff], id: Int) raises OutOfStock -> Person:
     if id < 0 or id >= len(staff[].names):
         raise OutOfStock(id)
     return Person(id, staff[].names[id])
+
+
+def signed(req: Request) raises -> Response:
+    var sig = req.headers.get("x-signature")
+    if not sig:
+        return Response.text("unsigned", status=401)
+    var resp = Response.text(
+        sig.value() + "|" + String(len(req.headers.get_all("x-a"))),
+        status=202,
+    )
+    resp.headers.add("X-Request-Id", "42")
+    resp.headers.add("Set-Cookie", "a=1")
+    resp.headers.add("Set-Cookie", "b=2")
+    resp.headers.add("X-Empty", "")
+    resp.headers.add("Transfer-Encoding", "chunked")
+    resp.headers.add("Keep-Alive", "timeout=5")
+    resp.headers.add("Upgrade", "websocket")
+    resp.headers.add("Connection", "X-Hop")
+    resp.headers.add("X-Hop", "secret")
+    return resp^
+
+
+def inject_header(req: Request) raises -> Response:
+    var resp = Response.text("never")
+    resp.headers.add("X-Bad", "a\r\nSet-Cookie: evil=1")
+    return resp^
+
+
+def headers_app() -> App:
+    var app = App()
+    app.get["/hello"](hello)
+    app.post["/signed"](signed)
+    app.get["/signed"](signed)
+    app.get["/inject"](inject_header)
+    return app^
 
 
 def hello_app() -> App:
@@ -533,6 +593,194 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             var local = in_memory.post(path, body)
             assert_equal(response.status, local.status, path + " " + body)
             assert_equal(response.text(), local.body, path + " " + body)
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+def test_headers_over_localhost_match_app_handle() raises:
+    var child = _serve_in_child(headers_app())
+    var base = String("http://127.0.0.1:", child.port)
+    try:
+        var client = _client()
+        var app = headers_app()
+        # Existing responses: only Flare's own fields, as before M3-005.
+        var hello_resp = client.get(base + "/hello")
+        assert_equal(hello_resp.text(), "hello")
+        assert_equal(hello_resp.headers.len(), 3)
+        assert_true(hello_resp.headers.contains("content-length"))
+        assert_true(hello_resp.headers.contains("date"))
+        assert_true(hello_resp.headers.contains("connection"))
+        # A raw route reads request fields and writes response fields.
+        var req = FlareRequest("POST", base + "/signed", List("b".as_bytes()))
+        req.headers.append("X-Signature", "sha256=abc")
+        req.headers.append("X-A", "1")
+        req.headers.append("x-a", "2")
+        var resp = client.send(req)
+        var mh = Headers()
+        mh.add("X-Signature", "sha256=abc")
+        mh.add("X-A", "1")
+        mh.add("x-a", "2")
+        var local = app.handle(Request("POST", "/signed", "b", mh^))
+        assert_equal(resp.status, 202)
+        assert_equal(resp.status, local.status)
+        assert_equal(resp.text(), local.body)
+        assert_equal(resp.text(), "sha256=abc|2")
+        assert_equal(resp.headers.get("x-request-id"), "42")
+        assert_equal(len(resp.headers.get_all("set-cookie")), 2)
+        assert_equal(resp.headers.get_all("set-cookie")[1], "b=2")
+        assert_true(resp.headers.contains("x-empty"))
+        # Omitted on the wire, kept in memory.
+        for name in ["transfer-encoding", "keep-alive", "upgrade", "x-hop"]:
+            assert_false(resp.headers.contains(name), name)
+            assert_true(Bool(local.headers.get(name)), name)
+        assert_equal(resp.headers.get("connection"), "close")
+        # The whole kept list: App.handle's fields in order, minus the
+        # omitted ones, then Flare's own three.
+        var wire = List[UInt8]()
+        resp.headers.encode_to(wire)
+        var kept = String()
+        for line in String(from_utf8_lossy=Span(wire)).split("\r\n"):
+            if line.byte_length() == 0 or line.startswith("Date: "):
+                continue
+            kept += String(line) + ";"
+        var expected = String()
+        for i in range(len(local.headers)):
+            var lower = local.headers.name(i).lower()
+            if lower in [
+                "transfer-encoding",
+                "keep-alive",
+                "upgrade",
+                "connection",
+                "x-hop",
+            ]:
+                continue
+            expected += (
+                local.headers.name(i) + ": " + local.headers.value(i) + ";"
+            )
+        expected += "Content-Length: 12;Connection: close;"
+        assert_equal(kept, expected)
+        assert_equal(client.post(base + "/signed", "b").status, 401)
+        var inj = client.get(base + "/inject")
+        assert_equal(inj.status, 500)
+        assert_equal(inj.status, app.handle(Request("GET", "/inject")).status)
+        assert_false(inj.headers.contains("set-cookie"))
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+def _h2_frame(
+    typ: FrameType, flags: UInt8, sid: Int, var payload: List[UInt8]
+) -> List[UInt8]:
+    var f = Frame()
+    f.header.type = typ.copy()
+    f.header.flags = FrameFlags(flags)
+    f.header.stream_id = sid
+    f.payload = payload^
+    return encode_frame(f)
+
+
+def h2_get(
+    port: Int, path: String, fields: List[Tuple[String, String]]
+) raises -> Tuple[List[HpackHeader], String]:
+    """One GET over cleartext HTTP/2 (prior knowledge) on stream 1: the
+    response's decoded header fields (`:status` first) and its body."""
+    var hdrs = List[HpackHeader]()
+    hdrs.append(HpackHeader(":method", "GET"))
+    hdrs.append(HpackHeader(":scheme", "http"))
+    hdrs.append(HpackHeader(":path", path))
+    hdrs.append(HpackHeader(":authority", "localhost"))
+    for f in fields:
+        hdrs.append(HpackHeader(f[0], f[1]))
+    var block = HpackEncoder().encode(Span[HpackHeader, _](hdrs))
+    var wire = List(H2_PREFACE.as_bytes())
+    wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
+    wire.extend(
+        Span(
+            _h2_frame(
+                FrameType.HEADERS(),
+                FrameFlags.END_HEADERS() | FrameFlags.END_STREAM(),
+                1,
+                block^,
+            )
+        )
+    )
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.set_recv_timeout(TIMEOUT_MS)
+    stream.write_all(Span[UInt8, _](wire))
+    var decoder = HpackDecoder()
+    var acc = List[UInt8]()
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    var pos = 0
+    var fields_out = List[HpackHeader]()
+    var body = List[UInt8]()
+    while True:
+        var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
+        if not maybe:
+            var n = stream.read(buf.unsafe_ptr(), len(buf))
+            if n == 0:
+                raise Error("connection closed before the response ended")
+            for k in range(n):
+                acc.append(buf[k])
+            continue
+        var f = maybe.value().copy()
+        pos += 9 + f.header.length
+        if f.header.stream_id != 1:
+            if f.header.type.value == FrameType.GOAWAY().value:
+                raise Error("GOAWAY")
+            continue
+        if f.header.type.value == FrameType.HEADERS().value:
+            fields_out = decoder.decode(Span[UInt8, _](f.payload))
+        elif f.header.type.value == FrameType.DATA().value:
+            body.extend(Span[UInt8, _](f.payload))
+        elif f.header.type.value == FrameType.RST_STREAM().value:
+            raise Error("RST_STREAM")
+        if f.header.flags.has(FrameFlags.END_STREAM()):
+            break
+    return (fields_out^, String(from_utf8_lossy=Span(body)))
+
+
+def _h2_fields(fields: List[HpackHeader]) -> String:
+    var out = String()
+    for f in fields:
+        if f.name == "date":
+            continue
+        out += f.name + "=" + f.value + ";"
+    return out^
+
+
+def test_headers_over_h2c_follow_the_same_rules() raises:
+    var child = _serve_in_child(headers_app())
+    try:
+        var ok = h2_get(
+            child.port,
+            "/signed",
+            [
+                (String("x-signature"), String("sha256=abc")),
+                (String("x-a"), String("1")),
+                (String("x-a"), String("2")),
+            ],
+        )
+        print("observed h2c /signed:", _h2_fields(ok[0]), ok[1])
+        assert_equal(
+            _h2_fields(ok[0]),
+            ":status=202;x-request-id=42;set-cookie=a=1;set-cookie=b=2;x-empty=;",
+        )
+        assert_equal(ok[1], "sha256=abc|2")
+        # HTTP/2 admits `:` inside a name; Muntin cannot represent it.
+        var forged = h2_get(
+            child.port,
+            "/signed",
+            [
+                (String("x-signature"), String("sha256=abc")),
+                (String("x-user:admin"), String("zzz")),
+            ],
+        )
+        print("observed h2c forged:", _h2_fields(forged[0]), forged[1])
+        assert_equal(forged[0][0].value, "400")
+        assert_equal(forged[1], "Bad Request")
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
