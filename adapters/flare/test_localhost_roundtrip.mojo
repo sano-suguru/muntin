@@ -72,6 +72,15 @@ the in-memory one each own a value, moved with its `App` into
 or is not called (400), and an out-of-range id raises `OutOfStock` (409).
 Each must equal `TestClient`.
 
+M3-006 registers stateful `POST /staff` -> `hire(staff: State[Staff], body:
+CreateUser) raises OutOfStock -> Person` and `POST /staff/{id}` ->
+`assign(staff: State[Staff], id: Int, body: CreateUser) raises OutOfStock ->
+String` on the same `State[Staff]` as `GET /staff/{id}`. Success, a bad body
+(400), a bad route value (400) and the application error (409) must equal
+`TestClient`. The child's call order is not observable here; that the
+route value and body fail before the handler is proven through
+`TestClient` in `tests/test_state_post.mojo`.
+
 M3-005 serves `headers_app()`: a raw `POST /signed` reads `X-Signature` and
 repeated `X-A`, and answers with `X-Request-Id`, two `Set-Cookie`, an empty
 value, and connection-specific fields (`Transfer-Encoding`, `Keep-Alive`,
@@ -273,6 +282,24 @@ def find_staff(staff: State[Staff], id: Int) raises OutOfStock -> Person:
     return Person(id, staff[].names[id])
 
 
+def hire(staff: State[Staff], body: CreateUser) raises OutOfStock -> Person:
+    """A stateful body-only POST handler (M3-006): a name already on the
+    staff raises `OutOfStock` with its index (409)."""
+    for i in range(len(staff[].names)):
+        if staff[].names[i] == body.name:
+            raise OutOfStock(i)
+    return Person(len(staff[].names), body.name)
+
+
+def assign(
+    staff: State[Staff], id: Int, body: CreateUser
+) raises OutOfStock -> String:
+    """A stateful route-value-then-body POST handler (M3-006)."""
+    if id < 0 or id >= len(staff[].names):
+        raise OutOfStock(id)
+    return staff[].names[id] + " -> " + body.name
+
+
 def signed(req: Request) raises -> Response:
     var sig = req.headers.get("x-signature")
     if not sig:
@@ -334,7 +361,10 @@ def users_app() -> App:
     var names = List[String]()
     names.append("Ada")
     names.append("Grace")
-    app.get["/staff/{id}"](find_staff, State(Staff(names^)))
+    var staff = State(Staff(names^))
+    app.get["/staff/{id}"](find_staff, staff)
+    app.post["/staff"](hire, staff)
+    app.post["/staff/{id}"](assign, staff)
     return app^
 
 
@@ -575,6 +605,48 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             ),
             (String("/webhook?k"), String(""), 401, String("unsigned k")),
             (String("/webhook/x"), String("signed"), 404, String("Not Found")),
+            # M3-006: "Person(2, Lin)" only if the handler read its state
+            # (two names) and got the converted body; "Grace -> Lin" only if
+            # it also got Int(1) from "01". The 409s are its raises; the
+            # 400s are a body or a route value it never saw.
+            (
+                String("/staff"),
+                String("name=Lin"),
+                200,
+                String("Person(2, Lin)"),
+            ),
+            (
+                String("/staff"),
+                String("name=Ada"),
+                409,
+                String("out of stock 0"),
+            ),
+            (String("/staff"), String("Lin"), 400, String("Bad Request")),
+            (
+                String("/staff/01"),
+                String("name=Lin"),
+                200,
+                String("Grace -> Lin"),
+            ),
+            (
+                String("/staff/5"),
+                String("name=Lin"),
+                409,
+                String("out of stock 5"),
+            ),
+            (
+                String("/staff/x"),
+                String("name=Lin"),
+                400,
+                String("Bad Request"),
+            ),
+            (String("/staff/1"), String(""), 400, String("Bad Request")),
+            (
+                String("/staff/1/x"),
+                String("name=Lin"),
+                404,
+                String("Not Found"),
+            ),
         ]
         for want in posts:
             var path = want[0]
