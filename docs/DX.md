@@ -159,7 +159,7 @@ Semantics:
 
 Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` and `def(Int, B)` (M2-009) with `B: FromBody` for `app.post`, plus, on both, the raw `def(req: Request) -> Response` (M2-015, section 9; `Response` only, under the same error model). Each may be non-raising or declare `raises` or `raises T` (M2-011, section 6; a `T` declaring `ToErrorResponse` chooses its own response, M2-013), and returns `String` (or a type that converts to it implicitly, such as `StaticString`) or a type conforming to `ToResponse`, including `Response` (M2-008, section 5). Other `get` shapes (more or non-`Int` parameters) and other result types fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) raises Never thin -> String'` and, for the `ToResponse` candidate, `argument type 'Int' does not conform to trait 'ToResponse'`.
 
-Still targets (not implemented yet; M3 or later, each placed in `docs/SPEC.md` "M3"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, response headers, parameter-name checking, middleware, and state.
+Still targets (not implemented yet; M3 or later, each placed in `docs/SPEC.md` "M3"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, JSON body decoding, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, JSON responses, response headers, parameter-name checking, middleware, and state (decided in M3-001, section 8; not production).
 
 Mojo facts discovered while proving the above:
 
@@ -469,22 +469,42 @@ Status: not implemented; M3 (`docs/SPEC.md`). `app.use` does not exist.
 
 Long-lived state should have explicit ownership and predictable lifetime behavior.
 
-Conceptual direction:
+Decided shape (M3-001; `docs/ARCHITECTURE.md`, "Application state decision (M3-001)"), proven in the decision spike (`tests/test_spike_state.mojo`, `tests/state_fail`), not yet production:
 
 ```mojo
-@fieldwise_init
-struct AppState:
-    var users: UserRepository
-    var metrics: Metrics
+from muntin import App, State
 
 
-def get_user(id: Int, state: State[AppState]) -> User:
-    return state.users.get(id)
+struct Users(Movable):
+    var names: List[String]
+
+    def get(self, id: Int) raises NotFound -> User:
+        ...
+
+
+def get_user(users: State[Users], id: Int) raises NotFound -> User:
+    return users[].get(id)                 # read-only access to the shared value
+
+
+def main():
+    var users = State(Users(load_names()))   # the application builds the value once
+    var app = App()                          # App stays non-generic
+    app.get["/hello"](hello)                 # stateless handlers: unchanged
+    app.get["/users/{id}"](get_user, users)  # the state is the registration's second argument
 ```
 
-The exact state/extractor syntax is not frozen. Requirements are explicit ownership, no hidden globals, testability, and no unnecessary per-request allocation.
+Rules:
 
-Status: not implemented; M3 (`docs/SPEC.md`). Handlers cannot capture state (they are thin functions; closures are not stored, "Handler model" above).
+- **Which parameter is injected:** a handler takes application state exactly when its registration passes a second argument, a `State[S]`. Its first parameter is then `State[S]` (the same `S`), and the rest is one of the M2 shapes, bound as before: route values in the literal's order, then the body. So `def(State[Users], Int, CreateUser)` on `post` is state, route value, body. The state is never a route value or a body, and parameter names are never read.
+- **Ownership:** `State(value)` takes the value. `State` is a shared handle: the application keeps its own, each registration keeps a copy, and the value is destroyed when the last handle goes. A request borrows the route's handle, so it copies nothing and allocates nothing. `users[]` is read-only through every handle (the handle's internal pointer is reachable by name, since Mojo 1.1.0 has no private fields; it is not API). A value that must change while the application serves keeps that mutability in its own fields, and its rules are the application's.
+- **Several values:** one `State` per handler. Several values are the fields of one state type, and different routes may take different state types (`State[Users]` on some routes, `State[Config]` on others).
+- **Unchanged:** every M2 handler and registration, `App()`, `App.handle(Request) -> Response`, `TestClient(app)` and the backends. There are no globals and no hidden lookup: the state reaches the handler only through the registration that passed it.
+
+A scoped registrar, `app.with_state(users).get[...](h)`, was measured too. It states the state once and leaves `App`'s compiler messages unchanged, but it is rejected on Mojo 1.1.0: the compiler does not track mutation through the registrar's stored pointer. With the decided form, every registration is an ordinary `mut` call on `App`, which the compiler tracks.
+
+DX's earlier sketch put the state last (`def get_user(id: Int, state: State[AppState])`) and read it as `state.users`. A state-last family compiles on Mojo 1.1.0, but it is not the decided shape. State goes first so the body stays the last parameter (M2-005). Access is `state[]` because a struct cannot forward field access to the value it holds.
+
+Status: decided, not implemented. The first production slice is the two `get` shapes, `def(State[S])` and `def(State[S], Int)`, each returning `String` or `ToResponse` (M3-003). Stateful `post` shapes and stateful raw handlers come in a later slice. Until then, a stateful handler registered on `post` fails to compile, and the message points at `FromBody`.
 
 ## 9. Raw Request/Response escape hatch
 
@@ -688,7 +708,7 @@ Status after M2 (M2-016): the handler model of this example is production: `get_
 
 - `CreateUser` must conform to `FromBody` and parse its own body, because there is no JSON codec;
 - `User` must conform to `ToResponse`. The stdlib `List[User]` does not conform, so a list result needs an application type that does;
-- `users` cannot exist yet: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`), handlers cannot capture, and there is no state API, so a handler can read only its arguments and compile-time constants;
+- `users` cannot exist yet: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`), handlers cannot capture, and there is no state API in production, so a handler can read only its arguments and compile-time constants. The decided form (M3-001, section 8) is `def get_user(users: State[Users], id: Int) -> User` registered as `app.get["/users/{id}"](get_user, users)`;
 - there is no `app.run()`.
 
 The first three are M3 items (codec, state); `app.run()` is lifecycle work (M3, ownership undecided). The closest runnable form today is section 4's `CreateUser` and section 5's `User`, driven through `TestClient`.
