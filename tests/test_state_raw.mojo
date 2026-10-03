@@ -584,14 +584,13 @@ def test_existing_routes_are_unchanged_beside_stateful_raw() raises:
     assert_equal(_calls(keys), 3)
 
 
-# The docs/DX.md section 9 stateful webhook, verbatim.
+# The docs/DX.md section 8 stateful raw webhook, verbatim but for the
+# handler's name.
 
 
+@fieldwise_init
 struct WebhookKeys(Movable):
     var secret: String
-
-    def __init__(out self, secret: String):
-        self.secret = secret
 
 
 def dx_webhook(keys: State[WebhookKeys], req: Request) raises -> Response:
@@ -603,7 +602,7 @@ def dx_webhook(keys: State[WebhookKeys], req: Request) raises -> Response:
     return resp^
 
 
-def test_dx_section_9_stateful_example() raises:
+def test_dx_section_8_stateful_raw_example() raises:
     var keys = State(WebhookKeys("sha256=valid"))
     var app = App()
     app.post["/webhook"](dx_webhook, keys)

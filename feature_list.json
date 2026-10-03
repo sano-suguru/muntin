@@ -719,6 +719,25 @@
         "16 planted mutations each red (15 through TestClient and fixtures, plus the index swap over loopback; binding: GET method, missing body flag; extraction: swapped indices incl. loopback, body before route value, altered route value, from_body failure as 500; errors: handler error as 400 or always 500; per-request handle copy in each adapter; marker and guards removed; placeholder assert removed). ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0.",
         "Fresh-context review: no material issue (overloads, adapters and guard texts match the M3-001 spike; keyword spellings, StaticString, S = Int, a FromBody type as both state and body, ref/mut/var state parameters probed; storage, unsafe surface and adapter diffs empty; doc counts and the 8 changed diagnostics reproduced); minors applied (guard message names the stateful shape, mutation count itemized, reference count read inside ToResponse handlers of both shapes, module comment wording)."
       ]
+    },
+    {
+      "id": "M3-007",
+      "priority": 307,
+      "category": "application_state",
+      "description": "Stateful raw handlers in production, the last M3-001 slice: App.get and App.post overloads taking (handler, state) for def(State[S], var Request) thin raises E -> Response, completing the stateful handler family without changing raw-request or state semantics.",
+      "acceptance": [
+        "App.get and App.post each gain exactly one overload taking (handler: def(State[S], var Request) thin raises E -> Response, state: State[S]); State is parameter 1 and the registration's second argument, the whole Request is parameter 2, moved in as existing raw handlers receive it; the result is exactly Response; route literals stay static (the raw twin's route checks and messages); App stays non-generic.",
+        "The state is bound with the existing _Bound[H, S]: each registration stores one copied handle and requests borrow it (no per-request copy, reference-count change or allocation); the value is dropped once across App moves; one stateful raw trampoline serves GET and POST; _Erased, _Call, _Route, _handler_storage.mojo, _Shared, State's representation, the unsafe surface and the Flare adapter are unchanged.",
+        "Raw semantics are M2-015's and M3-005's: method, path, query, body and headers reach the Request unchanged; no typed extraction after the match; Request headers keep the in-memory semantics and returned Response headers the backend policy; handler raises follow ToErrorResponse or the fixed 500; first registration wins across stateless raw, stateful raw and typed routes; existing typed, stateful typed and raw routes are unchanged.",
+        "Negative fixtures on both methods discriminate a missing state, plain S instead of State[S], a wrong State type, State not first, var/mut State, Request not second or extra parameters, a non-Response result, placeholder routes, a stateless raw handler given a state and a stateful raw handler without its state; M3-006's raw_stateful_post known-gap fixture is retired; every pre-existing expected diagnostic still matches and note/caret changes are recorded.",
+        "TestClient, App.handle and a Flare loopback agree for one stateful raw GET and POST with request and response headers and an application error; focused mutations of state binding, Request transport, GET/POST registration, error mapping and per-request State copying are each red; ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; CI verify and flare pass on Ubuntu and macOS; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": [
+        "Production: _call_state_raw[S, E] and one stateful raw overload each on App.get and App.post (last in each group), storing _Bound[H, S] with raw=True; _call_raw's rebuild moved into _raw_request, called by both raw adapters; the four stateful body overloads' Request guard names the stateful raw shape. _Erased, _Call, _Route, _handler_storage.mojo, state.mojo, check_unsafe.sh, App.handle, http.mojo, body.mojo, testing.mojo and adapters/flare/muntin_flare.mojo unchanged.",
+        "tests/test_state_raw.mojo 13/13; tests/state_raw_fail 26; tests/compile_fail/state_raw_* 6; loopback GET/POST /keyed equal App.handle and TestClient (202 with fields, 401, 404). 204 existing must-fail diagnostics: 171 identical; 33 gain one candidate note (19 one-argument calls a 'missing required argument: state' note, 14 two-argument calls the stateful raw candidate's), error lines and carets unchanged, 20 lose one trailing detail note to the ten-note cap; every expected text matches.",
+        "14 planted mutations each red (GET as POST, POST as GET, raw flag dropped, headers/query/body dropped or path-only Request, errors as 400 or always 500, per-request handle copy, equal parameter lists on post, stateful guard text reverted, and over loopback the dropped headers and always-500 errors). ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0."
+      ]
     }
   ]
 }
