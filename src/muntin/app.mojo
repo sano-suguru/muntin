@@ -3,6 +3,7 @@
 from ._handler_storage import _Erased
 from .body import FromBody
 from .http import Request, Response, ToErrorResponse, ToResponse
+from .state import State
 
 # Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
 # (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody`; and on
@@ -44,6 +45,19 @@ from .http import Request, Response, ToErrorResponse, ToResponse
 # `_call_raw` rebuilds the `Request` and moves it into the handler. The
 # body overloads' `not B == Request` guard only improves the message for
 # calls no overload accepts; it takes no part in selection.
+#
+# Stateful handlers (M3-003, docs/ARCHITECTURE.md "Application state
+# decision (M3-001)"): a `get` registration with a second argument,
+# `(handler, state: State[S])`, takes a handler whose first parameter is
+# `State[S]` and whose rest is the `def()` or `def(Int)` shape, bound and
+# checked exactly as its stateless twin. Every M2 registration passes one
+# argument, so the two families never compete in overload resolution: the
+# argument count separates them, not ranking. `S` is inferred from both
+# arguments, so they must agree. The registration moves the handler and one
+# copy of the handle into the route's `_Erased` box as one `_Bound[H, S]`;
+# the stateful adapters borrow it and pass the handle by borrow, so a
+# request copies nothing, changes no reference count and allocates nothing
+# for the state.
 #
 # Errors (M2-010, docs/ARCHITECTURE.md "Application-error decision"): a
 # request-side failure is answered 400 by the step that fails, before the
@@ -357,6 +371,62 @@ def _call_raw[
     return result^
 
 
+struct _Bound[H: Movable & Deinitable, S: Movable & Deinitable](Movable):
+    """A stateful handler and its route's copy of the state handle, boxed
+    together as one `_Erased` value."""
+
+    var handler: Self.H
+    var state: State[Self.S]
+
+    def __init__(out self, var handler: Self.H, state: State[Self.S]):
+        """Takes `handler` and copies the handle: the one copy a
+        registration makes."""
+        self.handler = handler^
+        self.state = state.copy()
+
+
+def _call_state_none[
+    S: Movable & Deinitable,
+    E: Deinitable,
+    R: Movable & Deinitable,
+    respond: _Respond[R],
+](
+    bound: _Bound[def(State[S]) thin raises E -> R, S], args: List[String]
+) -> Response:
+    """`_call_none` with the route's state handle passed first, by borrow."""
+    var result: R
+    try:
+        result = bound.handler(bound.state)
+    except e:
+        return _handler_error(e^)
+    return respond(result^)
+
+
+def _call_state_int[
+    S: Movable & Deinitable,
+    E: Deinitable,
+    R: Movable & Deinitable,
+    respond: _Respond[R],
+](
+    bound: _Bound[def(State[S], Int) thin raises E -> R, S],
+    args: List[String],
+) -> Response:
+    """`_call_int` with the route's state handle passed first, by borrow:
+    answers 400 itself, without calling `handler`, if the one argument is
+    not an integer."""
+    var id: Int
+    try:
+        id = _parse_int(args[0])
+    except:
+        return _bad_request()
+    var result: R
+    try:
+        result = bound.handler(bound.state, id)
+    except e:
+        return _handler_error(e^)
+    return respond(result^)
+
+
 struct _Route(Movable):
     var method: String
     var path: String
@@ -535,6 +605,127 @@ struct App(Movable):
                 path,
                 _Erased.__init__[call=_call_raw[E]](handler),
                 raw=True,
+            )
+        )
+
+    def get[
+        S: Movable & Deinitable, E: Deinitable, //, path: StaticString
+    ](
+        mut self,
+        handler: def(State[S]) thin raises E -> String,
+        state: State[S],
+    ):
+        """Registers the stateful `handler` for `GET path`, as `get` on
+        `def()`: its String result becomes a 200 text response, and a raise
+        is converted or the fixed 500. `handler`'s one parameter is
+        `State[S]`, the type of `state`; the route keeps one copy of
+        `state`, and each request passes it to `handler` by borrow."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert (
+            _path_params(path) == 0
+        ), "route declares a path parameter but the handler takes none"
+        comptime assert (
+            _query_params(path) == 0
+        ), "route declares a query parameter but the handler takes none"
+        self._routes.append(
+            _Route(
+                "GET",
+                path,
+                _Erased.__init__[call=_call_state_none[S, E, String, _text]](
+                    _Bound(handler, state)
+                ),
+            )
+        )
+
+    def get[
+        S: Movable & Deinitable,
+        E: Deinitable,
+        R: ToResponse,
+        //,
+        path: StaticString,
+    ](mut self, handler: def(State[S]) thin raises E -> R, state: State[S]):
+        """Registers the stateful `handler` for `GET path`, as the `String`
+        overload; its result converts itself with `R.to_response()` after
+        `handler` returns, as for `get` on `def() -> R`."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert (
+            _path_params(path) == 0
+        ), "route declares a path parameter but the handler takes none"
+        comptime assert (
+            _query_params(path) == 0
+        ), "route declares a query parameter but the handler takes none"
+        self._routes.append(
+            _Route(
+                "GET",
+                path,
+                _Erased.__init__[call=_call_state_none[S, E, R, _converted[R]]](
+                    _Bound(handler, state)
+                ),
+            )
+        )
+
+    def get[
+        S: Movable & Deinitable, E: Deinitable, //, path: StaticString
+    ](
+        mut self,
+        handler: def(State[S], Int) thin raises E -> String,
+        state: State[S],
+    ):
+        """Registers the stateful `handler` for `GET path`, as `get` on
+        `def(Int)`: `path` declares exactly one path or query parameter,
+        converted to `Int` and passed after the state, and a missing,
+        duplicated or non-integer value yields 400 without calling
+        `handler`. The state is passed as for `get` on `def(State[S])`."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 1, (
+            "handler takes one Int parameter; route must declare exactly one"
+            " path or query parameter"
+        )
+        self._routes.append(
+            _Route(
+                "GET",
+                path,
+                _Erased.__init__[call=_call_state_int[S, E, String, _text]](
+                    _Bound(handler, state)
+                ),
+            )
+        )
+
+    def get[
+        S: Movable & Deinitable,
+        E: Deinitable,
+        R: ToResponse,
+        //,
+        path: StaticString,
+    ](
+        mut self,
+        handler: def(State[S], Int) thin raises E -> R,
+        state: State[S],
+    ):
+        """Registers the stateful `handler` for `GET path` with one `Int`
+        route value, as the `String` overload; its result converts itself
+        with `R.to_response()` after `handler` returns. A 400 calls neither
+        `handler` nor the conversion; a raise skips the conversion."""
+        comptime assert (
+            _path_params(path) >= 0 and _query_params(path) >= 0
+        ), "malformed route literal"
+        comptime assert _path_params(path) + _query_params(path) == 1, (
+            "handler takes one Int parameter; route must declare exactly one"
+            " path or query parameter"
+        )
+        self._routes.append(
+            _Route(
+                "GET",
+                path,
+                _Erased.__init__[call=_call_state_int[S, E, R, _converted[R]]](
+                    _Bound(handler, state)
+                ),
             )
         )
 

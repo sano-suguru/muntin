@@ -143,8 +143,11 @@ done
 # docs/ARCHITECTURE.md "Raw Request decision (M2-014)". tests/state_fail:
 # evidence for docs/ARCHITECTURE.md "Application state decision (M3-001)".
 # tests/state_storage_fail: evidence for docs/ARCHITECTURE.md "State storage
-# decision (M3-004)".
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail; do
+# decision (M3-004)". tests/state_get_fail: production App.get takes a
+# stateful handler only with its State, first, borrowed and read-only; a
+# reference from state[] cannot outlive its handle; a second handle cannot
+# replace or mutate the shared value (M3-003).
+for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail; do
     step "$dir (must not build)"
     for t in "$dir"/*.mojo; do
         expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
