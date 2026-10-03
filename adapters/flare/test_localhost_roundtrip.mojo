@@ -63,6 +63,14 @@ query and body as Muntin received them (an empty body and a query a typed
 route would answer 400 included), or raises `Unsigned`, answered 401 by
 `to_error_response` in Muntin. `GET /webhook` is 404. The adapter only
 carries the request and the final `Response`. Each must equal `TestClient`.
+
+M3-003 registers the stateful `GET /staff/{id}` -> `find_staff(staff:
+State[Staff], id: Int) raises OutOfStock -> Person`, with `Staff` defined
+here and its `State` built inside `users_app()`, so the child's `App` and
+the in-memory one each own a value, moved with its `App` into
+`MuntinHandler`. The handler reads the state, receives the converted `Int`
+or is not called (400), and an out-of-range id raises `OutOfStock` (409).
+Each must equal `TestClient`.
 """
 
 from std.ffi import c_uint, external_call
@@ -76,6 +84,7 @@ from muntin import (
     FromBody,
     Request,
     Response,
+    State,
     ToErrorResponse,
     ToResponse,
 )
@@ -223,6 +232,22 @@ def webhook(req: Request) raises Unsigned -> Response:
     )
 
 
+struct Staff(Movable):
+    """Application state for `find_staff`: a move-only list of names."""
+
+    var names: List[String]
+
+    def __init__(out self, var names: List[String]):
+        self.names = names^
+
+
+def find_staff(staff: State[Staff], id: Int) raises OutOfStock -> Person:
+    """A stateful handler (M3-003): reads the route's `State[Staff]`."""
+    if id < 0 or id >= len(staff[].names):
+        raise OutOfStock(id)
+    return Person(id, staff[].names[id])
+
+
 def hello_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -246,6 +271,10 @@ def users_app() -> App:
     app.post["/orders"](place_order)
     app.get["/stock/{id}"](reserve)
     app.post["/webhook"](webhook)
+    var names = List[String]()
+    names.append("Ada")
+    names.append("Grace")
+    app.get["/staff/{id}"](find_staff, State(Staff(names^)))
     return app^
 
 
@@ -359,6 +388,14 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/stock/abc"), 400, String("Bad Request")),
             # M2-015: the raw route is POST only.
             (String("/webhook"), 404, String("Not Found")),
+            # M3-003: "Person(1, Grace)" only if the handler read its state
+            # and got Int(1) from "01"; the 409 is its raise, the 400 a
+            # value it never saw.
+            (String("/staff/01"), 200, String("Person(1, Grace)")),
+            (String("/staff/0"), 200, String("Person(0, Ada)")),
+            (String("/staff/2"), 409, String("out of stock 2")),
+            (String("/staff/x"), 400, String("Bad Request")),
+            (String("/staff"), 404, String("Not Found")),
         ]
         for want in expected:
             var path = want[0]

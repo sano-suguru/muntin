@@ -9,11 +9,18 @@
 # itself is in the module docstring and docs/ARCHITECTURE.md "Handler storage
 # decision (M2)". tests/ is not checked
 # (spikes and storage tests use these operations on purpose).
+# One exemption (M3-003): src/muntin/state.mojo may name the safe std type
+# `OwnedPointer`, which holds the shared state value so that the compiler
+# tracks references into it (docs/ARCHITECTURE.md "Application state decision
+# (M3-001)"). Only that word is exempt, only in that file: every other part of
+# the pattern still applies there, so an `unsafe_*` constructor or accessor
+# of `OwnedPointer` still fails.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 dir=src/muntin
 storage=$dir/_handler_storage.mojo
+state=$dir/state.mojo
 status=0
 
 if [[ ! -f "$storage" ]]; then
@@ -26,8 +33,12 @@ fi
 # any other `Unsafe*` API, and the `_Erased`/`_Header` fields whose pairing
 # the module guarantees.
 pattern='[Uu]nsafe|Untracked|OpaquePointer|OwnedPointer|Allocation|bitcast|\._(header|invoke|drop|value)\b'
-if grep -rnE --include='*.mojo' "$pattern" "$dir" | grep -v "^$storage:"; then
+if grep -rnE --include='*.mojo' "$pattern" "$dir" | grep -v -e "^$storage:" -e "^$state:"; then
     echo "error: unsafe handler-storage operations outside $storage" >&2
+    status=1
+fi
+if [[ -f "$state" ]] && sed 's/OwnedPointer//g' "$state" | grep -nE "$pattern" | sed "s#^#$state:#" | grep .; then
+    echo "error: $state may name OwnedPointer and nothing else from the unsafe pattern" >&2
     status=1
 fi
 
