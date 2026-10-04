@@ -1,0 +1,260 @@
+# M3-010 TestClient request-headers decision spike, application side.
+# `SpikeClient` (tests/testclient_headers_spike.mojo) is the selected
+# candidate K (keyword-only headers) over production `App`; every response
+# it gets is compared with `App.handle(Request(...))` built from the same
+# arguments.
+# Decision and evidence: docs/ARCHITECTURE.md, "TestClient request headers
+# decision (M3-010)".
+
+from std.testing import assert_equal, TestSuite
+
+from muntin import (
+    App,
+    FromJson,
+    Headers,
+    Json,
+    JsonValue,
+    JsonWriter,
+    Request,
+    Response,
+    ToJson,
+)
+from muntin.testing import TestClient
+from testclient_headers_spike import AutoTypeClient, SpikeClient
+
+
+@fieldwise_init
+struct CreateUser(FromJson):
+    var name: String
+
+    @staticmethod
+    def from_json(value: JsonValue) raises -> Self:
+        return Self(value["name"].string())
+
+
+@fieldwise_init
+struct User(ToJson):
+    var id: Int
+    var name: String
+
+    def write_json(self, mut out: JsonWriter) raises:
+        out.begin_object()
+        out.name("id")
+        out.int(self.id)
+        out.name("name")
+        out.string(self.name)
+        out.end_object()
+
+
+def hello() -> String:
+    return "hello"
+
+
+def create_user(body: Json[CreateUser]) -> Json[User]:
+    return Json(User(1, body.value.name))
+
+
+def echo(req: Request) -> Response:
+    """Answers with the method, path, body and every header field, in
+    order, each value in angle brackets."""
+    var out = req.method + " " + req.path + " [" + req.body + "]"
+    for i in range(len(req.headers)):
+        out += " " + req.headers.name(i) + "=<" + req.headers.value(i) + ">"
+    return Response.text(out)
+
+
+def empty_probe(req: Request) -> Response:
+    """Distinguishes an empty value from an absent field."""
+    var v = req.headers.get("x-empty")
+    if not v:
+        return Response.text("absent")
+    return Response.text("present <" + v.value() + ">")
+
+
+def _app() -> App:
+    var app = App()
+    app.get["/hello"](hello)
+    app.get["/echo"](echo)
+    app.post["/echo"](echo)
+    app.get["/empty"](empty_probe)
+    app.post["/users"](create_user)
+    return app^
+
+
+def _fields(h: Headers) -> String:
+    var out = String()
+    for i in range(len(h)):
+        out += h.name(i) + "=" + h.value(i) + ";"
+    return out^
+
+
+def _assert_same(got: Response, want: Response) raises:
+    """The client's answer equals `App.handle`'s: status, body and every
+    response field in order."""
+    assert_equal(got.status, want.status)
+    assert_equal(got.body, want.body)
+    assert_equal(_fields(got.headers), _fields(want.headers))
+
+
+def test_bare_forms_are_unchanged() raises:
+    var app = _app()
+    var client = SpikeClient(app)
+    var current = TestClient(app)
+    var g = client.get("/hello")
+    assert_equal(g.status, 200)
+    assert_equal(g.body, "hello")
+    _assert_same(g, current.get("/hello"))
+    _assert_same(g, app.handle(Request("GET", "/hello")))
+    var p = client.post("/echo", "b")
+    assert_equal(p.body, "POST /echo [b]")
+    _assert_same(p, current.post("/echo", "b"))
+    _assert_same(p, app.handle(Request("POST", "/echo", "b")))
+    _assert_same(client.get("/missing"), current.get("/missing"))
+    _assert_same(client.post("/hello", ""), current.post("/hello", ""))
+
+
+def test_get_with_headers() raises:
+    var app = _app()
+    var client = SpikeClient(app)
+    var h = Headers()
+    h.add("X-Request-Id", "42")
+    var r = client.get("/echo?x=1", headers=h.copy())
+    assert_equal(r.status, 200)
+    assert_equal(r.body, "GET /echo [] X-Request-Id=<42>")
+    _assert_same(r, app.handle(Request("GET", "/echo?x=1", "", h.copy())))
+    # A typed route reads no fields; sending some changes nothing.
+    _assert_same(client.get("/hello", headers=h.copy()), client.get("/hello"))
+
+
+def test_post_with_headers() raises:
+    var app = _app()
+    var client = SpikeClient(app)
+    var h = Headers()
+    h.add("Authorization", "Bearer t")
+    var r = client.post("/echo", "payload", headers=h.copy())
+    assert_equal(r.body, "POST /echo [payload] Authorization=<Bearer t>")
+    _assert_same(r, app.handle(Request("POST", "/echo", "payload", h^)))
+
+
+def test_repeated_fields_keep_order_and_casing() raises:
+    var app = _app()
+    var client = SpikeClient(app)
+    var h = Headers()
+    h.add("X-A", "1")
+    h.add("Set-Cookie", "a=1")
+    h.add("x-a", "2")
+    h.add("Set-Cookie", "b=2")
+    var r = client.post("/echo", "", headers=h.copy())
+    assert_equal(
+        r.body,
+        "POST /echo [] X-A=<1> Set-Cookie=<a=1> x-a=<2> Set-Cookie=<b=2>",
+    )
+    _assert_same(r, app.handle(Request("POST", "/echo", "", h.copy())))
+    _assert_same(
+        client.get("/echo", headers=h.copy()),
+        app.handle(Request("GET", "/echo", "", h^)),
+    )
+
+
+def test_empty_value_is_sent_as_a_value() raises:
+    var app = _app()
+    var client = SpikeClient(app)
+    var h = Headers()
+    h.add("X-Empty", "")
+    var r = client.get("/empty", headers=h.copy())
+    assert_equal(r.body, "present <>")
+    _assert_same(r, app.handle(Request("GET", "/empty", "", h^)))
+    assert_equal(client.get("/empty").body, "absent")
+
+
+def test_ownership_follows_request() raises:
+    var app = _app()
+    var client = SpikeClient(app)
+    var h = Headers()
+    h.add("X-A", "1")
+    # `.copy()` leaves `h` usable; changing it later does not reach a
+    # request already sent, and the next request sends the new fields.
+    var first = client.get("/echo", headers=h.copy())
+    h.add("X-B", "2")
+    assert_equal(first.body, "GET /echo [] X-A=<1>")
+    assert_equal(len(h), 2)
+    var second = client.get("/echo", headers=h.copy())
+    assert_equal(second.body, "GET /echo [] X-A=<1> X-B=<2>")
+    # `^` moves the fields in (using `h` afterwards does not compile:
+    # tests/testclient_headers_fail/use_after_move.mojo).
+    var moved = client.post("/echo", "b", headers=h^)
+    assert_equal(moved.body, "POST /echo [b] X-A=<1> X-B=<2>")
+
+
+def test_default_is_empty_on_every_call() raises:
+    var app = _app()
+    var client = SpikeClient(app)
+    var h = Headers()
+    h.add("X-A", "1")
+    _ = client.get("/echo", headers=h.copy())
+    _ = client.post("/echo", "", headers=h^)
+    assert_equal(client.get("/echo").body, "GET /echo []")
+    assert_equal(client.post("/echo", "").body, "POST /echo []")
+
+
+def test_json_body_route_needs_the_field() raises:
+    var app = _app()
+    var client = SpikeClient(app)
+    var body = String('{"name":"Ada"}')
+    var json = Headers()
+    json.add("Content-Type", "application/json")
+    var ok = client.post("/users", body, headers=json.copy())
+    assert_equal(ok.status, 200)
+    assert_equal(ok.body, '{"id":1,"name":"Ada"}')
+    assert_equal(_fields(ok.headers), "Content-Type=application/json;")
+    _assert_same(ok, app.handle(Request("POST", "/users", body, json.copy())))
+    # Without the field the M3-008 rule still answers 415, as today.
+    var missing = client.post("/users", body)
+    assert_equal(missing.status, 415)
+    assert_equal(missing.body, "Unsupported Media Type")
+    _assert_same(missing, app.handle(Request("POST", "/users", body)))
+    _assert_same(missing, TestClient(app).post("/users", body))
+    var plain = Headers()
+    plain.add("Content-Type", "text/plain")
+    _assert_same(
+        client.post("/users", body, headers=plain.copy()),
+        app.handle(Request("POST", "/users", body, plain.copy())),
+    )
+    assert_equal(client.post("/users", body, headers=plain^).status, 415)
+    var twice = json.copy()
+    twice.add("Content-Type", "application/json")
+    _assert_same(
+        client.post("/users", body, headers=twice.copy()),
+        app.handle(Request("POST", "/users", body, twice.copy())),
+    )
+    assert_equal(client.post("/users", body, headers=twice^).status, 415)
+    var charset = Headers()
+    charset.add("content-type", "application/json; charset=utf-8")
+    assert_equal(client.post("/users", body, headers=charset^).status, 200)
+    var malformed = client.post("/users", "{", headers=json.copy())
+    assert_equal(malformed.status, 400)
+    _assert_same(malformed, app.handle(Request("POST", "/users", "{", json^)))
+
+
+def test_rejected_auto_type_client_breaks_parity() raises:
+    # Candidate D2: the client adds a field the caller did not supply, so the
+    # same target and body are 200 through it and 415 through `App.handle`
+    # (and over a real connection without the field), and a non-JSON route
+    # receives a field nobody sent.
+    var app = _app()
+    var auto = AutoTypeClient(app)
+    var body = String('{"name":"Ada"}')
+    assert_equal(auto.post("/users", body).status, 200)
+    assert_equal(app.handle(Request("POST", "/users", body)).status, 415)
+    assert_equal(
+        auto.post("/echo", body).body,
+        'POST /echo [{"name":"Ada"}] Content-Type=<application/json>',
+    )
+    assert_equal(
+        app.handle(Request("POST", "/echo", body)).body,
+        'POST /echo [{"name":"Ada"}]',
+    )
+
+
+def main() raises:
+    TestSuite.discover_tests[__functions_in_module()]().run()

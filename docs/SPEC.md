@@ -186,9 +186,9 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: **active**. Nine items are merged and passing in `feature_list.json`; no next item is chosen. Each row gives the PR that merged it. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
+Status: **active**. M3-001 to M3-009 are merged and passing in `feature_list.json`. M3-010 (decision) is PR #39; its production slice is M3-011. Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
 
-| Item | Kind | Scope | Merged |
+| Item | Kind | Scope | PR / status |
 |---|---|---|---|
 | M3-001 | decision | application state: `State[S]` first handler parameter, bound at registration `app.get[route](handler, state)`; M2 stays closed | PR #25 |
 | M3-002 | decision | request/response headers: `muntin.Headers`, raw-handler transport, no default fields, Flare mapping; typed extraction deferred | PR #28 |
@@ -199,6 +199,8 @@ Status: **active**. Nine items are merged and passing in `feature_list.json`; no
 | M3-007 | production | stateful raw `get`/`post` (completes the stateful family) | PR #31 |
 | M3-008 | decision | JSON: `Json[T]` over `FromJson`/`ToJson`, Muntin-owned codec, 415/413 rules, 1 MiB cap | PR #32 |
 | M3-009 | production | JSON | PR #36 |
+| M3-010 | decision | `TestClient` request header fields: a keyword-only, defaulted `var headers: Headers` on `get` and `post` | PR #39 |
+| M3-011 | production | `TestClient` request header fields | next |
 
 Each item's scope paragraph, and the result paragraphs written when it merged, are in [`docs/history/spec-items.md`](history/spec-items.md#m3-items) (the item order there is the order they were written, not the ID order); citations such as `docs/SPEC.md`, "M3-003 result" refer to those paragraphs. State went first because it was the M3 item most likely to change an M2 signature or M2-005's binding rule; it did not.
 
@@ -210,7 +212,7 @@ Each becomes its own decision-first item. The reason each is additive is from M2
 
 - **OpenAPI/schema output, and its foundations** (moved from M2): it needs a type-to-format mapping; the M3-008 codec maps fields by hand, so a schema source waits for a derived codec;
 - **JSON follow-ups** left out of M3-009: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;
-- **`TestClient` header fields:** `TestClient` sends none, so it reaches a JSON body route as 415 (an accepted cost recorded by M3-008);
+- **`TestClient` header fields:** decided in M3-010 (`client.post(target, body, headers=headers^)`), production slice M3-011; until then `TestClient` sends none, so it reaches a JSON body route as 415 (an accepted cost recorded by M3-008);
 - **typed header extraction:** deferred by M3-002; it competes for M3-001's single injected slot, so it needs its own binding decision;
 - **more route values:** non-`Int` types (`String` first, which also makes `/users/{name}` routable), several values, path and query values together, optional/default query values, percent-decoding. The M2-005 positional rule already covers several values; each type adds a converter;
 - **more HTTP methods** (`put`, `patch`, `delete`, `POST` without a body): overload families that repeat the `get`/`post` contract (and, with a stateful twin, two overloads per result policy each);
