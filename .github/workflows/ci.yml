@@ -39,6 +39,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        # check.sh and test.sh share nothing, so they run as separate jobs.
+        script: [check, test]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -46,9 +48,9 @@ jobs:
         with:
           pixi-version: v0.81.0
           locked: true
-      - run: ./scripts/check.sh
-      - run: ./scripts/test.sh
-      - run: git diff --check
+      - run: ./scripts/${{ matrix.script }}.sh
+      - if: matrix.script == 'check'
+        run: git diff --check
       # Muntin's own checks must not need Flare: only the default
       # environment was installed above.
       - name: default checks ran without the flare environment
