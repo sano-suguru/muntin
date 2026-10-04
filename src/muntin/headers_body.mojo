@@ -1,0 +1,68 @@
+"""Typed request-header access for `post` bodies (M3-013).
+
+`WithHeaders[B]` carries the request's header fields beside a body in the
+existing body slot of `App.post` (docs/ARCHITECTURE.md, "Typed header access
+decision (M3-012)"). It is not itself a `FromBody`: the body overloads and
+adapters in `app.mojo` accept `FromBody` or the private `_HeaderCarrier`, so
+a body alone never produces a carrier without the request's fields.
+"""
+
+from .body import FromBody
+from .http import Headers
+from .json import _JsonBody
+
+
+trait _HeaderCarrier(Deinitable, Movable):
+    """Marks `WithHeaders`, so the body overloads and adapters in `app.mojo`
+    can tell a carrier at compile time (as `_JsonBody` marks `Json`).
+    Private; it adds nothing to `WithHeaders`'s public surface."""
+
+    @staticmethod
+    def _from_parts(body: String, var headers: Headers) raises -> Self:
+        """Builds the carrier from the request body and the rebuilt fields;
+        raises only when the body's `from_body` raises."""
+        ...
+
+
+struct WithHeaders[B: FromBody](
+    Deinitable,
+    Movable,
+    _HeaderCarrier,
+    _JsonBody where conforms_to(B, _JsonBody),
+):
+    """A request body and the request's header fields, as one `post` body.
+
+    A handler declares `input: WithHeaders[B]` (or `var input`) where it
+    would declare a body `B`, on any of the eight body overloads of
+    `App.post`, stateless or stateful. `input.headers` is the request's
+    `Headers`: every field in order, with its casing, repeated names as
+    separate fields and empty values kept; `get` matches names ASCII
+    case-insensitively. Muntin interprets no field here: a missing field is
+    `None` and its status is the handler's error type to choose.
+    `input.body` is converted by `B.from_body` as a bare body would be (a
+    raise is 400 before the handler), and a `WithHeaders[Json[T]]` body keeps
+    the JSON `Content-Type` (415) and size (413) steps.
+
+    `WithHeaders` is accepted in the body slot but is not a `FromBody`, so a
+    generic `B: FromBody` does not accept it. Building one by hand takes an
+    explicit `Headers`: `WithHeaders(body^, headers^)`.
+    """
+
+    var headers: Headers
+    """The request's header fields."""
+    var body: Self.B
+    """The converted request body."""
+
+    def __init__(out self, var body: Self.B, var headers: Headers):
+        """Moves `body` and `headers` in."""
+        self.body = body^
+        self.headers = headers^
+
+    def take_body(deinit self) -> Self.B:
+        """Moves the body out (`input^.take_body()`): a field cannot be
+        moved out of the middle of a value on Mojo 1.1.0."""
+        return self.body^
+
+    @staticmethod
+    def _from_parts(body: String, var headers: Headers) raises -> Self:
+        return Self(Self.B.from_body(body), headers^)

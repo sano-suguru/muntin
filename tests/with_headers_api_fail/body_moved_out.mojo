@@ -1,12 +1,10 @@
 # Must not compile: moving the body field out of a carrier. Mojo 1.1.0
-# does not move a field out of the middle of a value, so the carrier has
-# `take_body(deinit self)`, as `Json` has `take` (docs/ARCHITECTURE.md,
-# "Typed header access decision (M3-012)").
+# does not move a field out of the middle of a value, so `WithHeaders` has
+# `take_body(deinit self)`, as `Json` has `take` (M3-013;
+# docs/ARCHITECTURE.md, "Typed header access decision (M3-012)").
 # Expected diagnostic (checked by scripts/check.sh): field 'input.body.text' destroyed out of the middle of a value
 
-from muntin import FromBody
-
-from header_access_spike import SpikeWithHeaders
+from muntin import FromBody, WithHeaders
 
 
 @fieldwise_init
@@ -18,7 +16,7 @@ struct Note(FromBody, Movable):
         return Self(body)
 
 
-def h(var input: SpikeWithHeaders[Note]) -> String:
+def h(var input: WithHeaders[Note]) -> String:
     var b = input.body^
     return b.text
 

@@ -1,13 +1,11 @@
-# Must not compile: the carrier is not a `FromBody`, so it has no
+# Must not compile: `WithHeaders` is not a `FromBody`, so it has no
 # `from_body` and a body alone cannot produce one with the fields silently
 # missing. Building one by hand stays possible and takes an explicit
-# `Headers` (docs/ARCHITECTURE.md, "Typed header access decision
+# `Headers` (M3-013; docs/ARCHITECTURE.md, "Typed header access decision
 # (M3-012)").
-# Expected diagnostic (checked by scripts/check.sh): 'SpikeWithHeaders[Note]' value has no attribute 'from_body'
+# Expected diagnostic (checked by scripts/check.sh): 'WithHeaders[Note]' value has no attribute 'from_body'
 
-from muntin import FromBody, Request, Response
-
-from header_access_spike import SpikeWithHeaders
+from muntin import FromBody, Request, Response, WithHeaders
 
 
 @fieldwise_init
@@ -20,7 +18,7 @@ struct Note(FromBody, Movable):
 
 
 def raw(req: Request) raises -> Response:
-    var n = SpikeWithHeaders[Note].from_body(req.body)
+    var n = WithHeaders[Note].from_body(req.body)
     return Response.text(n.body.text)
 
 
