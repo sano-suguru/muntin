@@ -15,9 +15,9 @@ M3 so far (merged unless marked):
 | JSON | M3-008 (`Json[T]` over `FromJson`/`ToJson`, PR #32) | M3-009 (PR #36) |
 | `TestClient` request headers | M3-010 (not merged) | M3-011 (next) |
 
-## Latest completed slice
+## Latest verified increment
 
-M3-010 (decision only; branch `m3-010-testclient-headers-gate`, not merged): `TestClient.get` and `.post` gain a last, defaulted `var headers: Headers = Headers()` argument, moved into the `Request` they build, and nothing else. `src/muntin` and `adapters/` are unchanged. Record: `docs/history/architecture-decisions.md`, "TestClient request headers decision (M3-010)". `passes` stays `false` until CI on its pull request passes.
+M3-010 (decision only; not merged): `TestClient.get` and `.post` gain a last, defaulted `var headers: Headers = Headers()` argument, moved into the `Request` they build, and nothing else. `src/muntin` and `adapters/` are unchanged. Record: `docs/history/architecture-decisions.md`, "TestClient request headers decision (M3-010)". `passes` stays `false` until CI on its pull request passes.
 
 ## Easy to get wrong now
 

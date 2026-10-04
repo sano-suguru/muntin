@@ -43,8 +43,11 @@ struct AutoTypeClient[origin: Origin[mut=False]]:
     def __init__(out self, ref[Self.origin] app: App):
         self._app = Pointer(to=app)
 
-    def post(self, target: String, body: String) raises -> Response:
+    def post(self, target: String, body: String) -> Response:
         var headers = Headers()
         if body.startswith("{") or body.startswith("["):
-            headers.add("Content-Type", "application/json")
+            try:
+                headers.add("Content-Type", "application/json")
+            except:
+                pass  # unreachable: the field is valid
         return self._app[].handle(Request("POST", target, body, headers^))
