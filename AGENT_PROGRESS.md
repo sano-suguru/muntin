@@ -4,7 +4,7 @@ The current handoff between coding sessions: state, what is easy to get wrong no
 
 ## Active milestone
 
-M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-012 has `passes: true`; M3-013 is PR #42.
+M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-013 has `passes: true` (M3-013: PR #42, CI passing).
 
 M3 so far:
 
