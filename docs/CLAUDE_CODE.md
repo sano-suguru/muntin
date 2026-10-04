@@ -22,7 +22,10 @@ docs/DX.md
   desired public API and ergonomics
 
 docs/ARCHITECTURE.md
-  invariants and dependency boundaries
+  invariants, dependency boundaries, current architecture, decision index
+
+docs/history/
+  decision records and earlier progress (read through the indexes)
 
 docs/SPEC.md
   milestone scope and acceptance

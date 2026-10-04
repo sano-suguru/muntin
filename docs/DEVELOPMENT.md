@@ -92,7 +92,8 @@ Only after successful verification:
 
 - change `passes` from `false` to `true` for the satisfied feature;
 - append concrete evidence rather than prose like "works now";
-- update `AGENT_PROGRESS.md` with the new verified state and next smallest step;
+- update `AGENT_PROGRESS.md` with the new verified state and next smallest step, replacing the previous slice's summary (append that summary to `docs/history/progress-log.md` if it records something not kept elsewhere);
+- update the documents section 9 assigns to the change, each once;
 - make a local coherent commit when git is initialized.
 
 Do not rewrite feature descriptions or acceptance criteria as a routine way to achieve passing state.
@@ -107,7 +108,20 @@ Do not rewrite feature descriptions or acceptance criteria as a routine way to a
 - what exact command last passed/failed;
 - what to do next.
 
-Large design explanations belong in `docs/`, not the handoff.
+Large design explanations belong in `docs/`, not the handoff. Keep it near 1,000 words; if it grows past that, move what is no longer current to `docs/history/progress-log.md`.
+
+Each kind of detail has one canonical place. Write it there once and link to it from the other documents instead of restating it:
+
+| Detail | Canonical place |
+|---|---|
+| decision record: the contract as decided, reasons, compiler evidence, rejected candidates, mutations, review findings, "Revisit when", the next production slice; and the production record of each slice (what changed, diagnostics, test counts) | `docs/history/architecture-decisions.md`, one `###` record per item, with a row in `docs/ARCHITECTURE.md`'s decision index (and its revisit index when it pins a fixture) |
+| current architecture contract | `docs/ARCHITECTURE.md`, "Current architecture": edit the affected subsection to state the new result; do not append history there |
+| current public API, runnable examples, current limits, targets | `docs/DX.md` (the status table and the section's status) |
+| milestone scope, open item scope, remaining candidates | `docs/SPEC.md`; when an item merges, move its scope and result paragraphs to `docs/history/spec-items.md` and keep one row in the item table |
+| acceptance, `passes`, executable evidence | `feature_list.json`; evidence states the commands, counts and CI result briefly and points to the record for narrative |
+| current handoff | `AGENT_PROGRESS.md` |
+
+Test counts, mutation lists and review narratives go in the record only. A long paragraph in a record keeps contract, reasons, evidence, limits and revisit conditions in separate labeled parts.
 
 ## 10. Stop at the requested boundary
 

@@ -77,19 +77,20 @@ Complete (M2-016). Typed routes, `Int` path/query extraction, typed request bodi
 
 ### M3 — composition and production ergonomics
 
-Application state (decided in M3-001 as a `State[S]` handler parameter bound at registration; production for `get` since M3-003, for `post` since M3-006, and for raw `Request -> Response` handlers on both since M3-007), headers (decided in M3-002; request and response headers production since M3-005, typed extraction and default headers not), codecs and schema/OpenAPI output, more route values and methods, middleware, observability, streaming, lifecycle (`app.run()`) and production hardening. Each is decided before it is built, and only once the application model earns the abstraction.
+Application state (decided in M3-001 as a `State[S]` handler parameter bound at registration; production for `get` since M3-003, for `post` since M3-006, and for raw `Request -> Response` handlers on both since M3-007), headers (decided in M3-002; request and response headers production since M3-005, typed header extraction not), JSON (decided in M3-008 as `Json[T]` over application `FromJson`/`ToJson`; production since M3-009), schema/OpenAPI output, more route values and methods, middleware, observability, streaming, lifecycle (`app.run()`) and production hardening. Each is decided before it is built, and only once the application model earns the abstraction.
 
 ## Repository guide
 
-- `docs/DX.md` — canonical public API and developer-experience target.
-- `docs/ARCHITECTURE.md` — dependency boundaries and invariants.
-- `docs/SPEC.md` — milestone scope and acceptance criteria.
+- `docs/DX.md` — current public API with its status, and the developer-experience target.
+- `docs/ARCHITECTURE.md` — current architecture, dependency boundaries and invariants, and the index of decisions and revisit conditions.
+- `docs/SPEC.md` — milestone scope, item index and remaining candidates (acceptance criteria are in `feature_list.json`).
 - `docs/DEVELOPMENT.md` — engineering and verification loop.
 - `docs/CLAUDE_CODE.md` — Claude Code `/goal` and model/harness guidance.
 - `docs/GOALS.md` — ready-to-paste `/goal` conditions.
 - `docs/REFERENCES.md` — authoritative sources behind volatile assumptions.
 - `feature_list.json` — machine-readable completion state.
 - `AGENT_PROGRESS.md` — concise handoff between coding sessions.
+- `docs/history/` — decision records (`architecture-decisions.md`), completed item scope (`spec-items.md`) and the earlier progress log (`progress-log.md`).
 
 ## Development
 

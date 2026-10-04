@@ -47,8 +47,11 @@ Update a document only when its subject changed:
 - public API changed → `docs/DX.md`
 - dependency boundary or seam changed → `docs/ARCHITECTURE.md`
 - milestone scope or acceptance changed → `docs/SPEC.md` and `feature_list.json`
-- end of a verified increment → `AGENT_PROGRESS.md`
+- decision or production record (reasons, evidence, rejected candidates, revisit conditions) → `docs/history/architecture-decisions.md`, indexed in `docs/ARCHITECTURE.md`
+- end of a verified increment → `AGENT_PROGRESS.md` (current handoff only; older results go to `docs/history/progress-log.md`)
 - ordinary implementation → code and tests only
+
+Write each detail once in its canonical place and link to it elsewhere; `docs/DEVELOPMENT.md` section 9 lists the places.
 
 ## Canonical verification
 Once bootstrap creates them, prefer:
