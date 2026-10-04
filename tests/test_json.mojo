@@ -2,10 +2,12 @@
 # `ToJson`, `JsonValue` and `JsonWriter`, and the body adapters' `Content-Type`
 # (415) and size (413) steps. Decision: docs/ARCHITECTURE.md, "JSON codec
 # decision (M3-008)". Successful JSON-body requests go through
-# `App.handle(Request(..., headers^))` with `Content-Type` set; `TestClient`
-# sends no fields, so its `post` to a JSON-body route is pinned as 415, and
-# routes that only return `Json[T]` go through `TestClient`. DX sections 4
-# and 5: tests/test_json_dx.mojo. Must-not-compile cases: tests/json_api_fail.
+# `App.handle(Request(..., headers^))` with `Content-Type` set; the bare
+# `TestClient.post(target, body)` sends no fields, so its answer on a
+# JSON-body route is pinned as 415, and routes that only return `Json[T]` go
+# through `TestClient`. `TestClient`'s `headers=` (M3-011):
+# tests/test_testclient_headers.mojo. DX sections 4 and 5:
+# tests/test_json_dx.mojo. Must-not-compile cases: tests/json_api_fail.
 
 from std.collections import Optional
 from std.memory import bitcast
@@ -787,8 +789,8 @@ def test_content_type_is_415_on_every_json_body_shape() raises:
 
 
 def test_testclient_post_to_a_json_body_route_is_415() raises:
-    # `TestClient.post` sends no Content-Type: pinned, an accepted cost of
-    # requiring the field until TestClient can send fields.
+    # The bare `TestClient.post` sends no Content-Type, so a JSON body route
+    # answers 415; a test sends the field with `headers=` (M3-011).
     var app = json_app()
     var client = TestClient(app)
     for s in _shapes():

@@ -423,8 +423,8 @@ app.post["/users/{id}"](replace_user)    # the existing def(Int, B) overload
   var client = TestClient(app)
   var headers = Headers()
   headers.add("Content-Type", "application/json")
-  client.post("/users", '{"name":"Ada","age":36}', headers=headers^)  # 200, {"id":1,"name":"Ada"}
-  client.post("/users", '{"name":"Ada","age":36}')                    # 415: no field sent
+  _ = client.post("/users", '{"name":"Ada","age":36}', headers=headers^)  # 200, {"id":1,"name":"Ada"}
+  _ = client.post("/users", '{"name":"Ada","age":36}')                    # 415: no field sent
   ```
 
   The client adds no field itself, so `client.post(target, body)` stays 415, and its answer equals `app.handle(Request("POST", target, body, headers^))` with the same fields.
@@ -748,9 +748,9 @@ Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `Test
 ```mojo
 var headers = Headers()
 headers.add("X-Request-Id", "42")
-client.get("/echo", headers=headers.copy())    # headers stays usable
-client.post("/echo", "body", headers=headers^)  # moved
-client.get("/echo")                             # no fields
+_ = client.get("/echo", headers=headers.copy())    # headers stays usable
+_ = client.post("/echo", "body", headers=headers^)  # moved
+_ = client.get("/echo")                             # no fields
 ```
 
 - The client builds `Request(method, target, body, headers^)` and nothing else: it adds, removes, inspects or merges no field, so its answer equals `app.handle(Request(...))` built from the same arguments. Fields keep their order, casing and repeats, and an empty value is sent as a value.
