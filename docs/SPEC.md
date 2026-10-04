@@ -186,7 +186,7 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: **active**. M3-001 to M3-010 are merged and passing in `feature_list.json`; M3-011, the M3-010 production slice, is PR #40. Each row gives its PR. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
+Status: **active**. M3-001 to M3-011 are merged and passing in `feature_list.json`. M3-012 (decision) is PR #41; its production slice is M3-013. Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
 
 | Item | Kind | Scope | PR / status |
 |---|---|---|---|
@@ -201,6 +201,8 @@ Status: **active**. M3-001 to M3-010 are merged and passing in `feature_list.jso
 | M3-009 | production | JSON | PR #36 |
 | M3-010 | decision | `TestClient` request header fields: a keyword-only, defaulted `var headers: Headers` on `get` and `post` | PR #39 |
 | M3-011 | production | `TestClient` request header fields | PR #40 |
+| M3-012 | decision | typed header access: a `WithHeaders[B]` body carrier for typed `post` handlers, no overload and no injected slot; typed `get` stays raw | PR #41 |
+| M3-013 | production | typed header access for `post` handlers | next |
 
 Each item's scope paragraph, and the result paragraphs written when it merged, are in [`docs/history/spec-items.md`](history/spec-items.md#m3-items) (the item order there is the order they were written, not the ID order); citations such as `docs/SPEC.md`, "M3-003 result" refer to those paragraphs. State went first because it was the M3 item most likely to change an M2 signature or M2-005's binding rule; it did not.
 
@@ -212,7 +214,7 @@ Each becomes its own decision-first item. The reason each is additive is from M2
 
 - **OpenAPI/schema output, and its foundations** (moved from M2): it needs a type-to-format mapping; the M3-008 codec maps fields by hand, so a schema source waits for a derived codec;
 - **JSON follow-ups** left out of M3-009: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;
-- **typed header extraction:** deferred by M3-002; it competes for M3-001's single injected slot, so it needs its own binding decision;
+- **typed header access on `get`, compile-time header names, a `FromHeaders` converter:** left out by M3-012, which gave typed `post` handlers a body carrier (production slice M3-013). Every measured typed header shape in `get`'s overload set exceeds Mojo 1.1.0's ten-note cap or changes an M2 signature, so `get` waits for a registration-structure decision, which more methods, more route-value arities and broader raw handlers need as well;
 - **more route values:** non-`Int` types (`String` first, which also makes `/users/{name}` routable), several values, path and query values together, optional/default query values, percent-decoding. The M2-005 positional rule already covers several values; each type adds a converter;
 - **more HTTP methods** (`put`, `patch`, `delete`, `POST` without a body): overload families that repeat the `get`/`post` contract (and, with a stateful twin, two overloads per result policy each);
 - **more body shapes:** `String`/builtin, optional, multiple and streaming bodies, and binary (bytes) bodies, which need a non-`String` body representation;
