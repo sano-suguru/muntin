@@ -23,7 +23,8 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
+          # --no-renames: a rename out of src/ into docs/ must count as code.
+          changed="$(git diff --no-renames --name-only "origin/$BASE_REF...HEAD")"
           printf '%s\n' "$changed"
           if grep -qvE '^docs/|\.md$' <<<"$changed"; then
             echo "code=true" >>"$GITHUB_OUTPUT"
