@@ -24,7 +24,7 @@ M3-012 (decision only; PR #41): typed `post` handlers will read request header f
 
 The current contract is `docs/ARCHITECTURE.md`, "Current architecture". Points a new session tends to miss:
 
-- Typed handlers cannot read headers until M3-013 lands, and then only on `post` (`WithHeaders[B]`); a typed header shape on `get` is rejected on Mojo 1.1.0 (note cap), not merely deferred. The JSON `Content-Type` check is a separate verdict for `Json[T]` bodies only, not header extraction.
+- Typed handlers cannot read headers until M3-013 lands, and then only on `post` (`WithHeaders[B]`). Header access on typed `get` handlers stays a target that waits for a registration-structure decision: each measured `get` shape drops candidate notes past Mojo 1.1.0's cap or changes an M2 signature, so it is not "one more overload". The JSON `Content-Type` check is a separate verdict for `Json[T]` bodies only, not header extraction.
 - `TestClient` sends header fields only through `headers=`: `client.post(target, body)` to a JSON body route is still 415, and `tests/test_json.mojo` pins that on purpose. The client never adds a field (no automatic `Content-Type`, no per-client defaults); a test that needs the field sends it.
 - `get` and `post` have ten overloads each, Mojo 1.1.0's ten-note diagnostic cap; an eleventh must measure its diagnostics first.
 - M2 is closed: a new item adds to the M2 contract; changing an M2 signature or the 400/404/500 boundary reopens M2 (`docs/ARCHITECTURE.md`, "When M2 reopens").

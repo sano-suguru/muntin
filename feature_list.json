@@ -836,7 +836,9 @@
       "passes": false,
       "evidence": [
         "Decision: a Muntin body carrier WithHeaders[B: FromBody] (fields headers: Headers, body: B, take_body) in post's existing body slot: no overload, no injected kind; composes with State and Json[T]; Muntin interprets no field on a carrier route (missing None, repeats kept, value interpretation is the handler's error type); runtime names, ASCII case-insensitive. Typed get stays raw: every measured get header shape drops candidate notes past Mojo 1.1.0's ten-note cap or changes an M2 signature. Details: docs/ARCHITECTURE.md \"Typed header access decision (M3-012)\".",
-        "Evidence: tests/header_access_spike.mojo + tests/test_spike_header_access.mojo 9/9; tests/header_access_fail 8 (check.sh); scratch copy with the carrier passes check.sh, test.sh (281 existing tests unchanged) and check_flare.sh, 248 of 259 diagnostics byte-identical and 11 differing only in the echoed assert line; get, relaxed-slot, generic-slot and compile-time-name variants measured on scratch copies; 12 spike mutations red, 1 inert with its reason."
+        "Evidence: tests/header_access_spike.mojo + tests/test_spike_header_access.mojo 9/9; tests/header_access_fail 8 (check.sh); scratch copy with the carrier passes check.sh, test.sh (281 existing tests unchanged) and check_flare.sh, 248 of 259 diagnostics byte-identical and 11 differing only in the echoed assert line; get, relaxed-slot, generic-slot and compile-time-name variants measured on scratch copies; 12 spike mutations red, 1 inert with its reason.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; git diff main -- src adapters empty.",
+        "Fresh-context review: two material findings fixed (two revisit pins carried a second error that kept them failing; the per-request copy was understated); minors applied."
       ]
     },
     {

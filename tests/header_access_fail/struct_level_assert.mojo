@@ -3,8 +3,9 @@
 # a carrier parameterized by a header name can reject an invalid name only
 # when a function using it is instantiated (at the registration), as
 # "function instantiation failed" (docs/ARCHITECTURE.md, "Typed header
-# access decision (M3-012)", compile-time names). If this compiles,
-# revisit compile-time header names.
+# access decision (M3-012)", compile-time names). The name used is valid,
+# so the struct-level assert is the only error: if Mojo starts accepting
+# it, this compiles; revisit compile-time header names then.
 # Expected diagnostic (checked by scripts/check.sh): 'comptime assert' must be inside a function
 
 
@@ -26,5 +27,5 @@ struct NamedHeader[name: StaticString]:
 
 
 def main():
-    var h = NamedHeader["x api key"]("v")
+    var h = NamedHeader["x-api-key"]("v")
     print(h.value)

@@ -4,8 +4,9 @@
 # I == State[S]` does not refine `I` on Mojo 1.1.0, so passing the
 # route's handle (or a context) where the handler expects `I` needs
 # `rebind`, the M3-008 4b rejection class (docs/ARCHITECTURE.md, "Typed
-# header access decision (M3-012)"). If this compiles, re-measure those
-# candidates.
+# header access decision (M3-012)"). The else branch uses `rebind` only so
+# that the one error left is the if branch's: if `comptime if` starts
+# refining `I`, this compiles; re-measure those candidates then.
 # Expected diagnostic (checked by scripts/check.sh): value cannot be converted from 'State[S]' to 'I'
 
 from muntin import Headers, State
@@ -37,7 +38,7 @@ def call_slot[
     comptime if I == State[S]:
         return handler(state, 1)
     else:
-        return handler(Ctx[S](state, headers^), 1)
+        return handler(rebind[I](Ctx[S](state, headers^)), 1)
 
 
 def with_state(u: State[Users], id: Int) -> String:
