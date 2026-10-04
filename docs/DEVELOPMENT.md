@@ -108,13 +108,13 @@ Do not rewrite feature descriptions or acceptance criteria as a routine way to a
 - what exact command last passed/failed;
 - what to do next.
 
-Large design explanations belong in `docs/`, not the handoff. The handoff keeps only what the next session could get wrong right now; when a new slice lands, the previous slice's specific description goes.
+Large design explanations belong in `docs/`, not the handoff. The handoff keeps only what the next session could get wrong right now; when a new slice lands, the previous slice's specific description goes. A time-bound operational note goes under "Temporary watch" with the condition for deleting it.
 
 Each kind of detail has one canonical source. Entry documents (`AGENT_PROGRESS.md`, `docs/ARCHITECTURE.md`'s current architecture, `docs/SPEC.md`, `README.md`) may summarize it, but each summary links to the canonical source and adds no requirement of its own; when they disagree, the canonical source wins and the summary is fixed:
 
 | Detail | Canonical place |
 |---|---|
-| decision record: the contract as decided, reasons, compiler evidence, rejected candidates, mutations, review findings, "Revisit when", the next production slice; and the production record of each slice (what changed, diagnostics, test counts) | `docs/history/architecture-decisions.md`, one `###` record per item, with a same-titled stub under `docs/ARCHITECTURE.md`'s "Decision records" (and a revisit index row when it pins a fixture) |
+| decision record: the contract as decided, reasons, compiler evidence, rejected candidates, mutations, review findings, "Revisit when", the next production slice; and the production record of each slice (what changed, diagnostics, test counts) | `docs/history/architecture-decisions.md`, one `###` record per item, with a same-titled stub (heading and link only) under `docs/ARCHITECTURE.md`'s "Decision records", and a revisit index row when it pins a fixture |
 | current architecture contract | `docs/ARCHITECTURE.md`, "Current architecture": edit the affected subsection to state the new result; do not append history there |
 | current public API, runnable examples, current limits, targets | `docs/DX.md` (the status table and the section's status) |
 | milestone scope, open item scope, remaining candidates | `docs/SPEC.md`; when an item merges, move its scope and result paragraphs to `docs/history/spec-items.md` and keep one row in the item table |
