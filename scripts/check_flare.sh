@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Flare checks (M1-001 to M1-003, M2-001, M2-002, M2-006, M2-008, M2-009,
-# M2-011, M2-013, M2-015, M3-003, M3-002, M3-005, M3-006, M3-007).
+# M2-011, M2-013, M2-015, M3-003, M3-002, M3-005, M3-006, M3-007, M3-009).
 # Builds and runs compat/flare, the Flare adapter's contract tests and its real
 # localhost round trips (adapters/flare: GET /hello, typed GET /users/{id} and
 # /items?{limit}, body-only POST /users, ToResponse/Response results, and
@@ -9,7 +9,7 @@
 # error GET /stock/{id} answering 409, the raw POST /webhook, the stateful
 # GET /staff/{id}, the stateful POST /staff and /staff/{id}, request/response
 # headers over HTTP/1.1 and cleartext HTTP/2, and the stateful raw GET and
-# POST /keyed)
+# POST /keyed, and the JSON body routes POST /greet and /greet/{id})
 # against the Flare release
 # pinned in pixi.toml's `flare` environment, and checks that the default
 # environment (which builds src/muntin) cannot see Flare. Exits nonzero on any

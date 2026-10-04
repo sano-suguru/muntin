@@ -3,6 +3,7 @@
 from ._handler_storage import _Erased
 from .body import FromBody
 from .http import Headers, Request, Response, ToErrorResponse, ToResponse
+from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
 from .state import State, _InjectedState
 
 # Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
@@ -86,6 +87,19 @@ from .state import State, _InjectedState
 # response policy runs only after it returns. `_handler_error` converts an
 # error whose declared type `E` conforms to `ToErrorResponse` (M2-012,
 # "Error-response decision") and answers every other one with a fixed 500.
+#
+# JSON bodies (M3-009, docs/ARCHITECTURE.md "JSON codec decision (M3-008)"):
+# `Json[T]` is an ordinary `FromBody`, so the eight body overloads register
+# it unchanged; each sets `_Route.json` when `B` conforms to the private
+# marker `_JsonBody`. `FromBody.from_body` sees only the body, so the
+# request `Content-Type` is decided in `App.handle`, which appends a verdict
+# after the body for a JSON route only (`"1"` when the request has exactly
+# one `application/json` field, else empty; other routes' arguments are
+# unchanged). The four body adapters, for a JSON body only, answer 415 when
+# the verdict is not `"1"`, then 413 when the body is over 1 MiB, after the
+# route value and before `from_body`. Order on a JSON body route: 404, query
+# 400 (`App.handle`), route-value 400, 415, 413, JSON 400 (`from_body`),
+# handler.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -225,6 +239,17 @@ def _bad_request() -> Response:
     return Response.text("Bad Request", status=400)
 
 
+def _unsupported_media_type() -> Response:
+    """A JSON body route's answer to a request whose `Content-Type` is not
+    exactly one `application/json` field (M3-009)."""
+    return Response.text("Unsupported Media Type", status=415)
+
+
+def _content_too_large() -> Response:
+    """A JSON body route's answer to a body over 1 MiB (M3-009)."""
+    return Response.text("Content Too Large", status=413)
+
+
 def _internal_error() -> Response:
     """The fixed answer to a handler error: status 500 and a fixed body.
     The error's own text never reaches the client."""
@@ -308,7 +333,9 @@ def _call_body[
 ](handler: def(var B) thin raises E -> R, args: List[String]) -> Response:
     """Converts the one argument, the request body, with `B.from_body` and
     moves the value into `handler`; answers 400 itself, without calling
-    `handler`, if `from_body` raises.
+    `handler`, if `from_body` raises. For a JSON body (`_JsonBody`) it
+    first answers 415 unless the `Content-Type` verdict (the last argument)
+    is `"1"`, then 413 for a body over 1 MiB, without parsing it.
 
     `B` is refined here rather than bounded, as in `App.post`: forwarding a
     handler with an explicit `B` to a callee that requires `B: FromBody`
@@ -316,6 +343,11 @@ def _call_body[
     decision (M2-005)").
     """
     comptime assert conforms_to(B, FromBody)
+    comptime if conforms_to(B, _JsonBody):
+        if args[len(args) - 1] != "1":
+            return _unsupported_media_type()
+        if args[0].byte_length() > _MAX_BODY_BYTES:
+            return _content_too_large()
     var body: B
     try:
         body = B.from_body(args[0])
@@ -340,8 +372,9 @@ def _call_int_body[
     that order.
 
     A bad route value answers 400 before the body is converted; a
-    `from_body` raise answers 400. Neither calls `handler`. `B` is refined
-    as in `_call_body`.
+    `from_body` raise answers 400. Neither calls `handler`. For a JSON body
+    the 415 and 413 steps of `_call_body` run between the two. `B` is
+    refined as in `_call_body`.
     """
     comptime assert conforms_to(B, FromBody)
     var id: Int
@@ -349,6 +382,11 @@ def _call_int_body[
         id = _parse_int(args[0])
     except:
         return _bad_request()
+    comptime if conforms_to(B, _JsonBody):
+        if args[len(args) - 1] != "1":
+            return _unsupported_media_type()
+        if args[1].byte_length() > _MAX_BODY_BYTES:
+            return _content_too_large()
     var body: B
     try:
         body = B.from_body(args[1])
@@ -476,8 +514,14 @@ def _call_state_body[
     args: List[String],
 ) -> Response:
     """`_call_body` with the route's state handle passed first, by borrow:
-    answers 400 itself, without calling `handler`, if `from_body` raises."""
+    answers 400 itself, without calling `handler`, if `from_body` raises,
+    after the same 415 and 413 steps for a JSON body."""
     comptime assert conforms_to(B, FromBody)
+    comptime if conforms_to(B, _JsonBody):
+        if args[len(args) - 1] != "1":
+            return _unsupported_media_type()
+        if args[0].byte_length() > _MAX_BODY_BYTES:
+            return _content_too_large()
     var body: B
     try:
         body = B.from_body(args[0])
@@ -503,14 +547,19 @@ def _call_state_int_body[
 ) -> Response:
     """`_call_int_body` with the route's state handle passed first, by
     borrow: a bad route value (`args[0]`) answers 400 before the body
-    (`args[1]`) is converted, a `from_body` raise answers 400, and neither
-    calls `handler`."""
+    (`args[1]`) is converted, then a JSON body gets the 415 and 413 steps,
+    a `from_body` raise answers 400, and none calls `handler`."""
     comptime assert conforms_to(B, FromBody)
     var id: Int
     try:
         id = _parse_int(args[0])
     except:
         return _bad_request()
+    comptime if conforms_to(B, _JsonBody):
+        if args[len(args) - 1] != "1":
+            return _unsupported_media_type()
+        if args[1].byte_length() > _MAX_BODY_BYTES:
+            return _content_too_large()
     var body: B
     try:
         body = B.from_body(args[1])
@@ -555,6 +604,10 @@ struct _Route(Movable):
     """Key of the route's `{key}` query parameter, or empty if it has none."""
     var body: Bool
     """Whether the handler's last argument is the request body."""
+    var json: Bool
+    """Whether that body is a `Json[T]` (`_JsonBody`): `App.handle` then
+    appends the request's `Content-Type` verdict after the body, and the
+    adapter answers 415 and 413 before `from_body` (M3-009)."""
     var raw: Bool
     """Whether the handler receives the whole request (`_call_raw`,
     `_call_state_raw`): its raw
@@ -568,11 +621,13 @@ struct _Route(Movable):
         route: StaticString,
         var handler: _Erased,
         body: Bool = False,
+        json: Bool = False,
         raw: Bool = False,
     ):
         """Splits `route` like `Request` splits a target: at its first `?`."""
         self.method = method
         self.body = body
+        self.json = json
         self.raw = raw
         var mark = route.find("?")
         if mark < 0:
@@ -924,6 +979,7 @@ struct App(Movable):
                 path,
                 _Erased.__init__[call=_call_body[B, E, String, _text]](handler),
                 body=True,
+                json=conforms_to(B, _JsonBody),
             )
         )
 
@@ -972,6 +1028,7 @@ struct App(Movable):
                     handler
                 ),
                 body=True,
+                json=conforms_to(B, _JsonBody),
             )
         )
 
@@ -1020,6 +1077,7 @@ struct App(Movable):
                     handler
                 ),
                 body=True,
+                json=conforms_to(B, _JsonBody),
             )
         )
 
@@ -1068,6 +1126,7 @@ struct App(Movable):
                     handler
                 ),
                 body=True,
+                json=conforms_to(B, _JsonBody),
             )
         )
 
@@ -1151,6 +1210,7 @@ struct App(Movable):
                     _Bound(handler, state)
                 ),
                 body=True,
+                json=conforms_to(B, _JsonBody),
             )
         )
 
@@ -1200,6 +1260,7 @@ struct App(Movable):
                     call=_call_state_body[S, B, E, R, _converted[R]]
                 ](_Bound(handler, state)),
                 body=True,
+                json=conforms_to(B, _JsonBody),
             )
         )
 
@@ -1251,6 +1312,7 @@ struct App(Movable):
                     call=_call_state_int_body[S, B, E, String, _text]
                 ](_Bound(handler, state)),
                 body=True,
+                json=conforms_to(B, _JsonBody),
             )
         )
 
@@ -1301,6 +1363,7 @@ struct App(Movable):
                     call=_call_state_int_body[S, B, E, R, _converted[R]]
                 ](_Bound(handler, state)),
                 body=True,
+                json=conforms_to(B, _JsonBody),
             )
         )
 
@@ -1354,7 +1417,9 @@ struct App(Movable):
         `_call_state_raw` rebuilds the `Request` (`_raw_request`). Typed routes receive no headers. A body route receives
         `request.body` as its last raw argument, after its route value if it
         has one; its call trampoline (`_call_body`, `_call_int_body`)
-        converts it and answers 400 itself if that fails.
+        converts it and answers 400 itself if that fails. A JSON body route
+        (`_Route.json`) also receives the request's `Content-Type` verdict
+        after the body, for the trampoline's 415 step.
 
         No matching route is 404. A missing or duplicated query value is 400
         here; the adapter answers its own 400s and turns a handler error
@@ -1389,6 +1454,10 @@ struct App(Movable):
                         return _bad_request()
                 if route.body:
                     args.append(request.body)
+                if route.json:
+                    args.append(
+                        "1" if _json_content_type(request.headers) else ""
+                    )
             # No adapter raises: each answers its own 400s and turns a
             # handler error into a response. A raise here is a server fault,
             # never a client error.
