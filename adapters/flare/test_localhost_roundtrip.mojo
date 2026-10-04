@@ -102,6 +102,15 @@ fields, one of which (`Keep-Alive`) the adapter omits. Over HTTP/1.1 status,
 body and the kept fields equal `App.handle`; a missing signature (also
 through `TestClient`) and a wrong one raise `Unsigned`, answered 401 by
 `to_error_response` in Muntin. The adapter is unchanged.
+
+M3-009 serves `json_app()`: the JSON body route `POST /greet` ->
+`greet(var body: Json[Greeting]) -> Json[Greeting]` and its stateful twin
+`POST /greet/{id}` (state `Greeter`). Over HTTP/1.1, `application/json; charset=utf-8` is
+200 with `Content-Type: application/json` on the wire, a missing field
+(the request built without one: Flare's `post(url, String)` adds
+`application/json` itself) and `text/plain` are 415, a body over 1 MiB is
+413, and malformed JSON is 400; each status, body and `Content-Type` equals
+`App.handle` with the same fields. The adapter is unchanged.
 """
 
 from std.ffi import c_uint, external_call
@@ -127,10 +136,15 @@ from muntin import (
     App,
     Headers,
     FromBody,
+    FromJson,
+    Json,
+    JsonValue,
+    JsonWriter,
     Request,
     Response,
     State,
     ToErrorResponse,
+    ToJson,
     ToResponse,
 )
 from muntin.testing import TestClient
@@ -1008,6 +1022,107 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
         print("observed h2c forged:", _h2_fields(forged[0]), forged[1])
         assert_equal(forged[0][0].value, "400")
         assert_equal(forged[1], "Bad Request")
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+@fieldwise_init
+struct Greeting(FromJson, ToJson):
+    var name: String
+
+    @staticmethod
+    def from_json(value: JsonValue) raises -> Self:
+        return Self(value["name"].string())
+
+    def write_json(self, mut out: JsonWriter) raises:
+        out.begin_object()
+        out.name("hello")
+        out.string(self.name)
+        out.end_object()
+
+
+def greet(var body: Json[Greeting]) -> Json[Greeting]:
+    return Json(body^.take())
+
+
+@fieldwise_init
+struct Greeter(Movable):
+    var title: String
+
+
+def greet_staff(
+    greeter: State[Greeter], id: Int, var body: Json[Greeting]
+) -> Json[Greeting]:
+    var g = body^.take()
+    return Json(Greeting(greeter[].title + g.name + " #" + String(id)))
+
+
+def json_app() -> App:
+    var app = App()
+    app.post["/greet"](greet)
+    app.post["/greet/{id}"](greet_staff, State(Greeter("Dr. ")))
+    return app^
+
+
+def _json_request(url: String, body: String, ct: String) raises -> FlareRequest:
+    var req = FlareRequest("POST", url, List(body.as_bytes()))
+    if ct.byte_length() > 0:
+        req.headers.append("Content-Type", ct)
+    return req^
+
+
+def test_json_over_localhost_matches_app_handle() raises:
+    var child = _serve_in_child(json_app())
+    var base = String("http://127.0.0.1:", child.port)
+    try:
+        var client = _client()
+        var app = json_app()
+        var good = '{"name":"Ad\\u00e9 \\"x\\""}'
+        var big = '{"name":"b"}' + String(" ") * 1_048_565
+        var cases = [
+            (String(""), good, String("application/json; charset=utf-8"), 200),
+            (String(""), good, String(""), 415),
+            (String(""), good, String("text/plain"), 415),
+            (String(""), big, String("application/json"), 413),
+            (String(""), String('{"name":'), String("application/json"), 400),
+            (String("/7"), good, String("application/json"), 200),
+            (String("/7"), good, String(""), 415),
+            (String("/7"), big, String("application/json"), 413),
+            (String("/x"), big, String("text/plain"), 400),
+        ]
+        for c in cases:
+            var path = "/greet" + c[0]
+            var body = c[1]
+            var ct = c[2]
+            var resp = client.send(_json_request(base + path, body, ct))
+            var h = Headers()
+            if ct.byte_length() > 0:
+                h.add("Content-Type", ct)
+            var local = app.handle(Request("POST", path, body, h^))
+            var label = path + " " + ct + " " + String(body.byte_length())
+            print("observed: POST", label, resp.status, repr(resp.text()))
+            assert_equal(resp.status, c[3], label)
+            assert_equal(resp.status, local.status, label)
+            assert_equal(resp.text(), local.body, label)
+            if c[3] == 200:
+                assert_equal(
+                    resp.headers.get("content-type"), "application/json"
+                )
+                assert_equal(
+                    local.headers.get("content-type").value(),
+                    "application/json",
+                )
+            else:
+                assert_false(resp.headers.contains("content-type"), label)
+                assert_equal(len(local.headers), 0, label)
+        assert_equal(
+            client.send(
+                _json_request(base + "/greet", good, "application/json")
+            ).text(),
+            '{"hello":"Adé \\"x\\""}',
+        )
+        assert_equal(big.byte_length(), 1_048_577)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
