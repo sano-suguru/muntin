@@ -32,7 +32,7 @@ All status below is for **Mojo 1.1.0 (8189361e)**, as of M3-011. Each numbered s
 | `TestClient` request header fields (`headers=`) | production (M3-011) | sections 4, 10 |
 | typed header extraction, middleware, `app.run()`, more methods and route-value types, derived codecs, schema/OpenAPI, streaming | target | "Still targets" below; `docs/SPEC.md` M3 "Remaining candidates" |
 
-Every production row also has a Flare loopback check in `adapters/flare/test_localhost_roundtrip.mojo` (`./scripts/check_flare.sh`). M2 is complete (M2-016): its contract is `docs/SPEC.md`, "M2 completion contract", a record of what M2 provides; M3 rows above go beyond it.
+Every production row whose behavior crosses the backend seam also has a Flare loopback check in `adapters/flare/test_localhost_roundtrip.mojo` (`./scripts/check_flare.sh`). `TestClient` request header fields is a testing API that never reaches a backend, so its tests compare it with `App.handle` directly. M2 is complete (M2-016): its contract is `docs/SPEC.md`, "M2 completion contract", a record of what M2 provides; M3 rows above go beyond it.
 
 Proven baseline, verified by `tests/test_app.mojo` and `main.mojo` (run via `./scripts/test.sh` / `./scripts/check.sh`):
 
@@ -427,7 +427,7 @@ app.post["/users/{id}"](replace_user)    # the existing def(Int, B) overload
   _ = client.post("/users", '{"name":"Ada","age":36}')                    # 415: no field sent
   ```
 
-  The client adds no field itself, so `client.post(target, body)` stays 415, and its answer equals `app.handle(Request("POST", target, body, headers^))` with the same fields.
+  The client adds no field itself, so `client.post(target, body)` stays 415, and its answer equals `app.handle(Request("POST", target, body, h^))` for a separate `Headers` value `h` with the same fields (`headers` itself is moved into the client's request).
 
 ## 5. Typed responses
 
@@ -753,7 +753,7 @@ _ = client.post("/echo", "body", headers=headers^)  # moved
 _ = client.get("/echo")                             # no fields
 ```
 
-- The client builds `Request(method, target, body, headers^)` and nothing else: it adds, removes, inspects or merges no field, so its answer equals `app.handle(Request(...))` built from the same arguments. Fields keep their order, casing and repeats, and an empty value is sent as a value.
+- The client builds `Request(method, target, body, headers^)` and nothing else: it adds, removes, inspects or merges no field, so its answer equals `app.handle(Request(...))` built from the same method, target and body and a `Headers` value with the same fields. Fields keep their order, casing and repeats, and an empty value is sent as a value.
 - `headers=` is keyword-only: a positional `Headers` after the target or the body is `invalid call to 'get'` / `'post'`: `unexpected argument`. A plain variable is `cannot be implicitly copied` (pass `headers^` or `headers.copy()`), and using it after `^` is `use of uninitialized value`. Each call without `headers=` sends none; the client keeps no per-client fields.
 - Building `Headers` raises (`add` validates), so a test that sends fields runs in a raising context.
 
