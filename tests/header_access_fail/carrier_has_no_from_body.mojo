@@ -1,7 +1,8 @@
-# Must not compile: the carrier is not a `FromBody`; a body alone cannot
-# build it, so it has no `from_body` and a raw handler cannot build one by
-# hand and silently lose the fields (docs/ARCHITECTURE.md, "Typed header
-# access decision (M3-012)").
+# Must not compile: the carrier is not a `FromBody`, so it has no
+# `from_body` and a body alone cannot produce one with the fields silently
+# missing. Building one by hand stays possible and takes an explicit
+# `Headers` (docs/ARCHITECTURE.md, "Typed header access decision
+# (M3-012)").
 # Expected diagnostic (checked by scripts/check.sh): 'SpikeWithHeaders[Note]' value has no attribute 'from_body'
 
 from muntin import FromBody, Request, Response
