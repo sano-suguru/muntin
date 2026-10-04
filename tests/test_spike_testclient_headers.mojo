@@ -1,6 +1,6 @@
 # M3-010 TestClient request-headers decision spike, application side.
 # `SpikeClient` (tests/testclient_headers_spike.mojo) is the selected
-# candidate A over production `App`; every response it gets is compared with
+# candidate K (keyword-only headers) over production `App`; every response it gets is compared with
 # `App.handle(Request(...))` for the same request. Decision and evidence:
 # docs/ARCHITECTURE.md, "TestClient request headers decision (M3-010)".
 

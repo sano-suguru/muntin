@@ -26,7 +26,8 @@ struct SpikeClient[origin: Origin[mut=False]]:
         self, target: String, *, var headers: Headers = Headers()
     ) -> Response:
         """Sends `GET target` with `headers` (none by default), moved into
-        the `Request` (pass `headers^` or `headers.copy()`)."""
+        the `Request` (pass `headers=headers^` or
+        `headers=headers.copy()`)."""
         return self._app[].handle(Request("GET", target, "", headers^))
 
     def post(
