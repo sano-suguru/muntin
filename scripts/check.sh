@@ -41,12 +41,6 @@ mkdir -p build
 "${MOJO[@]}" precompile --Werror src/muntin -o build/muntin.mojoc
 echo "ok"
 
-step "build tests"
-for t in tests/test_*.mojo; do
-    "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$tmp/$(basename "$t" .mojo)"
-done
-echo "ok"
-
 # The library side of the argument-extraction spike must not depend on the
 # application module that defines its body types. Mojo 1.1.0 accepts a
 # circular import between two modules on one include path, so build a driver
@@ -121,24 +115,13 @@ cp tests/json_spike.mojo tests/json_lib_only/driver.mojo "$tmp/json_lib_only/"
 "$tmp/json_lib_only/driver"
 echo "ok"
 
-step "compile-time route checks (tests/compile_fail must not build)"
-for t in tests/compile_fail/*.mojo; do
-    expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
-    if [[ -z "$expected" ]]; then
-        echo "error: $t has no expected diagnostic" >&2
-        exit 1
-    fi
-    if "${MOJO[@]}" build -I src "$t" -o "$tmp/compile_fail" >"$tmp/log" 2>&1; then
-        echo "error: $t compiled; Muntin no longer rejects it" >&2
-        exit 1
-    fi
-    if ! grep -qF "constraint failed: $expected" "$tmp/log"; then
-        cat "$tmp/log" >&2
-        echo "error: $t failed without 'constraint failed: $expected'" >&2
-        exit 1
-    fi
-    echo "ok: $t -> $expected"
-done
+# Every fixture below is built by scripts/build_one.sh, one job per CPU, and
+# its report is printed in file order.
+fixtures=()
+
+# tests/compile_fail: compile-time route checks; each must not build, failing
+# with "constraint failed: <expected diagnostic>".
+for t in tests/compile_fail/*.mojo; do fixtures+=(route "$t"); done
 
 # Fixtures whose expected text is the compiler's own diagnostic.
 # tests/spike_fail: evidence for docs/ARCHITECTURE.md "Handler storage decision
@@ -173,39 +156,17 @@ done
 # returns Response (M3-007); the reference-lifetime and second-handle cases
 # are the shared State's, pinned in tests/state_get_fail. tests/json_fail:
 # evidence for docs/ARCHITECTURE.md "JSON codec decision (M3-008)".
-for dir in tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail; do
-    step "$dir (must not build)"
-    for t in "$dir"/*.mojo; do
-        expected="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check.sh): //p' "$t")"
-        if [[ -z "$expected" ]]; then
-            echo "error: $t has no expected diagnostic" >&2
-            exit 1
-        fi
-        if "${MOJO[@]}" build -I src -I tests "$t" -o "$tmp/must_fail" >"$tmp/log" 2>&1; then
-            echo "error: $t compiled; it is expected to fail" >&2
-            exit 1
-        fi
-        if ! grep -qF "$expected" "$tmp/log"; then
-            cat "$tmp/log" >&2
-            echo "error: $t failed without '$expected'" >&2
-            exit 1
-        fi
-        echo "ok: $t"
-    done
+must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail)
+for dir in "${must_fail_dirs[@]}"; do
+    for t in "$dir"/*.mojo; do fixtures+=(must_fail "$t"); done
 done
 
 # Known gaps the decisions rest on (M3-001, M3-004, M3-002, M3-008): each file must build
 # and is never run. A file that stops building means the toolchain changed
 # what the decision measured; docs/ARCHITECTURE.md lists the revisit
 # condition.
-step "tests/state_known_gaps, tests/state_storage_known_gaps, tests/headers_known_gaps, tests/json_known_gaps (must build, not run)"
 for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo tests/headers_known_gaps/*.mojo tests/json_known_gaps/*.mojo; do
-    if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$tmp/known_gap" >"$tmp/log" 2>&1; then
-        cat "$tmp/log" >&2
-        echo "error: $t no longer builds; a revisit condition in docs/ARCHITECTURE.md has fired" >&2
-        exit 1
-    fi
-    echo "ok: $t"
+    fixtures+=(known_gap "$t")
 done
 
 # Mojo 1.1.0 toolchain-wide soundness gaps (M3-004): primitives that break
@@ -214,15 +175,21 @@ done
 # `memmove` warns. A file that stops building means the toolchain improved;
 # docs/ARCHITECTURE.md "State storage decision (M3-004)" says what to
 # reevaluate.
-step "tests/toolchain_soundness_gaps (must build, not run)"
-for t in tests/toolchain_soundness_gaps/*.mojo; do
-    if ! "${MOJO[@]}" build -I src -I tests "$t" -o "$tmp/toolchain_gap" >"$tmp/log" 2>&1; then
-        cat "$tmp/log" >&2
-        echo "error: $t no longer builds; the toolchain improved, see docs/ARCHITECTURE.md" >&2
-        exit 1
-    fi
-    echo "ok: $t"
+for t in tests/toolchain_soundness_gaps/*.mojo; do fixtures+=(toolchain_gap "$t"); done
+
+jobs="$(getconf _NPROCESSORS_ONLN)"
+step "fixtures: must not build / must build ($(( ${#fixtures[@]} / 2 )) files, $jobs jobs)"
+mkdir -p "$tmp/fixtures"
+status=0
+printf '%s\0' "${fixtures[@]}" | xargs -0 -n 2 -P "$jobs" ./scripts/build_one.sh "$tmp/fixtures" || status=1
+for (( i = 1; i < ${#fixtures[@]}; i += 2 )); do
+    t="${fixtures[i]}"
+    cat "$tmp/fixtures/${t//\//_}.log" 2>/dev/null || echo "error: no report for $t"
 done
+if (( status != 0 )); then
+    echo "error: a fixture check failed (see above)" >&2
+    exit 1
+fi
 
 step "build example"
 "${MOJO[@]}" build --Werror -I src main.mojo -o build/muntin

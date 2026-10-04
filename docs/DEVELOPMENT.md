@@ -62,6 +62,14 @@ A syntax-only check, a test command that failed to start, or a skipped test due 
 
 Record the exact successful commands in the feature's `evidence` array.
 
+The canonical commands:
+
+- `./scripts/check.sh`: toolchain, formatting, architecture boundary, unsafe confinement, package and example builds, the library-only spike drivers, and every must-not-build and must-build fixture under `tests/` (built in parallel, one job per CPU, reports printed in file order). It does not build `tests/test_*.mojo`.
+- `./scripts/test.sh [FILE...]`: builds each `tests/test_*.mojo` (or only the named files) with `--Werror` in parallel, then runs the binaries one at a time. With no arguments it runs every test file; CI always runs it without arguments.
+- `./scripts/check_flare.sh`: the Flare adapter and its localhost round trips, in the `flare` environment.
+
+CI runs on pull requests only. `verify` (check, test, `git diff --check`) and `flare` run on ubuntu-latest and macos-latest, except when every changed file is under `docs/` or ends in `.md`; then both are skipped. `ci-ok` always runs and is the required status check for `main`: it passes only when both ran and passed, or both were skipped for a docs-only change. A new push to a pull request cancels its running checks. Nothing reruns after a merge; `main` instead requires a pull request to be up to date with it before merging.
+
 ## 7. Review important boundaries skeptically
 
 For public API, architecture, ownership/lifetime, backend seam, unsafe code, or dependency changes, use an independent/fresh-context review when practical.
