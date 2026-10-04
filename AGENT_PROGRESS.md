@@ -4,26 +4,27 @@ The current handoff between coding sessions: state, what is easy to get wrong no
 
 ## Active milestone
 
-M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json`, M3-001 to M3-009 included, has `passes: true`.
+M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-009 has `passes: true`; M3-010 (decision) and M3-011 (its production slice) do not yet.
 
-M3 so far, each merged:
+M3 so far (merged unless marked):
 
 | Area | Decision | Production |
 |---|---|---|
 | application state | M3-001 (`State[S]` bound at registration, PR #25); M3-004 (sealed `_Shared` storage, PR #27) | M3-003 stateful `get` (PR #26), M3-006 stateful `post` (PR #30), M3-007 stateful raw (PR #31) |
 | headers | M3-002 (`muntin.Headers`, PR #28) | M3-005 (PR #29) |
 | JSON | M3-008 (`Json[T]` over `FromJson`/`ToJson`, PR #32) | M3-009 (PR #36) |
+| `TestClient` request headers | M3-010 (not merged) | M3-011 (next) |
 
 ## Latest completed slice
 
-M3-009 merged (PR #36): JSON bodies and results are production. Current contract: `docs/ARCHITECTURE.md`, "JSON"; public semantics: `docs/DX.md`, sections 4 and 5; decision and evidence: the M3-008 and M3-009 records and `feature_list.json` M3-009.
+M3-010 (decision only; branch `m3-010-testclient-headers-gate`, not merged): `TestClient.get` and `.post` gain a last, defaulted `var headers: Headers = Headers()` argument, moved into the `Request` they build, and nothing else. `src/muntin` and `adapters/` are unchanged. Record: `docs/history/architecture-decisions.md`, "TestClient request headers decision (M3-010)". `passes` stays `false` until CI on its pull request passes.
 
 ## Easy to get wrong now
 
 The current contract is `docs/ARCHITECTURE.md`, "Current architecture". Points a new session tends to miss:
 
 - Typed handlers cannot read headers (typed header extraction is not implemented). The JSON `Content-Type` check is a separate verdict for `Json[T]` bodies only, not header extraction.
-- `TestClient` sends no header fields, so `TestClient.post` to a JSON body route is 415; JSON body tests call `app.handle(Request(..., headers^))`.
+- `TestClient` sends no header fields until M3-011 lands, so `TestClient.post` to a JSON body route is 415; JSON body tests call `app.handle(Request(..., headers^))`. `SpikeClient` in `tests/testclient_headers_spike.mojo` is decision evidence, not the production client.
 - `get` and `post` have ten overloads each, Mojo 1.1.0's ten-note diagnostic cap; an eleventh must measure its diagnostics first.
 - M2 is closed: a new item adds to the M2 contract; changing an M2 signature or the 400/404/500 boundary reopens M2 (`docs/ARCHITECTURE.md`, "When M2 reopens").
 - `App.handle` is never called concurrently today; a concurrent backend or a `Copyable` `App` reopens the JSON cap and interior mutability in `State` values.
@@ -38,11 +39,11 @@ Time-bound operational notes. Each says when to delete it.
 
 ## Latest verification evidence
 
-M3-009 (PR #36): `./scripts/check.sh`, `./scripts/test.sh`, `./scripts/check_flare.sh` and `git diff --check` exit 0; CI `verify` and `flare` pass on ubuntu-latest and macos-latest. The later documentation reorganization changed no code; `check.sh` and `test.sh` still exit 0.
+M3-010: `./scripts/check.sh`, `./scripts/test.sh`, `./scripts/check_flare.sh` and `git diff --check` exit 0; `git diff main -- src adapters` is empty. Spike 9/9, `tests/testclient_headers_fail` 3, scratch copies of `src/muntin` pass the 273 existing tests unchanged, 5 spike mutations red (details in the record).
 
 ## Next step
 
-No next item is chosen in the repository. Candidates are `docs/SPEC.md`, M3, "Remaining candidates"; the nearest follow-up the JSON records name is a way for `TestClient` to send header fields (`docs/history/architecture-decisions.md`, "JSON codec decision (M3-008)", revisit conditions). Start any next item as its own decision-first entry in `feature_list.json` and `docs/SPEC.md`.
+After M3-010 merges: M3-011, exactly the record's "Next production slice (M3-011)" (two signatures in `src/muntin/testing.mojo`, `tests/test_testclient_headers.mojo`, `tests/testclient_headers_api_fail`, DX section 4's JSON example through the client). Acceptance: `feature_list.json` M3-011.
 
 ## Where things are
 

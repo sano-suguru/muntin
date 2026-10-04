@@ -260,6 +260,7 @@ If one of these pins changes (a must-fail fixture compiles, or `scripts/build_on
 | `tests/json_fail`; `tests/json_known_gaps` (must build; `relaxed_result_bound.mojo` pins rejected candidate 4b, for which the record lists no separate revisit condition); `test_number_limits_on_mojo_1_1_0` and `test_float_rounding_gaps_on_mojo_1_1_0` in `tests/test_json.mojo` | [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) |
 | an 11th `get` or `post` overload | [Stateful raw handlers in production (M3-007)](history/architecture-decisions.md#stateful-raw-handlers-in-production-m3-007) (note budget) and [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) |
 | a concurrent `App.handle` or a `Copyable` `App` | [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001) (interior mutability in `S`) and [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) (re-derive the cap) |
+| `tests/testclient_headers_fail` (a fixture compiles) | [TestClient request headers decision (M3-010)](history/architecture-decisions.md#testclient-request-headers-decision-m3-010) |
 | typed header extraction or another injected kind proposed | [Headers decision (M3-002)](history/architecture-decisions.md#headers-decision-m3-002) and [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001) (one injected slot) |
 
 ## Decision records
@@ -373,6 +374,10 @@ Record: [JSON codec decision (M3-008)](history/architecture-decisions.md#json-co
 ### JSON in production (M3-009)
 
 Record: [JSON in production (M3-009)](history/architecture-decisions.md#json-in-production-m3-009).
+
+### TestClient request headers decision (M3-010)
+
+Record: [TestClient request headers decision (M3-010)](history/architecture-decisions.md#testclient-request-headers-decision-m3-010).
 
 ## Request/Response ownership
 

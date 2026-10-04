@@ -1355,3 +1355,75 @@ Status: **production**, the M3-008 slice. The contract, the codec's rules, the r
   - `tests/json_api_fail` (6, `check.sh`): `Json[T]` without `FromJson` as a body and a bare `FromJson` type as a body (`... its type must conform to FromBody`), `Json[T]` without `ToJson` as a result (`argument type 'Json[In]' does not conform to trait 'ToResponse'`), `body.value^` (`field 'body.value.secret' destroyed out of the middle of a value ...`), a non-raising `write_json` that writes (`cannot call function that may raise ...`), a second `JsonValue` clearing the tape (`invalid use of mutating method on rvalue of type 'List[_Node]'`; it names the internal `_parse_json` and `_doc` only to reach a second handle). The first two prove `Json[T]` is not a `FromBody` without `FromJson`, with the same text as any other non-body type.
   - `adapters/flare/test_localhost_roundtrip.mojo`: `json_app()` serves `POST /greet` (`Json[Greeting]` in and out) and the stateful `POST /greet/{id}`. Over HTTP/1.1, `application/json; charset=utf-8` is 200 with `Content-Type: application/json` on the wire, a missing field (a request built without one) and `text/plain` are 415, a body of 1,048,577 bytes is 413, malformed JSON is 400, and a bad route value with an oversized `text/plain` body is 400; each status, body and `Content-Type` equals `App.handle` with the same fields. The adapter is unchanged.
   - Mutations (planted in scratch copies of `src/muntin`, never in the tree; 49, of which 46 red): the `json` flag missing on each of the eight body overloads; the verdict not transported, or always `"1"`; the arity check dropped together with a missing flag (a body `"1"` then passes as the verdict); the step missing in each of the four adapters; 415 answered as 400; the 413 step missing (stateful `Int` body); 413 before 415; the JSON steps before the route value (stateful); the cap off by one in an adapter and in the parser, and missing from the parser; the `Content-Type` rule accepting a missing field, a second field or `+json`, rejecting parameters, comparing case-sensitively or lowercasing Unicode first; the parser accepting trailing commas, duplicate members, leading zeros, a lone low surrogate, control bytes, trailing content or one level past the cap; duplicate detection by list scan and element access by walking the siblings (the cost oracle); `int()` accepting fractions; `float()` accepting infinity; an absent member returned as a value; the writer accepting a repeated name or non-finite numbers, leaving control bytes unescaped or finishing an open container; a serialization failure answered 200; a JSON result without its field. Green, and observationally inert (no request distinguishes them from production while every body overload sets the flag): the verdict appended for every body route (the slice listed it; the non-JSON adapters read their arguments from the front, so a trailing extra argument changes nothing); the verdict read as "non-empty" instead of `"1"`; the arity check dropped alone. The last two matter only when a flag is missing, which the combined mutation above covers. M3-009's acceptance records inert mutations with their reason instead of forcing them red.
+
+### TestClient request headers decision (M3-010)
+
+Status: **decision** (M3-010; `src/muntin` and `adapters/` are unchanged in it). It decides how `muntin.testing.TestClient` sends request header fields, so that a test can reach a `Json[T]` body route through the client instead of `App.handle(Request(..., headers^))`.
+
+**Selected: A, a last, defaulted `headers` argument on the existing `get` and `post`.**
+
+```mojo
+struct TestClient[origin: Origin[mut=False]]:
+    def get(self, target: String, var headers: Headers = Headers()) -> Response
+    def post(self, target: String, body: String, var headers: Headers = Headers()) -> Response
+```
+
+```mojo
+var client = TestClient(app)
+client.get("/hello")                          # unchanged
+client.post("/users", "name=Ada")             # unchanged
+
+var headers = Headers()
+headers.add("Content-Type", "application/json")
+client.post("/users", '{"name":"Ada"}', headers^)   # or headers.copy(); headers= is the same argument
+client.get("/echo", headers.copy())
+```
+
+- **What the client does:** builds `Request(method, target, body, headers^)` and calls `App.handle`; nothing else. It adds, removes, inspects or merges no field, and it knows nothing of JSON or of the route. A request sent through it is the request `App.handle(Request(...))` receives from the same arguments, so the answers are equal (status, body and response fields).
+- **Ownership:** the argument is `var headers: Headers`, moved into the `Request`, exactly as `Request`'s own initializer takes it (M3-002): a caller passes `headers^` or `headers.copy()`; a plain variable is `cannot be implicitly copied`, and using the variable after `^` is `use of uninitialized value`. A copy sent earlier is unaffected by later changes to the original. The default is a new, empty `Headers` on every call.
+- **Why it is the smallest:** two existing signatures each gain one defaulted parameter. No method, overload, type, field or client state is added; `App`, the registration overloads, `Request`, `Headers`, the JSON code and the Flare adapter are untouched; the bare forms keep their exact spelling and meaning, and every existing test builds and passes against it unchanged. The parameter mirrors the initializer the client already calls, so it adds no new rule to learn.
+- **Reading a call:** the headers are the last argument and are always a `Headers` value the test built itself, so a request that carries fields says so at the call (`client.post(target, body, headers^)`), and one that does not, carries none. `get` takes no body, so its second argument is the headers; a string there does not compile (`cannot be converted from 'StringLiteral["b"]' to 'Headers'`).
+
+**Rejected (measured on Mojo 1.1.0 in scratch copies of `src/muntin`; production unchanged):**
+
+| Candidate | Measured | Why rejected |
+|---|---|---|
+| A-borrow: `headers: Headers = Headers()` borrowed, copied inside | builds; existing suite passes; `client.post("/echo", "b", h)` with a plain variable compiles, and the client copies it | `Request` takes headers by move and rejects a plain variable (`headers_api_fail/request_headers_moved_in.mojo`); the client would accept what `Request` refuses and copy behind the call |
+| A-keyword: `*, var headers: Headers = Headers()` | builds; `headers=h^` works; positional `client.post("/echo", "b", h^)` is `invalid call to 'post': unexpected argument` | forces `headers=headers^` where `Request` takes the same argument positionally; A already accepts the keyword spelling |
+| B: separate overloads `get(target, var headers)` and `post(target, body, var headers)` beside the unchanged ones | builds; identical call syntax and results to A; existing suite passes | two more methods for exactly A's behavior |
+| C1: client-level default fields (`client.headers`, sent on every request) | builds; with `client.headers.add("Content-Type", "application/json")`, `GET /echo` and a plain-text `POST /echo` both receive the field | the fields of a request are not visible at its call; needs a `var client`, per-client state and a merge rule for per-request fields |
+| C2: builder (`client.request("POST", target).header(n, v).body(b).send()`) | builds only with `send(deinit self)`; `header` raises; `client.request("PUT", "/users").send()` is 404 | a new public type and four methods; it also opens arbitrary methods on the client, which is outside this item |
+| D1: `post_json(target, body)` adding `Content-Type: application/json` | builds; sends the field to the non-JSON route `/echo` too | the client would know JSON; a JSON-only API where a general field argument suffices |
+| D2: automatic `Content-Type` when `post`'s body looks like JSON | the same request is 200 through the client and 415 through `App.handle` (and over a connection without the field); `/echo` receives a field nobody sent | the client would answer differently from every backend; it hides the M3-008 request rule from the tests meant to exercise it |
+
+**M3-008's revisit condition** "`TestClient` gains a way to send header fields" is the one this decision meets. Its outcome: the request rule is unchanged (a `Json[T]` body needs exactly one `Content-Type` whose media type is `application/json`, otherwise 415), and the accepted cost it recorded ends with the production slice: a test reaches a JSON body route through the client by sending the field. `TestClient.post(target, body)` without it is still 415, so `tests/test_json.mojo`'s pin of that stays true.
+
+**Invariants:**
+- `TestClient` builds a Muntin `Request` and calls `App.handle`, nothing else: it adds, removes, inspects or merges no field and never looks at the body or the route. Its answer equals `App.handle(Request(method, target, body, headers))` for the same arguments.
+- The bare forms `client.get(target)` and `client.post(target, body)` keep their spelling and meaning: no field is sent.
+- The headers argument is the last parameter of `get` and `post`, defaulted to an empty `Headers`, and moved in as `Request`'s initializer moves it; there is no implicit copy and no per-client state.
+- No backend type reaches the client; the client stays in `muntin.testing`, outside the backend seam.
+
+**Evidence:**
+- `tests/testclient_headers_spike.mojo` (`SpikeClient`: A over production `App`, `Request` and `Headers`; `AutoTypeClient`: D2) and `tests/test_spike_testclient_headers.mojo` (9): the bare `get` and `post` equal production `TestClient` and `App.handle` (200, 404); fields on `GET` and on `POST`, a typed route unaffected by fields; repeated names (`X-A`, `Set-Cookie`, `x-a`, `Set-Cookie`) in order and casing; an empty value present as `""` and distinct from an absent field; `.copy()` leaving the original usable and a later change not reaching a sent request, `^` and the `headers=` spelling; the default empty on every call after calls with fields; a JSON body route 200 with `Content-Type: application/json` and `application/json; charset=utf-8`, 415 without the field (equal to today's `TestClient.post`), with `text/plain` and with two fields, 400 for malformed JSON; every case equal to `App.handle(Request(...))`; D2's parity break.
+- `tests/testclient_headers_fail` (3, `check.sh`): a plain variable (`cannot be implicitly copied`), use after `^` (`use of uninitialized value 'h'`), a string as `get`'s second argument (`cannot be converted from 'StringLiteral["b"]' to 'Headers'`).
+- Source compatibility: scratch copies of `src/muntin` with A, A-borrow, A-keyword and B in `testing.mojo` build every `tests/test_*.mojo` on `main` unchanged (273 tests, all pass, as on `main`). No must-fail fixture names `TestClient`, so no expected diagnostic can change.
+- Mutations of `SpikeClient` (5), each red: fields dropped in `get`, dropped in `post`, `get` sent as `POST`, the body dropped, a field added by `post`.
+
+**Cost:** one defaulted parameter on each of two methods. A test that needs fields builds a `Headers` value first, in a raising context (`add` raises); there is no one-line literal for fields.
+
+**Revisit when:**
+- `Request`'s initializer changes how it takes headers (by borrow, or a field literal): the client's parameter follows it;
+- `TestClient` gains another method (`put`, `delete`, a general `request(method, ...)`): it takes the same last, defaulted, moved-in `headers` parameter; reconsider a builder only if a request then needs more than method, target, body and fields;
+- Mojo gains a collection literal or keyword-argument form that builds `Headers` inline: consider accepting it without changing the bare forms;
+- a test needs the same fields on most requests: a helper in the test, not client state, unless several suites repeat it.
+
+**Next production slice (M3-011): TestClient request headers.**
+- `src/muntin/testing.mojo`: `get(self, target: String, var headers: Headers = Headers())` sends `Request("GET", target, "", headers^)`; `post(self, target: String, body: String, var headers: Headers = Headers())` sends `Request("POST", target, body, headers^)`; `Headers` imported from `.http`; docstrings say the fields are moved in and none are sent by default. Nothing else in `src/muntin` or `adapters/` changes.
+- Tests: `tests/test_testclient_headers.mojo`, the spike's semantics on production `TestClient` (bare forms equal to `App.handle`; fields on `GET` and `POST`; repeated names in order and casing; empty value; `.copy()`, `^`, `headers=`; default empty on every call; JSON body route 200 with the field and 415 without, `text/plain` and two fields; malformed 400; each equal to `App.handle(Request(...))`). `tests/test_json_dx.mojo` sends DX section 4's successful JSON bodies through `client.post(target, body, headers^)` and keeps one `App.handle` comparison. `tests/test_json.mojo`'s `TestClient.post` 415 pin stays.
+- Negative fixtures: `tests/testclient_headers_api_fail` against production `TestClient` (plain variable, use after `^`, a string as `get`'s second argument), registered in `check.sh`. The spike (`tests/testclient_headers_spike.mojo`, `tests/test_spike_testclient_headers.mojo`) and `tests/testclient_headers_fail` stay as this decision's evidence.
+- Mutations (in scratch copies of `src/muntin`), each red: fields dropped in `get`; dropped in `post`; `get` sent as `POST`; the body dropped; a field added by the client.
+- Diagnostics: every existing expected diagnostic identical (no `App` signature changes).
+- Docs: DX (the status table and "Still targets"; section 4's JSON bullet and example send the field through the client; section 9 or the `TestClient` notes show the argument), `docs/ARCHITECTURE.md` "Current architecture" (backend seam, JSON, other current limits), `docs/SPEC.md`, `feature_list.json`, `AGENT_PROGRESS.md`.
+- Done: the above; `check.sh`, `test.sh`, `check_flare.sh` and `git diff --check` exit 0; CI `verify` and `flare` pass; a fresh-context review finds no unresolved material issue.
+- Not in the slice: JSON-specific client methods or automatic fields, client-level default fields, a builder, new client methods or HTTP methods, typed header extraction, any change to the 415 rule, `Request` or `Headers`.

@@ -781,6 +781,38 @@
         "Diagnostics: 249 existing must-fail fixtures, 119 byte-identical, 130 differ only in app.mojo line numbers; error text, columns, notes and carets identical; every expected text matches. Mutations: 49 planted in scratch copies, 46 red (including the arity check dropped with a missing flag); 3 green ones are observationally inert while every overload sets the flag (verdict on every body route; non-empty verdict check; arity check alone), recorded per the acceptance. ./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0.",
         "Fresh-context review: one material issue (marked passing before CI) fixed; minors applied (per-object name sort and O(k*m) member lookup stated). CI on PR #36 passes (verify and flare on ubuntu-latest and macos-latest); merged."
       ]
+    },
+    {
+      "id": "M3-010",
+      "priority": 310,
+      "category": "testing",
+      "description": "Decide with pinned-compiler evidence the smallest public API through which muntin.testing.TestClient passes Muntin-owned Headers into the Request it builds, so a Json[T] body route can be tested through the client; production and adapters unchanged.",
+      "acceptance": [
+        "At least these candidates are measured on Mojo 1.1.0 against production App: a last defaulted Headers argument on the existing get/post; separate headers overloads; client-level default fields or a builder; a JSON-specific helper or automatic Content-Type. Each rejected candidate is recorded with its compiler or runtime evidence and a reason.",
+        "For the selected API, executable evidence shows: the bare client.get(target) and client.post(target, body) unchanged in spelling and meaning (every existing test builds unchanged); fields on GET and on POST; repeated names in order and casing; an empty value; copy and move ownership consistent with Request's initializer (a plain variable and use after move do not compile); a JSON body route 200 with an explicit Content-Type: application/json and still 415 without it; every answer equal to App.handle(Request(...)) for the same arguments.",
+        "The client builds the Request only: it adds, removes or inspects no field and does not treat JSON or a route specially; no App overload, Request/Headers ownership, 415 rule, typed header extraction or Flare change; src/muntin and adapters unchanged in the final diff.",
+        "docs/history/architecture-decisions.md records the selected API, why it is the smallest, rejected candidates, cost, invariants, revisit conditions (including the M3-008 condition this meets) and an exact next production slice (files, API, positive and negative tests, mutations, done conditions), with a stub and revisit-index row in docs/ARCHITECTURE.md; DX, SPEC, feature_list and AGENT_PROGRESS record the decision facts; check.sh, test.sh, check_flare.sh and git diff --check exit 0; CI verify and flare pass on its PR; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": [
+        "Decision: TestClient.get(self, target: String, var headers: Headers = Headers()) and post(self, target: String, body: String, var headers: Headers = Headers()), moved into Request(method, target, body, headers^); nothing else. Rejected: borrowed-and-copied, keyword-only, separate overloads, client-level fields, builder, post_json, automatic Content-Type (client 200 vs App.handle 415). Details: docs/ARCHITECTURE.md \"TestClient request headers decision (M3-010)\".",
+        "Evidence: tests/testclient_headers_spike.mojo + tests/test_spike_testclient_headers.mojo 9/9; tests/testclient_headers_fail 3; scratch copies of src/muntin (A, A-borrow, A-keyword, B) build and pass all 273 existing tests unchanged; 5 mutations of the spike client each red.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; git diff main -- src adapters empty."
+      ]
+    },
+    {
+      "id": "M3-011",
+      "priority": 311,
+      "category": "testing",
+      "description": "TestClient request headers in production, the M3-010 slice: a last, defaulted, moved-in Headers argument on TestClient.get and TestClient.post, without any other API change.",
+      "acceptance": [
+        "src/muntin/testing.mojo: get(self, target: String, var headers: Headers = Headers()) sends Request(\"GET\", target, \"\", headers^) and post(self, target: String, body: String, var headers: Headers = Headers()) sends Request(\"POST\", target, body, headers^) through App.handle; nothing else in src/muntin or adapters changes, and every existing expected diagnostic is identical.",
+        "tests/test_testclient_headers.mojo proves on production TestClient: the bare forms equal App.handle; fields on GET and POST; repeated names in order and casing; an empty value; .copy(), ^ and headers=; the default empty on every call; a JSON body route 200 with Content-Type: application/json and 415 without it, with text/plain and with two fields; malformed JSON 400; each answer equal to App.handle(Request(...)). tests/test_json_dx.mojo sends DX section 4's successful JSON bodies through the client; tests/test_json.mojo's TestClient.post 415 pin stays.",
+        "tests/testclient_headers_api_fail (registered in check.sh) rejects a plain Headers variable, use after ^, and a string as get's second argument on production TestClient; the mutations listed in the M3-010 slice are each red.",
+        "DX, ARCHITECTURE current architecture, SPEC and AGENT_PROGRESS describe the production API; check.sh, test.sh, check_flare.sh and git diff --check exit 0; CI verify and flare pass; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }
