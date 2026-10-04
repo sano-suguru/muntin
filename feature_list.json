@@ -793,12 +793,13 @@
         "The client builds the Request only: it adds, removes or inspects no field and does not treat JSON or a route specially; no App overload, Request/Headers ownership, 415 rule, typed header extraction or Flare change; src/muntin and adapters unchanged in the final diff.",
         "docs/history/architecture-decisions.md records the selected API, why its surface is minimal and why it was chosen among the equal-cost shapes, rejected candidates, cost, invariants, revisit conditions (including the M3-008 condition this meets) pinned by fixtures that observe both the client's own spelling and Request's move-in premise and an exact next production slice (files, API, positive and negative tests, mutations, done conditions), with a stub and revisit-index row in docs/ARCHITECTURE.md; DX, SPEC, feature_list and AGENT_PROGRESS record the decision facts; check.sh, test.sh, check_flare.sh and git diff --check exit 0; CI verify and flare pass on its PR; a fresh-context review finds no unresolved material issue."
       ],
-      "passes": false,
+      "passes": true,
       "evidence": [
         "Decision: TestClient.get(self, target: String, *, var headers: Headers = Headers()) and post(self, target: String, body: String, *, var headers: Headers = Headers()), moved into Request(method, target, body, headers^); nothing else. Rejected: positional last on both, keyword-only on get alone, borrowed-and-copied, separate overloads, client-level fields, builder, post_json, automatic Content-Type (adds a field the caller did not supply: client 200 vs App.handle 415 for the same target and body). Details: docs/ARCHITECTURE.md \"TestClient request headers decision (M3-010)\".",
         "Evidence: tests/testclient_headers_spike.mojo + tests/test_spike_testclient_headers.mojo 9/9; tests/testclient_headers_fail 4; revisit pins tests/testclient_headers_fail and tests/headers_api_fail/request_headers_moved_in.mojo; scratch copies of src/muntin (K, P, H, borrowed, B) build and pass all 273 existing tests unchanged, and with K main.mojo and the Flare adapter tests (13, loopback 6) too; 7 mutations of the spike client each red.",
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; git diff main -- src adapters empty.",
-        "Fresh-context review: no unresolved material issue."
+        "Fresh-context review: no unresolved material issue.",
+        "CI on PR #39 passes (verify and flare on ubuntu-latest and macos-latest)."
       ]
     },
     {
