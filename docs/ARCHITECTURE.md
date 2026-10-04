@@ -2,7 +2,7 @@
 
 Muntin owns the application model. Transports adapt to `App.handle(Request) -> Response`; they do not define application semantics.
 
-This file gives the thesis, the invariants, the [current architecture](#current-architecture-as-of-m3-009) and a [revisit index](#revisit-index). Reasons, evidence and revisit conditions are in the [decision records](history/architecture-decisions.md); this file restates their results and adds no decision, and a disagreement no later record explains is an inconsistency to fix. Public API semantics: `docs/DX.md`. Milestones: `docs/SPEC.md`. Acceptance: `feature_list.json`.
+This file gives the thesis, the invariants, the [current architecture](#current-architecture-as-of-m3-011) and a [revisit index](#revisit-index). Reasons, evidence and revisit conditions are in the [decision records](history/architecture-decisions.md); this file restates their results and adds no decision, and a disagreement no later record explains is an inconsistency to fix. Public API semantics: `docs/DX.md`. Milestones: `docs/SPEC.md`. Acceptance: `feature_list.json`.
 
 ## Architectural thesis
 
@@ -118,7 +118,7 @@ M0 scope, kept for the record; the current model is "Current architecture" below
 
 Do not design the final middleware, schema, DI, async, or streaming system during M0.
 
-## Current architecture (as of M3-009)
+## Current architecture (as of M3-011)
 
 Toolchain: Mojo 1.1.0 (8189361e) via pixi 0.81.0, pinned by `pixi.lock`; `scripts/check.sh` fails on any other Mojo version, so an upgrade is a deliberate change to the script and the docs. Flare v0.11.0 (commit `59bda50f`) exists only in the separate `flare` pixi environment.
 
@@ -143,7 +143,7 @@ The public surface is the exported names and `muntin.testing.TestClient`. `_`-pr
 ### Backend seam
 
 - The only seam is `App.handle(self, request: Request) -> Response`. A backend builds a Muntin `Request`, calls `handle`, and converts the `Response` back. There is no backend trait until a second backend exists (A7).
-- `TestClient[origin: Origin[mut=False]]` holds a `Pointer[App, origin]`: it borrows the `App` immutably, so `TestClient(app)` copies nothing, and `App.handle` takes `self` read-only. `TestClient.get(target)` and `.post(target, body)` send no header fields.
+- `TestClient[origin: Origin[mut=False]]` holds a `Pointer[App, origin]`: it borrows the `App` immutably, so `TestClient(app)` copies nothing, and `App.handle` takes `self` read-only. `TestClient.get(target)` and `.post(target, body)` send no header fields; `headers=` (keyword-only, defaulted, moved in) sends the given fields unchanged (M3-011). The client builds `Request(method, target, body, headers^)` and calls `App.handle`, nothing else.
 - `Request(method, target, body, headers^)` (body and headers defaulted) splits `target` at its first `?` into `path` (all that routes match) and `query` (raw, undecoded, `""` when absent). Both backends pass the raw target, so the split is the same for both. `Request` and `Response` own `String` data; no backend type or buffer lifetime reaches application code.
 - `scripts/check_boundaries.sh` fails if `src/muntin` imports or mentions Flare or socket modules (A2). `scripts/check_unsafe.sh` confines unsafe operations to `_handler_storage.mojo` (below).
 - `App.handle` is never called concurrently today: Flare's multi-worker `serve` needs a `Copyable` handler and `App` is move-only. That bounds JSON parse memory (one parse at a time per `App`) and makes interior mutability in a `State` value single-threaded; a concurrent backend or a `Copyable` `App` reopens both (revisit index).
@@ -206,7 +206,7 @@ Transport through the box: an adapter receives `List[String]` raw arguments, in 
 - `Json[T]` conforms to `FromBody` when `T: FromJson` and to `ToResponse` when `T: ToJson` (conditional conformance); `take(deinit self)` moves the value out. Applications map fields by hand in `from_json(JsonValue)` and `write_json(mut JsonWriter)`; there is no derived codec.
 - The codec is Muntin's: the RFC 8259 grammar, strictly, with Muntin's limits (duplicate member names, nesting deeper than 64, comments, trailing commas, leading zeros, `NaN`, a byte order mark and lone surrogates are 400; extra members are ignored). `JsonValue` is a read-only position in a compact tape held in `_Shared`; parsing is linear apart from a per-object name sort, and member lookup scans the object, so reading k fields of an m-member object costs O(k·m). `int()` is exact; `float()` goes through Mojo 1.1.0 `atof` (long literals raise, some values are 1 ulp off), and `String(Float64)` in the writer is not always round-trip; both are pinned toolchain gaps.
 - Request rule: exactly one `Content-Type` field whose media type (text before any `;`, SP/HTAB trimmed) is `application/json`, compared ASCII case-insensitively; parameters are ignored; missing, duplicated, other and `+json` types are 415. Fixed 1 MiB cap (1,048,576 bytes accepted, one more is 413); the parser also raises above it, so a raw handler's `Json[T].from_body` never parses an unbounded body. At the cap one parse adds at most about 29 MB of memory (`[0,0,...]`), about 5 MB for typical records. Only `Json[T]` bodies have the check and the cap; application `FromBody` types need no `Content-Type` and have no Muntin cap. Backend limits apply first (Flare's default `max_body_size` is 10 MB).
-- `TestClient.post` sends no fields, so a JSON body route answers it 415; tests send JSON bodies with `app.handle(Request(..., headers^))`.
+- `TestClient.post(target, body)` sends no fields, so a JSON body route answers it 415; a test sends the field with `headers=` (M3-011) or through `app.handle(Request(..., headers^))`.
 
 ### Flare adapter
 
@@ -229,7 +229,7 @@ Serving is test-fixture code only: `adapters/flare/test_localhost_roundtrip.mojo
 
 ### Other current limits and operational risks
 
-Not implemented (candidates in `docs/SPEC.md` M3): `app.run()`/lifecycle, middleware, typed header extraction, `TestClient` header methods, methods other than `GET`/`POST` (they are 404), route values other than one `Int` (no `String`, several, path and query together, optional/default, percent-decoding), raw route values and non-`Response` raw results, bodies other than one required `FromBody` body on `POST`, binary bodies, fallible conversions, application-level error mappers, logging of dropped errors, a configurable JSON cap, derived codecs, `+json`, `Json(value, status=)`, top-level list results, schema/OpenAPI, streaming, performance work.
+Not implemented (candidates in `docs/SPEC.md` M3): `app.run()`/lifecycle, middleware, typed header extraction, methods other than `GET`/`POST` (they are 404), route values other than one `Int` (no `String`, several, path and query together, optional/default, percent-decoding), raw route values and non-`Response` raw results, bodies other than one required `FromBody` body on `POST`, binary bodies, fallible conversions, application-level error mappers, logging of dropped errors, a configurable JSON cap, derived codecs, `+json`, `Json(value, status=)`, top-level list results, schema/OpenAPI, streaming, performance work.
 
 - Absolute-form targets (`http://host/path`) become the whole `path` and are 404.
 - Static path segments are not checked for target bytes: `/hello world` compiles and matches in memory but never arrives over Flare, which rejects target bytes outside `!`..`~`.
@@ -260,7 +260,7 @@ If one of these pins changes (a must-fail fixture compiles, or `scripts/build_on
 | `tests/json_fail`; `tests/json_known_gaps` (must build; `relaxed_result_bound.mojo` pins rejected candidate 4b, for which the record lists no separate revisit condition); `test_number_limits_on_mojo_1_1_0` and `test_float_rounding_gaps_on_mojo_1_1_0` in `tests/test_json.mojo` | [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) |
 | an 11th `get` or `post` overload | [Stateful raw handlers in production (M3-007)](history/architecture-decisions.md#stateful-raw-handlers-in-production-m3-007) (note budget) and [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) |
 | a concurrent `App.handle` or a `Copyable` `App` | [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001) (interior mutability in `S`) and [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) (re-derive the cap) |
-| `tests/testclient_headers_fail` (a fixture compiles: the client's own spelling and ownership changed; `SpikeClient` until M3-011); `tests/headers_api_fail/request_headers_moved_in.mojo` (compiles: `Request` no longer takes headers by move, the premise the client follows) | [TestClient request headers decision (M3-010)](history/architecture-decisions.md#testclient-request-headers-decision-m3-010) |
+| `tests/testclient_headers_api_fail` (a fixture compiles: production `TestClient`'s spelling or ownership changed); `tests/headers_api_fail/request_headers_moved_in.mojo` (compiles: `Request` no longer takes headers by move, the premise the client follows) | [TestClient request headers decision (M3-010)](history/architecture-decisions.md#testclient-request-headers-decision-m3-010) |
 | typed header extraction or another injected kind proposed | [Headers decision (M3-002)](history/architecture-decisions.md#headers-decision-m3-002) and [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001) (one injected slot) |
 
 ## Decision records
@@ -378,6 +378,10 @@ Record: [JSON in production (M3-009)](history/architecture-decisions.md#json-in-
 ### TestClient request headers decision (M3-010)
 
 Record: [TestClient request headers decision (M3-010)](history/architecture-decisions.md#testclient-request-headers-decision-m3-010).
+
+### TestClient request headers in production (M3-011)
+
+Record: [TestClient request headers in production (M3-011)](history/architecture-decisions.md#testclient-request-headers-in-production-m3-011).
 
 ## Request/Response ownership
 

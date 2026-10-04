@@ -1,8 +1,10 @@
 # DX section 4 and 5's JSON examples (M3-009), compiled and run as written
-# there against production `muntin`. JSON bodies go through
-# `App.handle(Request(..., headers^))` with the `Content-Type` set, as DX
-# section 4 says; `TestClient.post` sends no field and is 415. The result-only
-# route goes through `TestClient`.
+# there against production `muntin`. The successful JSON bodies go through
+# `TestClient.post(target, body, headers=headers^)` with the `Content-Type`
+# set, as DX section 4 shows (M3-011), one of them also compared with
+# `App.handle(Request(...))`; `TestClient.post` without the field is 415. The
+# rejected bodies go through `App.handle(Request(..., headers^))`. The
+# result-only route goes through `TestClient`.
 
 from std.collections import Optional
 from std.testing import assert_equal, TestSuite
@@ -75,31 +77,51 @@ def _post(
     return app.handle(Request("POST", target, body, headers^))
 
 
+def _content_type(t: String) raises -> Headers:
+    var headers = Headers()
+    headers.add("Content-Type", t)
+    return headers^
+
+
 def test_dx_json_examples() raises:
     var app = App()
     app.post["/users"](create_user)
     app.post["/users/{id}"](replace_user)
     app.get["/create"](create)
-    var r = _post(app, "/users", '{"name":"Ada","age":36}', "application/json")
+    var client = TestClient(app)
+    var headers = Headers()
+    headers.add("Content-Type", "application/json")
+    var r = client.post("/users", '{"name":"Ada","age":36}', headers=headers^)
     assert_equal(r.status, 200)
     assert_equal(r.body, '{"id":1,"name":"Ada"}')
     assert_equal(len(r.headers), 1)
     assert_equal(r.headers.get("content-type").value(), "application/json")
+    var direct = app.handle(
+        Request(
+            "POST",
+            "/users",
+            '{"name":"Ada","age":36}',
+            _content_type("application/json"),
+        )
+    )
+    assert_equal(r.status, direct.status)
+    assert_equal(r.body, direct.body)
+    assert_equal(len(r.headers), len(direct.headers))
+    assert_equal(r.headers.name(0), direct.headers.name(0))
+    assert_equal(r.headers.value(0), direct.headers.value(0))
     assert_equal(
-        _post(
-            app,
+        client.post(
             "/users/4",
             '{"name":"Bo","age":1,"nickname":null}',
-            "application/json",
+            headers=_content_type("application/json"),
         ).body,
         '{"id":4,"name":"Bo"}',
     )
     assert_equal(
-        _post(
-            app,
+        client.post(
             "/users",
             '{"name":"Ada","age":36}',
-            "application/json; charset=utf-8",
+            headers=_content_type("application/json; charset=utf-8"),
         ).status,
         200,
     )

@@ -814,7 +814,11 @@
         "DX, ARCHITECTURE current architecture, SPEC and AGENT_PROGRESS describe the production API; check.sh, test.sh, check_flare.sh and git diff --check exit 0; CI verify and flare pass; a fresh-context review finds no unresolved material issue."
       ],
       "passes": false,
-      "evidence": []
+      "evidence": [
+        "Production: src/muntin/testing.mojo get(self, target, *, var headers: Headers = Headers()) and post(self, target, body, *, var headers: Headers = Headers()) send Request(method, target, body, headers^) through App.handle; nothing else in src/muntin or adapters changes. Details: docs/ARCHITECTURE.md \"TestClient request headers in production (M3-011)\".",
+        "Evidence: tests/test_testclient_headers.mojo 8/8 and tests/test_json_dx.mojo (DX section 4's JSON bodies through the client) against App.handle; tests/testclient_headers_api_fail 4 (check.sh); M3-010 spike and tests/testclient_headers_fail deleted; the 255 existing must-fail fixtures' diagnostics byte-identical to main's; 7 slice mutations each red (plus get adding a field).",
+        "./scripts/check.sh, ./scripts/test.sh (281 tests), ./scripts/check_flare.sh and git diff --check exit 0; git diff main -- adapters empty."
+      ]
     }
   ]
 }

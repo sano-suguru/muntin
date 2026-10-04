@@ -1,10 +1,9 @@
-# M3-010 TestClient request-headers decision spike, application side.
-# `SpikeClient` (tests/testclient_headers_spike.mojo) is the selected
-# candidate K (keyword-only headers) over production `App`; every response
-# it gets is compared with `App.handle(Request(...))` built from the same
-# arguments.
-# Decision and evidence: docs/ARCHITECTURE.md, "TestClient request headers
-# decision (M3-010)".
+# TestClient request header fields (M3-011): `TestClient.get` and `.post`
+# take a keyword-only, defaulted `headers=` argument and move it into the
+# `Request` they send through `App.handle`. Every response is compared with
+# `App.handle(Request(...))` built from the same arguments.
+# Decision: docs/ARCHITECTURE.md, "TestClient request headers decision
+# (M3-010)". Must-not-compile evidence: tests/testclient_headers_api_fail.
 
 from std.testing import assert_equal, TestSuite
 
@@ -20,7 +19,6 @@ from muntin import (
     ToJson,
 )
 from muntin.testing import TestClient
-from testclient_headers_spike import AutoTypeClient, SpikeClient
 
 
 @fieldwise_init
@@ -98,24 +96,25 @@ def _assert_same(got: Response, want: Response) raises:
 
 def test_bare_forms_are_unchanged() raises:
     var app = _app()
-    var client = SpikeClient(app)
-    var current = TestClient(app)
+    var client = TestClient(app)
     var g = client.get("/hello")
     assert_equal(g.status, 200)
     assert_equal(g.body, "hello")
-    _assert_same(g, current.get("/hello"))
     _assert_same(g, app.handle(Request("GET", "/hello")))
     var p = client.post("/echo", "b")
     assert_equal(p.body, "POST /echo [b]")
-    _assert_same(p, current.post("/echo", "b"))
     _assert_same(p, app.handle(Request("POST", "/echo", "b")))
-    _assert_same(client.get("/missing"), current.get("/missing"))
-    _assert_same(client.post("/hello", ""), current.post("/hello", ""))
+    var missing = client.get("/missing")
+    assert_equal(missing.status, 404)
+    _assert_same(missing, app.handle(Request("GET", "/missing")))
+    var wrong_method = client.post("/hello", "")
+    assert_equal(wrong_method.status, 404)
+    _assert_same(wrong_method, app.handle(Request("POST", "/hello", "")))
 
 
 def test_get_with_headers() raises:
     var app = _app()
-    var client = SpikeClient(app)
+    var client = TestClient(app)
     var h = Headers()
     h.add("X-Request-Id", "42")
     var r = client.get("/echo?x=1", headers=h.copy())
@@ -128,7 +127,7 @@ def test_get_with_headers() raises:
 
 def test_post_with_headers() raises:
     var app = _app()
-    var client = SpikeClient(app)
+    var client = TestClient(app)
     var h = Headers()
     h.add("Authorization", "Bearer t")
     var r = client.post("/echo", "payload", headers=h.copy())
@@ -138,7 +137,7 @@ def test_post_with_headers() raises:
 
 def test_repeated_fields_keep_order_and_casing() raises:
     var app = _app()
-    var client = SpikeClient(app)
+    var client = TestClient(app)
     var h = Headers()
     h.add("X-A", "1")
     h.add("Set-Cookie", "a=1")
@@ -158,7 +157,7 @@ def test_repeated_fields_keep_order_and_casing() raises:
 
 def test_empty_value_is_sent_as_a_value() raises:
     var app = _app()
-    var client = SpikeClient(app)
+    var client = TestClient(app)
     var h = Headers()
     h.add("X-Empty", "")
     var r = client.get("/empty", headers=h.copy())
@@ -169,7 +168,7 @@ def test_empty_value_is_sent_as_a_value() raises:
 
 def test_ownership_follows_request() raises:
     var app = _app()
-    var client = SpikeClient(app)
+    var client = TestClient(app)
     var h = Headers()
     h.add("X-A", "1")
     # `.copy()` leaves `h` usable; changing it later does not reach a
@@ -181,14 +180,14 @@ def test_ownership_follows_request() raises:
     var second = client.get("/echo", headers=h.copy())
     assert_equal(second.body, "GET /echo [] X-A=<1> X-B=<2>")
     # `^` moves the fields in (using `h` afterwards does not compile:
-    # tests/testclient_headers_fail/use_after_move.mojo).
+    # tests/testclient_headers_api_fail/use_after_move.mojo).
     var moved = client.post("/echo", "b", headers=h^)
     assert_equal(moved.body, "POST /echo [b] X-A=<1> X-B=<2>")
 
 
 def test_default_is_empty_on_every_call() raises:
     var app = _app()
-    var client = SpikeClient(app)
+    var client = TestClient(app)
     var h = Headers()
     h.add("X-A", "1")
     _ = client.get("/echo", headers=h.copy())
@@ -199,7 +198,7 @@ def test_default_is_empty_on_every_call() raises:
 
 def test_json_body_route_needs_the_field() raises:
     var app = _app()
-    var client = SpikeClient(app)
+    var client = TestClient(app)
     var body = String('{"name":"Ada"}')
     var json = Headers()
     json.add("Content-Type", "application/json")
@@ -213,7 +212,6 @@ def test_json_body_route_needs_the_field() raises:
     assert_equal(missing.status, 415)
     assert_equal(missing.body, "Unsupported Media Type")
     _assert_same(missing, app.handle(Request("POST", "/users", body)))
-    _assert_same(missing, TestClient(app).post("/users", body))
     var plain = Headers()
     plain.add("Content-Type", "text/plain")
     _assert_same(
@@ -234,26 +232,6 @@ def test_json_body_route_needs_the_field() raises:
     var malformed = client.post("/users", "{", headers=json.copy())
     assert_equal(malformed.status, 400)
     _assert_same(malformed, app.handle(Request("POST", "/users", "{", json^)))
-
-
-def test_rejected_auto_type_client_breaks_parity() raises:
-    # Candidate D2: the client adds a field the caller did not supply, so the
-    # same target and body are 200 through it and 415 through `App.handle`
-    # (and over a real connection without the field), and a non-JSON route
-    # receives a field nobody sent.
-    var app = _app()
-    var auto = AutoTypeClient(app)
-    var body = String('{"name":"Ada"}')
-    assert_equal(auto.post("/users", body).status, 200)
-    assert_equal(app.handle(Request("POST", "/users", body)).status, 415)
-    assert_equal(
-        auto.post("/echo", body).body,
-        'POST /echo [{"name":"Ada"}] Content-Type=<application/json>',
-    )
-    assert_equal(
-        app.handle(Request("POST", "/echo", body)).body,
-        'POST /echo [{"name":"Ada"}]',
-    )
 
 
 def main() raises:

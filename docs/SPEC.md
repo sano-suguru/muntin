@@ -204,7 +204,7 @@ Status: **active**. M3-001 to M3-009 are merged and passing in `feature_list.jso
 
 Each item's scope paragraph, and the result paragraphs written when it merged, are in [`docs/history/spec-items.md`](history/spec-items.md#m3-items) (the item order there is the order they were written, not the ID order); citations such as `docs/SPEC.md`, "M3-003 result" refer to those paragraphs. State went first because it was the M3 item most likely to change an M2 signature or M2-005's binding rule; it did not.
 
-Delivered M3 areas, formerly on the candidate list: application state/context (M3-001, M3-004, M3-003, M3-006, M3-007), request and response headers (M3-002, M3-005), JSON and serialization (M3-008, M3-009).
+Delivered M3 areas, formerly on the candidate list: application state/context (M3-001, M3-004, M3-003, M3-006, M3-007), request and response headers (M3-002, M3-005), JSON and serialization (M3-008, M3-009), `TestClient` request header fields (M3-010, M3-011).
 
 ### Remaining candidates
 
@@ -212,7 +212,6 @@ Each becomes its own decision-first item. The reason each is additive is from M2
 
 - **OpenAPI/schema output, and its foundations** (moved from M2): it needs a type-to-format mapping; the M3-008 codec maps fields by hand, so a schema source waits for a derived codec;
 - **JSON follow-ups** left out of M3-009: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;
-- **`TestClient` header fields:** decided in M3-010 (`client.post(target, body, headers=headers^)`), production slice M3-011; until then `TestClient` sends none, so it reaches a JSON body route as 415 (an accepted cost recorded by M3-008);
 - **typed header extraction:** deferred by M3-002; it competes for M3-001's single injected slot, so it needs its own binding decision;
 - **more route values:** non-`Int` types (`String` first, which also makes `/users/{name}` routable), several values, path and query values together, optional/default query values, percent-decoding. The M2-005 positional rule already covers several values; each type adds a converter;
 - **more HTTP methods** (`put`, `patch`, `delete`, `POST` without a body): overload families that repeat the `get`/`post` contract (and, with a stateful twin, two overloads per result policy each);

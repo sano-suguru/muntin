@@ -154,9 +154,11 @@ for t in tests/compile_fail/*.mojo; do fixtures+=(route "$t"); done
 # evidence for docs/ARCHITECTURE.md "JSON codec decision (M3-008)".
 # tests/json_api_fail: the same invariants on production muntin.Json,
 # FromJson, ToJson, JsonValue and JsonWriter (M3-009).
-# tests/testclient_headers_fail: evidence for docs/ARCHITECTURE.md
-# "TestClient request headers decision (M3-010)".
-must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_fail)
+# tests/testclient_headers_api_fail: production muntin.testing.TestClient
+# takes request header fields keyword-only and by move, as decided in
+# docs/ARCHITECTURE.md "TestClient request headers decision (M3-010)"
+# (M3-011).
+must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail)
 for dir in "${must_fail_dirs[@]}"; do
     for t in "$dir"/*.mojo; do fixtures+=(must_fail "$t"); done
 done
