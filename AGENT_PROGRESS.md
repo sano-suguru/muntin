@@ -4,20 +4,20 @@ The current handoff between coding sessions: state, what is easy to get wrong no
 
 ## Active milestone
 
-M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-009 has `passes: true`; M3-010 (decision) and M3-011 (its production slice) do not yet.
+M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-009 has `passes: true`. M3-010's `passes` flips to `true` only once CI passes on PR #39; M3-011 is next.
 
-M3 so far (merged unless marked):
+M3 so far:
 
 | Area | Decision | Production |
 |---|---|---|
 | application state | M3-001 (`State[S]` bound at registration, PR #25); M3-004 (sealed `_Shared` storage, PR #27) | M3-003 stateful `get` (PR #26), M3-006 stateful `post` (PR #30), M3-007 stateful raw (PR #31) |
 | headers | M3-002 (`muntin.Headers`, PR #28) | M3-005 (PR #29) |
 | JSON | M3-008 (`Json[T]` over `FromJson`/`ToJson`, PR #32) | M3-009 (PR #36) |
-| `TestClient` request headers | M3-010 (not merged) | M3-011 (next) |
+| `TestClient` request headers | M3-010 (PR #39) | M3-011 (next) |
 
 ## Current increment
 
-M3-010 (decision only; not merged): `TestClient.get` and `.post` gain a keyword-only, defaulted `var headers: Headers = Headers()` argument (`headers=headers^`), moved into the `Request` they build, and nothing else. `src/muntin` and `adapters/` are unchanged. Record: `docs/history/architecture-decisions.md`, "TestClient request headers decision (M3-010)". Verified locally; `passes` stays `false` until CI on its pull request passes.
+M3-010 (decision only; PR #39): `TestClient.get` and `.post` gain a keyword-only, defaulted `var headers: Headers = Headers()` argument (`headers=headers^`), moved into the `Request` they build, and nothing else. `src/muntin` and `adapters/` are unchanged. Record: `docs/history/architecture-decisions.md`, "TestClient request headers decision (M3-010)".
 
 ## Easy to get wrong now
 
@@ -39,11 +39,11 @@ Time-bound operational notes. Each says when to delete it.
 
 ## Latest verification evidence
 
-M3-010: `./scripts/check.sh`, `./scripts/test.sh`, `./scripts/check_flare.sh` and `git diff --check` exit 0; `git diff main -- src adapters` is empty. Spike 9/9, `tests/testclient_headers_fail` 4, scratch copies of `src/muntin` pass the 273 existing tests unchanged, 7 spike mutations red (details in the record).
+M3-010: the local canonical checks pass, and `src/muntin` and `adapters/` are unchanged. Full evidence: the decision record.
 
 ## Next step
 
-After M3-010 merges: M3-011, exactly the record's "Next production slice (M3-011)" (two signatures in `src/muntin/testing.mojo`, `tests/test_testclient_headers.mojo`, `tests/testclient_headers_api_fail`, DX section 4's JSON example through the client, the M3-010 spike and its fixtures deleted). Acceptance: `feature_list.json` M3-011.
+M3-011, exactly the record's "Next production slice (M3-011)" (two signatures in `src/muntin/testing.mojo`, `tests/test_testclient_headers.mojo`, `tests/testclient_headers_api_fail`, DX section 4's JSON example through the client, the M3-010 spike and its fixtures deleted). Acceptance: `feature_list.json` M3-011.
 
 ## Where things are
 

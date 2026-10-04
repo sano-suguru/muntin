@@ -186,7 +186,7 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: **active**. Nine items are merged and passing in `feature_list.json`. M3-010 (decision) is decided and not merged; its production slice is M3-011. Each merged row gives the PR that merged it. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
+Status: **active**. M3-001 to M3-009 are merged and passing in `feature_list.json`. M3-010 (decision) is PR #39; its production slice is M3-011. Each row gives its PR. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
 
 | Item | Kind | Scope | Merged |
 |---|---|---|---|
@@ -199,8 +199,8 @@ Status: **active**. Nine items are merged and passing in `feature_list.json`. M3
 | M3-007 | production | stateful raw `get`/`post` (completes the stateful family) | PR #31 |
 | M3-008 | decision | JSON: `Json[T]` over `FromJson`/`ToJson`, Muntin-owned codec, 415/413 rules, 1 MiB cap | PR #32 |
 | M3-009 | production | JSON | PR #36 |
-| M3-010 | decision | `TestClient` request header fields: a keyword-only, defaulted `var headers: Headers` on `get` and `post` | not merged |
-| M3-011 | production | `TestClient` request header fields | not started |
+| M3-010 | decision | `TestClient` request header fields: a keyword-only, defaulted `var headers: Headers` on `get` and `post` | PR #39 |
+| M3-011 | production | `TestClient` request header fields | next |
 
 Each item's scope paragraph, and the result paragraphs written when it merged, are in [`docs/history/spec-items.md`](history/spec-items.md#m3-items) (the item order there is the order they were written, not the ID order); citations such as `docs/SPEC.md`, "M3-003 result" refer to those paragraphs. State went first because it was the M3 item most likely to change an M2 signature or M2-005's binding rule; it did not.
 

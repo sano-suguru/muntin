@@ -1,7 +1,8 @@
 # M3-010 TestClient request-headers decision spike, application side.
 # `SpikeClient` (tests/testclient_headers_spike.mojo) is the selected
 # candidate K (keyword-only headers) over production `App`; every response
-# it gets is compared with `App.handle(Request(...))` for the same request.
+# it gets is compared with `App.handle(Request(...))` built from the same
+# arguments.
 # Decision and evidence: docs/ARCHITECTURE.md, "TestClient request headers
 # decision (M3-010)".
 
@@ -236,9 +237,10 @@ def test_json_body_route_needs_the_field() raises:
 
 
 def test_rejected_auto_type_client_breaks_parity() raises:
-    # Candidate D2: the same request is 200 through the client and 415
-    # through `App.handle` (and over a real connection without the field),
-    # and a non-JSON route receives a field nobody sent.
+    # Candidate D2: the client adds a field the caller did not supply, so the
+    # same target and body are 200 through it and 415 through `App.handle`
+    # (and over a real connection without the field), and a non-JSON route
+    # receives a field nobody sent.
     var app = _app()
     var auto = AutoTypeClient(app)
     var body = String('{"name":"Ada"}')
