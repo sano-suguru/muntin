@@ -2,11 +2,39 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
+
+# A new push to a pull request supersedes its running checks.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
+  # Pull requests that change only docs/** and *.md files skip verify and
+  # flare; ci-ok still reports.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # --no-renames: a rename out of src/ into docs/ must count as code.
+          changed="$(git diff --no-renames --name-only "origin/$BASE_REF...HEAD")"
+          printf '%s\n' "$changed"
+          if grep -qvE '^docs/|\.md$' <<<"$changed"; then
+            echo "code=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "code=false" >>"$GITHUB_OUTPUT"
+          fi
+
   verify:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +55,8 @@ jobs:
         run: test ! -e .pixi/envs/flare
 
   flare:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -48,3 +78,23 @@ jobs:
           # skip the pixi-build compile this job exists to prove.
           cache: false
       - run: ./scripts/check_flare.sh
+
+  # The one required status check for main. It must fail, never skip, when
+  # anything above fails or is cancelled: a skipped required check counts as
+  # passing.
+  ci-ok:
+    needs: [changes, verify, flare]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          VERIFY: ${{ needs.verify.result }}
+          FLARE: ${{ needs.flare.result }}
+        run: |
+          echo "changes=$CHANGES code=$CODE verify=$VERIFY flare=$FLARE"
+          test "$CHANGES" = success
+          if [ "$CODE" = true ]; then want=success; else want=skipped; fi
+          test "$VERIFY" = "$want"
+          test "$FLARE" = "$want"
