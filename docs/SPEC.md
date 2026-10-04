@@ -186,9 +186,9 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: **active**. M3-001 to M3-009 are merged and passing in `feature_list.json`. M3-010 (decision) is PR #39; its production slice is M3-011. Each row gives its PR. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
+Status: **active**. M3-001 to M3-009 are merged and passing in `feature_list.json`. M3-010 (decision) is PR #39; its production slice is M3-011. Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
 
-| Item | Kind | Scope | Merged |
+| Item | Kind | Scope | PR / status |
 |---|---|---|---|
 | M3-001 | decision | application state: `State[S]` first handler parameter, bound at registration `app.get[route](handler, state)`; M2 stays closed | PR #25 |
 | M3-002 | decision | request/response headers: `muntin.Headers`, raw-handler transport, no default fields, Flare mapping; typed extraction deferred | PR #28 |
