@@ -24,6 +24,8 @@ from muntin import (
 )
 from muntin.testing import TestClient
 
+from muntin.http import _Field
+
 from header_access_spike import CarrierApp, SpikeWithHeaders
 
 
@@ -268,6 +270,18 @@ def test_other_body_routes_receive_no_fields() raises:
     )
     assert_equal(r.status, 200)
     assert_equal(_post(app, "/plain", "hi", _h("X-A", "1")).body, "plain hi")
+
+
+def test_invalid_in_memory_fields_are_the_fixed_500() raises:
+    # The M3-002 known gap: `_fields` is reachable by name, so an in-memory
+    # `Headers` can hold a field `add` would refuse. On a carrier route the
+    # rebuild through `add` raises, and the answer is the fixed 500, not 400.
+    var app = _app()
+    var h = Headers()
+    h._fields.append(_Field("X-Inject", "a\r\nSet-Cookie: evil=1"))
+    var r = _post(app, "/note", "hi", h^)
+    assert_equal(r.status, 500)
+    assert_equal(r.body, "Internal Server Error")
 
 
 def test_unmatched_is_404() raises:

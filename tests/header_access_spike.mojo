@@ -24,7 +24,8 @@
 #              header field's name and value after the body and the JSON
 #              verdict; other routes' arguments are production's.
 #   adapters   production's body adapters plus one branch: for a carrier,
-#              the fields are rebuilt first (failure: the fixed 500, as
+#              the fields are rebuilt first (a field `add` refuses, which
+#              only the M3-002 `_fields` gap can produce: the fixed 500, as
 #              `_raw_request`), then the carrier is built with
 #              `B.from_body` (a raise: 400). The JSON arity check allows
 #              the trailing pairs on a carrier route only: the verdict
@@ -144,7 +145,7 @@ def _call_c_body[
         try:
             fields = _fields(args, _first_field[B](1))
         except:
-            return _internal_error()  # unreachable: they came from Headers
+            return _internal_error()  # a field `add` refuses (the _fields gap)
     var body: B
     try:
         body = _convert[B](args[0], fields^)
@@ -180,7 +181,7 @@ def _call_c_int_body[
         try:
             fields = _fields(args, _first_field[B](2))
         except:
-            return _internal_error()  # unreachable: they came from Headers
+            return _internal_error()  # a field `add` refuses (the _fields gap)
     var body: B
     try:
         body = _convert[B](args[1], fields^)
@@ -215,7 +216,7 @@ def _call_c_state_body[
         try:
             fields = _fields(args, _first_field[B](1))
         except:
-            return _internal_error()  # unreachable: they came from Headers
+            return _internal_error()  # a field `add` refuses (the _fields gap)
     var body: B
     try:
         body = _convert[B](args[0], fields^)
