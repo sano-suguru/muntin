@@ -41,79 +41,75 @@ mkdir -p build
 "${MOJO[@]}" precompile --Werror src/muntin -o build/muntin.mojoc
 echo "ok"
 
+# Library-only spike drivers. Each copies a spike and its driver into a
+# directory without the application module and builds the driver there; all
+# eight build at once, then each runs in order.
+lib_dirs=()
+lib_titles=()
+lib_pids=()
+lib_only() { # DIR TITLE FILE...
+    local dir="$tmp/$1" title="$2"
+    shift 2
+    mkdir -p "$dir"
+    cp "$@" "$dir/"
+    "${MOJO[@]}" build --Werror -I src -I "$dir" "$dir/driver.mojo" -o "$dir/driver" >"$dir/build.log" 2>&1 &
+    lib_pids+=($!)
+    lib_dirs+=("$dir")
+    lib_titles+=("$title")
+}
+
 # The library side of the argument-extraction spike must not depend on the
 # application module that defines its body types. Mojo 1.1.0 accepts a
 # circular import between two modules on one include path, so build a driver
 # that instantiates it from a directory without the application module.
-step "extraction spike library builds without the application module"
-mkdir -p "$tmp/lib_only"
-cp tests/extraction_spike.mojo tests/extraction_lib_only/driver.mojo "$tmp/lib_only/"
-"${MOJO[@]}" build --Werror -I src -I "$tmp/lib_only" "$tmp/lib_only/driver.mojo" -o "$tmp/lib_only/driver"
-"$tmp/lib_only/driver"
-echo "ok"
+lib_only lib_only "extraction spike library builds without the application module" \
+    tests/extraction_spike.mojo tests/extraction_lib_only/driver.mojo
 
 # Same check for the typed-response spike (M2-007): its library side must
 # convert return types defined only by the application.
-step "response spike library builds without the application module"
-mkdir -p "$tmp/response_lib_only"
-cp tests/response_spike.mojo tests/response_lib_only/driver.mojo "$tmp/response_lib_only/"
-"${MOJO[@]}" build --Werror -I src -I "$tmp/response_lib_only" "$tmp/response_lib_only/driver.mojo" -o "$tmp/response_lib_only/driver"
-"$tmp/response_lib_only/driver"
-echo "ok"
+lib_only response_lib_only "response spike library builds without the application module" \
+    tests/response_spike.mojo tests/response_lib_only/driver.mojo
 
 # Same check for the application-error spike (M2-010): its library side
 # must catch error types defined only by the application.
-step "error spike library builds without the application module"
-mkdir -p "$tmp/error_lib_only"
-cp tests/error_spike.mojo tests/error_lib_only/driver.mojo "$tmp/error_lib_only/"
-"${MOJO[@]}" build --Werror -I src -I "$tmp/error_lib_only" "$tmp/error_lib_only/driver.mojo" -o "$tmp/error_lib_only/driver"
-"$tmp/error_lib_only/driver"
-echo "ok"
+lib_only error_lib_only "error spike library builds without the application module" \
+    tests/error_spike.mojo tests/error_lib_only/driver.mojo
 
 # Same check for the error-response spike (M2-012): its library side must
 # detect an error-trait conformance declared only by the application.
-step "error-response spike library builds without the application module"
-mkdir -p "$tmp/error_response_lib_only"
-cp tests/error_response_spike.mojo tests/error_response_lib_only/driver.mojo "$tmp/error_response_lib_only/"
-"${MOJO[@]}" build --Werror -I src -I "$tmp/error_response_lib_only" "$tmp/error_response_lib_only/driver.mojo" -o "$tmp/error_response_lib_only/driver"
-"$tmp/error_response_lib_only/driver"
-echo "ok"
+lib_only error_response_lib_only "error-response spike library builds without the application module" \
+    tests/error_response_spike.mojo tests/error_response_lib_only/driver.mojo
 
 # Same check for the application-state spike (M3-001): its library side
 # must store and inject state types defined only by the application.
-step "state spike library builds without the application module"
-mkdir -p "$tmp/state_lib_only"
-cp tests/state_spike.mojo tests/scoped_state_spike.mojo tests/state_lib_only/driver.mojo "$tmp/state_lib_only/"
-"${MOJO[@]}" build --Werror -I src -I "$tmp/state_lib_only" "$tmp/state_lib_only/driver.mojo" -o "$tmp/state_lib_only/driver"
-"$tmp/state_lib_only/driver"
-echo "ok"
+lib_only state_lib_only "state spike library builds without the application module" \
+    tests/state_spike.mojo tests/scoped_state_spike.mojo tests/state_lib_only/driver.mojo
 
 # Same check for the state-storage spike (M3-004): its sealed box must
 # share state types defined only by the application.
-step "state-storage spike library builds without the application module"
-mkdir -p "$tmp/state_storage_lib_only"
-cp tests/state_storage_spike.mojo tests/state_storage_lib_only/driver.mojo "$tmp/state_storage_lib_only/"
-"${MOJO[@]}" build --Werror -I src -I "$tmp/state_storage_lib_only" "$tmp/state_storage_lib_only/driver.mojo" -o "$tmp/state_storage_lib_only/driver"
-"$tmp/state_storage_lib_only/driver"
-echo "ok"
+lib_only state_storage_lib_only "state-storage spike library builds without the application module" \
+    tests/state_storage_spike.mojo tests/state_storage_lib_only/driver.mojo
 
 # Same check for the headers spike (M3-002): its raw transport must carry
 # headers to handlers defined only by the application.
-step "headers spike library builds without the application module"
-mkdir -p "$tmp/headers_lib_only"
-cp tests/headers_spike.mojo tests/headers_lib_only/driver.mojo "$tmp/headers_lib_only/"
-"${MOJO[@]}" build --Werror -I src -I "$tmp/headers_lib_only" "$tmp/headers_lib_only/driver.mojo" -o "$tmp/headers_lib_only/driver"
-"$tmp/headers_lib_only/driver"
-echo "ok"
+lib_only headers_lib_only "headers spike library builds without the application module" \
+    tests/headers_spike.mojo tests/headers_lib_only/driver.mojo
 
 # Same check for the JSON codec spike (M3-008): `Json[T]` and the codec must
 # convert application types defined only by the application.
-step "JSON spike library builds without the application module"
-mkdir -p "$tmp/json_lib_only"
-cp tests/json_spike.mojo tests/json_lib_only/driver.mojo "$tmp/json_lib_only/"
-"${MOJO[@]}" build --Werror -I src -I "$tmp/json_lib_only" "$tmp/json_lib_only/driver.mojo" -o "$tmp/json_lib_only/driver"
-"$tmp/json_lib_only/driver"
-echo "ok"
+lib_only json_lib_only "JSON spike library builds without the application module" \
+    tests/json_spike.mojo tests/json_lib_only/driver.mojo
+
+for i in "${!lib_pids[@]}"; do
+    step "${lib_titles[i]}"
+    if ! wait "${lib_pids[i]}"; then
+        cat "${lib_dirs[i]}/build.log"
+        echo "error: ${lib_dirs[i]}/driver.mojo failed to build" >&2
+        exit 1
+    fi
+    "${lib_dirs[i]}/driver"
+    echo "ok"
+done
 
 # Every fixture below is built by scripts/build_one.sh, one job per CPU, and
 # its report is printed in file order.
