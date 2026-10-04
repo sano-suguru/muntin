@@ -43,19 +43,6 @@ if ! grep -q "tag=v0.11.0#$FLARE_COMMIT" <<<"$listing"; then
     exit 1
 fi
 
-step "build fixture"
-mkdir -p build
-"${FLARE[@]}" build --Werror "$fixture" -o build/flare_smoke
-echo "ok"
-
-step "run fixture"
-out="$(./build/flare_smoke)"
-echo "$out"
-if [[ "$out" != "200 hello" ]]; then
-    echo "error: expected '200 hello' from $fixture" >&2
-    exit 1
-fi
-
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -68,9 +55,46 @@ if ! diff -ru "$adapter" "$tmp/adapter"; then
 fi
 echo "ok"
 
-step "build adapter tests"
-"${FLARE[@]}" build --Werror -I src -I "$adapter" "$adapter_tests" -o build/test_muntin_flare
-echo "ok"
+# Every Flare binary is built here at once; the steps below run them in order.
+mkdir -p build
+pids=()
+outs=()
+build_bg() { # OUT ARGS...: mojo build --Werror ARGS -o build/OUT, in the background
+    local out="$1"
+    shift
+    "${FLARE[@]}" build --Werror "$@" -o "build/$out" >"$tmp/build_$out.log" 2>&1 &
+    pids+=($!)
+    outs+=("$out")
+}
+step "build fixture, adapter tests and probes (in parallel)"
+build_bg flare_smoke "$fixture"
+build_bg test_muntin_flare -I src -I "$adapter" "$adapter_tests"
+build_bg serve_probe -I src -I "$adapter" "$serve_probe"
+build_bg test_localhost_roundtrip -I src -I "$adapter" "$roundtrip"
+build_bg flare_header_probe -I src -I "$adapter" compat/flare/headers/flare_header_probe.mojo
+build_bg inbound_rebuild -I src -I tests -I "$adapter" compat/flare/headers/inbound_rebuild.mojo
+build_bg json_loopback_probe -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo
+built=0
+for i in "${!pids[@]}"; do
+    if wait "${pids[i]}"; then
+        echo "ok: build/${outs[i]}"
+    else
+        cat "$tmp/build_${outs[i]}.log"
+        echo "error: build of build/${outs[i]} failed" >&2
+        built=1
+    fi
+done
+if ((built != 0)); then
+    exit 1
+fi
+
+step "run fixture"
+out="$(./build/flare_smoke)"
+echo "$out"
+if [[ "$out" != "200 hello" ]]; then
+    echo "error: expected '200 hello' from $fixture" >&2
+    exit 1
+fi
 
 step "run adapter tests"
 if ! out="$(./build/test_muntin_flare 2>&1)"; then
@@ -85,12 +109,7 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' <<<"$out"; then
 fi
 
 step "serve probe (compile-only: HttpServer.serve accepts MuntinHandler)"
-"${FLARE[@]}" build --Werror -I src -I "$adapter" "$serve_probe" -o build/serve_probe
 ./build/serve_probe
-
-step "build localhost round trip"
-"${FLARE[@]}" build --Werror -I src -I "$adapter" "$roundtrip" -o build/test_localhost_roundtrip
-echo "ok"
 
 step "run localhost round trip (GET /hello, typed GET routes, body-only and route-value-then-body POSTs over loopback: Flare -> MuntinHandler -> App.handle)"
 # Output goes to a file, not a pipe: a leftover child holding the pipe would
@@ -121,7 +140,6 @@ echo "ok: no server process left behind"
 # response headers over loopback, and candidate D's fixture (a Flare
 # HeaderMap cannot be a field of Muntin's Copyable Request).
 step "Flare header probe (M3-002)"
-"${FLARE[@]}" build --Werror -I src -I "$adapter" compat/flare/headers/flare_header_probe.mojo -o build/flare_header_probe
 probe_status=0
 ./build/flare_header_probe >"$tmp/header_probe.log" 2>&1 || probe_status=$?
 cat "$tmp/header_probe.log"
@@ -137,7 +155,6 @@ if ((probe_status != 0)); then
 fi
 
 step "inbound header mapping rule against Flare (M3-002)"
-"${FLARE[@]}" build --Werror -I src -I tests -I "$adapter" compat/flare/headers/inbound_rebuild.mojo -o build/inbound_rebuild
 if ! out="$(./build/inbound_rebuild 2>&1)"; then
     printf '%s\n' "$out"
     echo "error: the inbound header mapping rule failed" >&2
@@ -167,7 +184,6 @@ echo "ok: $fixture_d"
 # the request and response fields and body bytes the JSON contract relies on,
 # over loopback through the adapter, with the decision spike's Json[T].
 step "Flare JSON loopback probe (M3-008)"
-"${FLARE[@]}" build --Werror -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo -o build/json_loopback_probe
 json_status=0
 NO_PROXY=127.0.0.1 ./build/json_loopback_probe >"$tmp/json_probe.log" 2>&1 || json_status=$?
 cat "$tmp/json_probe.log"

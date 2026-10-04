@@ -64,11 +64,11 @@ Record the exact successful commands in the feature's `evidence` array.
 
 The canonical commands:
 
-- `./scripts/check.sh`: toolchain, formatting, architecture boundary, unsafe confinement, package and example builds, the library-only spike drivers, and every must-not-build and must-build fixture under `tests/` (built in parallel, one job per CPU, reports printed in file order). It does not build `tests/test_*.mojo`.
+- `./scripts/check.sh`: toolchain, formatting, architecture boundary, unsafe confinement, package and example builds, the library-only spike drivers (built in parallel), and every must-not-build and must-build fixture under `tests/` (built in parallel, one job per CPU, reports printed in file order). It does not build `tests/test_*.mojo`.
 - `./scripts/test.sh [FILE...]`: builds each `tests/test_*.mojo` (or only the named files) with `--Werror` in parallel, then runs the binaries one at a time. With no arguments it runs every test file; CI always runs it without arguments.
-- `./scripts/check_flare.sh`: the Flare adapter and its localhost round trips, in the `flare` environment.
+- `./scripts/check_flare.sh`: the Flare adapter and its localhost round trips, in the `flare` environment (binaries built in parallel, then run in order).
 
-CI runs on pull requests only. `verify` (check, test, `git diff --check`) and `flare` run on ubuntu-latest and macos-latest, except when every changed file is under `docs/` or ends in `.md`; then both are skipped. `ci-ok` always runs and passes only when both ran and passed, or both were skipped for a docs-only change; it is the one required status check for `main`, where a repository ruleset also requires a pull request that is up to date with `main`. A new push to a pull request cancels its running checks. Nothing reruns after a merge.
+CI runs on pull requests only. `verify` (`check.sh` with `git diff --check`, and `test.sh`, as separate jobs) and `flare` run on ubuntu-latest and macos-latest, except when every changed file is under `docs/` or ends in `.md`; then both are skipped. `ci-ok` always runs and passes only when both ran and passed, or both were skipped for a docs-only change; it is the one required status check for `main`, where a repository ruleset also requires a pull request that is up to date with `main`. A new push to a pull request cancels its running checks. Nothing reruns after a merge.
 
 ## 7. Review important boundaries skeptically
 
