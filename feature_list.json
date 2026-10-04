@@ -740,6 +740,41 @@
         "Fresh-context review: no material issue (overload probes incl. S = Request, S = Int, a FromBody state, keyword arguments; diagnostic counts and the _raw_request refactor reproduced); minors applied (ten-note budget revisit condition, DX note wording, function-value spelling, docstrings).",
         "CI on PR #31 passes (verify and flare on ubuntu-latest and macos-latest)."
       ]
+    },
+    {
+      "id": "M3-008",
+      "priority": 308,
+      "category": "codec",
+      "description": "Decide with pinned-compiler evidence Muntin's first JSON codec and Content-Type contract, the smallest API that makes JSON bodies and results ordinary without another App.get/App.post handler-shape family; production and adapters unchanged.",
+      "acceptance": [
+        "At least these candidates are measured with Mojo 1.1.0 spikes or compiler evidence: a Json[T] wrapper through the existing FromBody/ToResponse; application FromJson/ToJson traits; a Response.json-style helper only; blanket conversion of JSON-capable body/result types; no built-in codec. For each: canonical handler/registration syntax, whether an App overload is needed, inference and diagnostics, move-only ownership, application trait requirements, what the pinned toolchain can encode/decode generically, visible allocations/copies, and no backend type leak.",
+        "The Content-Type contract is exact: String results and Response.text add no field; the JSON response media type; whether a JSON request requires, accepts without, or ignores Content-Type, and application/json; charset=utf-8; whether an explicitly set response Content-Type wins; M3-005 validation/filtering unchanged.",
+        "The error contract is exact: malformed or invalid request JSON in the request-side 400 model; handler raises stay ToErrorResponse or the fixed 500; response-serialization failure measured separately and mapped without treating it as a handler error. The overload budget (ten get/post overloads) is protected or any addition measured and justified.",
+        "Executable evidence: spikes for the viable candidates with a representative application struct (nested, list, string, number, bool, null), malformed JSON, a move-only value, production Headers for Content-Type, compile-fail probes for unsupported generic/trait forms; rejected candidates recorded with compiler/runtime evidence; src/muntin and adapters unchanged.",
+        "ARCHITECTURE records the selected contract, invariants, rejected candidates, revisit conditions tied to Mojo/toolchain changes and an exact next production slice (API, files, tests, Flare, negative fixtures, mutations); DX, SPEC, feature_list and AGENT_PROGRESS record the decision facts; check.sh, test.sh, check_flare.sh and git diff --check exit 0; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": true,
+      "evidence": [
+        "Decision: Json[T] (FromBody where T: FromJson, ToResponse where T: ToJson, take(deinit self)) over application FromJson.from_json(JsonValue) raises / ToJson.write_json(mut JsonWriter) raises, with a Muntin-owned codec: the RFC 8259 grammar, strictly, with Muntin's limits (compact tape with a child table in M3-004's _Shared, linear parsing and indexing, depth 64, duplicate members rejected; Mojo 1.1.0 atof/String(Float64) 1-ulp and long-literal gaps pinned). No App overload; no diagnostic changes. Response: 200, exactly Content-Type: application/json; text results unchanged; an explicit set after conversion wins. Request: exactly one Content-Type with media type application/json (parameters not interpreted), else 415 after route values and before parsing; JSON body cap fixed at 1 MiB, 413 after the 415 check (parser raises too); malformed JSON 400; serialization failure the fixed 500 without ToErrorResponse. Details: docs/ARCHITECTURE.md \"JSON codec decision (M3-008)\".",
+        "Evidence: tests/json_spike.mojo + tests/test_spike_json.mojo 18/18 and tests/test_spike_json_dx.mojo 1/1; tests/json_lib_only/driver.mojo; tests/json_fail 13; tests/json_known_gaps 3 (refining-trait default B, derived-encode declaration, relaxed-bound model 4b); compat/flare/json/json_loopback_probe.mojo over loopback (check_flare.sh); scratch copies: an 11th post overload is ambiguous, relaxed bounds change 6 pinned diagnostics; 30 mutations each red.",
+        "Rejected: refining-trait defaults (undocumented basis), helper-only API, blanket conversion (ambiguous overload or relaxed bounds), no codec, the Flare-bundled json package (flare environment only, __extension, native library), derived reflection codecs (no constructor, List[struct] needs __extension, late diagnostics; deferred).",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; git diff main -- src adapters empty.",
+        "Fresh-context review: two material findings (quadratic/memory-heavy parsing of hostile bodies; silent 1-ulp float errors in Mojo 1.1.0 atof and String(Float64)) resolved by the linear compact tape with a cost oracle and by pinned float gaps; minors applied (ASCII-only media-type folding, writer duplicate names, candidate B′, internal JsonValue initializer, M3-005 statement, illustrative fixtures labeled, 4b model, slice notes). Re-review: no material issue; minors applied (sort-based duplicate names instead of a fixed-seed hash set, 2^32-byte guard, evidence wording). PR #32 review: two material findings resolved (writer duplicate names by sort at end_object instead of a predictable-seed hash set; the 1 MiB JSON body cap with 413 decided, about 30 MB per active parse); M3-009 test plan split between App.handle and TestClient; RFC and 415 wording fixed."
+      ]
+    },
+    {
+      "id": "M3-009",
+      "priority": 309,
+      "category": "codec",
+      "description": "JSON in production, the M3-008 slice: muntin.Json, FromJson, ToJson, JsonValue and JsonWriter, with the request Content-Type step in the body adapters, without new overloads or handler shapes.",
+      "acceptance": [
+        "src/muntin/json.mojo provides FromJson, ToJson, Json[T] (conditional FromBody/ToResponse, take), JsonValue (compact tape with child table held in _Shared, internal initializer, accessors as decided; linear parsing and indexing proven by a cost oracle) and JsonWriter as decided in M3-008, with the parser (RFC 8259 grammar with Muntin's duplicate-name, depth, 1 MiB size and numeric limits) indexing the body's bytes; muntin exports Json, FromJson, ToJson, JsonValue and JsonWriter; no unsafe code outside _handler_storage.mojo and no backend import.",
+        "_Route gains json, set by the eight body overloads from the private _JsonBody marker; for a JSON route App.handle appends a Content-Type verdict after the body, and _call_body, _call_int_body, _call_state_body and _call_state_int_body answer 415 Unsupported Media Type after the route value, then 413 Content Too Large for a body over 1 MiB, both before from_body; non-JSON body routes, signatures, _Call, _Erased, the storage module, TestClient and the Flare adapter are unchanged and every existing expected diagnostic is identical.",
+        "tests/test_json.mojo proves the M3-008 semantics on production: successful JSON-body requests through App.handle with Content-Type set on every typed and stateful shape (accepted and rejected JSON, field errors, 415 and 413 cases and the full order, move-only, a raw handler decoding with Json[T].from_body); TestClient.post on a JSON-body route pinned as 415; result-only Json routes through TestClient (response field, serialization failure vs handler error, explicit override, no field on text results); DX sections 4 and 5; tests/json_api_fail covers the decided negative cases on production.",
+        "A Flare loopback POST with application/json; charset=utf-8 (200, Content-Type: application/json on the wire), missing and text/plain Content-Type (415), a body over 1 MiB (413) and malformed JSON (400) equal App.handle; the spike's mutations plus verdict, flag, adapter-step, 415-as-400 and 413-step mutations are each red; check.sh, test.sh, check_flare.sh and git diff --check exit 0; CI verify and flare pass; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }
