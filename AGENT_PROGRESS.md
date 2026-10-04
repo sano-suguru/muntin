@@ -4,7 +4,7 @@ The current handoff between coding sessions: state, what is easy to get wrong no
 
 ## Active milestone
 
-M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-010 has `passes: true`; M3-011 is next.
+M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-011 has `passes: true`.
 
 M3 so far:
 
@@ -13,18 +13,18 @@ M3 so far:
 | application state | M3-001 (`State[S]` bound at registration, PR #25); M3-004 (sealed `_Shared` storage, PR #27) | M3-003 stateful `get` (PR #26), M3-006 stateful `post` (PR #30), M3-007 stateful raw (PR #31) |
 | headers | M3-002 (`muntin.Headers`, PR #28) | M3-005 (PR #29) |
 | JSON | M3-008 (`Json[T]` over `FromJson`/`ToJson`, PR #32) | M3-009 (PR #36) |
-| `TestClient` request headers | M3-010 (PR #39) | M3-011 (next) |
+| `TestClient` request headers | M3-010 (PR #39) | M3-011 (PR #40) |
 
 ## Current increment
 
-M3-010 (decision only; PR #39): `TestClient.get` and `.post` gain a keyword-only, defaulted `var headers: Headers = Headers()` argument (`headers=headers^`), moved into the `Request` they build, and nothing else. `src/muntin` and `adapters/` are unchanged. Record: `docs/history/architecture-decisions.md`, "TestClient request headers decision (M3-010)".
+M3-011 (production, the M3-010 slice): `TestClient.get(target, *, headers=)` and `.post(target, body, *, headers=)` move the given `Headers` into the `Request` they send through `App.handle`, and nothing else; the bare forms send no fields. Only `src/muntin/testing.mojo` changes in `src/muntin`; `adapters/` is unchanged. The M3-010 spike and its fixtures are deleted; `tests/test_testclient_headers.mojo` and `tests/testclient_headers_api_fail` replace them. Record: `docs/history/architecture-decisions.md`, "TestClient request headers in production (M3-011)".
 
 ## Easy to get wrong now
 
 The current contract is `docs/ARCHITECTURE.md`, "Current architecture". Points a new session tends to miss:
 
 - Typed handlers cannot read headers (typed header extraction is not implemented). The JSON `Content-Type` check is a separate verdict for `Json[T]` bodies only, not header extraction.
-- `TestClient` sends no header fields until M3-011 lands, so `TestClient.post` to a JSON body route is 415; JSON body tests call `app.handle(Request(..., headers^))`. `SpikeClient` in `tests/testclient_headers_spike.mojo` is decision evidence, not the production client.
+- `TestClient` sends header fields only through `headers=`: `client.post(target, body)` to a JSON body route is still 415, and `tests/test_json.mojo` pins that on purpose. The client never adds a field (no automatic `Content-Type`, no per-client defaults); a test that needs the field sends it.
 - `get` and `post` have ten overloads each, Mojo 1.1.0's ten-note diagnostic cap; an eleventh must measure its diagnostics first.
 - M2 is closed: a new item adds to the M2 contract; changing an M2 signature or the 400/404/500 boundary reopens M2 (`docs/ARCHITECTURE.md`, "When M2 reopens").
 - `App.handle` is never called concurrently today; a concurrent backend or a `Copyable` `App` reopens the JSON cap and interior mutability in `State` values.
@@ -39,11 +39,11 @@ Time-bound operational notes. Each says when to delete it.
 
 ## Latest verification evidence
 
-M3-010: the local canonical checks pass, and `src/muntin` and `adapters/` are unchanged. Full evidence: the decision record.
+M3-011: the local canonical checks and the slice's mutations are recorded in the production record and `feature_list.json`; `adapters/` is unchanged.
 
 ## Next step
 
-M3-011, exactly the record's "Next production slice (M3-011)" (two signatures in `src/muntin/testing.mojo`, `tests/test_testclient_headers.mojo`, `tests/testclient_headers_api_fail`, DX section 4's JSON example through the client, the M3-010 spike and its fixtures deleted). Acceptance: `feature_list.json` M3-011.
+After M3-011 merges: the next M3 item from `docs/SPEC.md`, "Remaining candidates" (each decision-first).
 
 ## Where things are
 

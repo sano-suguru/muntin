@@ -813,8 +813,14 @@
         "tests/testclient_headers_api_fail (registered in check.sh) rejects a plain Headers variable, use after ^, and positional headers on get and on post on production TestClient; the M3-010 spike (tests/testclient_headers_spike.mojo, tests/test_spike_testclient_headers.mojo) and tests/testclient_headers_fail are deleted and the ARCHITECTURE revisit row points at tests/testclient_headers_api_fail and tests/headers_api_fail/request_headers_moved_in.mojo; the mutations listed in the M3-010 slice are each red.",
         "DX, ARCHITECTURE current architecture, SPEC and AGENT_PROGRESS describe the production API; check.sh, test.sh, check_flare.sh and git diff --check exit 0; CI verify and flare pass; a fresh-context review finds no unresolved material issue."
       ],
-      "passes": false,
-      "evidence": []
+      "passes": true,
+      "evidence": [
+        "Production: src/muntin/testing.mojo get(self, target, *, var headers: Headers = Headers()) and post(self, target, body, *, var headers: Headers = Headers()) send Request(method, target, body, headers^) through App.handle; nothing else in src/muntin or adapters changes. Details: docs/ARCHITECTURE.md \"TestClient request headers in production (M3-011)\".",
+        "Evidence: tests/test_testclient_headers.mojo 8/8 and tests/test_json_dx.mojo (DX section 4's JSON bodies through the client) against App.handle; tests/testclient_headers_api_fail 4 (check.sh); M3-010 spike and tests/testclient_headers_fail deleted; the 255 existing must-fail fixtures' diagnostics byte-identical to main's; 7 slice mutations each red (plus get adding a field).",
+        "./scripts/check.sh, ./scripts/test.sh (281 tests), ./scripts/check_flare.sh and git diff --check exit 0; git diff main -- adapters empty.",
+        "Fresh-context review: no unresolved material issue (stale test_json.mojo comments and unused results in DX snippets fixed).",
+        "CI on PR #40 passes (verify and flare on ubuntu-latest and macos-latest)."
+      ]
     }
   ]
 }

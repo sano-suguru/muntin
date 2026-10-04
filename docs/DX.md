@@ -16,7 +16,7 @@ Muntin should feel like a native Mojo framework rather than a mechanical transla
 
 ## Proven vs. target status
 
-All status below is for **Mojo 1.1.0 (8189361e)**, as of M3-009. Each numbered section from 1 on opens with the design target (a constraint on where the API should go, not a claim that it compiles) and then gives its status: what is production now (the section names the tests that prove it) and what is still a target. The "Proven" block below is the M0 baseline; the sections after it add each shape.
+All status below is for **Mojo 1.1.0 (8189361e)**, as of M3-011. Each numbered section from 1 on opens with the design target (a constraint on where the API should go, not a claim that it compiles) and then gives its status: what is production now (the section names the tests that prove it) and what is still a target. The "Proven" block below is the M0 baseline; the sections after it add each shape.
 
 | Capability | Status | Examples |
 |---|---|---|
@@ -29,9 +29,10 @@ All status below is for **Mojo 1.1.0 (8189361e)**, as of M3-009. Each numbered s
 | raw `Request -> Response` handlers | production (M2-015) | section 9 |
 | request and response headers (`Headers`) for raw handlers and `Response` | production (M3-005) | section 9 |
 | JSON bodies and results (`Json[T]`) | production (M3-009) | sections 4, 5 |
-| typed header extraction, `TestClient` header fields, middleware, `app.run()`, more methods and route-value types, derived codecs, schema/OpenAPI, streaming | target | "Still targets" below; `docs/SPEC.md` M3 "Remaining candidates" |
+| `TestClient` request header fields (`headers=`) | production (M3-011) | sections 4, 10 |
+| typed header extraction, middleware, `app.run()`, more methods and route-value types, derived codecs, schema/OpenAPI, streaming | target | "Still targets" below; `docs/SPEC.md` M3 "Remaining candidates" |
 
-Every production row also has a Flare loopback check in `adapters/flare/test_localhost_roundtrip.mojo` (`./scripts/check_flare.sh`). M2 is complete (M2-016): its contract is `docs/SPEC.md`, "M2 completion contract", a record of what M2 provides; M3 rows above go beyond it.
+Every production row whose behavior crosses the backend seam also has a Flare loopback check in `adapters/flare/test_localhost_roundtrip.mojo` (`./scripts/check_flare.sh`). `TestClient` request header fields is a testing API that never reaches a backend, so its tests compare it with `App.handle` directly. M2 is complete (M2-016): its contract is `docs/SPEC.md`, "M2 completion contract", a record of what M2 provides; M3 rows above go beyond it.
 
 Proven baseline, verified by `tests/test_app.mojo` and `main.mojo` (run via `./scripts/test.sh` / `./scripts/check.sh`):
 
@@ -172,9 +173,9 @@ Semantics:
 
 Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` and `def(Int, B)` (M2-009) with `B: FromBody` for `app.post`, plus, on both, the raw `def(req: Request) -> Response` (M2-015, section 9; `Response` only, under the same error model). Each may be non-raising or declare `raises` or `raises T` (M2-011, section 6; a `T` declaring `ToErrorResponse` chooses its own response, M2-013), and returns `String` (or a type that converts to it implicitly, such as `StaticString`) or a type conforming to `ToResponse`, including `Response` (M2-008, section 5). Other `get` shapes (more or non-`Int` parameters) and other result types fail overload resolution at the call: `no matching method in call to 'get'`, with one note per candidate, e.g. `cannot be converted from 'def f(id: Int) thin -> Int' to 'def(Int) raises Never thin -> String'` and, for the `ToResponse` candidate, `argument type 'Int' does not conform to trait 'ToResponse'`. Since M3-003, `app.get` also takes a stateful handler with its state as a second argument, `def(State[S])` or `def(State[S], Int)`, and since M3-007 the stateful raw `def(State[S], req: Request) -> Response` (section 8); a failing one-argument `get` call lists those five candidates too, each with `missing required argument: 'state'`. `app.post` likewise takes `def(State[S], B)` and `def(State[S], Int, B)` since M3-006 and the stateful raw shape since M3-007. `Json[T]` (sections 4 and 5) is a body or a result type on these shapes, not a new shape.
 
-Production beyond the shapes above: application state (section 8) for `get` since M3-003, for `post` since M3-006 and for raw handlers on both since M3-007; request and response headers since M3-005 (section 9), read and written by raw handlers and set on a `Response`; JSON bodies and results since M3-009 (`Json[T]`, sections 4 and 5).
+Production beyond the shapes above: application state (section 8) for `get` since M3-003, for `post` since M3-006 and for raw handlers on both since M3-007; request and response headers since M3-005 (section 9), read and written by raw handlers and set on a `Response`; JSON bodies and results since M3-009 (`Json[T]`, sections 4 and 5); `TestClient` request header fields since M3-011 (`headers=`, sections 4 and 10).
 
-Still targets (not implemented yet; each placed in `docs/SPEC.md`, M3, "Remaining candidates"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, typed header extraction (typed handlers read no headers), `TestClient` header fields (decided in M3-010: a keyword-only `headers` argument on `get` and `post`, section 4), parameter-name checking, middleware, derived codecs, `+json` request types, a configurable JSON body cap, `Json(value, status=)` and top-level list results. Default response fields are decided, not a target: `String` results and `Response.text` add none, and only `Json[T]` results add `Content-Type: application/json` (M3-002, M3-008).
+Still targets (not implemented yet; each placed in `docs/SPEC.md`, M3, "Remaining candidates"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, `String` or other builtin bodies, optional or multiple bodies, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, typed header extraction (typed handlers read no headers), parameter-name checking, middleware, derived codecs, `+json` request types, a configurable JSON body cap, `Json(value, status=)` and top-level list results. Default response fields are decided, not a target: `String` results and `Response.text` add none, and only `Json[T]` results add `Content-Type: application/json` (M3-002, M3-008).
 
 Mojo facts discovered while proving the above:
 
@@ -413,7 +414,20 @@ app.post["/users/{id}"](replace_user)    # the existing def(Int, B) overload
 - Order on a JSON body route, each step before the next runs: no matching route 404; a missing, duplicated or invalid query value 400; an invalid path value 400; the `Content-Type` 415; the size 413; malformed JSON or a `from_json` raise 400; then the handler. Every shape that takes a `FromBody` body takes `Json[T]` (body only or `Int` then body, stateless or stateful, either result policy). Other body types keep their rules: no `Content-Type` required and no Muntin cap.
 - Through the Flare backend, invalid UTF-8 in a body arrives as U+FFFD and is not rejected.
 - JSON bodies are capped at 1 MiB (fixed; 413 above it, and `Json[T].from_body` raises on a larger body in a raw handler). Parsing is linear apart from a sort of each object's member names (duplicates); member lookup (`get`, `value[name]`) scans the object's members, so reading k fields of an m-member object costs O(k·m). At the cap parsing adds at most about 29 MB of memory (measured: 1 MiB of `[0,0,...]`; 1 MiB of typical records adds about 5 MB). Other body types have no Muntin cap.
-- `TestClient.post` sends no `Content-Type`, so a JSON-body route answers it 415 (an accepted cost of requiring the field, until `TestClient` can send fields); tests send JSON bodies with `app.handle(Request("POST", "/users", body, headers^))` and the field set. Routes that only return `Json[T]` test through `TestClient` as usual. Decided target (M3-010, production in M3-011): `TestClient.get` and `.post` take the fields as a keyword-only, defaulted argument, moved in as `Request` takes them, so a test sends `client.post("/users", body, headers=headers^)` with the field set; `client.post("/users", body)` without it stays 415. The client adds no field itself.
+- A test reaches a JSON body route through `TestClient` by sending the field (M3-011; section 10):
+
+  ```mojo
+  from muntin import Headers
+  from muntin.testing import TestClient
+
+  var client = TestClient(app)
+  var headers = Headers()
+  headers.add("Content-Type", "application/json")
+  _ = client.post("/users", '{"name":"Ada","age":36}', headers=headers^)  # 200, {"id":1,"name":"Ada"}
+  _ = client.post("/users", '{"name":"Ada","age":36}')                    # 415: no field sent
+  ```
+
+  The client adds no field itself, so `client.post(target, body)` stays 415, and its answer equals `app.handle(Request("POST", target, body, h^))` for a separate `Headers` value `h` with the same fields (`headers` itself is moved into the client's request).
 
 ## 5. Typed responses
 
@@ -696,7 +710,7 @@ app.post["/webhook"](webhook)
 - `add(name, value)` appends; `set(name, value)` removes every field with that name, then appends. Both raise on a name that is not an RFC 9110 token, or on a value with a control byte (other than HTAB) or SP/HTAB at either end. In a raising handler that error is the fixed 500, or its `ToErrorResponse`. Code that must not raise, such as `to_response`, wraps `add` in `try`.
 - `Request` has `headers` (as the backend received them); `Request(method, target, body, headers^)` builds one, and existing calls without headers are unchanged. `Response` has `headers`, empty from `Response(status, body)` and `Response.text`: Muntin adds no `Content-Type` or other default field.
 - Raw handlers read `req.headers` (a `var req` handler owns a copy it may change) and set fields on the `Response` they return. Typed handlers read no headers; a typed result sets fields through the `Response` its `to_response` builds. `String` results set none.
-- `TestClient` sends no headers; a test builds `Request(..., headers^)` and calls `app.handle`, the same seam.
+- `TestClient.get` and `.post` send the fields passed as `headers=` and none otherwise (section 10); a test may also build `Request(..., headers^)` and call `app.handle`, the same seam.
 - Through Flare, a request field Muntin cannot represent is answered 400 before the handler: over HTTP/2 Flare admits a `:` inside a name or a control byte in a value. Fields the backend owns or that are connection-specific (`Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`, `TE`, `Trailer`), and any field a `Connection` value names, are not written to the wire; they stay in the in-memory `Response`. Over HTTP/2, names go out lowercase. Header values are text: Flare answers 400 to an HTTP/1.1 header byte ≥ 0x80 itself.
 
 Semantics (decided in M2-014, `docs/ARCHITECTURE.md` "Raw Request decision (M2-014)"; production facts in "Raw Request handlers in production (M2-015)"):
@@ -729,7 +743,19 @@ def test_hello():
 
 The in-memory path must execute the same Muntin application dispatch seam used by real transports. This is an architecture proof, not merely test convenience.
 
-Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)` and `TestClient.post(target, body)` build a Muntin `Request` and call `App.handle`, the same entry point network adapters use. `TestClient` sends no header fields: tests that need fields (headers, JSON request bodies) build `Request(..., headers^)` and call `app.handle` directly.
+Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)` and `TestClient.post(target, body)` build a Muntin `Request` and call `App.handle`, the same entry point network adapters use. Since M3-011 both take the request's header fields as a keyword-only, defaulted argument, moved into the `Request` as `Request`'s initializer takes them (proven by `tests/test_testclient_headers.mojo` and `tests/testclient_headers_api_fail/`, via `./scripts/check.sh`):
+
+```mojo
+var headers = Headers()
+headers.add("X-Request-Id", "42")
+_ = client.get("/echo", headers=headers.copy())    # headers stays usable
+_ = client.post("/echo", "body", headers=headers^)  # moved
+_ = client.get("/echo")                             # no fields
+```
+
+- The client builds `Request(method, target, body, headers^)` and nothing else: it adds, removes, inspects or merges no field, so its answer equals `app.handle(Request(...))` built from the same method, target and body and a `Headers` value with the same fields. Fields keep their order, casing and repeats, and an empty value is sent as a value.
+- `headers=` is keyword-only: a positional `Headers` after the target or the body is `invalid call to 'get'` / `'post'`: `unexpected argument`. A plain variable is `cannot be implicitly copied` (pass `headers^` or `headers.copy()`), and using it after `^` is `use of uninitialized value`. Each call without `headers=` sends none; the client keeps no per-client fields.
+- Building `Headers` raises (`add` validates), so a test that sends fields runs in a raising context.
 
 ## 11. Transport independence
 
@@ -875,14 +901,14 @@ def main():
 
 The exact spellings are provisional. The durable properties are a small application surface, typed handlers, typed extraction, automatic conversion where safe, useful compile-time validation, low-level escape hatches, and backend independence.
 
-Status as of M3-009: the handler model of this example is production: `get_user(id: Int) -> User` with `app.get["/users/{id}"]` and `create_user(body: CreateUser) -> User` with `app.post["/users"]`, through `TestClient` and the Flare adapter. What still differs from the example:
+Status as of M3-011: the handler model of this example is production: `get_user(id: Int) -> User` with `app.get["/users/{id}"]` and `create_user(body: CreateUser) -> User` with `app.post["/users"]`, through `TestClient` and the Flare adapter. What still differs from the example:
 
 - JSON needs the wrapper (M3-009, section 4): `def create_user(body: Json[CreateUser]) -> Json[User]`, with `CreateUser: FromJson` and `User: ToJson` mapping their fields by hand. The bare `body: CreateUser` form needs `CreateUser` to conform to `FromBody` and parse its own body; a JSON-capable type is not a body by itself, and there is no derived codec;
 - the stdlib `List[User]` conforms to neither `ToResponse` nor `ToJson`, and top-level list results are not part of M3-009, so a list result needs an application type that conforms;
 - `users` is not a global: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`) and handlers cannot capture. Since M3-003 a `get` handler reaches it as `State` (section 8): `def get_user(users: State[Users], id: Int) -> User` registered as `app.get["/users/{id}"](get_user, users)`, and since M3-006 a `post` handler too: `def create_user(users: State[Users], body: CreateUser) -> User` registered as `app.post["/users"](create_user, users)`;
 - there is no `app.run()`.
 
-Derived codecs and list results are remaining M3 candidates; `app.run()` is lifecycle work (M3, ownership undecided). The closest runnable form today is section 4's JSON example (`Json[CreateUser]` in, `Json[User]` out) with section 8's `State`: JSON request bodies through `App.handle` with the `Content-Type` field set (`TestClient` sends no fields, so its `post` is 415), JSON results through either.
+Derived codecs and list results are remaining M3 candidates; `app.run()` is lifecycle work (M3, ownership undecided). The closest runnable form today is section 4's JSON example (`Json[CreateUser]` in, `Json[User]` out) with section 8's `State`: JSON request bodies through `TestClient.post(target, body, headers=headers^)` or `App.handle` with the `Content-Type` field set (without it, 415), JSON results through either.
 
 ## 20. Non-goals
 

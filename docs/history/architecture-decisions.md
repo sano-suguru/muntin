@@ -1358,7 +1358,7 @@ Status: **production**, the M3-008 slice. The contract, the codec's rules, the r
 
 ### TestClient request headers decision (M3-010)
 
-Status: **decision** (M3-010; `src/muntin` and `adapters/` are unchanged in it). It decides how `muntin.testing.TestClient` sends request header fields, so that a test can reach a `Json[T]` body route through the client instead of `App.handle(Request(..., headers^))`.
+Status: **decision** (M3-010; `src/muntin` and `adapters/` are unchanged in it; production since M3-011, "TestClient request headers in production (M3-011)" below). It decides how `muntin.testing.TestClient` sends request header fields, so that a test can reach a `Json[T]` body route through the client instead of `App.handle(Request(..., headers^))`.
 
 **Selected: K, a keyword-only, defaulted `headers` argument on the existing `get` and `post`.**
 
@@ -1404,7 +1404,7 @@ client.post("/users", '{"name":"Ada"}', headers=headers^)   # moved
 **Invariants:**
 - `TestClient` builds a Muntin `Request` and calls `App.handle`, nothing else: it adds, removes, inspects or merges no field and never looks at the body or the route. Its answer equals `App.handle(Request(method, target, body, headers))` for the same arguments.
 - The bare forms `client.get(target)` and `client.post(target, body)` keep their spelling and meaning: no field is sent.
-- The headers argument of `get` and `post` is keyword-only, defaulted to an empty `Headers`, and moved in as `Request`'s initializer moves it; there is no implicit copy and no per-client state. Pinned twice: `tests/testclient_headers_fail` pins the client's own spelling and ownership (keyword-only, no implicit copy, no use after `^`; on `SpikeClient` until M3-011), and `tests/headers_api_fail/request_headers_moved_in.mojo` pins the premise the client follows, that `Request` takes headers by move.
+- The headers argument of `get` and `post` is keyword-only, defaulted to an empty `Headers`, and moved in as `Request`'s initializer moves it; there is no implicit copy and no per-client state. Pinned twice: `tests/testclient_headers_api_fail` pins the client's own spelling and ownership on production `TestClient` (keyword-only, no implicit copy, no use after `^`; `tests/testclient_headers_fail` pinned it on `SpikeClient` until M3-011), and `tests/headers_api_fail/request_headers_moved_in.mojo` pins the premise the client follows, that `Request` takes headers by move.
 - No backend type reaches the client; the client stays in `muntin.testing`, outside the backend seam.
 
 **Evidence** (files as of the M3-010 merge; M3-011 deletes the spike and its fixtures):
@@ -1417,7 +1417,7 @@ client.post("/users", '{"name":"Ada"}', headers=headers^)   # moved
 
 **Revisit when:**
 - `Request`'s initializer changes its ownership of headers (for example, from move to borrow, which `tests/headers_api_fail/request_headers_moved_in.mojo` building would show): revisit whether the client should follow it;
-- a fixture in `tests/testclient_headers_fail` (after M3-011, `tests/testclient_headers_api_fail`) builds: the client's spelling or ownership changed;
+- a fixture in `tests/testclient_headers_api_fail` (in M3-010, `tests/testclient_headers_fail`) builds: the client's spelling or ownership changed;
 - `TestClient` gains another request method: revisit whether its header spelling should follow this pattern, keeping it consistent while it stays ergonomic;
 - `Headers` gains an inline literal (a Mojo collection literal or a Muntin initializer): consider accepting it without changing the bare forms;
 - a test needs the same fields on most requests: a helper in the test, not client state, unless several suites repeat it.
@@ -1432,3 +1432,18 @@ client.post("/users", '{"name":"Ada"}', headers=headers^)   # moved
 - Docs: every statement that the client sends no header fields changes to the argument: `docs/DX.md` the status table, "Still targets", section 4's JSON bullet (its example sends the field through the client), and the `TestClient` statements in sections 9, 10 and 19; `docs/ARCHITECTURE.md` "Current architecture": "Backend seam" (`TestClient.get(target)` and `.post(target, body)` send no header fields), "JSON" (`TestClient.post` sends no fields) and "Other current limits" (`TestClient` header methods). Also `docs/SPEC.md`, `feature_list.json`, `AGENT_PROGRESS.md`.
 - Done: the above; `check.sh`, `test.sh`, `check_flare.sh` and `git diff --check` exit 0; CI `verify` and `flare` pass; a fresh-context review finds no unresolved material issue.
 - Not in the slice: JSON-specific client methods or automatic fields, client-level default fields, a builder, new client methods or HTTP methods, typed header extraction, any change to the 415 rule, `Request` or `Headers`.
+
+### TestClient request headers in production (M3-011)
+
+Status: **production**, exactly the M3-010 slice. The decision, rejected candidates, invariants and revisit conditions are "TestClient request headers decision (M3-010)" above.
+
+- `src/muntin/testing.mojo`: `get(self, target: String, *, var headers: Headers = Headers())` sends `Request("GET", target, "", headers^)` and `post(self, target: String, body: String, *, var headers: Headers = Headers())` sends `Request("POST", target, body, headers^)` through `App.handle`; `Headers` is imported from `.http`; the docstrings say the fields are moved in as given and none are sent by default. The methods are the spike's `SpikeClient` unchanged in logic.
+- Unchanged: every other file in `src/muntin` (`App`, every overload and message, `Request`, `Headers`, the JSON code, the storage module and the unsafe surface) and `adapters/`. `TestClient` stays in `muntin.testing`, outside the backend seam.
+- Behavior: a request sent through the client is the request `App.handle(Request(...))` receives from the same arguments, with the fields in order, casing and repeats, an empty value as a value; the bare forms send none. A JSON body route answers the client 200 with `Content-Type: application/json` and 415 without it, with `text/plain` and with two fields, and 400 for malformed JSON, as through `App.handle`. `tests/test_json.mojo`'s `TestClient.post` 415 pins are unchanged and still pass.
+- Diagnostics: the 255 existing must-fail fixtures (every `tests/*_fail` directory except the retired `tests/testclient_headers_fail`), built against `main`'s `src` and this slice's: every log byte-identical once the source path is normalized. No fixture outside the new directory calls `TestClient`.
+- Evidence:
+  - `tests/test_testclient_headers.mojo` (8, production `TestClient`): the bare `get` and `post` equal to `App.handle` (200, both 404s); fields on `GET` and on `POST`, a typed route unaffected by fields; repeated names (`X-A`, `Set-Cookie`, `x-a`, `Set-Cookie`) in order and casing; an empty value present as `""` and distinct from an absent field; `.copy()` leaving the original usable and a later change not reaching a sent request, and `^`; the default empty on every call after calls with fields; a JSON body route 200 with `Content-Type: application/json` and `application/json; charset=utf-8`, 415 without the field, with `text/plain` and with two fields, 400 for malformed JSON; every case compared with `App.handle(Request(...))` (status, body and response fields in order).
+  - `tests/test_json_dx.mojo`: DX section 4's successful JSON bodies through `client.post(target, body, headers=...)`, the first spelled as DX shows it (`headers=headers^`) and compared with `App.handle(Request(...))`; the rejected bodies stay on `App.handle`; the `TestClient(app).post("/users", ok)` 415 pin stays.
+  - `tests/testclient_headers_api_fail` (4, `check.sh`), on production `TestClient`, with the spike fixtures' expected texts: a plain variable (`cannot be implicitly copied`), use after `^` (`use of uninitialized value 'h'`), positional headers on `get` and on `post` (`invalid call to 'get': unexpected argument`, `invalid call to 'post': unexpected argument`). Against the previous `TestClient` the first two failed for another reason (`unexpected keyword argument 'headers'`), so they fail for the documented reason only with the slice; the positional pair fails before and after, and the two `*` mutations below are what show they pin keyword-only.
+  - Mutations (in scratch copies of `src/muntin`, never in the tree), each red: fields dropped in `get` (4 tests fail); dropped in `post` (4, and `test_json_dx`); `get` sent as `POST` (6, and `test_json_dx`); the body dropped in `post` (4, and `test_json_dx`); a field added by `post` (5); the `*` dropped from `get` and from `post` (each makes its positional fixture build). Beyond the slice's list, a field added by `get` is also red (4).
+- Spike retired: `tests/testclient_headers_spike.mojo`, `tests/test_spike_testclient_headers.mojo` (`AutoTypeClient` included) and `tests/testclient_headers_fail` are deleted and `check.sh` registers `tests/testclient_headers_api_fail` in their place; the M3-010 record keeps what they measured. The revisit index points at `tests/testclient_headers_api_fail` and `tests/headers_api_fail/request_headers_moved_in.mojo`.

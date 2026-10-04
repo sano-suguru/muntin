@@ -81,7 +81,8 @@ In progress. Available now:
 
 - application state shared with handlers;
 - request and response headers;
-- JSON request bodies and responses.
+- JSON request bodies and responses;
+- request header fields from `TestClient` (`headers=`).
 
 Still planned:
 
