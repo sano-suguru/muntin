@@ -13,7 +13,7 @@ M3 so far:
 | application state | M3-001 (`State[S]` bound at registration, PR #25); M3-004 (sealed `_Shared` storage, PR #27) | M3-003 stateful `get` (PR #26), M3-006 stateful `post` (PR #30), M3-007 stateful raw (PR #31) |
 | headers | M3-002 (`muntin.Headers`, PR #28) | M3-005 (PR #29) |
 | JSON | M3-008 (`Json[T]` over `FromJson`/`ToJson`, PR #32) | M3-009 (PR #36) |
-| `TestClient` request headers | M3-010 (PR #39) | M3-011 |
+| `TestClient` request headers | M3-010 (PR #39) | M3-011 (PR #40) |
 
 ## Current increment
 
