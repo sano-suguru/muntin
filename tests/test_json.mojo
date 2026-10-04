@@ -751,10 +751,14 @@ def test_content_type_is_415_on_every_json_body_shape() raises:
                 _post(app, target, BODY, v), 415, "Unsupported Media Type"
             )
             assert_equal(_count(HANDLER), 0, target + " " + v)
-        # Missing, empty, and two fields (same or different values).
+        # Missing, empty, and two fields (same or different values). A body
+        # that reads "1" is never taken for the verdict.
         _reset()
         _assert_fixed(
             _post(app, target, BODY, ""), 415, "Unsupported Media Type"
+        )
+        _assert_fixed(
+            _post(app, target, "1", ""), 415, "Unsupported Media Type"
         )
         var empty = Headers()
         empty.add("Content-Type", "")

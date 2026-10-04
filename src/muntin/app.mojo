@@ -95,11 +95,12 @@ from .state import State, _InjectedState
 # request `Content-Type` is decided in `App.handle`, which appends a verdict
 # after the body for a JSON route only (`"1"` when the request has exactly
 # one `application/json` field, else empty; other routes' arguments are
-# unchanged). The four body adapters, for a JSON body only, answer 415 when
-# the verdict is not `"1"`, then 413 when the body is over 1 MiB, after the
-# route value and before `from_body`. Order on a JSON body route: 404, query
-# 400 (`App.handle`), route-value 400, 415, 413, JSON 400 (`from_body`),
-# handler.
+# unchanged). The four body adapters, for a JSON body only, answer 415
+# unless the arguments end with the verdict `"1"` at the expected position
+# (an exact arity check, so a body can never stand in for a missing
+# verdict), then 413 when the body is over 1 MiB, after the route value and
+# before `from_body`. Order on a JSON body route: 404, query 400
+# (`App.handle`), route-value 400, 415, 413, JSON 400 (`from_body`), handler.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -334,8 +335,10 @@ def _call_body[
     """Converts the one argument, the request body, with `B.from_body` and
     moves the value into `handler`; answers 400 itself, without calling
     `handler`, if `from_body` raises. For a JSON body (`_JsonBody`) it
-    first answers 415 unless the `Content-Type` verdict (the last argument)
-    is `"1"`, then 413 for a body over 1 MiB, without parsing it.
+    first answers 415 unless the arguments are exactly the body and the
+    `Content-Type` verdict `"1"` (the arity check keeps a route registered
+    without its `json` flag from reading a body `"1"` as the verdict), then
+    413 for a body over 1 MiB, without parsing it.
 
     `B` is refined here rather than bounded, as in `App.post`: forwarding a
     handler with an explicit `B` to a callee that requires `B: FromBody`
@@ -344,7 +347,7 @@ def _call_body[
     """
     comptime assert conforms_to(B, FromBody)
     comptime if conforms_to(B, _JsonBody):
-        if args[len(args) - 1] != "1":
+        if len(args) != 2 or args[1] != "1":
             return _unsupported_media_type()
         if args[0].byte_length() > _MAX_BODY_BYTES:
             return _content_too_large()
@@ -383,7 +386,7 @@ def _call_int_body[
     except:
         return _bad_request()
     comptime if conforms_to(B, _JsonBody):
-        if args[len(args) - 1] != "1":
+        if len(args) != 3 or args[2] != "1":
             return _unsupported_media_type()
         if args[1].byte_length() > _MAX_BODY_BYTES:
             return _content_too_large()
@@ -518,7 +521,7 @@ def _call_state_body[
     after the same 415 and 413 steps for a JSON body."""
     comptime assert conforms_to(B, FromBody)
     comptime if conforms_to(B, _JsonBody):
-        if args[len(args) - 1] != "1":
+        if len(args) != 2 or args[1] != "1":
             return _unsupported_media_type()
         if args[0].byte_length() > _MAX_BODY_BYTES:
             return _content_too_large()
@@ -556,7 +559,7 @@ def _call_state_int_body[
     except:
         return _bad_request()
     comptime if conforms_to(B, _JsonBody):
-        if args[len(args) - 1] != "1":
+        if len(args) != 3 or args[2] != "1":
             return _unsupported_media_type()
         if args[1].byte_length() > _MAX_BODY_BYTES:
             return _content_too_large()
