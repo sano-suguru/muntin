@@ -118,7 +118,7 @@ M0 scope, kept for the record; the current model is "Current architecture" below
 
 Do not design the final middleware, schema, DI, async, or streaming system during M0.
 
-## Current architecture (as of M3-011)
+## Current architecture (as of M3-013)
 
 Toolchain: Mojo 1.1.0 (8189361e) via pixi 0.81.0, pinned by `pixi.lock`; `scripts/check.sh` fails on any other Mojo version, so an upgrade is a deliberate change to the script and the docs. Flare v0.11.0 (commit `59bda50f`) exists only in the separate `flare` pixi environment.
 
@@ -126,10 +126,11 @@ Toolchain: Mojo 1.1.0 (8189361e) via pixi 0.81.0, pinned by `pixi.lock`; `script
 
 ```text
 src/muntin/__init__.mojo          exports App, FromBody, Headers, Request, Response, ToErrorResponse, ToResponse,
-                                  FromJson, Json, JsonValue, JsonWriter, ToJson, State
+                                  FromJson, Json, JsonValue, JsonWriter, ToJson, State, WithHeaders
 src/muntin/http.mojo              Request (method, path, query, body, headers), Response (status, body, headers),
                                   Headers, ToResponse, ToErrorResponse
 src/muntin/body.mojo              FromBody
+src/muntin/headers_body.mojo      WithHeaders[B] (post body carrier with the request's fields); private marker _HeaderCarrier
 src/muntin/app.mojo               App: route table, the get/post registration overloads, App.handle; private adapters
 src/muntin/state.mojo             State[S]; private marker _InjectedState
 src/muntin/json.mojo              Json[T], FromJson, ToJson, JsonValue, JsonWriter; private parser, limits, _JsonBody
@@ -150,7 +151,7 @@ The public surface is the exported names and `muntin.testing.TestClient`. `_`-pr
 
 ### Registration surface
 
-`App.get` and `App.post` have ten overloads each. Every typed handler type is `thin raises E` with `E: Deinitable` inferred (`Never` for a non-raising handler, `Error` for `raises`, the application's `T` for `raises T`); `B: FromBody` (possibly move-only) and `R: ToResponse` are inferred too.
+`App.get` and `App.post` have ten overloads each. Every typed handler type is `thin raises E` with `E: Deinitable` inferred (`Never` for a non-raising handler, `Error` for `raises`, the application's `T` for `raises T`); the body `B` (a `FromBody`, possibly move-only, or a `WithHeaders[B2]` carrier) and `R: ToResponse` are inferred too.
 
 | Method | Stateless (`app.m[route](handler)`) | Stateful (`app.m[route](handler, state)`) | Results |
 |---|---|---|---|
@@ -160,7 +161,8 @@ The public surface is the exported names and `muntin.testing.TestClient`. `_`-pr
 
 - **Route literals** are compile-time strings checked at the registration call: a leading `/`, static or `{name}` segments, an optional query part of `{key}` items joined by `&` (keys visible ASCII, none of `{}=&?#`). The placeholder count must equal the handler's route-value count (zero or one `Int`); raw routes declare none. Names are never compared with handler parameter names: binding is positional (route values in the literal's order, then the body). Literals are stored and split as runtime `String`s per request.
 - **Disjointness** (M2-005): route-value slots take only `Int`; the body slot takes an application type conforming to `FromBody` and rejects `Int` by type equality. `Json[T]` is a body or a result through the same overloads, so JSON adds no shape.
-- **One injected slot** (M3-001): a handler takes state exactly when its registration passes a second argument, a `State[S]`; it is then the first parameter, and the rest is one stateless shape. Argument count separates the two families. The slot is registration-bound; M3-012 keeps request header fields out of it (they travel in the body slot, below). A second injected kind, request-scoped injection included, needs its own decision, because a second slot doubles the overloads again.
+- **Header carrier in the body slot** (M3-013): the body slot also takes `WithHeaders[B]` with `B: FromBody`, which is not itself a `FromBody`: the eight body overloads' last assert accepts `FromBody` or the private `_HeaderCarrier`, with its message unchanged, so header access adds no shape and no overload. `FromBody` therefore no longer names every type a `post` body slot accepts (the accepted cost). `get` has no body slot, so typed `get` handlers read no fields and use the raw `get`.
+- **One injected slot** (M3-001): a handler takes state exactly when its registration passes a second argument, a `State[S]`; it is then the first parameter, and the rest is one stateless shape. Argument count separates the two families. The slot is registration-bound; M3-012 keeps request header fields out of it (they travel in the body slot, above). A second injected kind, request-scoped injection included, needs its own decision, because a second slot doubles the overloads again.
 - **Raw selection on `post`** rests on Mojo 1.1.0's documented "shorter parameter list" rule: `[E, path]` against `[B, E, R, path]`, and `[S, E, path]` against `[S, B, E, R, path]`. Invariant: each raw overload's parameter list stays strictly shorter than every body overload a `Request -> Response` handler satisfies; equal lists are `ambiguous call` (`tests/raw_fail/equal_parameter_lists.mojo`).
 - **Guards** in the body overloads (`not B == Int`, `not B == Request`, not a `State`) only replace the message of calls that already fail; they take no part in selection.
 - **Diagnostic budget:** Mojo 1.1.0 prints at most ten notes per diagnostic (`tests/header_access_fail/eleven_candidates_drop_a_note.mojo`). With ten overloads per method, a failing one-argument call shows ten candidate notes and no detail note; an eleventh overload on either method drops candidate notes, so such a slice must measure its diagnostics.
@@ -176,7 +178,8 @@ Routes are a list scanned in registration order; the first route whose method an
 | route value `Int`, on routes with one: optional `-`, ASCII digits, `Int` range (leading zeros allowed) | adapter | 400 `Bad Request` |
 | `Json[T]` bodies only: exactly one `Content-Type` whose media type is `application/json` | adapter, from the verdict `App.handle` appends | 415 `Unsupported Media Type` |
 | `Json[T]` bodies only: body length at most 1,048,576 bytes | adapter | 413 `Content Too Large` |
-| `B.from_body(body)` (for `Json[T]`: parse and `from_json`) | adapter | 400 `Bad Request`, handler not called |
+| `WithHeaders[B]` bodies only: the fields rebuilt through `Headers.add` | adapter | 500 `Internal Server Error` (only an in-memory `Headers` built through the `_fields` gap fails) |
+| `B.from_body(body)` (for `Json[T]`: parse and `from_json`; for `WithHeaders[B]`: the inner `B`'s) | adapter | 400 `Bad Request`, handler not called |
 | handler call (the only step in the handler `try`) | adapter, `_handler_error[E]` | `T.to_error_response()` if the declared `T` conforms to `ToErrorResponse`, else 500 `Internal Server Error`, error dropped unread |
 | result: `String`-compatible → 200 text with no fields; `R: ToResponse` → `to_response()` once | adapter | non-raising; a `Json[T]` serialization failure is the fixed 500 without fields and without `ToErrorResponse` |
 
@@ -184,7 +187,7 @@ A raise escaping `invoke` is 500, never 400. 400 and 404 run neither the handler
 
 Error opt-in (M2-013): a raised value converts only when the handler's declared error type declares `ToErrorResponse` in its own struct declaration (directly, through a refining trait, or as a documented conditional conformance). Bare `raises` (`Error`) is never mapped by message; a raised `ToResponse`-only type, a same-named method without the conformance and a `Variant` of opted-in types are 500. A returned value converts with `to_response`, a raised one with `to_error_response`. Undocumented `__extension` behavior is not a supported opt-in.
 
-Transport through the box: an adapter receives `List[String]` raw arguments, in this order: the one route value if the route has one (the path capture or the query value, never both), then the body, then, on a JSON body route, the verdict (`"1"` or `""`). The JSON adapters answer 415 unless the arguments are exactly (route value,) body and verdict `"1"`. A raw route receives `method`, `path`, `query`, `body`, then each header field's name and value. Typed routes receive no header strings. A state never travels in the arguments; it is bound with the handler.
+Transport through the box: an adapter receives `List[String]` raw arguments, in this order: the one route value if the route has one (the path capture or the query value, never both), then the body, then, on a JSON body route, the verdict (`"1"` or `""`), then, on a carrier route (`WithHeaders[B]`), each header field's name and value. The JSON adapters answer 415 unless the arguments are exactly (route value,) body and verdict `"1"`, or, for a carrier, the verdict `"1"` at that index followed by an even count. A raw route receives `method`, `path`, `query`, `body`, then each header field's name and value. Typed routes without a carrier receive no header strings. A carrier route copies each field twice per request (into the arguments, then into the rebuilt `Headers`), as raw routes do. A state never travels in the arguments; it is bound with the handler.
 
 ### Storage and ownership
 
@@ -198,8 +201,8 @@ Transport through the box: an adapter receives `List[String]` raw arguments, in 
 
 - `muntin.Headers` is an ordered list of fields: original casing, repeated names kept in order, ASCII case-insensitive `get` (`Optional[String]`, first value) and `get_all`; `len`, `name(i)`, `value(i)`. `add` appends and `set` removes every same-name field, then appends; both raise on a name that is not an RFC 9110 token or a value with a control byte (other than HTAB) or SP/HTAB at either end. Copies are explicit (`.copy()`).
 - `Request.headers` is what the backend received; `Response.headers` is empty from `Response(status, body)` and `Response.text`. Muntin adds no default field: `String` results and `Response.text` set none, and `Json[T]` results set exactly `Content-Type: application/json`.
-- Raw handlers read `req.headers` and set fields on their `Response`. **Typed handlers cannot read headers: typed header access is not implemented.** M3-012 decided it for typed `post` handlers as a Muntin body carrier, `WithHeaders[B]`, in the existing body slot, with no overload and no injected slot; its production slice is M3-013. Typed `get` handlers stay on the raw `get` until a registration-structure decision. The JSON `Content-Type` check is not header extraction: it is a fixed verdict `App.handle` computes for `Json[T]` body routes only.
-- Known gap: `headers._fields` is reachable by name and bypasses `add` (`tests/headers_known_gaps`); the Flare adapter re-checks every outgoing field.
+- Raw handlers read `req.headers` and set fields on their `Response`. Typed `post` handlers read them through a `WithHeaders[B]` body (M3-013): `input.headers` is the request's `Headers`, every field in order with its casing, repeats and empty values, and `input.body` is converted by `B.from_body`; `take_body(deinit self)` moves the body out. Muntin interprets no field on a carrier route (a missing field is `None`; a value's status is the handler's error type to choose), and the carrier composes with `State` and with `Json[T]`. Typed `get` handlers read no fields and stay on the raw `get` until a registration-structure decision. The JSON `Content-Type` check is not header extraction: it is a fixed verdict `App.handle` computes for `Json[T]` body routes only, carried or not.
+- Known gap: `headers._fields` is reachable by name and bypasses `add` (`tests/headers_known_gaps`); the Flare adapter re-checks every outgoing field, and a carrier route answers such a request field with the fixed 500.
 
 ### JSON
 
@@ -229,7 +232,7 @@ Serving is test-fixture code only: `adapters/flare/test_localhost_roundtrip.mojo
 
 ### Other current limits and operational risks
 
-Not implemented (candidates in `docs/SPEC.md` M3): `app.run()`/lifecycle, middleware, typed header access (decided for `post` in M3-012, production slice M3-013; `get` stays raw), methods other than `GET`/`POST` (they are 404), route values other than one `Int` (no `String`, several, path and query together, optional/default, percent-decoding), raw route values and non-`Response` raw results, bodies other than one required `FromBody` body on `POST`, binary bodies, fallible conversions, application-level error mappers, logging of dropped errors, a configurable JSON cap, derived codecs, `+json`, `Json(value, status=)`, top-level list results, schema/OpenAPI, streaming, performance work.
+Not implemented (candidates in `docs/SPEC.md` M3): `app.run()`/lifecycle, middleware, typed header access on `get` (it stays raw), compile-time header names or a `FromHeaders` converter, methods other than `GET`/`POST` (they are 404), route values other than one `Int` (no `String`, several, path and query together, optional/default, percent-decoding), raw route values and non-`Response` raw results, bodies other than one required `FromBody` body on `POST`, binary bodies, fallible conversions, application-level error mappers, logging of dropped errors, a configurable JSON cap, derived codecs, `+json`, `Json(value, status=)`, top-level list results, schema/OpenAPI, streaming, performance work.
 
 - Absolute-form targets (`http://host/path`) become the whole `path` and are 404.
 - Static path segments are not checked for target bytes: `/hello world` compiles and matches in memory but never arrives over Flare, which rejects target bytes outside `!`..`~`.
@@ -261,7 +264,8 @@ If one of these pins changes (a must-fail fixture compiles, or `scripts/build_on
 | an 11th `get` or `post` overload | [Stateful raw handlers in production (M3-007)](history/architecture-decisions.md#stateful-raw-handlers-in-production-m3-007) (note budget), [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) and [Typed header access decision (M3-012)](history/architecture-decisions.md#typed-header-access-decision-m3-012) (measured for a header shape on `get`) |
 | a concurrent `App.handle` or a `Copyable` `App` | [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001) (interior mutability in `S`) and [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) (re-derive the cap) |
 | `tests/testclient_headers_api_fail` (a fixture compiles: production `TestClient`'s spelling or ownership changed); `tests/headers_api_fail/request_headers_moved_in.mojo` (compiles: `Request` no longer takes headers by move, the premise the client follows) | [TestClient request headers decision (M3-010)](history/architecture-decisions.md#testclient-request-headers-decision-m3-010) (revisit conditions) and [TestClient request headers in production (M3-011)](history/architecture-decisions.md#testclient-request-headers-in-production-m3-011) (current fixtures and mutations) |
-| `tests/header_access_fail` (the toolchain pins: `eleven_candidates_drop_a_note.mojo` loses its text, `generic_slot_does_not_refine.mojo` or `struct_level_assert.mojo` compiles; the carrier fixtures pin the spike type until M3-013); a registration-structure decision; header access proposed for typed `get` handlers | [Typed header access decision (M3-012)](history/architecture-decisions.md#typed-header-access-decision-m3-012) |
+| `tests/header_access_fail` (the toolchain pins: `eleven_candidates_drop_a_note.mojo` loses its text, `generic_slot_does_not_refine.mojo` or `struct_level_assert.mojo` compiles); a registration-structure decision; header access proposed for typed `get` handlers | [Typed header access decision (M3-012)](history/architecture-decisions.md#typed-header-access-decision-m3-012) |
+| `tests/with_headers_api_fail` (a fixture compiles: production `WithHeaders` became a `FromBody`, its body bound relaxed, or a carrier shape registers on `get` or before a route value); generic application code needing every body-slot type under one bound | [Typed header access decision (M3-012)](history/architecture-decisions.md#typed-header-access-decision-m3-012) (revisit conditions, the accepted cost) and [Typed header access in production (M3-013)](history/architecture-decisions.md#typed-header-access-in-production-m3-013) (current fixtures and mutations) |
 | another injected kind proposed | [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001) (one injected slot) and [Typed header access decision (M3-012)](history/architecture-decisions.md#typed-header-access-decision-m3-012) (headers kept out of the slot) |
 
 ## Decision records
@@ -387,6 +391,10 @@ Record: [TestClient request headers in production (M3-011)](history/architecture
 ### Typed header access decision (M3-012)
 
 Record: [Typed header access decision (M3-012)](history/architecture-decisions.md#typed-header-access-decision-m3-012).
+
+### Typed header access in production (M3-013)
+
+Record: [Typed header access in production (M3-013)](history/architecture-decisions.md#typed-header-access-in-production-m3-013).
 
 ## Request/Response ownership
 
