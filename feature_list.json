@@ -821,6 +821,37 @@
         "Fresh-context review: no unresolved material issue (stale test_json.mojo comments and unused results in DX snippets fixed).",
         "CI on PR #40 passes (verify and flare on ubuntu-latest and macos-latest)."
       ]
+    },
+    {
+      "id": "M3-012",
+      "priority": 312,
+      "category": "extraction",
+      "description": "Decide with pinned-compiler evidence how typed handlers read request header fields, resolving the conflict with M3-001's single injected slot and the ten-overload diagnostic budget of get and post; production and adapters unchanged.",
+      "acceptance": [
+        "At least these candidates are measured on Mojo 1.1.0: reusing the injected slot; one composed request/context value; explicit header parameters or wrappers (on get and on post, including compile-time header names); raw Request as the status quo; and any smaller design found. Each records compiler or runtime evidence, call syntax, ownership, interaction with State, effect on stateless and stateful get, post and raw handlers, overload count and diagnostics, and whether it grows the API combinatorially; each rejected candidate has a measured reason.",
+        "The selected design lets typed handlers read header data without backend types; defines missing, repeated and invalid fields, whether names are compile-time or runtime and how they match, and ownership; composes with State or says why it cannot; adds no unnecessary overload family; keeps raw Request as the escape hatch; and leaves existing handler spellings, State, Headers, the JSON rules and the 400/404/415/413/500 boundaries unchanged. Where a handler kind gets no header access, the record gives the measured reason.",
+        "Executable evidence: a retained spike that exercises the selected mechanism (composition with State and Json[T] included) and must-fail fixtures that observe the premises the decision rests on, each failing for its documented reason, with mutations showing the evidence detects what it claims; a scratch copy of src/muntin with the selected design passes check.sh, test.sh and check_flare.sh with every existing test unchanged, and its diagnostics are compared with main's in full.",
+        "docs/history/architecture-decisions.md records the decision, rejected candidates, costs, invariants, revisit conditions pinned by fixtures and one exact next production slice (files, API, positive and negative tests, mutations, spike retirement, done conditions), with a stub and revisit-index rows in docs/ARCHITECTURE.md; DX, SPEC, spec-items, feature_list and AGENT_PROGRESS record only the decision facts; check.sh, test.sh, check_flare.sh and git diff --check exit 0; git diff main -- src adapters is empty; CI verify and flare pass on its PR; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": [
+        "Decision: a Muntin body carrier WithHeaders[B: FromBody] (fields headers: Headers, body: B, take_body) in post's existing body slot: no overload, no injected kind; composes with State and Json[T]; Muntin interprets no field on a carrier route (missing None, repeats kept, value interpretation is the handler's error type); runtime names, ASCII case-insensitive. Typed get stays raw: every measured get header shape drops candidate notes past Mojo 1.1.0's ten-note cap or changes an M2 signature. Details: docs/ARCHITECTURE.md \"Typed header access decision (M3-012)\".",
+        "Evidence: tests/header_access_spike.mojo + tests/test_spike_header_access.mojo 9/9; tests/header_access_fail 8 (check.sh); scratch copy with the carrier passes check.sh, test.sh (281 existing tests unchanged) and check_flare.sh, 248 of 259 diagnostics byte-identical and 11 differing only in the echoed assert line; get, relaxed-slot, generic-slot and compile-time-name variants measured on scratch copies; 12 spike mutations red, 1 inert with its reason."
+      ]
+    },
+    {
+      "id": "M3-013",
+      "priority": 313,
+      "category": "extraction",
+      "description": "Typed header access for post handlers in production, the M3-012 slice: WithHeaders[B] as a body on the eight existing body overloads, without any new overload or injected kind.",
+      "acceptance": [
+        "A new src/muntin module defines public WithHeaders[B: FromBody] (headers: Headers, body: B, take_body(deinit self) -> B), conforming to the private _JsonBody exactly when B does, and a private _HeaderCarrier with _from_parts; muntin exports WithHeaders. src/muntin/app.mojo adds _Route.headers set by the eight body overloads, whose last assert accepts FromBody or the carrier with its message unchanged; App.handle appends a carrier route's field names and values after the body and the JSON verdict; the four body adapters rebuild the fields (failure: the fixed 500) and build the carrier (from_body raise: 400), keeping the exact JSON arity for other bodies. No overload, signature, message, storage, unsafe surface, Headers, Request, TestClient or adapter change.",
+        "tests/test_with_headers.mojo proves through App.handle and TestClient, on all eight body overloads with a field sent on each: fields in order, casing and repeats; absent and empty fields; a handler-chosen status for a missing field; from_body 400; the route value first; State composition with the reference count unchanged per request; take_body with a move-only body; Json[T] inside the carrier on all four body shapes with the full order; non-carrier and raw routes unchanged; first registration wins; the raw-slot adapter function on production App. A loopback route through Flare equals App.handle.",
+        "tests/with_headers_api_fail (registered in check.sh) rejects on production a carrier from_body, a nested carrier, WithHeaders[Int], WithHeaders[Json[T]] without FromJson, the body moved out, a carrier handler on get and a carrier before a route value, each recorded as failing for its documented reason with the slice; the M3-012 spike and its five carrier fixtures are deleted and the toolchain pins kept; the mutations listed in the M3-012 slice are each red or recorded as inert with a reason; existing must-fail diagnostics are compared with main's in full.",
+        "DX, ARCHITECTURE current architecture, SPEC and AGENT_PROGRESS describe the production API; check.sh, test.sh, check_flare.sh and git diff --check exit 0; CI verify and flare pass; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }
