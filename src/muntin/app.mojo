@@ -400,9 +400,9 @@ def _call_body[
 ](handler: def(var B) thin raises E -> R, args: List[String]) -> Response:
     """Converts the one argument, the request body, with `B.from_body` and
     moves the value into `handler`; answers 400 itself, without calling
-    `handler`, if `from_body` raises. For a JSON body (`_JsonBody`) it
-    first answers 415 unless the arguments are exactly the body and the
-    `Content-Type` verdict `"1"` (the arity check keeps a route registered
+    `handler`, if `from_body` raises. For a JSON body (`_JsonBody`) that is
+    not a carrier it first answers 415 unless the arguments are exactly the
+    body and the `Content-Type` verdict `"1"` (the arity check keeps a route registered
     without its `json` flag from reading a body `"1"` as the verdict), then
     413 for a body over 1 MiB, without parsing it (`_json_status`).
 

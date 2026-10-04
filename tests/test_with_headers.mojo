@@ -615,6 +615,21 @@ def test_invalid_in_memory_fields_are_the_fixed_500() raises:
         var h = _h("Content-Type", "application/json")
         h._fields.append(_Field("Bad Name", "v"))
         assert_equal(_post(app, target, ok, h^).status, 500, target)
+    # The rebuild runs after the route value and the JSON steps: an
+    # invalid route value is still 400, a JSON body without its
+    # `Content-Type` 415, and one over the cap 413.
+    for target in ["/s/x", "/rq?id=x", "/st/sq?id=x", "/st/r/x", "/jst/x"]:
+        var h = Headers()
+        h._fields.append(_Field("Bad Name", "v"))
+        assert_equal(_post(app, target, "hi", h^).status, 400, target)
+    var big = String("x") * 1_048_577
+    for target in ["/j", "/j/5", "/jst", "/jst/5"]:
+        var h = Headers()
+        h._fields.append(_Field("Bad Name", "v"))
+        assert_equal(_post(app, target, ok, h^).status, 415, target)
+        h = _h("Content-Type", "application/json")
+        h._fields.append(_Field("Bad Name", "v"))
+        assert_equal(_post(app, target, big, h^).status, 413, target)
     # A route without a carrier never rebuilds the fields.
     var h = Headers()
     h._fields.append(_Field("Bad Name", "v"))
