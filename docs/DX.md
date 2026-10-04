@@ -16,20 +16,20 @@ Muntin should feel like a native Mojo framework rather than a mechanical transla
 
 ## Proven vs. target status
 
-All status below is for **Mojo 1.1.0 (8189361e)**, as of M3-009. Each numbered section from 1 on opens with the design target (a constraint on where the API should go, not a claim that it compiles) and then gives its status: what is production now, with the tests that prove it, and what is still a target. The "Proven" block below is the M0 baseline; the sections after it add each shape.
+All status below is for **Mojo 1.1.0 (8189361e)**, as of M3-009. Each numbered section from 1 on opens with the design target (a constraint on where the API should go, not a claim that it compiles) and then gives its status: what is production now (the section names the tests that prove it) and what is still a target. The "Proven" block below is the M0 baseline; the sections after it add each shape.
 
-| Capability | Status | Examples | Proven by |
-|---|---|---|---|
-| `App`, `get` routes, `TestClient`, `App.handle` | production (M0) | this section | `tests/test_app.mojo`, `main.mojo` |
-| one `Int` path or query value | production (M2-001, M2-002) | this section (sections 2 and 3 give the target and status) | `tests/test_app.mojo`, `tests/compile_fail/` |
-| typed bodies (`FromBody`), route value then body | production (M2-006, M2-009) | this section, section 4 | `tests/test_body.mojo`, `tests/test_int_body.mojo`, `tests/compile_fail/`, `tests/body_fail/` |
-| typed results (`ToResponse`, `-> Response`) | production (M2-008) | section 5 | `tests/test_response.mojo` |
-| raising handlers, `ToErrorResponse` | production (M2-011, M2-013) | section 6 | `tests/test_error.mojo`, `tests/test_error_response.mojo` |
-| application state (`State[S]`) on `get`, `post` and raw handlers | production (M3-003, M3-006, M3-007) | section 8 | `tests/test_state.mojo`, `tests/test_state_post.mojo`, `tests/test_state_raw.mojo` |
-| raw `Request -> Response` handlers | production (M2-015) | section 9 | `tests/test_raw.mojo` |
-| request and response headers (`Headers`) for raw handlers and `Response` | production (M3-005) | section 9 | `tests/test_headers.mojo`, `tests/headers_api_fail/` |
-| JSON bodies and results (`Json[T]`) | production (M3-009) | sections 4, 5 | `tests/test_json.mojo`, `tests/test_json_dx.mojo`, `tests/json_api_fail/` |
-| typed header extraction, `TestClient` header fields, middleware, `app.run()`, more methods and route-value types, derived codecs, schema/OpenAPI, streaming | target | "Still targets" below; `docs/SPEC.md` M3 "Remaining candidates" | — |
+| Capability | Status | Examples |
+|---|---|---|
+| `App`, `get` routes, `TestClient`, `App.handle` | production (M0) | this section |
+| one `Int` path or query value | production (M2-001, M2-002) | this section (sections 2 and 3 give the target and status) |
+| typed bodies (`FromBody`), route value then body | production (M2-006, M2-009) | this section, section 4 |
+| typed results (`ToResponse`, `-> Response`) | production (M2-008) | section 5 |
+| raising handlers, `ToErrorResponse` | production (M2-011, M2-013) | section 6 |
+| application state (`State[S]`) on `get`, `post` and raw handlers | production (M3-003, M3-006, M3-007) | section 8 |
+| raw `Request -> Response` handlers | production (M2-015) | section 9 |
+| request and response headers (`Headers`) for raw handlers and `Response` | production (M3-005) | section 9 |
+| JSON bodies and results (`Json[T]`) | production (M3-009) | sections 4, 5 |
+| typed header extraction, `TestClient` header fields, middleware, `app.run()`, more methods and route-value types, derived codecs, schema/OpenAPI, streaming | target | "Still targets" below; `docs/SPEC.md` M3 "Remaining candidates" |
 
 Every production row also has a Flare loopback check in `adapters/flare/test_localhost_roundtrip.mojo` (`./scripts/check_flare.sh`). M2 is complete (M2-016): its contract is `docs/SPEC.md`, "M2 completion contract", a record of what M2 provides; M3 rows above go beyond it.
 

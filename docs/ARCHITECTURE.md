@@ -1,15 +1,6 @@
 # Muntin architecture
 
-## Reading this document
-
-This file is the architecture entry point: the thesis and invariants, the [current architecture](#current-architecture-as-of-m3-009), an index of the decisions in force and an index of their revisit triggers. Each decision's full record (contract as decided, reasons, compiler evidence, rejected candidates, mutations, review findings and the "Revisit when" list) is in [`docs/history/architecture-decisions.md`](history/architecture-decisions.md), which belongs to the same architecture document set. `feature_list.json`, the scripts and older documents cite those records as `docs/ARCHITECTURE.md "<title>"`, or say that `docs/ARCHITECTURE.md` "has a '<title>' section" or "records" a decision; each of those statements refers to the record with that title; the [decision index](#decision-index) maps every such title to its record, and a sub-label such as "Next production slice (M3-009)" is a paragraph inside the record it belongs to.
-
-Roles:
-
-- **Current contract:** this file's "Current architecture". It restates the records' results and adds no decision. Where a record's plan differs from this section, a later record (named in the decision index) changed it; a difference that no later record explains is an inconsistency to resolve deliberately, not a new rule.
-- **Reasons and evidence:** the decision record named in the index.
-- **Revisit conditions:** the record's "Revisit when" list is the canonical text; the [revisit index](#revisit-index) points from each pinned fixture or test to it.
-- **User-facing API and examples:** `docs/DX.md`. **Milestone scope and remaining candidates:** `docs/SPEC.md`. **Acceptance and completion state:** `feature_list.json`.
+This is the architecture entry point: the thesis, the invariants, the [current architecture](#current-architecture-as-of-m3-009), a [revisit index](#revisit-index) and a [stub for each decision record](#decision-records). The records in [`docs/history/architecture-decisions.md`](history/architecture-decisions.md) hold the reasons, evidence, rejected candidates and "Revisit when" conditions; this file restates their results and adds no decision. If the two disagree and no later record explains why, treat it as an inconsistency to fix. Public API semantics and examples: `docs/DX.md`. Milestones: `docs/SPEC.md`. Acceptance: `feature_list.json`.
 
 ## Architectural thesis
 
@@ -249,43 +240,9 @@ Not implemented (candidates in `docs/SPEC.md` M3): `app.run()`/lifecycle, middle
 
 M2 is closed (M2-016; contract in `docs/SPEC.md`, "M2 completion contract"). Reopen it, rather than add an M3 item, when a toolchain upgrade changes what the contract rests on (overload resolution, parametric raises inference, `conforms_to` detection), when an M3 design must change an M2 public signature or semantics instead of adding to them (the `Request(method, target, body)` initializer, the 400/404/500 boundary, a fallible `ToResponse`/`ToErrorResponse`), or when a statement DX labels proven stops passing its test. Exact text: "M2 closure (M2-016)" in the decision records.
 
-## Decision index
-
-Every record is a heading in [`docs/history/architecture-decisions.md`](history/architecture-decisions.md); the title column is the exact text cited elsewhere as `docs/ARCHITECTURE.md "<title>"`. "Revisit" says whether the record has its own "Revisit when" (or reopen) list.
-
-| Record (cited title) | Kind | Current role | Revisit |
-|---|---|---|---|
-| [Implemented M0 layout (Mojo 1.1.0)](history/architecture-decisions.md#implemented-m0-layout-mojo-110) | layout | The module layout as last edited in M2-016; superseded by "Modules and public surface" above. | no |
-| [Flare adapter (M1-002)](history/architecture-decisions.md#flare-adapter-m1-002) | production | Adapter converts and calls `App.handle`, never routes. Its "headers dropped" policy was replaced in M3-005 ("Flare adapter" above). | no |
-| [Real localhost round trip (M1-003)](history/architecture-decisions.md#real-localhost-round-trip-m1-003) | production | Loopback proof through Flare; server lifecycle is test-fixture code, no `app.run()`. | no |
-| [Routing and handler storage (M2-001)](history/architecture-decisions.md#routing-and-handler-storage-m2-001) | production | Method + path matching, `Int` conversion, first match wins; its `Variant` storage was replaced in M2-004. | no |
-| [Request target boundary and query extraction (M2-002)](history/architecture-decisions.md#request-target-boundary-and-query-extraction-m2-002) | production | `Request` splits the target at the first `?`; one `Int` query value by key, no decoding. | no |
-| [Handler storage decision (M2)](history/architecture-decisions.md#handler-storage-decision-m2) | decision | Private typed box with pointer erasure instead of a closed `Variant`. Also cited as "Handler storage decision". | yes |
-| [Production implementation (M2-004)](history/architecture-decisions.md#production-implementation-m2-004) | production | Move-only `_Erased`, unsafe code confined to `_handler_storage.mojo`; its downstream-sealing boundary was restated by M3-004. | no |
-| [Argument extraction decision (M2-005)](history/architecture-decisions.md#argument-extraction-decision-m2-005) | decision | Positional binding (route values, then the body last); route-value and body types disjoint; `FromBody` conversion. Also cited as "Argument extraction decision". | yes |
-| [Body-only POST (M2-006)](history/architecture-decisions.md#body-only-post-m2-006) | production | `app.post[route](def(B))` with `B: FromBody`; 400 before the handler. | no |
-| [Typed response decision (M2-007)](history/architecture-decisions.md#typed-response-decision-m2-007) | decision | `ToResponse` trait on application result types; `String` keeps its own overloads; `Response` conforms. | yes |
-| [Typed results in production (M2-008)](history/architecture-decisions.md#typed-results-in-production-m2-008) | production | `_text`/`_converted[R]` result policies on every shape. | no |
-| [Route value then body in production (M2-009)](history/architecture-decisions.md#route-value-then-body-in-production-m2-009) | production | `post` `def(Int, B)`: route value, then body, then handler. | no |
-| [Application-error decision (M2-010)](history/architecture-decisions.md#application-error-decision-m2-010) | decision | Parametric `thin raises E`; request failures 400 where they occur; handler errors the fixed 500. | yes |
-| [Raising handlers in production (M2-011)](history/architecture-decisions.md#raising-handlers-in-production-m2-011) | production | Raising handlers on every shape; explicitly typed non-raising function values need `raises Never` (accepted limitation). | no |
-| [Error-response decision (M2-012)](history/architecture-decisions.md#error-response-decision-m2-012) | decision | Per-error-type opt-in through `ToErrorResponse`, detected in `_handler_error`; no application-level mapper. | yes |
-| [Application-defined error responses in production (M2-013)](history/architecture-decisions.md#application-defined-error-responses-in-production-m2-013) | production | `ToErrorResponse` exported; the opt-in rule above. | no |
-| [Raw Request decision (M2-014)](history/architecture-decisions.md#raw-request-decision-m2-014) | decision | Raw `def(var Request) -> Response` overloads selected by the shorter-parameter-list rule; `Request` guard for diagnostics. | yes |
-| [Raw Request handlers in production (M2-015)](history/architecture-decisions.md#raw-request-handlers-in-production-m2-015) | production | Raw routes: no extraction, no pre-handler 400; the M2-014 revisit conditions apply. | no |
-| [M2 closure (M2-016)](history/architecture-decisions.md#m2-closure-m2-016) | decision | M2 complete; contract in `docs/SPEC.md`; reopen conditions ("When M2 reopens" above). | yes |
-| [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001) | decision | `State[S]` first parameter, bound at registration `(handler, state)`; one injected slot; scoped registrar rejected. Its "Next production slice (M3-003)" representation was superseded by M3-004. | yes |
-| [State storage decision (M3-004)](history/architecture-decisions.md#state-storage-decision-m3-004) | decision | Sealed `_Shared[S]` box; the State guarantee and its toolchain-wide exclusions. | yes |
-| [Headers decision (M3-002)](history/architecture-decisions.md#headers-decision-m3-002) | decision | `muntin.Headers`; raw handlers get fields as raw strings; no default fields; typed extraction deferred; Flare inbound/outbound rules. | yes |
-| [Headers in production (M3-005)](history/architecture-decisions.md#headers-in-production-m3-005) | production | The M3-002 slice; a request field Muntin cannot represent is 400 over Flare. | no |
-| [Stateful POST in production (M3-006)](history/architecture-decisions.md#stateful-post-in-production-m3-006) | production | Stateful `post` overloads and the `State` guard. | no |
-| [Stateful raw handlers in production (M3-007)](history/architecture-decisions.md#stateful-raw-handlers-in-production-m3-007) | production | Stateful raw `get`/`post`; ten overloads per method reach the diagnostic note budget. | yes (note budget) |
-| [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) | decision | `Json[T]` over `FromJson`/`ToJson` with a Muntin-owned codec; 415/413 rules; 1 MiB cap; no new overload. | yes |
-| [JSON in production (M3-009)](history/architecture-decisions.md#json-in-production-m3-009) | production | The M3-008 slice; exact-arity verdict check; one body copy; the M3-008 revisit conditions apply. | no |
-
 ## Revisit index
 
-The canonical revisit conditions are the "Revisit when" lists in the records; this index only maps what the checks pin to the record that says what to re-decide. When `scripts/build_one.sh` reports that a known gap "no longer builds; a revisit condition in docs/ARCHITECTURE.md has fired", or that a toolchain gap no longer builds, or when a must-fail fixture starts compiling, start from this table.
+If one of these pins changes (a must-fail fixture compiles, or `scripts/build_one.sh` says a known gap or toolchain gap no longer builds), reopen the linked decision rather than patching the test in isolation. The exact conditions are the record's "Revisit when" list.
 
 | Pinned by | Record |
 |---|---|
@@ -302,6 +259,118 @@ The canonical revisit conditions are the "Revisit when" lists in the records; th
 | an 11th `get` or `post` overload | [Stateful raw handlers in production (M3-007)](history/architecture-decisions.md#stateful-raw-handlers-in-production-m3-007) (note budget) and [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) |
 | a concurrent `App.handle` or a `Copyable` `App` | [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001) (interior mutability in `S`) and [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008) (re-derive the cap) |
 | typed header extraction or another injected kind proposed | [Headers decision (M3-002)](history/architecture-decisions.md#headers-decision-m3-002) and [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001) (one injected slot) |
+
+## Decision records
+
+One stub per record, under the title other documents cite as `docs/ARCHITECTURE.md "<title>"`. Each record is in [`docs/history/architecture-decisions.md`](history/architecture-decisions.md); a record with a "Revisit when" list (or reopen conditions) says so.
+
+### Implemented M0 layout (Mojo 1.1.0)
+
+Layout, M0 to M2-016. The module layout as last edited in M2-016; superseded by "Modules and public surface" in the current architecture. Record: [Implemented M0 layout (Mojo 1.1.0)](history/architecture-decisions.md#implemented-m0-layout-mojo-110).
+
+### Flare adapter (M1-002)
+
+Production, M1-002. Adapter converts and calls `App.handle`, never routes. Its "headers dropped" policy was replaced in M3-005 ("Flare adapter" in the current architecture). Record: [Flare adapter (M1-002)](history/architecture-decisions.md#flare-adapter-m1-002).
+
+### Real localhost round trip (M1-003)
+
+Production, M1-003. Loopback proof through Flare; server lifecycle is test-fixture code, no `app.run()`. Record: [Real localhost round trip (M1-003)](history/architecture-decisions.md#real-localhost-round-trip-m1-003).
+
+### Routing and handler storage (M2-001)
+
+Production, M2-001. Method + path matching, `Int` conversion, first match wins; its `Variant` storage was replaced in M2-004. Record: [Routing and handler storage (M2-001)](history/architecture-decisions.md#routing-and-handler-storage-m2-001).
+
+### Request target boundary and query extraction (M2-002)
+
+Production, M2-002. `Request` splits the target at the first `?`; one `Int` query value by key, no decoding. Record: [Request target boundary and query extraction (M2-002)](history/architecture-decisions.md#request-target-boundary-and-query-extraction-m2-002).
+
+### Handler storage decision (M2)
+
+Decision, M2-003. Private typed box with pointer erasure instead of a closed `Variant`. Also cited as "Handler storage decision". Has a "Revisit when" list. Record: [Handler storage decision (M2)](history/architecture-decisions.md#handler-storage-decision-m2).
+
+### Production implementation (M2-004)
+
+Production, M2-004. Move-only `_Erased`, unsafe code confined to `_handler_storage.mojo`; its downstream-sealing boundary was restated by M3-004. Record: [Production implementation (M2-004)](history/architecture-decisions.md#production-implementation-m2-004).
+
+### Argument extraction decision (M2-005)
+
+Decision, M2-005. Positional binding (route values, then the body last); route-value and body types disjoint; `FromBody` conversion. Also cited as "Argument extraction decision". Has a "Revisit when" list. Record: [Argument extraction decision (M2-005)](history/architecture-decisions.md#argument-extraction-decision-m2-005).
+
+### Body-only POST (M2-006)
+
+Production, M2-006. `app.post[route](def(B))` with `B: FromBody`; 400 before the handler. Record: [Body-only POST (M2-006)](history/architecture-decisions.md#body-only-post-m2-006).
+
+### Typed response decision (M2-007)
+
+Decision, M2-007. `ToResponse` trait on application result types; `String` keeps its own overloads; `Response` conforms. Has a "Revisit when" list. Record: [Typed response decision (M2-007)](history/architecture-decisions.md#typed-response-decision-m2-007).
+
+### Typed results in production (M2-008)
+
+Production, M2-008. `_text`/`_converted[R]` result policies on every shape. Record: [Typed results in production (M2-008)](history/architecture-decisions.md#typed-results-in-production-m2-008).
+
+### Route value then body in production (M2-009)
+
+Production, M2-009. `post` `def(Int, B)`: route value, then body, then handler. Record: [Route value then body in production (M2-009)](history/architecture-decisions.md#route-value-then-body-in-production-m2-009).
+
+### Application-error decision (M2-010)
+
+Decision, M2-010. Parametric `thin raises E`; request failures 400 where they occur; handler errors the fixed 500. Has a "Revisit when" list. Record: [Application-error decision (M2-010)](history/architecture-decisions.md#application-error-decision-m2-010).
+
+### Raising handlers in production (M2-011)
+
+Production, M2-011. Raising handlers on every shape; explicitly typed non-raising function values need `raises Never` (accepted limitation). Record: [Raising handlers in production (M2-011)](history/architecture-decisions.md#raising-handlers-in-production-m2-011).
+
+### Error-response decision (M2-012)
+
+Decision, M2-012. Per-error-type opt-in through `ToErrorResponse`, detected in `_handler_error`; no application-level mapper. Has a "Revisit when" list. Record: [Error-response decision (M2-012)](history/architecture-decisions.md#error-response-decision-m2-012).
+
+### Application-defined error responses in production (M2-013)
+
+Production, M2-013. `ToErrorResponse` exported; the opt-in rule above. Record: [Application-defined error responses in production (M2-013)](history/architecture-decisions.md#application-defined-error-responses-in-production-m2-013).
+
+### Raw Request decision (M2-014)
+
+Decision, M2-014. Raw `def(var Request) -> Response` overloads selected by the shorter-parameter-list rule; `Request` guard for diagnostics. Has a "Revisit when" list. Record: [Raw Request decision (M2-014)](history/architecture-decisions.md#raw-request-decision-m2-014).
+
+### Raw Request handlers in production (M2-015)
+
+Production, M2-015. Raw routes: no extraction, no pre-handler 400; the M2-014 revisit conditions apply. Record: [Raw Request handlers in production (M2-015)](history/architecture-decisions.md#raw-request-handlers-in-production-m2-015).
+
+### M2 closure (M2-016)
+
+Decision, M2-016. M2 complete; contract in `docs/SPEC.md`; reopen conditions ("When M2 reopens" in the current architecture). Has the M2 reopen conditions. Record: [M2 closure (M2-016)](history/architecture-decisions.md#m2-closure-m2-016).
+
+### Application state decision (M3-001)
+
+Decision, M3-001. `State[S]` first parameter, bound at registration `(handler, state)`; one injected slot; scoped registrar rejected. Its "Next production slice (M3-003)" representation was superseded by M3-004. Has a "Revisit when" list. Record: [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001).
+
+### State storage decision (M3-004)
+
+Decision, M3-004. Sealed `_Shared[S]` box; the State guarantee and its toolchain-wide exclusions. Has a "Revisit when" list. Record: [State storage decision (M3-004)](history/architecture-decisions.md#state-storage-decision-m3-004).
+
+### Headers decision (M3-002)
+
+Decision, M3-002. `muntin.Headers`; raw handlers get fields as raw strings; no default fields; typed extraction deferred; Flare inbound/outbound rules. Has a "Revisit when" list. Record: [Headers decision (M3-002)](history/architecture-decisions.md#headers-decision-m3-002).
+
+### Headers in production (M3-005)
+
+Production, M3-005. The M3-002 slice; a request field Muntin cannot represent is 400 over Flare. Record: [Headers in production (M3-005)](history/architecture-decisions.md#headers-in-production-m3-005).
+
+### Stateful POST in production (M3-006)
+
+Production, M3-006. Stateful `post` overloads and the `State` guard. Record: [Stateful POST in production (M3-006)](history/architecture-decisions.md#stateful-post-in-production-m3-006).
+
+### Stateful raw handlers in production (M3-007)
+
+Production, M3-007. Stateful raw `get`/`post`; ten overloads per method reach the diagnostic note budget. States the note-budget revisit condition. Record: [Stateful raw handlers in production (M3-007)](history/architecture-decisions.md#stateful-raw-handlers-in-production-m3-007).
+
+### JSON codec decision (M3-008)
+
+Decision, M3-008. `Json[T]` over `FromJson`/`ToJson` with a Muntin-owned codec; 415/413 rules; 1 MiB cap; no new overload. Has a "Revisit when" list. Record: [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008).
+
+### JSON in production (M3-009)
+
+Production, M3-009. The M3-008 slice; exact-arity verdict check; one body copy; the M3-008 revisit conditions apply. Record: [JSON in production (M3-009)](history/architecture-decisions.md#json-in-production-m3-009).
 
 ## Request/Response ownership
 

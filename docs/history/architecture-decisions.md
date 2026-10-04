@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Part of the architecture document set. `docs/ARCHITECTURE.md` holds the current contract and indexes these records; `feature_list.json`, the scripts and older documents cite them as `docs/ARCHITECTURE.md "<title>"`, and that index maps each title to its heading here.
+`docs/ARCHITECTURE.md` holds the current architecture and, under "Decision records", a stub with the same title for each record below, so citations of `docs/ARCHITECTURE.md "<title>"` land on a stub that links here.
 
 Each record keeps the text written when its item merged (M1-002 to M3-009), moved here verbatim when the entry document was reorganized after M3-009 merged (PR #36, recorded in PR #37). A record's contract, reasons, evidence, rejected candidates and "Revisit when" conditions are the detail source for that decision; its status and "Next production slice" lines describe the plan at that time. "Above" and "below" refer to records in this file, except mentions of the sections that stayed in `docs/ARCHITECTURE.md` ("Flare policy", "Adapter translation policy", "Request/Response ownership"). A citation such as `docs/SPEC.md`, "M3-003 result" refers to a paragraph now in `docs/history/spec-items.md`. Later items changed parts of earlier records; the current behavior is `docs/ARCHITECTURE.md` "Current architecture".
 

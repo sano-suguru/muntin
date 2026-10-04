@@ -134,7 +134,7 @@ M2 delivered every item on this list except two parts, which M2-016 moved to M3:
 
 Each public API addition should be demonstrated by a small canonical example in `docs/DX.md` and executable tests.
 
-Item scope, in the order cut. Each item's full scope paragraph is in [`docs/history/spec-items.md`](history/spec-items.md#m2-items); acceptance is in `feature_list.json`; the architecture record of each is indexed in `docs/ARCHITECTURE.md`, "Decision index".
+Item scope, in the order cut. Each item's full scope paragraph is in [`docs/history/spec-items.md`](history/spec-items.md#m2-items); acceptance is in `feature_list.json`; the architecture record of each has a stub in `docs/ARCHITECTURE.md`, "Decision records".
 
 | Item | Kind | Scope |
 |---|---|---|
@@ -186,14 +186,14 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: **active**. Nine items are merged and passing in `feature_list.json`; no next item is chosen. The table is in merge order. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
+Status: **active**. Nine items are merged and passing in `feature_list.json`; no next item is chosen. Each row gives the PR that merged it. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
 
 | Item | Kind | Scope | Merged |
 |---|---|---|---|
 | M3-001 | decision | application state: `State[S]` first handler parameter, bound at registration `app.get[route](handler, state)`; M2 stays closed | PR #25 |
-| M3-004 | decision | state storage: sealed `_Shared[S]`, the State guarantee and its toolchain-wide exclusions | PR #27 |
-| M3-003 | production | stateful `get` | PR #26 |
 | M3-002 | decision | request/response headers: `muntin.Headers`, raw-handler transport, no default fields, Flare mapping; typed extraction deferred | PR #28 |
+| M3-003 | production | stateful `get` | PR #26 |
+| M3-004 | decision | state storage: sealed `_Shared[S]`, the State guarantee and its toolchain-wide exclusions | PR #27 |
 | M3-005 | production | headers | PR #29 |
 | M3-006 | production | stateful `post` and the `State` guard | PR #30 |
 | M3-007 | production | stateful raw `get`/`post` (completes the stateful family) | PR #31 |

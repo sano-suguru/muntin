@@ -92,8 +92,8 @@ Only after successful verification:
 
 - change `passes` from `false` to `true` for the satisfied feature;
 - append concrete evidence rather than prose like "works now";
-- update `AGENT_PROGRESS.md` with the new verified state and next smallest step, replacing the previous slice's summary (append that summary to `docs/history/progress-log.md` if it records something not kept elsewhere);
-- update the documents section 9 assigns to the change, each once;
+- update `AGENT_PROGRESS.md` with the new verified state and next smallest step, and delete the previous slice's slice-specific description (append it to `docs/history/progress-log.md` only if it records something not kept elsewhere);
+- update the canonical source section 9 assigns to the change, and the short summaries that link to it;
 - make a local coherent commit when git is initialized.
 
 Do not rewrite feature descriptions or acceptance criteria as a routine way to achieve passing state.
@@ -108,20 +108,20 @@ Do not rewrite feature descriptions or acceptance criteria as a routine way to a
 - what exact command last passed/failed;
 - what to do next.
 
-Large design explanations belong in `docs/`, not the handoff. Keep it near 1,000 words; if it grows past that, move what is no longer current to `docs/history/progress-log.md`.
+Large design explanations belong in `docs/`, not the handoff. The handoff keeps only what the next session could get wrong right now; when a new slice lands, the previous slice's specific description goes.
 
-Each kind of detail has one canonical place. Write it there once and link to it from the other documents instead of restating it:
+Each kind of detail has one canonical source. Entry documents (`AGENT_PROGRESS.md`, `docs/ARCHITECTURE.md`'s current architecture, `docs/SPEC.md`, `README.md`) may summarize it, but each summary links to the canonical source and adds no requirement of its own; when they disagree, the canonical source wins and the summary is fixed:
 
 | Detail | Canonical place |
 |---|---|
-| decision record: the contract as decided, reasons, compiler evidence, rejected candidates, mutations, review findings, "Revisit when", the next production slice; and the production record of each slice (what changed, diagnostics, test counts) | `docs/history/architecture-decisions.md`, one `###` record per item, with a row in `docs/ARCHITECTURE.md`'s decision index (and its revisit index when it pins a fixture) |
+| decision record: the contract as decided, reasons, compiler evidence, rejected candidates, mutations, review findings, "Revisit when", the next production slice; and the production record of each slice (what changed, diagnostics, test counts) | `docs/history/architecture-decisions.md`, one `###` record per item, with a same-titled stub under `docs/ARCHITECTURE.md`'s "Decision records" (and a revisit index row when it pins a fixture) |
 | current architecture contract | `docs/ARCHITECTURE.md`, "Current architecture": edit the affected subsection to state the new result; do not append history there |
 | current public API, runnable examples, current limits, targets | `docs/DX.md` (the status table and the section's status) |
 | milestone scope, open item scope, remaining candidates | `docs/SPEC.md`; when an item merges, move its scope and result paragraphs to `docs/history/spec-items.md` and keep one row in the item table |
 | acceptance, `passes`, executable evidence | `feature_list.json`; evidence states the commands, counts and CI result briefly and points to the record for narrative |
 | current handoff | `AGENT_PROGRESS.md` |
 
-Test counts, mutation lists and review narratives go in the record only. A long paragraph in a record keeps contract, reasons, evidence, limits and revisit conditions in separate labeled parts.
+Test counts, mutation lists and review narratives go in the record only; summaries do not repeat them. A long paragraph in a record keeps contract, reasons, evidence, limits and revisit conditions in separate labeled parts.
 
 ## 10. Stop at the requested boundary
 
