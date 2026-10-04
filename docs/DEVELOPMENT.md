@@ -68,7 +68,7 @@ The canonical commands:
 - `./scripts/test.sh [FILE...]`: builds each `tests/test_*.mojo` (or only the named files) with `--Werror` in parallel, then runs the binaries one at a time. With no arguments it runs every test file; CI always runs it without arguments.
 - `./scripts/check_flare.sh`: the Flare adapter and its localhost round trips, in the `flare` environment.
 
-CI runs on pull requests only. `verify` (check, test, `git diff --check`) and `flare` run on ubuntu-latest and macos-latest, except when every changed file is under `docs/` or ends in `.md`; then both are skipped. `ci-ok` always runs and passes only when both ran and passed, or both were skipped for a docs-only change; it is meant to be the one required status check for `main`, with pull requests required to be up to date with `main` before merging (a repository ruleset, not this file). A new push to a pull request cancels its running checks. Nothing reruns after a merge.
+CI runs on pull requests only. `verify` (check, test, `git diff --check`) and `flare` run on ubuntu-latest and macos-latest, except when every changed file is under `docs/` or ends in `.md`; then both are skipped. `ci-ok` always runs and passes only when both ran and passed, or both were skipped for a docs-only change; it is the one required status check for `main`, where a repository ruleset also requires a pull request that is up to date with `main`. A new push to a pull request cancels its running checks. Nothing reruns after a merge.
 
 ## 7. Review important boundaries skeptically
 
