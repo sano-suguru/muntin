@@ -116,12 +116,12 @@ def test_get_with_headers() raises:
     var client = SpikeClient(app)
     var h = Headers()
     h.add("X-Request-Id", "42")
-    var r = client.get("/echo?x=1", h.copy())
+    var r = client.get("/echo?x=1", headers=h.copy())
     assert_equal(r.status, 200)
     assert_equal(r.body, "GET /echo [] X-Request-Id=<42>")
     _assert_same(r, app.handle(Request("GET", "/echo?x=1", "", h.copy())))
     # A typed route reads no fields; sending some changes nothing.
-    _assert_same(client.get("/hello", h.copy()), client.get("/hello"))
+    _assert_same(client.get("/hello", headers=h.copy()), client.get("/hello"))
 
 
 def test_post_with_headers() raises:
@@ -129,7 +129,7 @@ def test_post_with_headers() raises:
     var client = SpikeClient(app)
     var h = Headers()
     h.add("Authorization", "Bearer t")
-    var r = client.post("/echo", "payload", h.copy())
+    var r = client.post("/echo", "payload", headers=h.copy())
     assert_equal(r.body, "POST /echo [payload] Authorization=<Bearer t>")
     _assert_same(r, app.handle(Request("POST", "/echo", "payload", h^)))
 
@@ -142,14 +142,14 @@ def test_repeated_fields_keep_order_and_casing() raises:
     h.add("Set-Cookie", "a=1")
     h.add("x-a", "2")
     h.add("Set-Cookie", "b=2")
-    var r = client.post("/echo", "", h.copy())
+    var r = client.post("/echo", "", headers=h.copy())
     assert_equal(
         r.body,
         "POST /echo [] X-A=<1> Set-Cookie=<a=1> x-a=<2> Set-Cookie=<b=2>",
     )
     _assert_same(r, app.handle(Request("POST", "/echo", "", h.copy())))
     _assert_same(
-        client.get("/echo", h.copy()),
+        client.get("/echo", headers=h.copy()),
         app.handle(Request("GET", "/echo", "", h^)),
     )
 
@@ -159,7 +159,7 @@ def test_empty_value_is_sent_as_a_value() raises:
     var client = SpikeClient(app)
     var h = Headers()
     h.add("X-Empty", "")
-    var r = client.get("/empty", h.copy())
+    var r = client.get("/empty", headers=h.copy())
     assert_equal(r.body, "present <>")
     _assert_same(r, app.handle(Request("GET", "/empty", "", h^)))
     assert_equal(client.get("/empty").body, "absent")
@@ -172,15 +172,14 @@ def test_ownership_follows_request() raises:
     h.add("X-A", "1")
     # `.copy()` leaves `h` usable; changing it later does not reach a
     # request already sent, and the next request sends the new fields.
-    var first = client.get("/echo", h.copy())
+    var first = client.get("/echo", headers=h.copy())
     h.add("X-B", "2")
     assert_equal(first.body, "GET /echo [] X-A=<1>")
     assert_equal(len(h), 2)
-    var second = client.get("/echo", h.copy())
+    var second = client.get("/echo", headers=h.copy())
     assert_equal(second.body, "GET /echo [] X-A=<1> X-B=<2>")
     # `^` moves the fields in (using `h` afterwards does not compile:
-    # tests/testclient_headers_fail/use_after_move.mojo); the keyword
-    # spelling is the same argument.
+    # tests/testclient_headers_fail/use_after_move.mojo).
     var moved = client.post("/echo", "b", headers=h^)
     assert_equal(moved.body, "POST /echo [b] X-A=<1> X-B=<2>")
 
@@ -190,8 +189,8 @@ def test_default_is_empty_on_every_call() raises:
     var client = SpikeClient(app)
     var h = Headers()
     h.add("X-A", "1")
-    _ = client.get("/echo", h.copy())
-    _ = client.post("/echo", "", h^)
+    _ = client.get("/echo", headers=h.copy())
+    _ = client.post("/echo", "", headers=h^)
     assert_equal(client.get("/echo").body, "GET /echo []")
     assert_equal(client.post("/echo", "").body, "POST /echo []")
 
@@ -202,7 +201,7 @@ def test_json_body_route_needs_the_field() raises:
     var body = String('{"name":"Ada"}')
     var json = Headers()
     json.add("Content-Type", "application/json")
-    var ok = client.post("/users", body, json.copy())
+    var ok = client.post("/users", body, headers=json.copy())
     assert_equal(ok.status, 200)
     assert_equal(ok.body, '{"id":1,"name":"Ada"}')
     assert_equal(_fields(ok.headers), "Content-Type=application/json;")
@@ -216,21 +215,21 @@ def test_json_body_route_needs_the_field() raises:
     var plain = Headers()
     plain.add("Content-Type", "text/plain")
     _assert_same(
-        client.post("/users", body, plain.copy()),
+        client.post("/users", body, headers=plain.copy()),
         app.handle(Request("POST", "/users", body, plain.copy())),
     )
-    assert_equal(client.post("/users", body, plain^).status, 415)
+    assert_equal(client.post("/users", body, headers=plain^).status, 415)
     var twice = json.copy()
     twice.add("Content-Type", "application/json")
     _assert_same(
-        client.post("/users", body, twice.copy()),
+        client.post("/users", body, headers=twice.copy()),
         app.handle(Request("POST", "/users", body, twice.copy())),
     )
-    assert_equal(client.post("/users", body, twice^).status, 415)
+    assert_equal(client.post("/users", body, headers=twice^).status, 415)
     var charset = Headers()
     charset.add("content-type", "application/json; charset=utf-8")
-    assert_equal(client.post("/users", body, charset^).status, 200)
-    var malformed = client.post("/users", "{", json.copy())
+    assert_equal(client.post("/users", body, headers=charset^).status, 200)
+    var malformed = client.post("/users", "{", headers=json.copy())
     assert_equal(malformed.status, 400)
     _assert_same(malformed, app.handle(Request("POST", "/users", "{", json^)))
 
