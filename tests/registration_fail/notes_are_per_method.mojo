@@ -4,8 +4,9 @@
 # ('UInt16'). So a new HTTP method is its own overload set and fits the
 # budget without restructuring, and the selected design's per-method sets
 # are measured separately (docs/ARCHITECTURE.md, "Registration structure
-# decision (M3-014)"). Named `get` instead, the twenty overloads are one
-# set and that note is omitted.
+# decision (M3-014)"). `get`'s overloads take a second parameter so that
+# renaming every `put` to `get` yields twenty distinct overloads in one
+# set: that note is then omitted (`(10 more notes omitted.)`).
 # Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'Other' to 'UInt16'
 
 
@@ -13,34 +14,34 @@ struct Registry:
     def __init__(out self):
         pass
 
-    def get(self, value: Int):
+    def get(self, value: Int, extra: Int):
         pass
 
-    def get(self, value: String):
+    def get(self, value: String, extra: Int):
         pass
 
-    def get(self, value: Bool):
+    def get(self, value: Bool, extra: Int):
         pass
 
-    def get(self, value: Float64):
+    def get(self, value: Float64, extra: Int):
         pass
 
-    def get(self, value: UInt8):
+    def get(self, value: UInt8, extra: Int):
         pass
 
-    def get(self, value: Int8):
+    def get(self, value: Int8, extra: Int):
         pass
 
-    def get(self, value: Int16):
+    def get(self, value: Int16, extra: Int):
         pass
 
-    def get(self, value: Int32):
+    def get(self, value: Int32, extra: Int):
         pass
 
-    def get(self, value: Int64):
+    def get(self, value: Int64, extra: Int):
         pass
 
-    def get(self, value: UInt32):
+    def get(self, value: UInt32, extra: Int):
         pass
 
     def put(self, value: Int):

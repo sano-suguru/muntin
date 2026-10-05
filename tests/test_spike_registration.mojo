@@ -134,6 +134,10 @@ def carried(input: WithHeaders[Note]) -> String:
     return input.body.text
 
 
+def carried_id(id: Int, input: WithHeaders[Note]) -> String:
+    return String(id) + " " + input.body.text
+
+
 def version() -> StaticString:
     return "1.0"
 
@@ -264,6 +268,8 @@ def test_dispatch_matches_production() raises:
     reg.on["GET", "/sraw"](stateful_raw, db)  # 8
     reg.on["GET", "/count"](count, db)  # 9
     reg.on["POST", "/carried"](carried)  # 10
+    reg.on["POST", "/sraw"](stateful_raw, db)  # 11
+    reg.on["POST", "/supdate/{id}"](stateful_update, db)  # 12
     assert_equal(_show(reg.invoke(0, _args())), "200 root")
     assert_equal(_show(reg.invoke(1, _args("42"))), "200 id 42")
     assert_equal(_show(reg.invoke(2, _args("7"))), "201 7")
@@ -277,6 +283,10 @@ def test_dispatch_matches_production() raises:
     assert_equal(_show(reg.invoke(8, _args("GET", "/sraw", ""))), "200 5 /sraw")
     assert_equal(_show(reg.invoke(9, _args())), "200 5")
     assert_equal(_show(reg.invoke(10, _args("hi", "X-A", "1"))), "200 hi")
+    assert_equal(
+        _show(reg.invoke(11, _args("POST", "/sraw", "b"))), "200 5 /sraw"
+    )
+    assert_equal(_show(reg.invoke(12, _args("2", "hi"))), "200 7 hi")
 
 
 def test_request_failures_answer_before_the_handler() raises:
@@ -284,10 +294,22 @@ def test_request_failures_answer_before_the_handler() raises:
     reg.on["GET", "/users/{id}"](by_id)
     reg.on["POST", "/notes/{id}"](update)
     reg.on["POST", "/notes"](note)
+    reg.on["POST", "/carried/{id}"](carried_id)
     assert_equal(_show(reg.invoke(0, _args("x"))), "400 Bad Request")
-    # The route value is converted before the body.
     assert_equal(_show(reg.invoke(1, _args("x", "bad"))), "400 Bad Request")
     assert_equal(_show(reg.invoke(2, _args("bad"))), "400 Bad Request")
+    # The route value is converted before the body: with both invalid, the
+    # bad route value (400) answers before the carrier's field rebuild
+    # (500 for a field name `Headers.add` rejects).
+    assert_equal(
+        _show(reg.invoke(3, _args("x", "hi", "bad name", "v"))),
+        "400 Bad Request",
+    )
+    assert_equal(
+        _show(reg.invoke(3, _args("1", "hi", "bad name", "v"))),
+        "500 Internal Server Error",
+    )
+    assert_equal(_show(reg.invoke(3, _args("1", "hi", "X-A", "v"))), "200 1 hi")
 
 
 def test_error_model_is_production_s() raises:

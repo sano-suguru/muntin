@@ -22,7 +22,12 @@
 #                                adapter instantiation, so a rejected shape
 #                                reports the rule, not an adapter's failure
 #                                (tests/registration_fail/
-#                                slot_misuse_names_the_rule.mojo)
+#                                slot_misuse_names_the_rule.mojo). The two
+#                                must accept the same shapes: if the Bool
+#                                is stricter, the guard's `else` aborts at
+#                                registration instead of dropping the
+#                                route (a compile-time `else` assert would
+#                                be reported instead of the rule)
 #   _as[T, A]                    the only `rebind_var`: exact type equality
 #                                asserted first, because `rebind_var`
 #                                reinterprets layout twins
@@ -34,6 +39,7 @@
 # tests/test_spike_registration.mojo.
 
 from std.builtin.rebind import rebind_var
+from std.os import abort
 
 from muntin import FromBody, Headers, Request, Response, State, ToResponse
 from muntin._handler_storage import _Erased
@@ -382,6 +388,8 @@ struct Registrar(Movable):
         comptime if _shape_ok[method, path, R, _ABSENT, _ABSENT]():
             self.shapes.append(String(method, " () -> ", _result_name[R]()))
             self._boxes.append(_Erased.__init__[call=_call0[E, R]](handler))
+        else:
+            abort("registration rule check and guard disagree")
 
     def on[
         A: Movable & Deinitable,
@@ -408,6 +416,8 @@ struct Registrar(Movable):
                     call=_call1[A, E, R, _index[k1, 0, k1, _ABSENT]()]
                 ](handler)
             )
+        else:
+            abort("registration rule check and guard disagree")
 
     def on[
         A: Movable & Deinitable,
@@ -439,6 +449,8 @@ struct Registrar(Movable):
             self._boxes.append(
                 _Erased.__init__[call=_call2[A, B, E, R, a, b]](handler)
             )
+        else:
+            abort("registration rule check and guard disagree")
 
     def on[
         S: Movable & Deinitable,
@@ -458,6 +470,8 @@ struct Registrar(Movable):
             self._boxes.append(
                 _Erased.__init__[call=_scall0[S, E, R]](_Bound(handler, state))
             )
+        else:
+            abort("registration rule check and guard disagree")
 
     def on[
         S: Movable & Deinitable,
@@ -489,6 +503,8 @@ struct Registrar(Movable):
                     call=_scall1[S, A, E, R, _index[k1, 0, k1, _ABSENT]()]
                 ](_Bound(handler, state))
             )
+        else:
+            abort("registration rule check and guard disagree")
 
     def on[
         S: Movable & Deinitable,
@@ -504,8 +520,6 @@ struct Registrar(Movable):
         handler: def(State[S], var A, var B) thin raises E -> R,
         state: State[S],
     ):
-        """Stateful arity 2: selection and classification only (not
-        boxed)."""
         comptime k1 = _kind[A]()
         comptime k2 = _kind[B]()
         _check_shape[method, path, R, k1, k2]()
@@ -521,6 +535,43 @@ struct Registrar(Movable):
                     _result_name[R](),
                 )
             )
+            comptime v1 = _values[k1, _ABSENT]()
+            comptime a = _index[k1, 0, k1, k2]()
+            comptime b = _index[k2, v1, k1, k2]()
+            self._boxes.append(
+                _Erased.__init__[call=_scall2[S, A, B, E, R, a, b]](
+                    _Bound(handler, state)
+                )
+            )
+        else:
+            abort("registration rule check and guard disagree")
+
+
+def _scall2[
+    S: Movable & Deinitable,
+    A: Movable & Deinitable,
+    B: Movable & Deinitable,
+    E: Deinitable,
+    R: Movable & Deinitable,
+    a: Int,
+    b: Int,
+](
+    bound: _Bound[def(State[S], var A, var B) thin raises E -> R, S],
+    args: List[String],
+) -> Response:
+    var x: A
+    var y: B
+    try:
+        x = _slot[A, a](args)
+        y = _slot[B, b](args)
+    except r:
+        return _reject(r)
+    var result: R
+    try:
+        result = bound.handler(bound.state, x^, y^)
+    except e:
+        return _handler_error(e^)
+    return _respond(result^)
 
 
 def _scall0[

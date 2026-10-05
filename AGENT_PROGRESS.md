@@ -19,7 +19,7 @@ M3 so far:
 
 ## Current increment
 
-M3-014 (decision; `src/muntin` and `adapters/` unchanged): selected C4r, one overload per handler arity on each method (stateless and stateful), every handler parameter a generic slot `var A` classified at compile time, the result type generic. Spellings, binding, request steps and storage stay; M3-015 reopens M2 for the overload declarations, the diagnostics of rejected calls (a Muntin rule as `constraint failed` instead of candidate notes), an owned `Int` route value becoming accepted, and typed function values with a borrowed parameter needing `var`. Retained evidence: `tests/registration_spike.mojo` with `tests/test_spike_registration.mojo`, `tests/registration_fail`, `tests/registration_known_gaps`. Record: `docs/history/architecture-decisions.md`, "Registration structure decision (M3-014)".
+M3-014 (decision; `src/muntin` and `adapters/` unchanged): selected C4r, one overload per handler arity on each method (stateless and stateful), every handler parameter a generic slot `var A` classified at compile time, the result type generic. Spellings, binding, request steps and storage stay; M3-015 reopens M2 for the overload declarations, the diagnostics of rejected calls (a shape that selects an overload reports a Muntin rule as `constraint failed` instead of candidate notes), an owned `Int` route value becoming accepted, and typed function values with a borrowed parameter needing `var`. Retained evidence: `tests/registration_spike.mojo` with `tests/test_spike_registration.mojo`, `tests/registration_fail`, `tests/registration_known_gaps`. Record: `docs/history/architecture-decisions.md`, "Registration structure decision (M3-014)".
 
 ## Easy to get wrong now
 
@@ -46,7 +46,7 @@ M3-014: `check.sh` (with the new fixtures), `test.sh` (the spike included), `che
 
 ## Next step
 
-After M3-014's PR passes CI and review and merges: M3-015, exactly the record's "Next production slice (M3-015)". If its review rejects the M2 reopen, the record's fallback is deferral (C1), with more HTTP methods as copied overload sets the next independent item.
+After M3-014's PR passes CI and review and merges: M3-015, exactly the record's "Next production slice (M3-015)". The M2 reopen is decided by M3-014's record; undoing it needs a new decision.
 
 ## Where things are
 
