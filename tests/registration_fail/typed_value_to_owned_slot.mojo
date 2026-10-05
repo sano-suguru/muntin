@@ -7,8 +7,9 @@
 # (tests/test_spike_registration.mojo) and a value spelled
 # `def(var Int) ...` does. This is the migration cost of the selected
 # design (docs/ARCHITECTURE.md, "Registration structure decision
-# (M3-014)"): such values and helper parameters must be respelled with
-# `var`. Production `get` accepts the borrowed spelling today.
+# (M3-014)"): such values and helper parameters must spell a borrowed
+# parameter in a slot position with `var` (a leading `State[S]` is not a
+# slot and keeps its spelling). Production `get` accepts the borrowed spelling today.
 # Expected diagnostic (checked by scripts/check.sh): function type conversions between closures not supported yet
 
 
