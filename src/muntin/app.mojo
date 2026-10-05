@@ -8,7 +8,8 @@ from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
 from .state import State, _InjectedState
 
 # Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
-# (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody`; and on
+# (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody` (or,
+# since M3-013, a `WithHeaders[B]` carrier, below); and on
 # both, the raw `def(var Request) -> Response` (M2-015). Mojo 1.1.0
 # function types spelled without `thin` are traits and cannot be stored, so
 # `App.get` takes thin function values; ordinary `def` functions convert
@@ -117,8 +118,9 @@ from .state import State, _InjectedState
 # forwards `_JsonBody` exactly when its body does, so a
 # `WithHeaders[Json[T]]` route keeps the order above; its arity check
 # allows only name and value pairs after the verdict, and every other JSON
-# body keeps the exact arity. Muntin interprets no header field on a carrier
-# route.
+# body keeps the exact arity. Muntin assigns no status to the fields the
+# handler reads; the only header-driven step on a carrier route is the
+# `Content-Type` verdict for a `Json[T]` body, unchanged.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -1069,17 +1071,18 @@ struct App(Movable):
     ](mut self, handler: def(var B) thin raises E -> String):
         """Registers `handler` for `POST path`, where `handler`'s one
         parameter is the request body and `path` declares no path or query
-        parameter. `B` is an application type conforming to `FromBody`; the
-        body is converted with `B.from_body` before `handler` runs, and a
-        conversion failure yields 400 without calling `handler`. A handler
+        parameter. `B` is an application type conforming to `FromBody` (or a
+        carrier, below); the body is converted with `B.from_body` before
+        `handler` runs, and a conversion failure yields 400 without calling
+        `handler`. A handler
         may declare `body: B` or `var body: B`; `B` may be move-only. A
         raise is converted or the fixed 500, as for `get` on `def()`.
 
         `B` may instead be `WithHeaders[B2]` with `B2: FromBody`: the body
         is converted with `B2.from_body` (400 on failure) and the handler
-        also receives the request's header fields, which Muntin does not
-        interpret. This holds for every body overload, stateless or
-        stateful."""
+        also receives the request's header fields, to which Muntin assigns
+        no status (a `Json[T]` inner body keeps its `Content-Type` 415 step).
+        This holds for every body overload, stateless or stateful."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"

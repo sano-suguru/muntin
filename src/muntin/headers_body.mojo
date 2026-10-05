@@ -37,8 +37,10 @@ struct WithHeaders[B: FromBody](
     `App.post`, stateless or stateful. `input.headers` is the request's
     `Headers`: every field in order, with its casing, repeated names as
     separate fields and empty values kept; `get` matches names ASCII
-    case-insensitively. Muntin interprets no field here: a missing field is
-    `None` and its status is the handler's error type to choose.
+    case-insensitively. Muntin assigns no status to these fields: a missing
+    field is `None` and its status is the handler's error type to choose.
+    The only header-driven step on a carrier route is the existing
+    `Json[T]` `Content-Type` verdict (415), unchanged.
     `input.body` is converted by `B.from_body` as a bare body would be (a
     raise is 400 before the handler), and a `WithHeaders[Json[T]]` body keeps
     the JSON `Content-Type` (415) and size (413) steps.
