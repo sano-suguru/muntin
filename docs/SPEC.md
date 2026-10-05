@@ -188,7 +188,7 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: **active**. M3-001 to M3-014 are merged and passing in `feature_list.json`. M3-015, the production slice of M3-014's registration structure, reopens M2 (PR #44, in review). M3-016 decides typed header access on `get`; its production slice is M3-017. Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
+Status: **active**. M3-001 to M3-015 are merged and passing in `feature_list.json`; M3-015, the production slice of M3-014's registration structure, reopened M2 (PR #44). M3-016 decides typed header access on `get`; its production slice is M3-017. Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
 
 | Item | Kind | Scope | PR / status |
 |---|---|---|---|
