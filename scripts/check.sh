@@ -174,7 +174,11 @@ for t in tests/compile_fail/*.mojo; do fixtures+=(route "$t"); done
 # registers, the rule check guards the adapter's instantiation, the rebind
 # helper rejects a layout twin, and each of the twelve overloads rejects an
 # immutable-origin result through its `where` clause.
-must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail tests/header_access_fail tests/with_headers_api_fail tests/registration_fail tests/registration_api_fail)
+# tests/get_headers_fail: evidence for docs/ARCHITECTURE.md "Typed get header
+# access decision (M3-016)": on the spike's `get`, a `Headers` slot is one,
+# last, and typed values spell it `var`; on production `post`, `Headers`
+# shapes keep today's messages, which the M3-017 slice preserves.
+must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail tests/header_access_fail tests/with_headers_api_fail tests/registration_fail tests/registration_api_fail tests/get_headers_fail)
 for dir in "${must_fail_dirs[@]}"; do
     for t in "$dir"/*.mojo; do fixtures+=(must_fail "$t"); done
 done
