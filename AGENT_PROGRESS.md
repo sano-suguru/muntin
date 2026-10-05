@@ -4,7 +4,7 @@ The current handoff between coding sessions: state, what is easy to get wrong no
 
 ## Active milestone
 
-M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-015 has `passes: true` (M3-014: PR #43; M3-015: PR #44). M3-016 (PR #45, a decision) is `passes: false` until CI and a fresh-context review of its final HEAD pass; M3-017 is its production slice.
+M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-016 has `passes: true` (M3-015: PR #44; M3-016: PR #45). M3-017, the production slice of M3-016, is next.
 
 M3 so far:
 
@@ -44,11 +44,11 @@ Time-bound operational notes. Each says when to delete it.
 
 ## Latest verification evidence
 
-M3-016: `check.sh` (with `tests/get_headers_fail`), `test.sh` (the spike test included), `check_flare.sh` and `git diff --check` pass on the branch, and `git diff main -- src/muntin adapters` is empty. The selected design was measured on a scratch copy of M3-015 (its `check.sh`, `test.sh` and `check_flare.sh` pass; every fixture's diagnostic compared in full); spike and scratch mutations are red. Full evidence: the M3-016 record.
+M3-016: `check.sh` (with `tests/get_headers_fail`), `test.sh` (the spike test included), `check_flare.sh` and `git diff --check` pass on the branch, and `git diff main -- src/muntin adapters` is empty. The selected design was measured on a scratch copy of M3-015 (its `check.sh`, `test.sh` and `check_flare.sh` pass; every fixture's diagnostic compared in full); spike and scratch mutations are red; a fresh-context review of the final HEAD found nothing open, and CI on PR #45 passes. Full evidence: the M3-016 record.
 
 ## Next step
 
-Set M3-016 `passes: true` once CI on PR #45 and a fresh-context review of its final HEAD pass. Then M3-017, exactly the record's "Next production slice (M3-017)".
+M3-017, exactly the record's "Next production slice (M3-017)".
 
 ## Where things are
 
