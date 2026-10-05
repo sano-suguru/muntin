@@ -1,5 +1,5 @@
-# Must not compile: a malformed route literal on the ToResponse overload for
-# `def()` handlers (M2-008).
+# Must not compile: a malformed route literal for a `def()` handler with a
+# ToResponse result (M2-008).
 # Expected diagnostic (checked by scripts/check.sh): malformed route literal
 
 from muntin import App, Response

@@ -3,8 +3,8 @@
 Decision and evidence: docs/ARCHITECTURE.md, "JSON codec decision (M3-008)".
 `Json[T]` is a request body through the existing `FromBody` when the
 application type `T` conforms to `FromJson`, and a result through the
-existing `ToResponse` when `T` conforms to `ToJson`, so it registers on the
-existing `App.get`/`App.post` overloads. The codec is Muntin's own: a strict
+existing `ToResponse` when `T` conforms to `ToJson`, so it registers through
+`App.get`/`App.post` like any other body or result. The codec is Muntin's own: a strict
 parser for the RFC 8259 grammar with Muntin's limits (duplicate member names
 rejected, nesting depth 64, 1 MiB, the Mojo 1.1.0 numeric limits of
 `float()`) and a writer.

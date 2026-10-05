@@ -1,10 +1,11 @@
 # Must not compile: a call no overload accepts, on a method with eleven
 # overloads whose candidate notes carry no detail notes. Mojo 1.1.0 prints
 # at most ten notes per diagnostic, so the eleventh candidate's note
-# ('UInt32') is omitted. This is the budget that keeps typed header access
+# ('UInt32') is omitted. This is the budget that kept typed header access
 # off App.get (docs/ARCHITECTURE.md, "Typed header access decision
-# (M3-012)"): get and post already have ten overloads each. If the cap
-# rises, the omission marker disappears and this check fails; revisit then.
+# (M3-012)") and that bounds the slot arities after M3-015 (six overloads
+# per method today, at most ten). If the cap rises, the omission marker
+# disappears and this check fails; revisit then.
 # Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'Other' to 'UInt16' (1 more notes omitted.)
 
 

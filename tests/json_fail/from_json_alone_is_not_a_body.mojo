@@ -1,6 +1,6 @@
 # Must not compile (M3-008, candidate 4 rejected): a JSON-capable type is not
 # a body by itself. Taking it directly would need a new `post` overload
-# family (`B: FromJson`), so the existing `FromBody` overloads reject it.
+# family (`B: FromJson`), so `post`'s `FromBody` body rule rejects it.
 # Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody
 from muntin import App
 from json_spike import FromJson, JsonValue

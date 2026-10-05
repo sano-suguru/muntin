@@ -1,8 +1,9 @@
 # Must not compile (M3-008, candidate 4b): with the relaxed bound of
 # tests/json_known_gaps/relaxed_result_bound.mojo, an `Int` result reaches
 # the generic overload and fails inside it ("function instantiation failed"
-# with the assert's text), where the production bound rejects it during
-# overload resolution with `does not conform to trait 'ToResponse'`
+# with the assert's text), where production rejects it during overload
+# resolution: its trait bound did until M3-015 (`does not conform to trait
+# 'ToResponse'`), its `where` clause does since
 # (tests/storage_fail/non_conforming_return_handler.mojo and 5 more).
 # Expected diagnostic (checked by scripts/check.sh): constraint failed: result must conform to ToResponse or ToJson
 from std.builtin.rebind import downcast

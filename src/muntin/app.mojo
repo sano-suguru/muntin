@@ -933,10 +933,9 @@ struct _Route(Movable):
     after the body and any verdict, and the adapter rebuilds the fields
     into the carrier (M3-013)."""
     var raw: Bool
-    """Whether the handler receives the whole request (`_call_raw`,
-    `_call_state_raw`): its raw
-    arguments are the request's method, path, query and body, then each
-    header field's name and value."""
+    """Whether the handler receives the whole request (a `Request`
+    slot): its raw arguments are the request's method, path, query and
+    body, then each header field's name and value."""
     var handler: _Erased
 
     def __init__(
@@ -1339,15 +1338,15 @@ struct App(Movable):
         raw or typed; the query takes no part in selecting it. A raw route
         receives `request.method`, `path`, `query` and `body`, then each
         header field's name and value, as its raw arguments, and nothing else
-        runs (no query gathering, no conversion); `_call_raw` or
-        `_call_state_raw` rebuilds the `Request` (`_raw_request`). A typed
+        runs (no query gathering, no conversion); the adapter's `Request`
+        slot rebuilds the `Request` (`_raw_request`). A typed
         route receives no headers unless its body is a `WithHeaders[B]`
         carrier (`_Route.headers`). A body route receives
         `request.body` as its last raw argument, after its route value if it
-        has one; its call trampoline (`_call_body`, `_call_int_body`)
-        converts it and answers 400 itself if that fails. A JSON body route
-        (`_Route.json`) also receives the request's `Content-Type` verdict
-        after the body, for the trampoline's 415 step. A carrier route then
+        has one; its adapter's body slot (`_slot`) converts it and answers
+        400 itself if that fails. A JSON body route (`_Route.json`) also
+        receives the request's `Content-Type` verdict after the body, for
+        the body slot's 415 step. A carrier route then
         receives each header field's name and value, in order, after the
         body and any verdict.
 

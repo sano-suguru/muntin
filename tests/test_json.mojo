@@ -499,7 +499,7 @@ def _assert_fixed(r: Response, status: Int, body: String) raises:
 
 def test_json_bodies_on_every_typed_shape() raises:
     # Body only and `Int` then body (path and query), stateless and
-    # stateful, with both result policies, through the existing overloads.
+    # stateful, with both result policies.
     var app = json_app()
     for s in _shapes():
         var target = s[0]

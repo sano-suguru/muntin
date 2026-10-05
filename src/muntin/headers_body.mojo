@@ -2,9 +2,9 @@
 
 `WithHeaders[B]` carries the request's header fields beside a body in the
 existing body slot of `App.post` (docs/ARCHITECTURE.md, "Typed header access
-decision (M3-012)"). It is not itself a `FromBody`: the body overloads and
-adapters in `app.mojo` accept `FromBody` or the private `_HeaderCarrier`, so
-a body alone never produces a carrier without the request's fields.
+decision (M3-012)"). It is not itself a `FromBody`: the body slot in
+`app.mojo` accepts `FromBody` or the private `_HeaderCarrier`, so a body
+alone never produces a carrier without the request's fields.
 """
 
 from .body import FromBody
@@ -13,8 +13,8 @@ from .json import _JsonBody
 
 
 trait _HeaderCarrier(Deinitable, Movable):
-    """Marks `WithHeaders`, so the body overloads and adapters in `app.mojo`
-    can tell a carrier at compile time (as `_JsonBody` marks `Json`).
+    """Marks `WithHeaders`, so the registration rules and body slot in
+    `app.mojo` can tell a carrier at compile time (as `_JsonBody` marks `Json`).
     Private; it adds nothing to `WithHeaders`'s public surface."""
 
     @staticmethod
@@ -33,8 +33,8 @@ struct WithHeaders[B: FromBody](
     """A request body and the request's header fields, as one `post` body.
 
     A handler declares `input: WithHeaders[B]` (or `var input`) where it
-    would declare a body `B`, on any of the eight body overloads of
-    `App.post`, stateless or stateful. `input.headers` is the request's
+    would declare a body `B`, in the body slot of `App.post`, stateless or
+    stateful. `input.headers` is the request's
     `Headers`: every field in order, with its casing, repeated names as
     separate fields and empty values kept; `get` matches names ASCII
     case-insensitively. Muntin chooses no status for these fields and gives

@@ -1,5 +1,5 @@
-# Must not compile: a malformed route literal on the ToResponse overload of
-# App.post (M2-008).
+# Must not compile: a malformed route literal on App.post for a handler
+# with a ToResponse result (M2-008).
 # Expected diagnostic (checked by scripts/check.sh): malformed route literal
 
 from muntin import App, FromBody, Response
