@@ -1,8 +1,8 @@
 # Must not compile: an error type that conforms to `ToErrorResponse` but not
 # `ToResponse`, returned from a handler (M2-013). The error contract never
 # makes a type a result: returning it needs `ToResponse`, as for any result
-# type, so the call matches no overload.
-# Expected diagnostic (checked by scripts/check.sh): argument type 'NotFound' does not conform to trait 'ToResponse'
+# type, so the result is outside every overload's `where` clause (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): identical(R, StringSpan[ImmStaticOrigin])
 
 from muntin import App, Response, ToErrorResponse
 

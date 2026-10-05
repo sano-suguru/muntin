@@ -1,6 +1,7 @@
 # Must not compile (M3-008): `Json[T]` is a result only when `T` conforms to
-# `ToJson`; otherwise no `get` overload accepts the handler.
-# Expected diagnostic (checked by scripts/check.sh): argument type 'Json[In]' does not conform to trait 'ToResponse'
+# `ToJson`; otherwise the result is outside every `get` overload's `where`
+# clause (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): identical(R, StringSpan[ImmStaticOrigin])
 from muntin import App
 from json_spike import FromJson, Json, JsonValue
 

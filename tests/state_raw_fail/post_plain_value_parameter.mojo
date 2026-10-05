@@ -1,5 +1,6 @@
-# Must not compile: a stateful raw handler declaring the plain value `Db` instead of `State[Db]` (M3-007).
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(db: Db, req: Request) thin -> Response' to 'def(State[S], var Request) raises Never thin -> Response'
+# Must not compile: a stateful raw handler declaring the plain value `Db`
+# instead of `State[Db]` (M3-007) selects no stateful overload (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(db: Db, req: Request) thin -> Response' to 'def(State[S], var A) raises Never thin -> Response'
 from muntin import App, Request, Response, State
 
 

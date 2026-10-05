@@ -162,15 +162,19 @@ for t in tests/compile_fail/*.mojo; do fixtures+=(route "$t"); done
 # ten-note cap, a generic slot needing rebind, and type-level asserts.
 # tests/with_headers_api_fail: production muntin.WithHeaders is not a
 # FromBody, takes only a FromBody body and is a post body only, last
-# (M3-013). tests/registration_fail: the premises of docs/ARCHITECTURE.md
-# "Registration structure decision (M3-014)": the note budget is per
-# method name, typed borrowed function values convert to no generic slot,
-# a generic slot is rebound only behind a type-equality assert, the rule
-# check guards the adapter's instantiation, and the result rule is a
-# `where` clause because no check in a generic body sees an origin's
-# identity (`Origin.equals` only in `where`; an exact `StaticString`
-# overload breaks `String` handlers; immutable-origin results rejected).
-must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail tests/header_access_fail tests/with_headers_api_fail tests/registration_fail)
+# (M3-013). tests/registration_fail: the toolchain premises of
+# docs/ARCHITECTURE.md "Registration structure decision (M3-014)": the note
+# budget is per method name, typed borrowed function values convert to no
+# generic slot (so the engine cannot sit behind the old signatures), a
+# rebind to another layout is rejected, and the result rule is a `where`
+# clause because no check in a generic body sees an origin's identity
+# (`Origin.equals` only in `where`; an exact `StaticString` overload breaks
+# `String` handlers). tests/registration_api_fail: production `get`/`post`
+# on generic-arity slots (M3-015): a typed borrowed `Int` value no longer
+# registers, the rule check guards the adapter's instantiation, the rebind
+# helper rejects a layout twin, and each of the twelve overloads rejects an
+# immutable-origin result through its `where` clause.
+must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail tests/header_access_fail tests/with_headers_api_fail tests/registration_fail tests/registration_api_fail)
 for dir in "${must_fail_dirs[@]}"; do
     for t in "$dir"/*.mojo; do fixtures+=(must_fail "$t"); done
 done

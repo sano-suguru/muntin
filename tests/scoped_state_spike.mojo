@@ -4,8 +4,10 @@
 # overloads to `App` itself, `app.get[route](handler, state)`; this models
 # A2, `app.with_state(state).get[route](handler)`, where they live on a
 # separate registrar type and `App` gains only `with_state`. It reuses A1's
-# `State`, `_Bound`, stateful adapters and route type, imports production's
-# adapters, route checks, matching and `_Erased` unchanged, and copies
+# `State`, `_Bound`, stateful adapters and route type, and A1's local
+# copies of production's typed adapters and response policies as of M3-014,
+# imports production's route checks, matching and `_Erased` unchanged, and
+# copies
 # production's ten overloads (signatures and asserts; the four body
 # overloads gain the `State` guard, worded for A2) so `App`'s overload set
 # and diagnostics are measured as production would have them. The
@@ -23,10 +25,11 @@
 from muntin import Request, Response, ToResponse
 from muntin.body import FromBody
 from muntin._handler_storage import _Erased
-from muntin.app import _bad_request, _converted, _handler_error, _text
-from muntin.app import _call_body, _call_int, _call_int_body, _call_none
-from muntin.app import _call_raw, _internal_error, _match, _parse_int
-from muntin.app import _path_params, _query_params, _query_value
+from muntin.app import _bad_request, _handler_error, _internal_error
+from muntin.app import _match, _parse_int, _path_params, _query_params
+from muntin.app import _query_value
+from state_spike import _Respond, _call_body, _call_int, _call_int_body
+from state_spike import _call_none, _call_raw, _converted, _text
 from state_spike import State, _Bound, _InjectedState, _StateRoute
 from state_spike import _call_state_body, _call_state_int
 from state_spike import _call_state_int_body, _call_state_none

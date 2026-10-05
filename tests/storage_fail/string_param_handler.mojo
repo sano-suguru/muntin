@@ -1,6 +1,7 @@
 # Must not compile: a String parameter. Not a supported handler shape, even
-# though the generic box could store it.
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def greet(name: String) thin -> String' to 'def(Int) raises Never thin -> String'
+# though the generic box could store it: `String` is no slot kind yet, so
+# get's one-slot overload reports the parameter (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a get handler's parameter is an Int route value or, for a raw handler, the Request
 
 from muntin import App
 

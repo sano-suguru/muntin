@@ -1,6 +1,6 @@
 # Must not compile: a handler declaring the plain value `Db` instead of
-# `State[Db]` (M3-006).
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(db: Db, body: Note) thin -> String' to 'def(State[S], var B) raises Never thin -> String'
+# `State[Db]` (M3-006) selects no stateful overload (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(db: Db, body: Note) thin -> String' to 'def(State[S], var A) raises Never thin -> String'
 from muntin import App, FromBody, State
 
 

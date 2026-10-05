@@ -1,5 +1,7 @@
-# Must not compile: a stateful raw handler with a parameter after the Request (M3-007).
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(db: State[Db], req: Request, n: Int) thin -> Response' to 'def(State[S], var Request) raises Never thin -> Response'
+# Must not compile: a stateful raw handler with a parameter after the Request
+# (M3-007). It selects get's stateful two-slot overload, whose rule check
+# reports the raw rule (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a stateful raw get handler takes State first, then only the Request, and returns Response
 from muntin import App, Request, Response, State
 
 

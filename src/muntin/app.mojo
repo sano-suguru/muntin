@@ -1,5 +1,8 @@
 """Muntin application: route registration and request dispatch."""
 
+from std.builtin.rebind import rebind_var
+from std.os import abort
+
 from ._handler_storage import _Erased
 from .body import FromBody
 from .headers_body import _HeaderCarrier
@@ -7,115 +10,132 @@ from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
 from .state import State, _InjectedState
 
-# Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
-# (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody` (or,
-# since M3-013, a `WithHeaders[B]` carrier, below); and on
-# both, the raw `def(var Request) -> Response` (M2-015). Mojo 1.1.0
-# function types spelled without `thin` are traits and cannot be stored, so
-# `App.get` takes thin function values; ordinary `def` functions convert
-# implicitly. Each function type is `thin raises E` with the error type `E`
-# inferred (M2-011, Mojo's "parametric raises"): `Never` for a non-raising
-# handler, `Error` for `raises`, the application's type for `raises T`.
-# `E` is inferred in every overload, so it never decides between them.
-# Each argument shape has one adapter below, which converts a matched
-# route's raw argument strings and calls the handler, and two registration
-# overloads, one per return policy (M2-008): a handler whose function type
-# converts to `def(...) thin -> String` (declared `-> String`, or
-# `-> StaticString` by implicit conversion) gets a 200 text response
-# (`_text`); a handler returning `R: ToResponse` (an application type, or
-# `Response`) gets `R.to_response()` (`_converted[R]`). The policy is a
-# compile-time parameter of the adapter, so extraction never looks at the
-# result type. The generic overloads bound `R` by the trait, so a
-# `String`-compatible result is never a candidate for them. The handler and
-# its adapter are stored together in an `_Erased` box
-# (`_handler_storage.mojo`), so dispatch is one call whatever the shape. Where a value comes from (path segment or query
-# key) is route data, not part of the shape, so `_call_int` serves both
-# `/users/{id}` and `/items?{limit}`. Whether a route takes the request body
-# is route data too (`_Route.body`): `App.handle` appends the body as the
-# last raw argument, after the route value if there is one, and
-# `_call_body`/`_call_int_body` convert it.
+# Registration (M3-015; docs/ARCHITECTURE.md, "Registration structure
+# decision (M3-014)" and "Registration on generic-arity slots in production
+# (M3-015)"): `get` and `post` each have one overload per request-slot
+# arity, 0 to 2, in a stateless and a stateful family. A request slot is a
+# handler parameter that comes from the request. The stateful family takes
+# a fixed leading `State[S]`, which is not a slot, and the state as the
+# registration's second argument, so the argument count separates the
+# families and no two overloads of a method accept the same handler. Every
+# slot is a generic `var A` (a plain `def` with a borrowed parameter
+# converts to it too), and its kind is decided at compile time from its type
+# alone (`_kind`): an `Int` route value, a body (`FromBody`, or a
+# `WithHeaders` carrier, below), the raw `Request`, a misplaced `State`, or
+# none. Shapes accepted today: `def()`, `def(Int)` and the raw
+# `def(var Request) -> Response` on `get`; `def(B)`, `def(Int, B)` and the
+# raw handler on `post`; the same after a leading `State[S]`.
+#
+# Mojo 1.1.0 function types spelled without `thin` are traits and cannot be
+# stored, so the overloads take thin function values; ordinary `def`
+# functions convert implicitly. Each function type is `thin raises E` with
+# `E` inferred (M2-011, Mojo's "parametric raises"): `Never` for a
+# non-raising handler, `Error` for `raises`, the application's type for
+# `raises T`. An explicitly typed function value spells every slot `var`
+# (`def(var Int) thin raises Never -> String`): a typed value with a
+# borrowed parameter converts to no generic slot
+# (tests/registration_fail/typed_value_to_owned_slot.mojo). A leading
+# `State[S]` keeps its spelling.
+#
+# The result type `R` is generic. Every overload accepts it only through
+# `where (R == String or R == StaticString or conforms_to(R, ToResponse))`,
+# which the compiler checks by identity at the call site: a check in the
+# body could not tell `StaticString` from other immutable-origin string
+# slices, because generic `==` keeps an origin's mutability but not its
+# identity (tests/registration_known_gaps/
+# generic_equality_ignores_origin_identity.mojo). `_respond` picks the
+# policy at compile time: `String` or `StaticString` is a 200 text
+# response, a `ToResponse` converts itself after the handler returns.
+#
+# Rules (`_rule`, `_check`, `_admits`): every other registration rule is a
+# compile-time assert with Muntin's message (`_check`), and the same rules
+# as one Bool (`_admits`) guard the adapter's instantiation. Without the
+# guard Mojo 1.1.0 reports the adapter's own failure before the rule's
+# message. Both read one ordered rule function, so they accept the same
+# shapes; if they ever disagree, the guard's `else` aborts at registration
+# rather than leaving a route unregistered. A call that selects no overload
+# (a wrong `State` convention, too many parameters, a result type outside
+# the `where` clause) keeps the compiler's candidate notes.
+#
+# Adapters: one per arity and family (`_call_0` to `_call_state_2`). Each
+# converts its slots in order (`_slot`), so a route value is converted
+# before the body; calls the handler alone in a `try`, whose error becomes
+# `_handler_error`; then applies `_respond`. A slot's raw argument index is
+# its position, because the only route value comes before the body.
+# `comptime if A == Int` does not refine `A` on Mojo 1.1.0, so a parsed
+# `Int`, a rebuilt `Request` and a text result reach their generic type
+# through the one rebind helper `_as`, which asserts type equality first
+# (the rebind alone accepts a different type of the same layout:
+# tests/registration_known_gaps/rebind_var_layout_twins.mojo), and
+# `scripts/check.sh` fails on any other rebind. The handler and its adapter
+# are stored together in an `_Erased` box (`_handler_storage.mojo`), so
+# dispatch is one call whatever the shape.
+# Where a route value comes from (path segment or query key) is route data,
+# not part of the shape. Whether a route takes the request body is route
+# data too (`_Route.body`): `App.handle` appends the body as the last raw
+# argument, after the route value if there is one.
 #
 # Raw handlers (M2-015, docs/ARCHITECTURE.md "Raw Request decision
-# (M2-014)"): the `get`/`post` overload taking `def(var Request) thin raises
-# E -> Response` has the parameter list `[E, path]`. On `post` a raw handler
-# also satisfies the generic body overload (`B = Request`, `R = Response`,
-# list `[B, E, R, path]`); Mojo's documented rule "shorter parameter list"
-# selects the raw overload (equal lists are ambiguous:
-# tests/raw_fail/equal_parameter_lists.mojo), so each raw overload's list
-# must stay strictly shorter than every body overload a raw handler can
-# satisfy. A raw route (`_Route.raw`) gets the request's method, path,
+# (M2-014)"): `Request` is a slot kind, so a raw handler selects the arity-1
+# overload (after `State[S]` in the stateful family) like any one-slot
+# handler, and its rule requires `Response` as the result and no
+# placeholder. A raw route (`_Route.raw`) gets the request's method, path,
 # query and body as its first four raw arguments, then each header field's
 # name and value (M3-005; docs/ARCHITECTURE.md "Headers decision (M3-002)",
-# R1), and nothing else runs; `_call_raw` rebuilds the `Request`, headers
-# included, and moves it into the handler. A typed route gets header
-# strings only when its body is a `WithHeaders[B]` carrier (below). The
-# body overloads' `not B == Request` guard only improves the message for
-# calls no overload accepts; it takes no part in selection.
+# R1), and nothing else runs; `_raw_request` rebuilds the `Request`,
+# headers included, and the adapter moves it into the handler. A typed
+# route gets header strings only when its body is a `WithHeaders[B]`
+# carrier (below).
 #
-# Stateful handlers (M3-003 for `get`, M3-006 for `post`;
-# docs/ARCHITECTURE.md "Application state decision (M3-001)"): a `get` or
-# `post` registration with a second argument, `(handler, state: State[S])`,
-# takes a handler whose first parameter is `State[S]` and whose rest is the
-# `def()` or `def(Int)` shape on `get`, or the `def(var B)` or
-# `def(Int, var B)` shape on `post`, bound and checked as its stateless
-# twin (plus the `State` guard below). Every M2 registration passes one
-# argument, so the two families never compete in overload resolution: the
-# argument count separates them, not ranking. `S` is inferred from both
-# arguments, so they must agree. The registration moves the handler and one
-# copy of the handle into the route's `_Erased` box as one `_Bound[H, S]`;
-# the stateful adapters borrow it and pass the handle by borrow, so a
-# request copies nothing, changes no reference count and allocates nothing
-# for the state. `State` conforms to the private marker `_InjectedState`:
-# the four stateless body overloads reject it as a body (a stateful handler
-# registered on `post` without its state), and the four stateful ones reject
-# a second `State` in the body slot. Like the `Request` guard, the marker
-# only improves the message of calls that already fail.
-#
-# Stateful raw handlers (M3-007): `get` and `post` each take
-# `(handler: def(State[S], var Request) thin raises E -> Response, state)`,
-# the raw shape with the state first, stored as `_Bound[H, S]` on a raw
-# route; `_call_state_raw` rebuilds the `Request` as `_call_raw` does
-# (`_raw_request`) and passes the handle by borrow. On `post` such a
-# handler also satisfies the stateful `ToResponse` body overload
-# (`B = Request`, `R = Response`, list `[S, B, E, R, path]`); the raw
-# overload's `[S, E, path]` is shorter, so the same rule selects it. On
-# `get` no other stateful overload takes a `Request`.
+# Stateful handlers (M3-003 for `get`, M3-006 for `post`, M3-007 for raw;
+# docs/ARCHITECTURE.md "Application state decision (M3-001)"): a
+# registration with a second argument, `(handler, state: State[S])`, takes
+# a handler whose first parameter is `State[S]` and whose slots follow,
+# bound and checked as the stateless shape of the same slots. `S` is
+# inferred from both arguments, so they must agree. The registration moves
+# the handler and one copy of the handle into the route's `_Erased` box as
+# one `_Bound[H, S]`; the stateful adapters borrow it and pass the handle by
+# borrow, so a request copies nothing, changes no reference count and
+# allocates nothing for the state. `State` conforms to the private marker
+# `_InjectedState`, so a `State` in a slot (a stateful handler registered
+# without its state, or a second `State`) is reported by its rule.
 #
 # Errors (M2-010, docs/ARCHITECTURE.md "Application-error decision"): a
-# request-side failure is answered 400 by the step that fails, before the
-# handler runs (query gathering in `App.handle`, `_parse_int` and
-# `from_body` in the adapters); a raw route has no such step. Only the
-# handler call sits in an adapter's handler `try`; whatever it raises goes to `_handler_error[E]`, and the
-# response policy runs only after it returns. `_handler_error` converts an
-# error whose declared type `E` conforms to `ToErrorResponse` (M2-012,
-# "Error-response decision") and answers every other one with a fixed 500.
+# request-side failure is answered by the step that fails, before the
+# handler runs (query gathering in `App.handle`, `_slot` in the adapters,
+# which raises the status as a `_Reject`); a raw route has no such step
+# except its rebuild, whose failure is the fixed 500. Only the handler call
+# sits in an adapter's handler `try`; whatever it raises goes to
+# `_handler_error[E]`, and the response policy runs only after it returns.
+# `_handler_error` converts an error whose declared type `E` conforms to
+# `ToErrorResponse` (M2-012, "Error-response decision") and answers every
+# other one with a fixed 500.
 #
 # JSON bodies (M3-009, docs/ARCHITECTURE.md "JSON codec decision (M3-008)"):
-# `Json[T]` is an ordinary `FromBody`, so the eight body overloads register
-# it unchanged; each sets `_Route.json` when `B` conforms to the private
-# marker `_JsonBody`. `FromBody.from_body` sees only the body, so the
-# request `Content-Type` is decided in `App.handle`, which appends a verdict
-# after the body for a JSON route only (`"1"` when the request has exactly
-# one `application/json` field, else empty; other routes' arguments are
-# unchanged). The four body adapters, for a JSON body only, answer 415
-# unless the arguments end with the verdict `"1"` at the expected position
-# (an exact arity check, so a body can never stand in for a missing
-# verdict), then 413 when the body is over 1 MiB, after the route value and
-# before `from_body`. Order on a JSON body route: 404, query 400
-# (`App.handle`), route-value 400, 415, 413, JSON 400 (`from_body`), handler.
+# `Json[T]` is an ordinary `FromBody` body slot; a route whose body conforms
+# to the private marker `_JsonBody` sets `_Route.json`. `FromBody.from_body`
+# sees only the body, so the request `Content-Type` is decided in
+# `App.handle`, which appends a verdict after the body for a JSON route only
+# (`"1"` when the request has exactly one `application/json` field, else
+# empty; other routes' arguments are unchanged). The body slot, for a JSON
+# body only, answers 415 unless the arguments end with the verdict `"1"` at
+# the expected position (an exact arity check, so a body can never stand in
+# for a missing verdict), then 413 when the body is over 1 MiB, after the
+# route value and before `from_body`. Order on a JSON body route: 404,
+# query 400 (`App.handle`), route-value 400, 415, 413, JSON 400
+# (`from_body`), handler.
 #
 # Header carriers (M3-013, docs/ARCHITECTURE.md "Typed header access decision
-# (M3-012)"): `WithHeaders[B]` (`headers_body.mojo`) is accepted in the body
-# slot of the eight body overloads without being a `FromBody`: their last
-# assert accepts `FromBody` or the private marker `_HeaderCarrier`, with its
-# message unchanged, and each sets `_Route.headers` for a carrier. For such
-# a route only, `App.handle` appends each request header field's name and
-# value after the body and the JSON verdict (the R1 transport raw routes
-# use). The four body adapters then rebuild the fields into a `Headers`
+# (M3-012)"): `WithHeaders[B]` (`headers_body.mojo`) is a body slot without
+# being a `FromBody`: `_kind` accepts `FromBody` or the private marker
+# `_HeaderCarrier`, and the route sets `_Route.headers` for a carrier. For
+# such a route only, `App.handle` appends each request header field's name
+# and value after the body and the JSON verdict (the R1 transport raw
+# routes use). The body slot then rebuilds the fields into a `Headers`
 # (`_carrier_fields`; a failure, which only the M3-002 `_fields` gap can
-# cause, is the fixed 500) and build the carrier with `B._from_parts`, which
-# converts the body with the inner `from_body` (a raise: 400). The carrier
-# forwards `_JsonBody` exactly when its body does, so a
+# cause, is the fixed 500) and builds the carrier with `B._from_parts`,
+# which converts the body with the inner `from_body` (a raise: 400). The
+# carrier forwards `_JsonBody` exactly when its body does, so a
 # `WithHeaders[Json[T]]` route keeps the order above; its arity check
 # allows only name and value pairs after the verdict, and every other JSON
 # body keeps the exact arity. Muntin chooses no status for the fields the
@@ -297,54 +317,276 @@ def _handler_error[E: Deinitable](var e: E) -> Response:
         return _internal_error()
 
 
-comptime _Respond[R: AnyType] = def(var R) thin -> Response
-"""How an adapter turns a handler result of type `R` into a `Response`."""
+struct _NoSlot:
+    """Stands for an absent request slot in `_rule`'s parameters."""
+
+    pass
 
 
-def _text(var result: String) -> Response:
-    """The `String` policy: a 200 text response."""
-    return Response.text(result^)
+# Request-slot kinds (`_kind`).
+comptime _ABSENT = 0
+comptime _INT = 1
+comptime _BODY = 2
+comptime _RAW = 3
+comptime _STATE = 4
+comptime _OTHER = 5
 
 
-def _converted[R: ToResponse](var result: R) -> Response:
-    """The `ToResponse` policy: the result converts itself, by move."""
-    return result^.to_response()
+def _kind[A: AnyType]() -> Int:
+    """The kind of a request slot of type `A`, from its type alone: type
+    equality (exact here, as these types carry no origin) for the types
+    that cannot conform to a Muntin trait, `conforms_to` for the rest."""
+    comptime if A == _NoSlot:
+        return _ABSENT
+    elif A == Int:
+        return _INT
+    elif A == Request:
+        return _RAW
+    elif conforms_to(A, _InjectedState):
+        return _STATE
+    elif conforms_to(A, FromBody) or conforms_to(A, _HeaderCarrier):
+        return _BODY
+    else:
+        return _OTHER
 
 
-# Adapter parameters are explicit (no `//`): they are passed as `call=` to
-# `_Erased.__init__`, where there is no runtime argument to infer them from.
-# Each adapter answers its own request-side 400s, then calls the handler
-# alone in a `try` (its error becomes `_handler_error`), then applies the
-# response policy. None of them raises.
+# Registration rules (`_rule`): `_OK`, or the first rule a shape breaks.
+comptime _OK = 0
+comptime _MALFORMED = 1
+comptime _PATH_TAKES_NONE = 2
+comptime _QUERY_TAKES_NONE = 3
+comptime _GET_INT_PLACES = 4
+comptime _GET_STATE_ARGUMENT = 5
+comptime _GET_RAW = 6
+comptime _GET_STATE_RAW = 7
+comptime _GET_BODY = 8
+comptime _GET_SLOT_KIND = 9
+comptime _GET_TWO_VALUES = 10
+comptime _POST_NO_BODY = 11
+comptime _POST_BODY_PLACES = 12
+comptime _POST_INT_BODY_PLACES = 13
+comptime _INT_AS_BODY = 14
+comptime _REQUEST_AS_BODY = 15
+comptime _STATE_REQUEST_AS_BODY = 16
+comptime _POST_STATE_ARGUMENT = 17
+comptime _ONE_STATE = 18
+comptime _BODY_TYPE = 19
+comptime _LAST_BODY_TYPE = 20
+comptime _POST_RAW = 21
+comptime _POST_STATE_RAW = 22
+comptime _POST_BODY_LAST = 23
+comptime _POST_SLOT_KIND = 24
 
 
-def _call_none[
-    E: Deinitable, R: Movable & Deinitable, respond: _Respond[R]
-](handler: def() thin raises E -> R, args: List[String]) -> Response:
-    var result: R
-    try:
-        result = handler()
-    except e:
-        return _handler_error(e^)
-    return respond(result^)
+def _takes_none(paths: Int, queries: Int) -> Int:
+    """The placeholder rule for a handler that takes no route value."""
+    if paths != 0:
+        return _PATH_TAKES_NONE
+    if queries != 0:
+        return _QUERY_TAKES_NONE
+    return _OK
 
 
-def _call_int[
-    E: Deinitable, R: Movable & Deinitable, respond: _Respond[R]
-](handler: def(Int) thin raises E -> R, args: List[String]) -> Response:
-    """Answers 400 itself, without calling `handler`, if the one argument is
-    not an integer."""
-    var id: Int
-    try:
-        id = _parse_int(args[0])
-    except:
-        return _bad_request()
-    var result: R
-    try:
-        result = handler(id)
-    except e:
-        return _handler_error(e^)
-    return respond(result^)
+def _get_rule(
+    stateful: Bool, k1: Int, k2: Int, response: Bool, paths: Int, queries: Int
+) -> Int:
+    """`get`'s rules for slot kinds `k1`, `k2` (`_ABSENT` when missing):
+    `def()`, `def(Int)` with exactly one placeholder, or the raw
+    `def(Request) -> Response` with none. A `State` slot comes first, then
+    a `Request` anywhere, a body, a parameter of no kind, two route values."""
+    if k1 == _STATE or k2 == _STATE:
+        return _ONE_STATE if stateful else _GET_STATE_ARGUMENT
+    if k1 == _RAW or k2 == _RAW:
+        if k1 != _RAW or k2 != _ABSENT or not response:
+            return _GET_STATE_RAW if stateful else _GET_RAW
+        return _takes_none(paths, queries)
+    if k1 == _BODY or k2 == _BODY:
+        return _GET_BODY
+    if k1 == _OTHER or k2 == _OTHER:
+        return _GET_SLOT_KIND
+    if k2 == _INT:
+        return _GET_TWO_VALUES
+    if k1 == _INT:
+        return _OK if paths + queries == 1 else _GET_INT_PLACES
+    return _takes_none(paths, queries)
+
+
+def _post_rule(
+    stateful: Bool, k1: Int, k2: Int, response: Bool, paths: Int, queries: Int
+) -> Int:
+    """`post`'s rules for slot kinds `k1`, `k2` (`_ABSENT` when missing):
+    `def(B)` with no placeholder, `def(Int, B)` with exactly one, or the raw
+    `def(Request) -> Response` with none. The order keeps the messages the
+    per-shape overloads gave before M3-015: for `def(X)`, the placeholders
+    and then `X`; for `def(Int, X)`, the placeholders and then `X`. A first
+    slot other than `Int` in a two-slot handler is reported before the
+    placeholders."""
+    if k1 == _ABSENT:
+        return _POST_NO_BODY
+    if k1 == _RAW:
+        if k2 != _ABSENT:
+            return _POST_STATE_RAW if stateful else _POST_RAW
+        if not response:
+            return _STATE_REQUEST_AS_BODY if stateful else _REQUEST_AS_BODY
+        return _takes_none(paths, queries)
+    var body = k1
+    if k2 != _ABSENT:
+        if k1 == _STATE:
+            return _ONE_STATE if stateful else _POST_STATE_ARGUMENT
+        if k1 == _BODY:
+            return _POST_BODY_LAST
+        if k1 == _OTHER:
+            return _POST_SLOT_KIND
+        if paths + queries != 1:
+            return _POST_INT_BODY_PLACES
+        body = k2
+    elif paths + queries != 0:
+        return _POST_BODY_PLACES
+    if body == _INT:
+        return _INT_AS_BODY
+    if body == _RAW:
+        return _STATE_REQUEST_AS_BODY if stateful else _REQUEST_AS_BODY
+    if body == _STATE:
+        return _ONE_STATE if stateful else _POST_STATE_ARGUMENT
+    if body != _BODY:
+        return _LAST_BODY_TYPE if stateful or k2 != _ABSENT else _BODY_TYPE
+    return _OK
+
+
+def _rule[
+    method: StaticString,
+    stateful: Bool,
+    path: StaticString,
+    R: AnyType,
+    A: AnyType,
+    B: AnyType,
+]() -> Int:
+    """The first registration rule a handler breaks, or `_OK`: `method` is
+    `"GET"` or `"POST"`, `stateful` the family, `A` and `B` the request
+    slots' types (`_NoSlot` when absent) and `R` the result type. The result
+    rule itself is each overload's `where` clause."""
+    var paths = _path_params(path)
+    var queries = _query_params(path)
+    if paths < 0 or queries < 0:
+        return _MALFORMED
+    var k1 = _kind[A]()
+    var k2 = _kind[B]()
+    if method == "GET":
+        return _get_rule(stateful, k1, k2, R == Response, paths, queries)
+    return _post_rule(stateful, k1, k2, R == Response, paths, queries)
+
+
+def _admits[
+    method: StaticString,
+    stateful: Bool,
+    path: StaticString,
+    R: AnyType,
+    A: AnyType,
+    B: AnyType,
+]() -> Bool:
+    """`_check` as one Bool: the guard of the adapter's instantiation."""
+    return _rule[method, stateful, path, R, A, B]() == _OK
+
+
+def _check[
+    method: StaticString,
+    stateful: Bool,
+    path: StaticString,
+    R: AnyType,
+    A: AnyType,
+    B: AnyType,
+]():
+    """Every registration rule as a compile-time assert with Muntin's
+    message. Messages that existed before M3-015 are kept for the same
+    rule; each new one names the method."""
+    comptime rule = _rule[method, stateful, path, R, A, B]()
+    comptime assert rule != _MALFORMED, "malformed route literal"
+    comptime assert (
+        rule != _PATH_TAKES_NONE
+    ), "route declares a path parameter but the handler takes none"
+    comptime assert (
+        rule != _QUERY_TAKES_NONE
+    ), "route declares a query parameter but the handler takes none"
+    comptime assert rule != _GET_INT_PLACES, (
+        "handler takes one Int parameter; route must declare exactly one"
+        " path or query parameter"
+    )
+    comptime assert rule != _GET_STATE_ARGUMENT, (
+        "State is injected application state; a stateful get handler takes"
+        " State first, and the state is the registration's second argument"
+    )
+    comptime assert (
+        rule != _GET_RAW
+    ), "a raw get handler takes only the Request and returns Response"
+    comptime assert rule != _GET_STATE_RAW, (
+        "a stateful raw get handler takes State first, then only the"
+        " Request, and returns Response"
+    )
+    comptime assert rule != _GET_BODY, "a get handler takes no request body"
+    comptime assert rule != _GET_SLOT_KIND, (
+        "a get handler's parameter is an Int route value or, for a raw"
+        " handler, the Request"
+    )
+    comptime assert (
+        rule != _GET_TWO_VALUES
+    ), "a get handler takes at most one Int route value"
+    comptime assert (
+        rule != _POST_NO_BODY
+    ), "a post handler takes the request body as its last parameter"
+    comptime assert rule != _POST_BODY_PLACES, (
+        "handler takes only the request body; route must declare no path"
+        " or query parameter"
+    )
+    comptime assert rule != _POST_INT_BODY_PLACES, (
+        "handler takes one Int parameter and the request body; route must"
+        " declare exactly one path or query parameter"
+    )
+    comptime assert rule != _INT_AS_BODY, (
+        "Int is a route-value type, never the request body; the body"
+        " parameter's type must conform to FromBody"
+    )
+    comptime assert rule != _REQUEST_AS_BODY, (
+        "Request is the whole request, not a body; a raw handler takes"
+        " only the Request and returns Response"
+    )
+    comptime assert rule != _STATE_REQUEST_AS_BODY, (
+        "Request is the whole request, not a body; a stateful raw handler"
+        " takes State first, then only the Request, and returns Response"
+    )
+    comptime assert rule != _POST_STATE_ARGUMENT, (
+        "State is injected application state, not the request body; a"
+        " stateful post handler takes State first and the body last, and"
+        " the state is the registration's second argument"
+    )
+    comptime assert (
+        rule != _ONE_STATE
+    ), "a handler takes at most one State, as its first parameter"
+    comptime assert rule != _BODY_TYPE, (
+        "the handler's parameter is the request body; its type must"
+        " conform to FromBody"
+    )
+    comptime assert rule != _LAST_BODY_TYPE, (
+        "the handler's last parameter is the request body; its type must"
+        " conform to FromBody"
+    )
+    comptime assert (
+        rule != _POST_RAW
+    ), "a raw post handler takes only the Request and returns Response"
+    comptime assert rule != _POST_STATE_RAW, (
+        "a stateful raw post handler takes State first, then only the"
+        " Request, and returns Response"
+    )
+    comptime assert (
+        rule != _POST_BODY_LAST
+    ), "a post handler takes one request body, as its last parameter"
+    comptime assert (
+        rule != _POST_SLOT_KIND
+    ), "a post handler's parameter before the body is an Int route value"
+    comptime assert rule == _OK, "internal: a registration rule has no message"
+
+
+comptime _GUARD_DRIFT = "registration rule check and guard disagree"
+"""The guard's `else`: `_admits` rejected a shape `_check` accepted."""
 
 
 def _json_status[B: AnyType](args: List[String], body_at: Int) -> Int:
@@ -395,114 +637,6 @@ def _carrier_fields[
     return headers^
 
 
-def _call_body[
-    B: Movable & Deinitable,
-    E: Deinitable,
-    R: Movable & Deinitable,
-    respond: _Respond[R],
-](handler: def(var B) thin raises E -> R, args: List[String]) -> Response:
-    """Converts the one argument, the request body, and moves the value
-    into `handler`: an ordinary body with `B.from_body`; a `WithHeaders`
-    carrier, after its fields are rebuilt, through `B._from_parts`, which
-    converts the inner body (below). Answers 400 itself, without calling
-    `handler`, if `from_body` raises. For a JSON body (`_JsonBody`) that is
-    not a carrier it first answers 415 unless the arguments are exactly the
-    body and the `Content-Type` verdict `"1"` (the arity check keeps a route registered
-    without its `json` flag from reading a body `"1"` as the verdict), then
-    413 for a body over 1 MiB, without parsing it (`_json_status`).
-
-    For a `WithHeaders[B]` carrier (`_HeaderCarrier`) the arguments go on
-    with the header fields' names and values. After the JSON steps for a
-    `Json[T]` inner body (`_json_status` allows the trailing pairs), the
-    fields are rebuilt into `Headers` (a failure is the fixed 500), then the
-    carrier is built with `B._from_parts`, whose inner `from_body` raise is
-    the same 400.
-
-    `B` is refined here rather than bounded, as in `App.post`: forwarding a
-    handler with an explicit `B` to a callee that requires `B: FromBody`
-    fails on Mojo 1.1.0 (docs/ARCHITECTURE.md, "Argument extraction
-    decision (M2-005)").
-    """
-    comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
-    comptime if conforms_to(B, _JsonBody):
-        var status = _json_status[B](args, 0)
-        if status != 0:
-            return _json_answer(status)
-    var body: B
-    comptime if conforms_to(B, _HeaderCarrier):
-        var fields: Headers
-        try:
-            fields = _carrier_fields[B](args, 0)
-        except:
-            return _internal_error()  # only the `_fields` gap gets here
-        try:
-            body = B._from_parts(args[0], fields^)
-        except:
-            return _bad_request()
-    else:
-        comptime assert conforms_to(B, FromBody)
-        try:
-            body = B.from_body(args[0])
-        except:
-            return _bad_request()
-    var result: R
-    try:
-        result = handler(body^)
-    except e:
-        return _handler_error(e^)
-    return respond(result^)
-
-
-def _call_int_body[
-    B: Movable & Deinitable,
-    E: Deinitable,
-    R: Movable & Deinitable,
-    respond: _Respond[R],
-](handler: def(Int, var B) thin raises E -> R, args: List[String]) -> Response:
-    """Converts the route value (`args[0]`) as `_call_int` does, then the
-    body (`args[1]`) as `_call_body` does, and calls `handler` with both, in
-    that order.
-
-    A bad route value answers 400 before the body is converted; a
-    `from_body` raise answers 400. Neither calls `handler`. For a JSON body
-    the 415 and 413 steps of `_call_body` run between the two. `B` is
-    refined as in `_call_body`.
-    """
-    comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
-    var id: Int
-    try:
-        id = _parse_int(args[0])
-    except:
-        return _bad_request()
-    comptime if conforms_to(B, _JsonBody):
-        var status = _json_status[B](args, 1)
-        if status != 0:
-            return _json_answer(status)
-    var body: B
-    comptime if conforms_to(B, _HeaderCarrier):
-        var fields: Headers
-        try:
-            fields = _carrier_fields[B](args, 1)
-        except:
-            return _internal_error()  # only the `_fields` gap gets here
-        try:
-            body = B._from_parts(args[1], fields^)
-        except:
-            return _bad_request()
-    else:
-        comptime assert conforms_to(B, FromBody)
-        try:
-            body = B.from_body(args[1])
-        except:
-            return _bad_request()
-    var result: R
-    try:
-        result = handler(id, body^)
-    except e:
-        return _handler_error(e^)
-    return respond(result^)
-
-
 def _raw_request(args: List[String]) raises -> Request:
     """Rebuilds a raw route's `Request` from its method, path, query and
     body (`args[0]` to `args[3]`) and its header fields (name and value
@@ -525,29 +659,165 @@ def _raw_request(args: List[String]) raises -> Request:
     return Request(args[0], target, args[3], headers^)
 
 
-def _call_raw[
-    E: Deinitable
-](
-    handler: def(var Request) thin raises E -> Response,
-    args: List[String],
-) -> Response:
-    """Rebuilds the matched `Request` (`_raw_request`) and moves it into
-    `handler`; no typed extraction runs, so this adapter answers no 400 of
-    its own. A rebuild failure is the fixed 500. A raise becomes
-    `_handler_error[E]`, as for every typed shape; the result is the
-    response, unconverted.
-    """
-    var request: Request
-    try:
-        request = _raw_request(args)
-    except:
+def _as[T: Movable, A: Movable](var value: T) -> A:
+    """`value` as `A`, which must equal `T`: the one rebind in `src/muntin`.
+
+    `comptime if A == Int` does not refine `A` on Mojo 1.1.0
+    (tests/header_access_fail/generic_slot_does_not_refine.mojo), so a
+    generic slot or result reaches its type through a rebind, and the rebind
+    alone also accepts a different type with the same layout
+    (tests/registration_known_gaps/rebind_var_layout_twins.mojo). The
+    equality asserted here is exact for origin-free types (`Int`,
+    `String`, `Request`); generic `==` ignores which origin a slice has, so
+    for a `StaticString` result exactness comes from the overloads' `where`
+    clause. `scripts/check.sh` requires the rebind on the line after this
+    assert and nowhere else."""
+    comptime assert A == T, "rebind requires generic type equality"
+    return rebind_var[A](value^)
+
+
+@fieldwise_init
+struct _Reject(Movable):
+    """A slot's request-side failure: the status answered before the
+    handler runs (400, 413, 415, or 500 for a rebuild failure)."""
+
+    var status: Int
+
+
+def _rejected(r: _Reject) -> Response:
+    """The response for a `_Reject`."""
+    if r.status == 400:
+        return _bad_request()
+    if r.status == 500:
         return _internal_error()
-    var result: Response
+    return _json_answer(r.status)
+
+
+def _slot[
+    A: Movable & Deinitable, at: Int
+](args: List[String]) raises _Reject -> A:
+    """Converts the request slot of type `A` whose raw argument is
+    `args[at]`. An `Int` route value is parsed (`_parse_int`; 400 if
+    invalid). A raw `Request` is rebuilt from all the arguments
+    (`_raw_request`; a failure is the fixed 500). A body is converted with
+    `A.from_body` (400 if it raises); for a JSON body (`_JsonBody`) the 415
+    and 413 steps run first (`_json_status`); a `WithHeaders` carrier has
+    its header fields rebuilt (the fixed 500 on failure) and is built
+    through `A._from_parts`, whose inner `from_body` raise is the same 400.
+
+    `A` is refined here rather than bounded: forwarding a handler with an
+    explicit body type to a callee that requires `FromBody` fails on Mojo
+    1.1.0 (docs/ARCHITECTURE.md, "Argument extraction decision (M2-005)").
+    """
+    comptime if A == Int:
+        try:
+            return _as[Int, A](_parse_int(args[at]))
+        except:
+            raise _Reject(400)
+    elif A == Request:
+        try:
+            return _as[Request, A](_raw_request(args))
+        except:
+            raise _Reject(500)
+    else:
+        comptime assert conforms_to(A, FromBody) or conforms_to(
+            A, _HeaderCarrier
+        )
+        comptime if conforms_to(A, _JsonBody):
+            var status = _json_status[A](args, at)
+            if status != 0:
+                raise _Reject(status)
+        comptime if conforms_to(A, _HeaderCarrier):
+            var fields: Headers
+            try:
+                fields = _carrier_fields[A](args, at)
+            except:
+                raise _Reject(500)  # only the `_fields` gap gets here
+            try:
+                return A._from_parts(args[at], fields^)
+            except:
+                raise _Reject(400)
+        else:
+            comptime assert conforms_to(A, FromBody)
+            try:
+                return A.from_body(args[at])
+            except:
+                raise _Reject(400)
+
+
+def _respond[R: Movable & Deinitable](var result: R) -> Response:
+    """The result policy, chosen at compile time from `R`: `String` or
+    `StaticString` is a 200 text response, a `ToResponse` converts itself
+    by move (a `Response` unchanged). The overloads' `where` clause admits
+    no other `R`."""
+    comptime if R == String:
+        return Response.text(_as[R, String](result^))
+    elif R == StaticString:
+        return Response.text(String(_as[R, StaticString](result^)))
+    else:
+        comptime assert conforms_to(R, ToResponse)
+        return result^.to_response()
+
+
+# Adapter parameters are explicit (no `//`): they are passed as `call=` to
+# `_Erased.__init__`, where there is no runtime argument to infer them from.
+# Each adapter answers its slots' request-side failures, then calls the
+# handler alone in a `try` (its error becomes `_handler_error`), then
+# applies `_respond`. None of them raises.
+
+
+def _call_0[
+    E: Deinitable, R: Movable & Deinitable
+](handler: def() thin raises E -> R, args: List[String]) -> Response:
+    var result: R
     try:
-        result = handler(request^)
+        result = handler()
     except e:
         return _handler_error(e^)
-    return result^
+    return _respond(result^)
+
+
+def _call_1[
+    A: Movable & Deinitable, E: Deinitable, R: Movable & Deinitable
+](handler: def(var A) thin raises E -> R, args: List[String]) -> Response:
+    """Converts the one slot (`_slot`) and moves it into `handler`; a
+    failure answers without calling it."""
+    var a: A
+    try:
+        a = _slot[A, 0](args)
+    except r:
+        return _rejected(r)
+    var result: R
+    try:
+        result = handler(a^)
+    except e:
+        return _handler_error(e^)
+    return _respond(result^)
+
+
+def _call_2[
+    A: Movable & Deinitable,
+    B: Movable & Deinitable,
+    E: Deinitable,
+    R: Movable & Deinitable,
+](
+    handler: def(var A, var B) thin raises E -> R, args: List[String]
+) -> Response:
+    """Converts the two slots in order, so a bad route value answers before
+    the body is converted, and moves both into `handler`."""
+    var a: A
+    var b: B
+    try:
+        a = _slot[A, 0](args)
+        b = _slot[B, 1](args)
+    except r:
+        return _rejected(r)
+    var result: R
+    try:
+        result = handler(a^, b^)
+    except e:
+        return _handler_error(e^)
+    return _respond(result^)
 
 
 struct _Bound[H: Movable & Deinitable, S: Movable & Deinitable](Movable):
@@ -564,160 +834,84 @@ struct _Bound[H: Movable & Deinitable, S: Movable & Deinitable](Movable):
         self.state = state.copy()
 
 
-def _call_state_none[
-    S: Movable & Deinitable,
-    E: Deinitable,
-    R: Movable & Deinitable,
-    respond: _Respond[R],
+def _call_state_0[
+    S: Movable & Deinitable, E: Deinitable, R: Movable & Deinitable
 ](
     bound: _Bound[def(State[S]) thin raises E -> R, S], args: List[String]
 ) -> Response:
-    """`_call_none` with the route's state handle passed first, by borrow."""
+    """`_call_0` with the route's state handle passed first, by borrow."""
     var result: R
     try:
         result = bound.handler(bound.state)
     except e:
         return _handler_error(e^)
-    return respond(result^)
+    return _respond(result^)
 
 
-def _call_state_int[
+def _call_state_1[
     S: Movable & Deinitable,
+    A: Movable & Deinitable,
     E: Deinitable,
     R: Movable & Deinitable,
-    respond: _Respond[R],
 ](
-    bound: _Bound[def(State[S], Int) thin raises E -> R, S],
+    bound: _Bound[def(State[S], var A) thin raises E -> R, S],
     args: List[String],
 ) -> Response:
-    """`_call_int` with the route's state handle passed first, by borrow:
-    answers 400 itself, without calling `handler`, if the one argument is
-    not an integer."""
-    var id: Int
+    """`_call_1` with the route's state handle passed first, by borrow."""
+    var a: A
     try:
-        id = _parse_int(args[0])
-    except:
-        return _bad_request()
+        a = _slot[A, 0](args)
+    except r:
+        return _rejected(r)
     var result: R
     try:
-        result = bound.handler(bound.state, id)
+        result = bound.handler(bound.state, a^)
     except e:
         return _handler_error(e^)
-    return respond(result^)
+    return _respond(result^)
 
 
-def _call_state_body[
+def _call_state_2[
     S: Movable & Deinitable,
+    A: Movable & Deinitable,
     B: Movable & Deinitable,
     E: Deinitable,
     R: Movable & Deinitable,
-    respond: _Respond[R],
 ](
-    bound: _Bound[def(State[S], var B) thin raises E -> R, S],
+    bound: _Bound[def(State[S], var A, var B) thin raises E -> R, S],
     args: List[String],
 ) -> Response:
-    """`_call_body` with the route's state handle passed first, by borrow:
-    answers 400 itself, without calling `handler`, if `from_body` raises,
-    after the same 415 and 413 steps for a JSON body."""
-    comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
-    comptime if conforms_to(B, _JsonBody):
-        var status = _json_status[B](args, 0)
-        if status != 0:
-            return _json_answer(status)
-    var body: B
-    comptime if conforms_to(B, _HeaderCarrier):
-        var fields: Headers
-        try:
-            fields = _carrier_fields[B](args, 0)
-        except:
-            return _internal_error()  # only the `_fields` gap gets here
-        try:
-            body = B._from_parts(args[0], fields^)
-        except:
-            return _bad_request()
-    else:
-        comptime assert conforms_to(B, FromBody)
-        try:
-            body = B.from_body(args[0])
-        except:
-            return _bad_request()
+    """`_call_2` with the route's state handle passed first, by borrow."""
+    var a: A
+    var b: B
+    try:
+        a = _slot[A, 0](args)
+        b = _slot[B, 1](args)
+    except r:
+        return _rejected(r)
     var result: R
     try:
-        result = bound.handler(bound.state, body^)
+        result = bound.handler(bound.state, a^, b^)
     except e:
         return _handler_error(e^)
-    return respond(result^)
+    return _respond(result^)
 
 
-def _call_state_int_body[
-    S: Movable & Deinitable,
-    B: Movable & Deinitable,
-    E: Deinitable,
-    R: Movable & Deinitable,
-    respond: _Respond[R],
-](
-    bound: _Bound[def(State[S], Int, var B) thin raises E -> R, S],
-    args: List[String],
-) -> Response:
-    """`_call_int_body` with the route's state handle passed first, by
-    borrow: a bad route value (`args[0]`) answers 400 before the body
-    (`args[1]`) is converted, then a JSON body gets the 415 and 413 steps,
-    a `from_body` raise answers 400, and none calls `handler`."""
-    comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
-    var id: Int
-    try:
-        id = _parse_int(args[0])
-    except:
-        return _bad_request()
-    comptime if conforms_to(B, _JsonBody):
-        var status = _json_status[B](args, 1)
-        if status != 0:
-            return _json_answer(status)
-    var body: B
-    comptime if conforms_to(B, _HeaderCarrier):
-        var fields: Headers
-        try:
-            fields = _carrier_fields[B](args, 1)
-        except:
-            return _internal_error()  # only the `_fields` gap gets here
-        try:
-            body = B._from_parts(args[1], fields^)
-        except:
-            return _bad_request()
-    else:
-        comptime assert conforms_to(B, FromBody)
-        try:
-            body = B.from_body(args[1])
-        except:
-            return _bad_request()
-    var result: R
-    try:
-        result = bound.handler(bound.state, id, body^)
-    except e:
-        return _handler_error(e^)
-    return respond(result^)
-
-
-def _call_state_raw[
-    S: Movable & Deinitable, E: Deinitable
-](
-    bound: _Bound[def(State[S], var Request) thin raises E -> Response, S],
-    args: List[String],
-) -> Response:
-    """`_call_raw` with the route's state handle passed first, by borrow:
-    the same rebuilt `Request`, moved into the handler, no 400 of its own,
-    and the response unconverted."""
-    var request: Request
-    try:
-        request = _raw_request(args)
-    except:
-        return _internal_error()
-    var result: Response
-    try:
-        result = bound.handler(bound.state, request^)
-    except e:
-        return _handler_error(e^)
-    return result^
+def _route[
+    Last: AnyType
+](method: String, path: StaticString, var handler: _Erased) -> _Route:
+    """The route for a handler whose last request slot has type `Last`
+    (`_NoSlot` for none): a body route, JSON or carrier when `Last` is such
+    a body, raw when it is the `Request`."""
+    return _Route(
+        method,
+        path,
+        handler^,
+        body=_kind[Last]() == _BODY,
+        json=conforms_to(Last, _JsonBody),
+        headers=conforms_to(Last, _HeaderCarrier),
+        raw=_kind[Last]() == _RAW,
+    )
 
 
 struct _Route(Movable):
@@ -783,792 +977,358 @@ struct App(Movable):
         self._routes = List[_Route]()
 
     def get[
-        E: Deinitable, //, path: StaticString
-    ](mut self, handler: def() thin raises E -> String):
-        """Registers `handler` for `GET path`; its String result becomes a
-        200 text response. `handler` may be non-raising or declare `raises`
-        or `raises T`. A raise is answered by the error's
-        `to_error_response()` if the declared error type `E` conforms to
-        `ToErrorResponse`; anything else it raises becomes a fixed 500
-        `Internal Server Error` (the error's text is never sent)."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert (
-            _path_params(path) == 0
-        ), "route declares a path parameter but the handler takes none"
-        comptime assert (
-            _query_params(path) == 0
-        ), "route declares a query parameter but the handler takes none"
-        self._routes.append(
-            _Route(
-                "GET",
-                path,
-                _Erased.__init__[call=_call_none[E, String, _text]](handler),
+        E: Deinitable, R: Movable & Deinitable, //, path: StaticString
+    ](mut self, handler: def() thin raises E -> R) where (
+        R == String or R == StaticString or conforms_to(R, ToResponse)
+    ):
+        """Registers `handler`, which takes no parameter, for `GET path`;
+        `path` declares no path or query parameter.
+
+        A `String` or `StaticString` result becomes a 200 text response; a
+        result conforming to `ToResponse` (an application type, or
+        `Response`) converts itself with `to_response()` after `handler`
+        returns. `handler` may be non-raising or declare `raises` or
+        `raises T`. A raise skips the result conversion and is answered by
+        the error's `to_error_response()` if the declared error type `E`
+        conforms to `ToErrorResponse`; anything else it raises becomes a
+        fixed 500 `Internal Server Error` (the error's text is never sent).
+        """
+        _check["GET", False, path, R, _NoSlot, _NoSlot]()
+        comptime if _admits["GET", False, path, R, _NoSlot, _NoSlot]():
+            self._routes.append(
+                _route[_NoSlot](
+                    "GET", path, _Erased.__init__[call=_call_0[E, R]](handler)
+                )
             )
-        )
+        else:
+            abort(_GUARD_DRIFT)
 
     def get[
-        E: Deinitable, R: ToResponse, //, path: StaticString
-    ](mut self, handler: def() thin raises E -> R):
-        """Registers `handler` for `GET path`; its result converts itself
-        with `R.to_response()` after `handler` returns. `R` is an
-        application type conforming to `ToResponse`, or `Response`. If
-        `handler` raises, the result conversion does not run: the error
-        converts if its declared type conforms to `ToErrorResponse`, else
-        the response is the fixed 500, even if the raised value conforms to
-        `ToResponse`."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert (
-            _path_params(path) == 0
-        ), "route declares a path parameter but the handler takes none"
-        comptime assert (
-            _query_params(path) == 0
-        ), "route declares a query parameter but the handler takes none"
-        self._routes.append(
-            _Route(
-                "GET",
-                path,
-                _Erased.__init__[call=_call_none[E, R, _converted[R]]](handler),
+        A: Movable & Deinitable,
+        E: Deinitable,
+        R: Movable & Deinitable,
+        //,
+        path: StaticString,
+    ](mut self, handler: def(var A) thin raises E -> R) where (
+        R == String or R == StaticString or conforms_to(R, ToResponse)
+    ):
+        """Registers `handler`, which takes one request parameter, for
+        `GET path`.
+
+        An `Int` parameter is a route value: `path` declares exactly one
+        parameter, a `{name}` segment (`/users/{id}`) or a `{key}` query
+        item (`/items?{limit}`), whose value is converted to `Int` and
+        passed by position (names are not checked against the handler); a
+        missing, duplicated or non-integer value yields 400 without calling
+        `handler`. A `Request` parameter makes a raw handler, which returns
+        `Response`: `path` declares no parameter, the handler receives the
+        whole request (method, path, query, body and header fields as
+        received), Muntin runs no typed extraction, so it answers no 400
+        before `handler`, and the `Response` is the answer. The parameter
+        may be borrowed or `var`; an explicitly typed function value spells
+        it `var` (`def(var Int) thin raises Never -> String`). Results and
+        raises are handled as for `get` on `def()`."""
+        _check["GET", False, path, R, A, _NoSlot]()
+        comptime if _admits["GET", False, path, R, A, _NoSlot]():
+            self._routes.append(
+                _route[A](
+                    "GET",
+                    path,
+                    _Erased.__init__[call=_call_1[A, E, R]](handler),
+                )
             )
-        )
+        else:
+            abort(_GUARD_DRIFT)
 
     def get[
-        E: Deinitable, //, path: StaticString
-    ](mut self, handler: def(Int) thin raises E -> String):
-        """Registers `handler` for `GET path`, where `path` declares exactly
-        one parameter: a `{name}` segment (`/users/{id}`) or a `{key}` query
-        item (`/items?{limit}`). Its value is converted to `Int` and passed
-        to `handler` by position (names are not checked against the handler);
-        a missing, duplicated or non-integer value yields 400 without calling
-        `handler`. A raise is converted or the fixed 500, as for `get` on
-        `def()`."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 1, (
-            "handler takes one Int parameter; route must declare exactly one"
-            " path or query parameter"
-        )
-        self._routes.append(
-            _Route(
-                "GET",
-                path,
-                _Erased.__init__[call=_call_int[E, String, _text]](handler),
+        A: Movable & Deinitable,
+        B: Movable & Deinitable,
+        E: Deinitable,
+        R: Movable & Deinitable,
+        //,
+        path: StaticString,
+    ](mut self, handler: def(var A, var B) thin raises E -> R) where (
+        R == String or R == StaticString or conforms_to(R, ToResponse)
+    ):
+        """The two-parameter `get` shape. No such handler is accepted
+        today (a `get` handler takes at most one `Int` route value and no
+        request body); a registration reports the rule it breaks."""
+        _check["GET", False, path, R, A, B]()
+        comptime if _admits["GET", False, path, R, A, B]():
+            self._routes.append(
+                _route[B](
+                    "GET",
+                    path,
+                    _Erased.__init__[call=_call_2[A, B, E, R]](handler),
+                )
             )
-        )
+        else:
+            abort(_GUARD_DRIFT)
 
     def get[
-        E: Deinitable, R: ToResponse, //, path: StaticString
-    ](mut self, handler: def(Int) thin raises E -> R):
-        """Registers `handler` for `GET path` with one `Int` route value, as
-        the `String` overload; its result converts itself with
-        `R.to_response()` after `handler` returns. A missing, duplicated or
-        non-integer value yields 400 without calling `handler` or the
-        conversion; a raise from `handler` skips the conversion and is
-        converted by `ToErrorResponse` or the fixed 500."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 1, (
-            "handler takes one Int parameter; route must declare exactly one"
-            " path or query parameter"
-        )
-        self._routes.append(
-            _Route(
-                "GET",
-                path,
-                _Erased.__init__[call=_call_int[E, R, _converted[R]]](handler),
+        S: Movable & Deinitable,
+        E: Deinitable,
+        R: Movable & Deinitable,
+        //,
+        path: StaticString,
+    ](
+        mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
+        """Registers the stateful `handler` for `GET path`, as `get` on
+        `def()`. `handler`'s one parameter is `State[S]`, the type of
+        `state`; the route keeps one copy of `state`, and each request
+        passes it to `handler` by borrow."""
+        _check["GET", True, path, R, _NoSlot, _NoSlot]()
+        comptime if _admits["GET", True, path, R, _NoSlot, _NoSlot]():
+            self._routes.append(
+                _route[_NoSlot](
+                    "GET",
+                    path,
+                    _Erased.__init__[call=_call_state_0[S, E, R]](
+                        _Bound(handler, state)
+                    ),
+                )
             )
-        )
+        else:
+            abort(_GUARD_DRIFT)
 
     def get[
-        E: Deinitable, //, path: StaticString
-    ](mut self, handler: def(var Request) thin raises E -> Response):
-        """Registers the raw `handler` for `GET path`: it receives the
-        whole `Request` (`method`, `path`, `query` and `body` as received)
-        and its `Response` is the answer, unconverted. `handler` may declare
-        `req: Request` or `var req: Request`. `path` declares no path or
-        query parameter; Muntin runs no typed extraction after the route
-        matches, so it answers no 400 before `handler`. A raise is converted
-        or the fixed 500, as for `get` on `def()`.
-
-        Keep this overload's parameter list strictly shorter than every body
-        overload a `Request -> Response` handler satisfies: Mojo selects it
-        over them by the shorter list (module comment)."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert (
-            _path_params(path) == 0
-        ), "route declares a path parameter but the handler takes none"
-        comptime assert (
-            _query_params(path) == 0
-        ), "route declares a query parameter but the handler takes none"
-        self._routes.append(
-            _Route(
-                "GET",
-                path,
-                _Erased.__init__[call=_call_raw[E]](handler),
-                raw=True,
-            )
-        )
-
-    def get[
-        S: Movable & Deinitable, E: Deinitable, //, path: StaticString
+        S: Movable & Deinitable,
+        A: Movable & Deinitable,
+        E: Deinitable,
+        R: Movable & Deinitable,
+        //,
+        path: StaticString,
     ](
         mut self,
-        handler: def(State[S]) thin raises E -> String,
+        handler: def(State[S], var A) thin raises E -> R,
         state: State[S],
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
-        `def()`: its String result becomes a 200 text response, and a raise
-        is converted or the fixed 500. `handler`'s one parameter is
+        `def(var A)` after the state: an `Int` route value, or the raw
+        `Request` returning `Response`. The state is passed as for `get` on
+        `def(State[S])`; a leading `State[S]` keeps its spelling in a typed
+        function value."""
+        _check["GET", True, path, R, A, _NoSlot]()
+        comptime if _admits["GET", True, path, R, A, _NoSlot]():
+            self._routes.append(
+                _route[A](
+                    "GET",
+                    path,
+                    _Erased.__init__[call=_call_state_1[S, A, E, R]](
+                        _Bound(handler, state)
+                    ),
+                )
+            )
+        else:
+            abort(_GUARD_DRIFT)
+
+    def get[
+        S: Movable & Deinitable,
+        A: Movable & Deinitable,
+        B: Movable & Deinitable,
+        E: Deinitable,
+        R: Movable & Deinitable,
+        //,
+        path: StaticString,
+    ](
+        mut self,
+        handler: def(State[S], var A, var B) thin raises E -> R,
+        state: State[S],
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
+        """The stateful two-parameter `get` shape. No such handler is
+        accepted today; a registration reports the rule it breaks."""
+        _check["GET", True, path, R, A, B]()
+        comptime if _admits["GET", True, path, R, A, B]():
+            self._routes.append(
+                _route[B](
+                    "GET",
+                    path,
+                    _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
+                        _Bound(handler, state)
+                    ),
+                )
+            )
+        else:
+            abort(_GUARD_DRIFT)
+
+    def post[
+        E: Deinitable, R: Movable & Deinitable, //, path: StaticString
+    ](mut self, handler: def() thin raises E -> R) where (
+        R == String or R == StaticString or conforms_to(R, ToResponse)
+    ):
+        """The parameterless `post` shape. No such handler is accepted
+        today (a `post` handler takes the request body last, or is raw); a
+        registration reports that rule."""
+        _check["POST", False, path, R, _NoSlot, _NoSlot]()
+        comptime if _admits["POST", False, path, R, _NoSlot, _NoSlot]():
+            self._routes.append(
+                _route[_NoSlot](
+                    "POST", path, _Erased.__init__[call=_call_0[E, R]](handler)
+                )
+            )
+        else:
+            abort(_GUARD_DRIFT)
+
+    def post[
+        A: Movable & Deinitable,
+        E: Deinitable,
+        R: Movable & Deinitable,
+        //,
+        path: StaticString,
+    ](mut self, handler: def(var A) thin raises E -> R) where (
+        R == String or R == StaticString or conforms_to(R, ToResponse)
+    ):
+        """Registers `handler`, which takes one request parameter, for
+        `POST path`; `path` declares no path or query parameter.
+
+        The parameter is the request body: an application type conforming
+        to `FromBody`, converted with `from_body` before `handler` runs (a
+        conversion failure yields 400 without calling `handler`), or a
+        `WithHeaders[B2]` carrier with `B2: FromBody`, which has no
+        `from_body`: its fields are rebuilt (the fixed 500 on failure) and
+        it is built through `_from_parts`, which converts the inner body
+        with `B2.from_body` (400 on failure); the handler also receives the
+        request's header fields, for which Muntin chooses no status. A
+        `Json[T]` body, alone or in a carrier, is first answered 415 unless
+        the request has exactly one `application/json` `Content-Type`, then
+        413 when it is over 1 MiB. The body may be declared `body: B` or
+        `var body: B`, and `B` may be move-only. A `Request` parameter
+        instead makes a raw handler, as for `get`. Results and raises are
+        handled as for `get` on `def()`; this holds for every body shape,
+        stateless or stateful."""
+        _check["POST", False, path, R, A, _NoSlot]()
+        comptime if _admits["POST", False, path, R, A, _NoSlot]():
+            self._routes.append(
+                _route[A](
+                    "POST",
+                    path,
+                    _Erased.__init__[call=_call_1[A, E, R]](handler),
+                )
+            )
+        else:
+            abort(_GUARD_DRIFT)
+
+    def post[
+        A: Movable & Deinitable,
+        B: Movable & Deinitable,
+        E: Deinitable,
+        R: Movable & Deinitable,
+        //,
+        path: StaticString,
+    ](mut self, handler: def(var A, var B) thin raises E -> R) where (
+        R == String or R == StaticString or conforms_to(R, ToResponse)
+    ):
+        """Registers `handler` for `POST path` with an `Int` route value
+        and then the request body, where `path` declares exactly one route
+        value, a `{name}` segment (`/users/{id}`) or a `{key}` query item
+        (`/users?{id}`). Binding is positional: the route value is the
+        first parameter, as for `get`, and the body the second, as for
+        `post` on `def(var A)`. An invalid matched path value, or a
+        missing, duplicated, empty or invalid query value, yields 400
+        before the body is converted (a missing path segment does not match
+        the route: 404); the body's own steps follow; neither calls
+        `handler`. The route value may be borrowed or `var`; an explicitly
+        typed function value spells both parameters `var`. Results and
+        raises as for `get` on `def()`."""
+        _check["POST", False, path, R, A, B]()
+        comptime if _admits["POST", False, path, R, A, B]():
+            self._routes.append(
+                _route[B](
+                    "POST",
+                    path,
+                    _Erased.__init__[call=_call_2[A, B, E, R]](handler),
+                )
+            )
+        else:
+            abort(_GUARD_DRIFT)
+
+    def post[
+        S: Movable & Deinitable,
+        E: Deinitable,
+        R: Movable & Deinitable,
+        //,
+        path: StaticString,
+    ](
+        mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
+        """The stateful parameterless `post` shape. No such handler is
+        accepted today; a registration reports the body rule."""
+        _check["POST", True, path, R, _NoSlot, _NoSlot]()
+        comptime if _admits["POST", True, path, R, _NoSlot, _NoSlot]():
+            self._routes.append(
+                _route[_NoSlot](
+                    "POST",
+                    path,
+                    _Erased.__init__[call=_call_state_0[S, E, R]](
+                        _Bound(handler, state)
+                    ),
+                )
+            )
+        else:
+            abort(_GUARD_DRIFT)
+
+    def post[
+        S: Movable & Deinitable,
+        A: Movable & Deinitable,
+        E: Deinitable,
+        R: Movable & Deinitable,
+        //,
+        path: StaticString,
+    ](
+        mut self,
+        handler: def(State[S], var A) thin raises E -> R,
+        state: State[S],
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
+        """Registers the stateful `handler` for `POST path`, as `post` on
+        `def(var A)` after the state: the request body, or the raw
+        `Request` returning `Response`. `handler`'s first parameter is
         `State[S]`, the type of `state`; the route keeps one copy of
         `state`, and each request passes it to `handler` by borrow."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert (
-            _path_params(path) == 0
-        ), "route declares a path parameter but the handler takes none"
-        comptime assert (
-            _query_params(path) == 0
-        ), "route declares a query parameter but the handler takes none"
-        self._routes.append(
-            _Route(
-                "GET",
-                path,
-                _Erased.__init__[call=_call_state_none[S, E, String, _text]](
-                    _Bound(handler, state)
-                ),
+        _check["POST", True, path, R, A, _NoSlot]()
+        comptime if _admits["POST", True, path, R, A, _NoSlot]():
+            self._routes.append(
+                _route[A](
+                    "POST",
+                    path,
+                    _Erased.__init__[call=_call_state_1[S, A, E, R]](
+                        _Bound(handler, state)
+                    ),
+                )
             )
-        )
-
-    def get[
-        S: Movable & Deinitable,
-        E: Deinitable,
-        R: ToResponse,
-        //,
-        path: StaticString,
-    ](mut self, handler: def(State[S]) thin raises E -> R, state: State[S]):
-        """Registers the stateful `handler` for `GET path`, as the `String`
-        overload; its result converts itself with `R.to_response()` after
-        `handler` returns, as for `get` on `def() -> R`."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert (
-            _path_params(path) == 0
-        ), "route declares a path parameter but the handler takes none"
-        comptime assert (
-            _query_params(path) == 0
-        ), "route declares a query parameter but the handler takes none"
-        self._routes.append(
-            _Route(
-                "GET",
-                path,
-                _Erased.__init__[call=_call_state_none[S, E, R, _converted[R]]](
-                    _Bound(handler, state)
-                ),
-            )
-        )
-
-    def get[
-        S: Movable & Deinitable, E: Deinitable, //, path: StaticString
-    ](
-        mut self,
-        handler: def(State[S], Int) thin raises E -> String,
-        state: State[S],
-    ):
-        """Registers the stateful `handler` for `GET path`, as `get` on
-        `def(Int)`: `path` declares exactly one path or query parameter,
-        converted to `Int` and passed after the state, and a missing,
-        duplicated or non-integer value yields 400 without calling
-        `handler`. The state is passed as for `get` on `def(State[S])`."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 1, (
-            "handler takes one Int parameter; route must declare exactly one"
-            " path or query parameter"
-        )
-        self._routes.append(
-            _Route(
-                "GET",
-                path,
-                _Erased.__init__[call=_call_state_int[S, E, String, _text]](
-                    _Bound(handler, state)
-                ),
-            )
-        )
-
-    def get[
-        S: Movable & Deinitable,
-        E: Deinitable,
-        R: ToResponse,
-        //,
-        path: StaticString,
-    ](
-        mut self,
-        handler: def(State[S], Int) thin raises E -> R,
-        state: State[S],
-    ):
-        """Registers the stateful `handler` for `GET path` with one `Int`
-        route value, as the `String` overload; its result converts itself
-        with `R.to_response()` after `handler` returns. A 400 calls neither
-        `handler` nor the conversion; a raise skips the conversion."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 1, (
-            "handler takes one Int parameter; route must declare exactly one"
-            " path or query parameter"
-        )
-        self._routes.append(
-            _Route(
-                "GET",
-                path,
-                _Erased.__init__[call=_call_state_int[S, E, R, _converted[R]]](
-                    _Bound(handler, state)
-                ),
-            )
-        )
-
-    def get[
-        S: Movable & Deinitable, E: Deinitable, //, path: StaticString
-    ](
-        mut self,
-        handler: def(State[S], var Request) thin raises E -> Response,
-        state: State[S],
-    ):
-        """Registers the stateful raw `handler` for `GET path`, as the raw
-        `get`: it receives the whole `Request` after the state and its
-        `Response` is the answer, unconverted; `path` declares no path or
-        query parameter, and no typed extraction runs. `handler`'s first
-        parameter is `State[S]`, the type of `state`; the route keeps one
-        copy of `state`, and each request passes it to `handler` by
-        borrow."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert (
-            _path_params(path) == 0
-        ), "route declares a path parameter but the handler takes none"
-        comptime assert (
-            _query_params(path) == 0
-        ), "route declares a query parameter but the handler takes none"
-        self._routes.append(
-            _Route(
-                "GET",
-                path,
-                _Erased.__init__[call=_call_state_raw[S, E]](
-                    _Bound(handler, state)
-                ),
-                raw=True,
-            )
-        )
-
-    def post[
-        B: Movable & Deinitable, E: Deinitable, //, path: StaticString
-    ](mut self, handler: def(var B) thin raises E -> String):
-        """Registers `handler` for `POST path`, where `handler`'s one
-        parameter is the request body and `path` declares no path or query
-        parameter. An ordinary body `B` is an application type conforming
-        to `FromBody`, converted with `B.from_body` before `handler` runs; a
-        conversion failure yields 400 without calling `handler`. A handler
-        may declare `body: B` or `var body: B`; `B` may be move-only. A
-        raise is converted or the fixed 500, as for `get` on `def()`.
-
-        `B` may instead be a `WithHeaders[B2]` carrier with `B2: FromBody`,
-        which has no `from_body`: its fields are rebuilt (the fixed 500 on
-        failure) and it is built through `_from_parts`, which converts the
-        inner body with `B2.from_body` (400 on failure). The handler also
-        receives the request's header fields, for which Muntin chooses no
-        status (a `Json[T]` inner body keeps its `Content-Type` 415 step).
-        This holds for every body overload, stateless or stateful."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 0, (
-            "handler takes only the request body; route must declare no path"
-            " or query parameter"
-        )
-        comptime assert not B == Int, (
-            "Int is a route-value type, never the request body; the body"
-            " parameter's type must conform to FromBody"
-        )
-        comptime assert not B == Request, (
-            "Request is the whole request, not a body; a raw handler takes"
-            " only the Request and returns Response"
-        )
-        comptime assert not conforms_to(B, _InjectedState), (
-            "State is injected application state, not the request body; a"
-            " stateful post handler takes State first and the body last, and"
-            " the state is the registration's second argument"
-        )
-        comptime assert conforms_to(B, FromBody) or conforms_to(
-            B, _HeaderCarrier
-        ), (
-            "the handler's parameter is the request body; its type must"
-            " conform to FromBody"
-        )
-        self._routes.append(
-            _Route(
-                "POST",
-                path,
-                _Erased.__init__[call=_call_body[B, E, String, _text]](handler),
-                body=True,
-                json=conforms_to(B, _JsonBody),
-                headers=conforms_to(B, _HeaderCarrier),
-            )
-        )
-
-    def post[
-        B: Movable & Deinitable,
-        E: Deinitable,
-        R: ToResponse,
-        //,
-        path: StaticString,
-    ](mut self, handler: def(var B) thin raises E -> R):
-        """Registers `handler` for `POST path` with the request body as its
-        one parameter, as the `String` overload; its result converts itself
-        with `R.to_response()` after `handler` returns. A conversion failure
-        of the body yields 400 without calling `handler` or the result
-        conversion; a raise from `handler` skips the conversion and is
-        converted by `ToErrorResponse` or the fixed 500."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 0, (
-            "handler takes only the request body; route must declare no path"
-            " or query parameter"
-        )
-        comptime assert not B == Int, (
-            "Int is a route-value type, never the request body; the body"
-            " parameter's type must conform to FromBody"
-        )
-        comptime assert not B == Request, (
-            "Request is the whole request, not a body; a raw handler takes"
-            " only the Request and returns Response"
-        )
-        comptime assert not conforms_to(B, _InjectedState), (
-            "State is injected application state, not the request body; a"
-            " stateful post handler takes State first and the body last, and"
-            " the state is the registration's second argument"
-        )
-        comptime assert conforms_to(B, FromBody) or conforms_to(
-            B, _HeaderCarrier
-        ), (
-            "the handler's parameter is the request body; its type must"
-            " conform to FromBody"
-        )
-        self._routes.append(
-            _Route(
-                "POST",
-                path,
-                _Erased.__init__[call=_call_body[B, E, R, _converted[R]]](
-                    handler
-                ),
-                body=True,
-                json=conforms_to(B, _JsonBody),
-                headers=conforms_to(B, _HeaderCarrier),
-            )
-        )
-
-    def post[
-        B: Movable & Deinitable, E: Deinitable, //, path: StaticString
-    ](mut self, handler: def(Int, var B) thin raises E -> String):
-        """Registers `handler` for `POST path`, where `path` declares exactly
-        one route value, a `{name}` segment (`/users/{id}`) or a `{key}`
-        query item (`/users?{id}`), and the request body follows it. Binding
-        is positional: the route value is the first parameter, as for
-        `get`, and the body the second, as for the body-only `post`. An
-        invalid matched path value, or a missing, duplicated, empty or
-        invalid query value, yields 400 before the body is converted (a
-        missing path segment does not match the route: 404); a body
-        conversion failure yields 400; neither calls `handler`. A raise is
-        converted or the fixed 500, as for `get` on `def()`."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 1, (
-            "handler takes one Int parameter and the request body; route must"
-            " declare exactly one path or query parameter"
-        )
-        comptime assert not B == Int, (
-            "Int is a route-value type, never the request body; the body"
-            " parameter's type must conform to FromBody"
-        )
-        comptime assert not B == Request, (
-            "Request is the whole request, not a body; a raw handler takes"
-            " only the Request and returns Response"
-        )
-        comptime assert not conforms_to(B, _InjectedState), (
-            "State is injected application state, not the request body; a"
-            " stateful post handler takes State first and the body last, and"
-            " the state is the registration's second argument"
-        )
-        comptime assert conforms_to(B, FromBody) or conforms_to(
-            B, _HeaderCarrier
-        ), (
-            "the handler's last parameter is the request body; its type must"
-            " conform to FromBody"
-        )
-        self._routes.append(
-            _Route(
-                "POST",
-                path,
-                _Erased.__init__[call=_call_int_body[B, E, String, _text]](
-                    handler
-                ),
-                body=True,
-                json=conforms_to(B, _JsonBody),
-                headers=conforms_to(B, _HeaderCarrier),
-            )
-        )
-
-    def post[
-        B: Movable & Deinitable,
-        E: Deinitable,
-        R: ToResponse,
-        //,
-        path: StaticString,
-    ](mut self, handler: def(Int, var B) thin raises E -> R):
-        """Registers `handler` for `POST path` with one route value and the
-        request body, as the `String` overload; its result converts itself
-        with `R.to_response()` after `handler` returns. A 400 calls neither
-        `handler` nor the result conversion; a raise from `handler` skips
-        the conversion and is converted by `ToErrorResponse` or the fixed
-        500."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 1, (
-            "handler takes one Int parameter and the request body; route must"
-            " declare exactly one path or query parameter"
-        )
-        comptime assert not B == Int, (
-            "Int is a route-value type, never the request body; the body"
-            " parameter's type must conform to FromBody"
-        )
-        comptime assert not B == Request, (
-            "Request is the whole request, not a body; a raw handler takes"
-            " only the Request and returns Response"
-        )
-        comptime assert not conforms_to(B, _InjectedState), (
-            "State is injected application state, not the request body; a"
-            " stateful post handler takes State first and the body last, and"
-            " the state is the registration's second argument"
-        )
-        comptime assert conforms_to(B, FromBody) or conforms_to(
-            B, _HeaderCarrier
-        ), (
-            "the handler's last parameter is the request body; its type must"
-            " conform to FromBody"
-        )
-        self._routes.append(
-            _Route(
-                "POST",
-                path,
-                _Erased.__init__[call=_call_int_body[B, E, R, _converted[R]]](
-                    handler
-                ),
-                body=True,
-                json=conforms_to(B, _JsonBody),
-                headers=conforms_to(B, _HeaderCarrier),
-            )
-        )
-
-    def post[
-        E: Deinitable, //, path: StaticString
-    ](mut self, handler: def(var Request) thin raises E -> Response):
-        """Registers the raw `handler` for `POST path`: it receives the
-        whole `Request` (`method`, `path`, `query` and `body` as received)
-        and its `Response` is the answer, unconverted. `handler` may declare
-        `req: Request` or `var req: Request`. `path` declares no path or
-        query parameter; Muntin runs no typed extraction after the route
-        matches, so it answers no 400 before `handler`. A raise is converted
-        or the fixed 500, as for `get` on `def()`.
-
-        Keep this overload's parameter list strictly shorter than every body
-        overload a `Request -> Response` handler satisfies: Mojo selects it
-        over them by the shorter list (module comment)."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert (
-            _path_params(path) == 0
-        ), "route declares a path parameter but the handler takes none"
-        comptime assert (
-            _query_params(path) == 0
-        ), "route declares a query parameter but the handler takes none"
-        self._routes.append(
-            _Route(
-                "POST",
-                path,
-                _Erased.__init__[call=_call_raw[E]](handler),
-                raw=True,
-            )
-        )
+        else:
+            abort(_GUARD_DRIFT)
 
     def post[
         S: Movable & Deinitable,
+        A: Movable & Deinitable,
         B: Movable & Deinitable,
         E: Deinitable,
+        R: Movable & Deinitable,
         //,
         path: StaticString,
     ](
         mut self,
-        handler: def(State[S], var B) thin raises E -> String,
+        handler: def(State[S], var A, var B) thin raises E -> R,
         state: State[S],
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `POST path`, as `post` on
-        `def(var B)`: the request body is converted before `handler` runs
-        (an ordinary body with `B.from_body`, a carrier as there, whose
-        rebuild failure is the fixed 500; a conversion failure is 400
-        without calling it), its
-        String result becomes a 200 text response, and a raise is converted
-        or the fixed 500. `handler`'s first parameter is `State[S]`, the
-        type of `state`, and its last the body; the route keeps one copy of
-        `state`, and each request passes it to `handler` by borrow."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 0, (
-            "handler takes only the request body; route must declare no path"
-            " or query parameter"
-        )
-        comptime assert not B == Int, (
-            "Int is a route-value type, never the request body; the body"
-            " parameter's type must conform to FromBody"
-        )
-        comptime assert not B == Request, (
-            "Request is the whole request, not a body; a stateful raw handler"
-            " takes State first, then only the Request, and returns Response"
-        )
-        comptime assert not conforms_to(
-            B, _InjectedState
-        ), "a handler takes at most one State, as its first parameter"
-        comptime assert conforms_to(B, FromBody) or conforms_to(
-            B, _HeaderCarrier
-        ), (
-            "the handler's last parameter is the request body; its type must"
-            " conform to FromBody"
-        )
-        self._routes.append(
-            _Route(
-                "POST",
-                path,
-                _Erased.__init__[call=_call_state_body[S, B, E, String, _text]](
-                    _Bound(handler, state)
-                ),
-                body=True,
-                json=conforms_to(B, _JsonBody),
-                headers=conforms_to(B, _HeaderCarrier),
+        `def(var A, var B)` after the state: an `Int` route value, then the
+        request body. The state is passed as for `post` on
+        `def(State[S], var A)`."""
+        _check["POST", True, path, R, A, B]()
+        comptime if _admits["POST", True, path, R, A, B]():
+            self._routes.append(
+                _route[B](
+                    "POST",
+                    path,
+                    _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
+                        _Bound(handler, state)
+                    ),
+                )
             )
-        )
-
-    def post[
-        S: Movable & Deinitable,
-        B: Movable & Deinitable,
-        E: Deinitable,
-        R: ToResponse,
-        //,
-        path: StaticString,
-    ](
-        mut self,
-        handler: def(State[S], var B) thin raises E -> R,
-        state: State[S],
-    ):
-        """Registers the stateful `handler` for `POST path` with the request
-        body after the state, as the `String` overload; its result converts
-        itself with `R.to_response()` after `handler` returns, as for `post`
-        on `def(var B) -> R`."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 0, (
-            "handler takes only the request body; route must declare no path"
-            " or query parameter"
-        )
-        comptime assert not B == Int, (
-            "Int is a route-value type, never the request body; the body"
-            " parameter's type must conform to FromBody"
-        )
-        comptime assert not B == Request, (
-            "Request is the whole request, not a body; a stateful raw handler"
-            " takes State first, then only the Request, and returns Response"
-        )
-        comptime assert not conforms_to(
-            B, _InjectedState
-        ), "a handler takes at most one State, as its first parameter"
-        comptime assert conforms_to(B, FromBody) or conforms_to(
-            B, _HeaderCarrier
-        ), (
-            "the handler's last parameter is the request body; its type must"
-            " conform to FromBody"
-        )
-        self._routes.append(
-            _Route(
-                "POST",
-                path,
-                _Erased.__init__[
-                    call=_call_state_body[S, B, E, R, _converted[R]]
-                ](_Bound(handler, state)),
-                body=True,
-                json=conforms_to(B, _JsonBody),
-                headers=conforms_to(B, _HeaderCarrier),
-            )
-        )
-
-    def post[
-        S: Movable & Deinitable,
-        B: Movable & Deinitable,
-        E: Deinitable,
-        //,
-        path: StaticString,
-    ](
-        mut self,
-        handler: def(State[S], Int, var B) thin raises E -> String,
-        state: State[S],
-    ):
-        """Registers the stateful `handler` for `POST path`, as `post` on
-        `def(Int, var B)`: `path` declares exactly one path or query
-        parameter, converted to `Int` and passed after the state, and the
-        body comes last. An invalid route value yields 400 before the body
-        is converted; a body conversion failure yields 400; neither calls
-        `handler`. The state is passed as for `post` on
-        `def(State[S], var B)`."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 1, (
-            "handler takes one Int parameter and the request body; route must"
-            " declare exactly one path or query parameter"
-        )
-        comptime assert not B == Int, (
-            "Int is a route-value type, never the request body; the body"
-            " parameter's type must conform to FromBody"
-        )
-        comptime assert not B == Request, (
-            "Request is the whole request, not a body; a stateful raw handler"
-            " takes State first, then only the Request, and returns Response"
-        )
-        comptime assert not conforms_to(
-            B, _InjectedState
-        ), "a handler takes at most one State, as its first parameter"
-        comptime assert conforms_to(B, FromBody) or conforms_to(
-            B, _HeaderCarrier
-        ), (
-            "the handler's last parameter is the request body; its type must"
-            " conform to FromBody"
-        )
-        self._routes.append(
-            _Route(
-                "POST",
-                path,
-                _Erased.__init__[
-                    call=_call_state_int_body[S, B, E, String, _text]
-                ](_Bound(handler, state)),
-                body=True,
-                json=conforms_to(B, _JsonBody),
-                headers=conforms_to(B, _HeaderCarrier),
-            )
-        )
-
-    def post[
-        S: Movable & Deinitable,
-        B: Movable & Deinitable,
-        E: Deinitable,
-        R: ToResponse,
-        //,
-        path: StaticString,
-    ](
-        mut self,
-        handler: def(State[S], Int, var B) thin raises E -> R,
-        state: State[S],
-    ):
-        """Registers the stateful `handler` for `POST path` with one route
-        value and the request body after the state, as the `String`
-        overload; its result converts itself with `R.to_response()` after
-        `handler` returns. A 400 calls neither `handler` nor the result
-        conversion; a raise skips the conversion."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert _path_params(path) + _query_params(path) == 1, (
-            "handler takes one Int parameter and the request body; route must"
-            " declare exactly one path or query parameter"
-        )
-        comptime assert not B == Int, (
-            "Int is a route-value type, never the request body; the body"
-            " parameter's type must conform to FromBody"
-        )
-        comptime assert not B == Request, (
-            "Request is the whole request, not a body; a stateful raw handler"
-            " takes State first, then only the Request, and returns Response"
-        )
-        comptime assert not conforms_to(
-            B, _InjectedState
-        ), "a handler takes at most one State, as its first parameter"
-        comptime assert conforms_to(B, FromBody) or conforms_to(
-            B, _HeaderCarrier
-        ), (
-            "the handler's last parameter is the request body; its type must"
-            " conform to FromBody"
-        )
-        self._routes.append(
-            _Route(
-                "POST",
-                path,
-                _Erased.__init__[
-                    call=_call_state_int_body[S, B, E, R, _converted[R]]
-                ](_Bound(handler, state)),
-                body=True,
-                json=conforms_to(B, _JsonBody),
-                headers=conforms_to(B, _HeaderCarrier),
-            )
-        )
-
-    def post[
-        S: Movable & Deinitable, E: Deinitable, //, path: StaticString
-    ](
-        mut self,
-        handler: def(State[S], var Request) thin raises E -> Response,
-        state: State[S],
-    ):
-        """Registers the stateful raw `handler` for `POST path`, as the raw
-        `post`: it receives the whole `Request` after the state and its
-        `Response` is the answer, unconverted; `path` declares no path or
-        query parameter, and no typed extraction runs. The state is passed
-        as for `get` on `def(State[S], var Request)`.
-
-        Keep this overload's parameter list strictly shorter than the
-        stateful body overloads' a `(State[S], Request) -> Response` handler
-        satisfies: Mojo selects it over them by the shorter list (module
-        comment)."""
-        comptime assert (
-            _path_params(path) >= 0 and _query_params(path) >= 0
-        ), "malformed route literal"
-        comptime assert (
-            _path_params(path) == 0
-        ), "route declares a path parameter but the handler takes none"
-        comptime assert (
-            _query_params(path) == 0
-        ), "route declares a query parameter but the handler takes none"
-        self._routes.append(
-            _Route(
-                "POST",
-                path,
-                _Erased.__init__[call=_call_state_raw[S, E]](
-                    _Bound(handler, state)
-                ),
-                raw=True,
-            )
-        )
+        else:
+            abort(_GUARD_DRIFT)
 
     def handle(self, request: Request) -> Response:
         """Dispatches `request` through the application's routes.

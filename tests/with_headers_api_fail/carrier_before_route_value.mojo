@@ -1,8 +1,8 @@
-# Must not compile: a carrier before the route value. The carrier is a
-# body, and the body is the handler's last parameter, so
-# `def(WithHeaders[B], Int)` matches no `post` overload (M3-013;
-# docs/ARCHITECTURE.md, "Typed header access decision (M3-012)").
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def update_note(input: WithHeaders[Note], id: Int) thin -> String' to 'def(Int, var B) raises Never thin -> String'
+# Must not compile: a carrier before the route value. The carrier is a body,
+# and the body is the handler's last parameter, so post's two-slot overload
+# reports it (M3-013, M3-015; docs/ARCHITECTURE.md, "Typed header access
+# decision (M3-012)").
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler takes one request body, as its last parameter
 
 from muntin import App, FromBody, WithHeaders
 

@@ -1,6 +1,7 @@
 # Must not compile: the handler borrows the route's handle read-only; `mut db:
-# State[Db]` does not convert to the registered function type (M3-006).
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(mut db: State[Db], id: Int, body: Note) thin -> String' to 'def(State[S], Int, var B) raises Never thin -> String'
+# State[Db]` does not convert to the registered function type (M3-006), so the
+# call selects no overload (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(mut db: State[Db], id: Int, body: Note) thin -> String' to 'def(State[S], var A, var B) raises Never thin -> String'
 from muntin import App, FromBody, State
 
 

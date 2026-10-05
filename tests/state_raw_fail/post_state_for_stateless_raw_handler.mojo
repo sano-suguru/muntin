@@ -1,5 +1,6 @@
-# Must not compile: a state argument for a raw handler that takes none has no overload; the state is never silently ignored (M3-007).
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(req: Request) thin -> Response' to 'def(State[S], var Request) raises Never thin -> Response'
+# Must not compile: a state argument for a raw handler that takes none selects
+# no overload; the state is never silently ignored (M3-007, M3-015).
+# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(req: Request) thin -> Response' to 'def(State[S], var A) raises Never thin -> Response'
 from muntin import App, Request, Response, State
 
 

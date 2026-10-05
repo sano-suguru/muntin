@@ -5,10 +5,11 @@
 # fields; if a module imports anything but `_Erased` or `_Shared` from it;
 # if the package root exports it; if the module imports anything but the
 # standard library and `.http`; or if it names request or body data (M2-006) or result/error
-# conversion (M2-013). A confinement guard, not a safety proof: the invariant
-# itself is in the module docstring and docs/ARCHITECTURE.md "Handler storage
-# decision (M2)". tests/ is not checked
-# (spikes and storage tests use these operations on purpose).
+# conversion (M2-013); or if `rebind_var` appears anywhere but the one guarded
+# rebind in app.mojo (M3-015, below). A confinement guard, not a safety proof:
+# the invariant itself is in the module docstring and docs/ARCHITECTURE.md
+# "Handler storage decision (M2)". tests/ is not checked (spikes and storage
+# tests use these operations on purpose).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -65,7 +66,40 @@ if grep -nE 'ToResponse|to_response|ToErrorResponse|to_error_response' "$storage
     status=1
 fi
 
+# The one rebind (M3-015): `rebind_var` also accepts a different type with
+# the same layout, so generic slots and results are rebound only through
+# app.mojo's helper, right after its type-equality assert. Exactly one
+# `rebind_var[` in src/muntin, storage module, comments and docstrings
+# included; it follows `comptime assert A == T`; and only app.mojo imports
+# from `std.builtin.rebind`, as exactly `from std.builtin.rebind import
+# rebind_var`, and names `rebind_var` at all.
+app=$dir/app.mojo
+rebinds="$(grep -rnF --include='*.mojo' 'rebind_var[' "$dir" || true)"
+if [[ "$(grep -c . <<<"$rebinds")" -ne 1 ]]; then
+    printf '%s\n' "$rebinds"
+    echo "error: src/muntin must contain exactly one 'rebind_var[' (the helper in $app)" >&2
+    status=1
+else
+    file="${rebinds%%:*}"
+    rest="${rebinds#*:}"
+    line="${rest%%:*}"
+    if [[ "$file" != "$app" ]] ||
+        ! sed -n "$((line - 1))p" "$file" | grep -qE '^[[:space:]]*comptime assert A == T\b'; then
+        printf '%s\n' "$rebinds"
+        echo "error: the one 'rebind_var[' must be in $app, on the line after 'comptime assert A == T'" >&2
+        status=1
+    fi
+fi
+if grep -rnE --include='*.mojo' 'rebind_var|builtin\.rebind' "$dir" | grep -v "^$app:"; then
+    echo "error: only $app may import or name rebind_var" >&2
+    status=1
+fi
+if grep -nE 'builtin\.rebind' "$app" | grep -vE '^[0-9]+:from std\.builtin\.rebind import rebind_var$'; then
+    echo "error: $app imports from std.builtin.rebind only as 'from std.builtin.rebind import rebind_var'" >&2
+    status=1
+fi
+
 if ((status == 0)); then
-    echo "ok: unsafe handler storage confined to $storage"
+    echo "ok: unsafe handler storage confined to $storage; one guarded rebind in $app"
 fi
 exit "$status"

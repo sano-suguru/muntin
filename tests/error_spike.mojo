@@ -4,8 +4,9 @@
 # their error types, so a typed error crosses a module boundary as it would
 # in a real application and this module never names it. Handlers are stored
 # in the production `_Erased` box, unchanged; route matching, `Int`
-# conversion, query gathering, `FromBody`, `ToResponse` and the response
-# policies are production's own. check.sh builds it through that test
+# conversion, query gathering, `FromBody` and `ToResponse` are production's
+# own, and the response policies are local copies of production's as of
+# M3-014 (below the imports). check.sh builds it through that test
 # (--Werror) and, without the application module, through
 # tests/error_lib_only/driver.mojo; test.sh runs it. Decision and evidence:
 # docs/ARCHITECTURE.md, "Application-error decision (M2-010)". Must-not-
@@ -28,9 +29,27 @@
 
 from muntin import FromBody, Request, Response, ToResponse
 from muntin._handler_storage import _Erased
-from muntin.app import _Respond, _bad_request, _converted, _text
+from muntin.app import _bad_request
 from muntin.app import _match, _parse_int, _path_params, _query_params
 from muntin.app import _query_value
+
+# Local copies of production's response policies as of M3-014
+# (src/muntin/app.mojo before M3-015 replaced them with one adapter per
+# request-slot arity), unchanged.
+
+
+comptime _Respond[R: AnyType] = def(var R) thin -> Response
+"""How an adapter turns a handler result of type `R` into a `Response`."""
+
+
+def _text(var result: String) -> Response:
+    """The `String` policy: a 200 text response."""
+    return Response.text(result^)
+
+
+def _converted[R: ToResponse](var result: R) -> Response:
+    """The `ToResponse` policy: the result converts itself, by move."""
+    return result^.to_response()
 
 
 def _internal_error() -> Response:
