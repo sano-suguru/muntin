@@ -3,8 +3,9 @@
 # `rebind_var` accepts a different struct with the same layout (`Meters`
 # as `Seconds`) on Mojo 1.1.0. A generic slot (`var A`) therefore passes a
 # parsed `Int` to the handler only through a helper that first asserts
-# `A == Int` exactly (tests/registration_spike.mojo, `_as`); the rebind
-# alone does not tell the two types apart. Beside it,
+# type equality (`A == Int`, exact for this origin-free type;
+# tests/registration_spike.mojo, `_as`); the rebind alone does not tell
+# the two types apart. Beside it,
 # tests/registration_fail/rebind_var_layout_mismatch.mojo pins that a
 # different layout is rejected.
 #

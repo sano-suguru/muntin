@@ -165,8 +165,11 @@ for t in tests/compile_fail/*.mojo; do fixtures+=(route "$t"); done
 # (M3-013). tests/registration_fail: the premises of docs/ARCHITECTURE.md
 # "Registration structure decision (M3-014)": the note budget is per
 # method name, typed borrowed function values convert to no generic slot,
-# a generic slot is rebound only behind a type-equality assert, and the
-# rule check guards the adapter's instantiation.
+# a generic slot is rebound only behind a type-equality assert, the rule
+# check guards the adapter's instantiation, and the result rule is a
+# `where` clause because no check in a generic body sees an origin's
+# identity (`Origin.equals` only in `where`; an exact `StaticString`
+# overload breaks `String` handlers; immutable-origin results rejected).
 must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail tests/header_access_fail tests/with_headers_api_fail tests/registration_fail)
 for dir in "${must_fail_dirs[@]}"; do
     for t in "$dir"/*.mojo; do fixtures+=(must_fail "$t"); done

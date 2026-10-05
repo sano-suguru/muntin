@@ -142,18 +142,6 @@ def version() -> StaticString:
     return "1.0"
 
 
-def any_origin_text() -> StringSlice[ImmutAnyOrigin]:
-    return StringSlice[ImmutAnyOrigin](StaticString("any"))
-
-
-def untracked_text() -> StringSlice[ImmUntrackedOrigin]:
-    return StringSlice[ImmUntrackedOrigin]()
-
-
-def origin_text[o: ImmOrigin]() -> StringSlice[o]:
-    return StringSlice[o]()
-
-
 def guarded(id: Int) raises Unauthorized -> String:
     if id == 0:
         raise Unauthorized()
@@ -344,28 +332,6 @@ def test_owned_and_borrowed_parameters_both_register() raises:
     reg.on["POST", "/d"](note_owned)
     assert_equal(_show(reg.invoke(1, _args("4"))), "200 owned 4")
     assert_equal(_show(reg.invoke(3, _args("x"))), "200 owned x")
-
-
-def test_immutable_origin_text_results_register() raises:
-    """The third recorded change to the accepted set: immutable-origin
-    `StringSlice` results take the `StaticString` text branch, because
-    generic equality keeps an origin's mutability but not its identity
-    (tests/registration_known_gaps). Measured forms: `ImmutAnyOrigin`
-    (safe code can give it data), `ImmUntrackedOrigin` and a local's origin
-    through an explicitly instantiated parametric handler (safe code can
-    give them only the empty value). Production `App.get` rejects all three.
-    """
-    var local = String("local")
-    var reg = Registrar()
-    reg.on["GET", "/any"](any_origin_text)
-    reg.on["GET", "/untracked"](untracked_text)
-    reg.on["GET", "/local"](origin_text[origin_of(local)])
-    for i in range(3):
-        assert_equal(reg.shapes[i], "GET () -> text")
-    assert_equal(_show(reg.invoke(0, _args())), "200 any")
-    assert_equal(_show(reg.invoke(1, _args())), "200 ")
-    assert_equal(_show(reg.invoke(2, _args())), "200 ")
-    _ = local^
 
 
 def test_new_slot_types_add_no_overload() raises:

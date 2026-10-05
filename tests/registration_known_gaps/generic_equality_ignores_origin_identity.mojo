@@ -6,17 +6,20 @@
 # local's origin made immutable, in either direction. Outside a generic
 # context the first two compare unequal to it; a local's origin compares
 # equal even there. A mutable origin stays distinct.
-# So the selected design's text policy (`R == StaticString`) accepts every
-# immutable-origin `StringSlice` result that a handler can express and
-# bind; production `App.get` accepts only `StaticString` (the third
-# recorded change to the accepted set).
+# So a text-result check written as `R == StaticString` inside a generic
+# body would accept every immutable-origin `StringSlice` a handler can
+# express and bind; production `App.get` accepts only `StaticString`. The
+# selected design therefore states its result rule as a `where` clause,
+# which the compiler checks by identity at the call site
+# (tests/registration_fail/immutable_origin_result_rejected.mojo).
 #
 # If this file stops building, see which assert failed. A non-generic
-# inequality: the types now compare equal outside a generic context;
-# re-read the premise. A generic equality: generic equality now tells that
-# origin apart, so the text policy rejects it and the third change shrinks
-# (re-measure, re-pin the spike tests). The `MutAnyOrigin` one: mutable
-# slices merge too and the change widens, so re-probe the result types.
+# inequality: the types now compare equal outside a generic context; the
+# direct equality for a local's origin: a local's origin is now told apart
+# directly. Either way, re-read the premise. A generic equality: generic
+# equality now tells that origin apart, so a body-level check could replace
+# the `where` clause (re-measure). The `MutAnyOrigin` one: mutable slices
+# merge too; re-probe the result types.
 
 
 def same[A: AnyType, B: AnyType]() -> Bool:

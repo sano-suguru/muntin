@@ -388,7 +388,9 @@ struct Registrar(Movable):
         //,
         method: StaticString,
         path: StaticString,
-    ](mut self, handler: def() thin raises E -> R):
+    ](mut self, handler: def() thin raises E -> R) where (
+        R == String or R == StaticString or conforms_to(R, ToResponse)
+    ):
         _check_shape[method, path, R, _ABSENT, _ABSENT]()
         comptime if _shape_ok[method, path, R, _ABSENT, _ABSENT]():
             self.shapes.append(String(method, " () -> ", _result_name[R]()))
@@ -403,7 +405,9 @@ struct Registrar(Movable):
         //,
         method: StaticString,
         path: StaticString,
-    ](mut self, handler: def(var A) thin raises E -> R):
+    ](mut self, handler: def(var A) thin raises E -> R) where (
+        R == String or R == StaticString or conforms_to(R, ToResponse)
+    ):
         comptime k1 = _kind[A]()
         _check_shape[method, path, R, k1, _ABSENT]()
         comptime if _shape_ok[method, path, R, k1, _ABSENT]():
@@ -432,7 +436,9 @@ struct Registrar(Movable):
         //,
         method: StaticString,
         path: StaticString,
-    ](mut self, handler: def(var A, var B) thin raises E -> R):
+    ](mut self, handler: def(var A, var B) thin raises E -> R) where (
+        R == String or R == StaticString or conforms_to(R, ToResponse)
+    ):
         comptime k1 = _kind[A]()
         comptime k2 = _kind[B]()
         _check_shape[method, path, R, k1, k2]()
@@ -464,7 +470,9 @@ struct Registrar(Movable):
         //,
         method: StaticString,
         path: StaticString,
-    ](mut self, handler: def(State[S]) thin raises E -> R, state: State[S]):
+    ](
+        mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Stateful arity 0: the state is the registration's second
         argument, so this family never competes with the stateless one."""
         _check_shape[method, path, R, _ABSENT, _ABSENT]()
@@ -490,7 +498,7 @@ struct Registrar(Movable):
         mut self,
         handler: def(State[S], var A) thin raises E -> R,
         state: State[S],
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         comptime k1 = _kind[A]()
         _check_shape[method, path, R, k1, _ABSENT]()
         comptime if _shape_ok[method, path, R, k1, _ABSENT]():
@@ -524,7 +532,7 @@ struct Registrar(Movable):
         mut self,
         handler: def(State[S], var A, var B) thin raises E -> R,
         state: State[S],
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         comptime k1 = _kind[A]()
         comptime k2 = _kind[B]()
         _check_shape[method, path, R, k1, k2]()
