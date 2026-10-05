@@ -33,8 +33,8 @@
 #                                reinterprets layout twins
 #                                (tests/registration_known_gaps); exact for
 #                                origin-free types, while generic `==`
-#                                equates `StaticString` with
-#                                `StringSlice[ImmutAnyOrigin]`
+#                                keeps an origin's mutability but not its
+#                                identity
 #
 # Route literals, matching, JSON and carrier steps are production's and are
 # not modelled here; the scratch copies of src/muntin measured them (the
@@ -180,7 +180,8 @@ def _check_shape[
 
 
 def _as[T: Movable, A: Movable](var value: T) -> A:
-    """`value` as `A`, which must be exactly `T`. `comptime if A == Int`
+    """`value` as `A`, which must equal `T` (exactly, for origin-free
+    types; generic `==` ignores which origin a slice has). `comptime if A == Int`
     does not refine `A` on Mojo 1.1.0
     (tests/header_access_fail/generic_slot_does_not_refine.mojo), and
     `rebind_var` alone also accepts a different type with the same layout

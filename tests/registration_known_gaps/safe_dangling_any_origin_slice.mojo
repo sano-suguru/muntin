@@ -1,5 +1,5 @@
-# Must build, and is never run (scripts/check.sh builds it only; running it
-# reads freed memory). Evidence for docs/ARCHITECTURE.md, "Registration
+# Must build, and is never run (scripts/check.sh builds it only; the
+# returned slice dangles). Evidence for docs/ARCHITECTURE.md, "Registration
 # structure decision (M3-014)": safe code can return a
 # `StringSlice[ImmutAnyOrigin]` into a local that is dropped on return,
 # because the explicit `ImmutAnyOrigin` constructor drops the origin the
@@ -13,7 +13,7 @@
 #
 # If this file stops building, safe code can no longer erase a local's
 # origin this way: the third accepted-set change no longer admits a
-# dangling result from safe code.
+# dangling result from safe code by this route.
 
 
 def text_of_local() -> StringSlice[ImmutAnyOrigin]:
