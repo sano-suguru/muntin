@@ -1,6 +1,6 @@
 # M3-014 registration-structure spike, application side: the selected
 # candidate's mechanism (tests/registration_spike.mojo) on Mojo 1.1.0.
-# One overload per handler arity selects every handler shape production
+# One overload per request-slot arity selects every handler shape production
 # registers today, with each parameter's kind and the result policy decided
 # at compile time; new slot types (a String route value, Headers) need no
 # new overload; extraction failures answer before the handler and the error

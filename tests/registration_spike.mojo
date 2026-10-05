@@ -2,7 +2,8 @@
 #
 # Models the selected candidate (C4r, docs/ARCHITECTURE.md "Registration
 # structure decision (M3-014)"): a registration method keeps one overload
-# per handler arity, and every handler parameter is a generic slot
+# per request-slot arity (a stateful family keeps a fixed leading
+# `State[S]`), and every request-derived parameter is a generic slot
 # `var A` whose kind is decided at compile time from its type, instead of
 # one overload per (shape, result policy). The result type `R` is generic
 # too and its policy is chosen at compile time. `_Erased`, `_Bound`,

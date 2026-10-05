@@ -203,7 +203,7 @@ Status: **active**. M3-001 to M3-013 are merged and passing in `feature_list.jso
 | M3-011 | production | `TestClient` request header fields | PR #40 |
 | M3-012 | decision | typed header access: a `WithHeaders[B]` body carrier for typed `post` handlers, no overload and no injected slot; typed `get` stays raw | PR #41 |
 | M3-013 | production | typed header access for `post` handlers (`WithHeaders[B]`) | PR #42 |
-| M3-014 | decision | registration structure: one overload per handler arity with generic slots on the existing method names; spellings unchanged; reopens M2 for overload declarations, rejected-call diagnostics and two edges of the accepted set (results stay as production's through a `where` clause); raw `String` is a route value, never a body | PR #43 |
+| M3-014 | decision | registration structure: one overload per request-slot arity (a stateful family keeps a fixed leading `State[S]`) with generic slots on the existing method names; spellings unchanged; reopens M2 for overload declarations, rejected-call diagnostics and two edges of the accepted set (results stay as production's through a `where` clause); raw `String` is a route value, never a body | PR #43 |
 | M3-015 | production | registration on generic-arity slots for `get` and `post`, today's slot kinds and rules only; reopens M2 | next |
 
 Each item's scope paragraph, and the result paragraphs written when it merged, are in [`docs/history/spec-items.md`](history/spec-items.md#m3-items) (the item order there is the order they were written, not the ID order); citations such as `docs/SPEC.md`, "M3-003 result" refer to those paragraphs. State went first because it was the M3 item most likely to change an M2 signature or M2-005's binding rule; it did not.
