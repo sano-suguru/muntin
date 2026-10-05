@@ -69,7 +69,8 @@ comptime _STATE = 6
 
 
 def _kind[A: AnyType]() -> Int:
-    """The slot kind of a handler parameter type. Exact type equality for
+    """The slot kind of a handler parameter type. Type equality (exact
+    here: these types carry no origin) for
     the stdlib and Muntin types that cannot conform to a Muntin trait;
     `conforms_to` for the rest."""
     comptime if A == Int:
@@ -187,7 +188,7 @@ def _as[T: Movable, A: Movable](var value: T) -> A:
     `rebind_var` alone also accepts a different type with the same layout
     (tests/registration_known_gaps/rebind_var_layout_twins.mojo), so the
     equality is asserted here, the one place the spike rebinds."""
-    comptime assert A == T, "a slot is rebound only to its own type"
+    comptime assert A == T, "rebind requires generic type equality"
     return rebind_var[A](value^)
 
 

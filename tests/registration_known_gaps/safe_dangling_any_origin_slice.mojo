@@ -5,7 +5,7 @@
 # because the explicit `ImmutAnyOrigin` constructor drops the origin the
 # compiler would otherwise track. A handler declared with that result is
 # accepted by the selected design (tests/registration_known_gaps/
-# generic_equality_merges_static_and_any_origin.mojo), which copies the
+# generic_equality_ignores_origin_identity.mojo), which copies the
 # result into a `String` right after the handler returns. The dangling
 # slice comes from the application's own conversion, outside Muntin's
 # guarantee, like the toolchain-wide gaps of "State storage decision

@@ -9,7 +9,7 @@
 # different layout is rejected.
 #
 # If this file stops building, `rebind_var` checks nominal types: the
-# exact-equality helper is then a second check, not the only one.
+# type-equality helper is then a second check, not the only one.
 from std.builtin.rebind import rebind_var
 
 

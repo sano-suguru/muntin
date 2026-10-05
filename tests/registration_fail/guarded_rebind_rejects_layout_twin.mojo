@@ -3,7 +3,7 @@
 # accepts (tests/registration_known_gaps/rebind_var_layout_twins.mojo) is
 # rejected. The selected design rebinds generic slots only through such a
 # helper (docs/ARCHITECTURE.md, "Registration structure decision (M3-014)").
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: a slot is rebound only to its own type
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: rebind requires generic type equality
 from registration_spike import _as
 
 
