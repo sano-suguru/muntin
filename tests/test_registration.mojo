@@ -152,6 +152,60 @@ def register_slots_post[
     app.post["/slots/{id}"](h)
 
 
+def register_slots_state_post[
+    S: Movable & Deinitable, A: Movable & Deinitable, B: Movable & Deinitable
+](
+    mut app: App,
+    h: def(State[S], var A, var B) thin raises Never -> String,
+    st: State[S],
+):
+    """Two generic slots after a `State` on `post`."""
+    app.post["/state-slots/{id}"](h, st)
+
+
+def register_raw_state_slot[
+    S: Movable & Deinitable, A: Movable & Deinitable
+](
+    mut app: App,
+    h: def(State[S], var A) thin raises Never -> Response,
+    st: State[S],
+):
+    """A generic slot filled by `Request` after a `State`, on both methods."""
+    app.get["/state-raw-slot"](h, st)
+    app.post["/state-raw-slot"](h, st)
+
+
+def register_body_text[
+    R: Movable & Deinitable
+](mut app: App, h: def(var Note) thin raises Never -> R) where R == String:
+    """Generic result on `post`."""
+    app.post["/body-generic"](h)
+
+
+def register_slot_and_result[
+    A: Movable & Deinitable, R: Movable & Deinitable
+](mut app: App, h: def(var A) thin raises Never -> R) where R == String:
+    """Generic slot and generic result together."""
+    app.get["/slot-generic/{id}"](h)
+
+
+def register_full_clause[
+    R: Movable & Deinitable
+](mut app: App, h: def() thin raises Never -> R) where (
+    R == String or R == StaticString or conforms_to(R, ToResponse)
+):
+    """The registration's own clause, copied verbatim."""
+    app.get["/full-clause"](h)
+
+
+def note_text(var body: Note) -> String:
+    return String("note ", body.text)
+
+
+def stateful_raw(db: State[Db], req: Request) -> Response:
+    return Response.text(String(db[].name, " ", req.method))
+
+
 def register_raw_slot[
     A: Movable & Deinitable
 ](mut app: App, h: def(var A) thin raises Never -> Response):
@@ -266,6 +320,23 @@ def test_generic_slot_helpers_forward() raises:
     assert_equal(client.post("/slots/x", "bad").status, 400)
     assert_equal(client.get("/raw-slot").text(), "raw GET /raw-slot")
     assert_equal(client.post("/raw-slot", "b").text(), "raw POST /raw-slot")
+
+
+def test_more_generic_forwarding_forms() raises:
+    var app = App()
+    var db = State(Db("db"))
+    register_slots_state_post(app, stateful_update, db)
+    register_raw_state_slot(app, stateful_raw, db)
+    register_body_text(app, note_text)
+    register_slot_and_result(app, by_id)
+    register_full_clause(app, static_text)
+    var client = TestClient(app^)
+    assert_equal(client.post("/state-slots/3", "x").text(), "db 3: x")
+    assert_equal(client.get("/state-raw-slot").text(), "db GET")
+    assert_equal(client.post("/state-raw-slot", "b").text(), "db POST")
+    assert_equal(client.post("/body-generic", "b").text(), "note b")
+    assert_equal(client.get("/slot-generic/6").text(), "typed 6")
+    assert_equal(client.get("/full-clause").text(), "static")
 
 
 def main() raises:

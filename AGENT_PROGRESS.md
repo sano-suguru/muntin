@@ -43,7 +43,7 @@ Time-bound operational notes. Each says when to delete it.
 
 ## Latest verification evidence
 
-M3-015: `check.sh`, `test.sh` (30 files, 304 tests), `check_flare.sh`, `check_unsafe.sh` and `git diff --check` pass on the branch. All 278 must-fail fixtures of `main` were built against both `src` trees and compared in full; 44 production mutations were red. The PR review's blocking findings (generic forwarding outside M3-014's edges; the local-origin result error) are answered by the amendment record and a pinned fixture. Details: the M3-015 record.
+M3-015: `check.sh`, `test.sh` (30 files, 305 tests), `check_flare.sh`, `check_unsafe.sh` and `git diff --check` pass on the branch. All 278 must-fail fixtures of `main` were built against both `src` trees and compared in full; 44 production mutations were red. The PR review's blocking findings (generic forwarding outside M3-014's edges; the local-origin result error) are answered by the amendment record and a pinned fixture. Details: the M3-015 record.
 
 ## Next step
 

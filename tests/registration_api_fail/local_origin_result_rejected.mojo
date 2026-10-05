@@ -6,7 +6,11 @@
 # (docs/ARCHITECTURE.md, "Registration structure decision (M3-014)", which
 # measured this on the model). Before M3-015 the same registration was
 # `no matching method in call to 'get'`, with the result rejected by the
-# `ToResponse` bound.
+# `ToResponse` bound. The expected text names the error class, which a
+# generic result without a proving `where` also gets
+# (generic_result_disjunction_lacks_evidence.mojo); removing the clause
+# from `get`'s arity-0 overload makes this file compile, which ties it to
+# the clause.
 # Expected diagnostic (checked by scripts/check.sh): invalid call to 'get': lacking evidence to prove correctness
 from muntin import App
 
