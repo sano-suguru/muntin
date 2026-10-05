@@ -4,7 +4,7 @@ The current handoff between coding sessions: state, what is easy to get wrong no
 
 ## Active milestone
 
-M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-014 has `passes: true` (M3-014: PR #43). M3-015 (PR #44) is `passes: false` again until its decision amendment passes review and CI.
+M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-015 has `passes: true` (M3-014: PR #43; M3-015: PR #44, passing after its decision amendment's review and CI, not yet merged).
 
 M3 so far:
 
@@ -43,11 +43,11 @@ Time-bound operational notes. Each says when to delete it.
 
 ## Latest verification evidence
 
-M3-015: `check.sh`, `test.sh` (30 files, 305 tests), `check_flare.sh`, `check_unsafe.sh` and `git diff --check` pass on the branch. All 278 must-fail fixtures of `main` were built against both `src` trees and compared in full; 44 production mutations were red. The PR review's blocking findings (generic forwarding outside M3-014's edges; the local-origin result error) are answered by the amendment record and a pinned fixture. Details: the M3-015 record.
+M3-015: `check.sh`, `test.sh` (30 files, 305 tests), `check_flare.sh`, `check_unsafe.sh` and `git diff --check` pass on the branch. All 278 must-fail fixtures of `main` were built against both `src` trees and compared in full; 44 production mutations were red. The PR review's blocking findings (generic forwarding outside M3-014's edges; the result-error statement) are answered by the amendment record and two pinned fixtures; fresh-context reviews of the amendment converged with no material issue, and CI on PR #44 passes. Details: the M3-015 record.
 
 ## Next step
 
-After PR #44 passes review and CI and merges, pick the next item from `docs/SPEC.md`, "Remaining candidates" (each is decision-first; typed `get` headers, `String` route values, more methods and `POST` without a body are now slot kinds or rules on the arity overloads).
+After PR #44 merges, pick the next item from `docs/SPEC.md`, "Remaining candidates" (each is decision-first; typed `get` headers, `String` route values, more methods and `POST` without a body are now slot kinds or rules on the arity overloads).
 
 ## Where things are
 
