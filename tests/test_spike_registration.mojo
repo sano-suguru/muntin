@@ -142,6 +142,19 @@ def version() -> StaticString:
     return "1.0"
 
 
+def test_typed_static_string_value_registers() raises:
+    """The third recorded change to the accepted set: a typed function
+    value whose result is `StaticString` registers as text on the model.
+    Production's text overloads take `def(...) -> String`, and a typed
+    value does not convert, so `main` rejects it with the `TODO: function
+    type conversions` error."""
+    var reg = Registrar()
+    var f: def() thin raises Never -> StaticString = version
+    reg.on["GET", "/version"](f)
+    assert_equal(reg.shapes[0], "GET () -> text")
+    assert_equal(_show(reg.invoke(0, _args())), "200 1.0")
+
+
 def guarded(id: Int) raises Unauthorized -> String:
     if id == 0:
         raise Unauthorized()
