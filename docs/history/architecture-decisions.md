@@ -1594,3 +1594,175 @@ Status: **production**, the M3-012 slice. The decision, rejected candidates, inv
   - `adapters/flare/test_localhost_roundtrip.mojo`: `json_app()` serves the stateful carrier route `POST /signed-greet` (`WithHeaders[Json[Greeting]]`, credential in the state). Over HTTP/1.1, repeated `X-A`/`x-a` fields reach the handler in order with their casing (200), a missing credential is the handler's 401, and a missing `Content-Type` is 415; each status and body equals `App.handle` with the test's fields. The handler echoes only `X-A` fields, because Flare's client adds fields of its own.
   - Mutations (planted in scratch copies of `src/muntin`, never in the tree), each red: the fields flag missing on each of the eight body overloads; the fields not appended; the fields appended for every body route (a plain `Json[T]` route answers 415); the carrier without `_JsonBody` forwarding; the first field read at the verdict's index; the JSON steps before the route value; a body conversion failure answered 500; the rebuild failure answered 400; the rebuild moved before the route value and the JSON steps (added after a fresh-context review found that order untested); the JSON flag missing with the parity check removed, both on every body overload and on carrier routes only; the carrier conforming to `FromBody` (`carrier_has_no_from_body` and `nested_carrier` build); the body bound relaxed with the check moved into `_from_parts` (`nested_carrier`, `carrier_of_int` and `carrier_of_json_without_from_json` build). Inert: the parity check removed alone. While every JSON carrier route sets its flag, no request tells it apart, and the JSON flag missing on carrier routes is red with or without it, as M3-009 recorded for its arity check.
 - Spike retired: `tests/header_access_spike.mojo`, `tests/test_spike_header_access.mojo` and the five carrier fixtures in `tests/header_access_fail` are deleted, and `check.sh` registers `tests/with_headers_api_fail`. `tests/header_access_fail` keeps the three toolchain pins. The M3-012 record keeps what the spike measured.
+
+### Registration structure decision (M3-014)
+
+Status: **decision** (M3-014; `src/muntin` and `adapters/` are unchanged in it). It decides how registration grows past the ceiling M3-007, M3-008 and M3-012 measured. Today `get` and `post` have ten overloads each, Mojo 1.1.0's ten-note cap. Every typed shape costs four overloads: two result policies (`String`, `R: ToResponse`), each stateless and stateful. So typed header access on `get`, non-`Int` and several route values, `POST` without a body and broader raw handlers each push one method past the cap (`docs/SPEC.md`, "Remaining candidates").
+
+**Selected: C4r, generic-arity slots on the existing method names. It reopens M2 when its production slice (M3-015) lands.** Each registration method keeps one overload per handler arity, stateless and stateful. Every handler parameter is a generic slot `var A`, and its kind is decided at compile time from its type:
+- route value: `Int` today;
+- body: a `FromBody`, or a `WithHeaders` carrier;
+- raw: `Request`;
+- `State`: first, through the stateful overloads.
+
+The result type `R` is generic too, and its policy is chosen at compile time: `String` or `StaticString` give the 200 text response, a `ToResponse` converts itself. One compile-time rule check per overload gives each rejected shape a Muntin message. Call spellings, binding order, the request steps and their statuses, first-registration-wins and the storage do not change. What changes is in "Costs" below: the overload declarations, the diagnostics of rejected calls, and two edges of the accepted set.
+
+```mojo
+# one overload per arity, stateless; the stateful family has the same arities after State[S]
+def get[E: Deinitable, R: Movable & Deinitable, //, path: StaticString](mut self, handler: def() thin raises E -> R)
+def get[A: Movable & Deinitable, E: Deinitable, R: Movable & Deinitable, //, path: StaticString](mut self, handler: def(var A) thin raises E -> R)
+def get[A: ..., B: ..., E: ..., R: ..., //, path: StaticString](mut self, handler: def(var A, var B) thin raises E -> R)
+def get[S: ..., A: ..., E: ..., R: ..., //, path: StaticString](mut self, handler: def(State[S], var A) thin raises E -> R, state: State[S])
+```
+
+**Call syntax.** Every current route keeps its spelling under C4r, C1 and C4b. C2, C3 and C3v keep these spellings but add their own for new shapes (candidates below):
+
+| Route kind | Spelling (today and under C4r) |
+|---|---|
+| stateless typed | `app.get["/users/{id}"](get_user)`, `app.post["/notes/{id}"](update)` |
+| stateful typed | `app.get["/users/{id}"](get_user, users)` |
+| raw, stateless and stateful | `app.get["/raw"](raw)`, `app.post["/raw"](raw, users)` |
+| body | `app.post["/notes"](create)` with `def create(body: Note)` or `var body: Note` |
+| `Json[T]` | `app.post["/users"](create_user)` with `def create_user(body: Json[CreateUser]) -> Json[User]` |
+| `WithHeaders[B]` | `app.post["/users"](create_user, users)` with `input: WithHeaders[Json[CreateUser]]` |
+
+**Measured** (Mojo 1.1.0 (8189361e)). Realistic candidates were built on scratch copies of the repository (git worktrees of `main`, not retained). The fixture comparison builds all 269 of `main`'s must-fail and route fixtures against each copy's `src`, with paths and line:column normalized, and checks each expected text:
+
+| Candidate | Overloads | Existing fixtures (269) | Existing tests (295) | Admits typed `get` headers |
+|---|---|---|---|---|
+| C1. status quo; a new method as its own set (`put`, ten overloads copied from `post`) | `get` 10, `post` 10, `put` 10 | identical | pass; `PUT /notes/7` answers through the copy and `POST` to it is 404 | no: a `get` shape needs four more overloads (M3-012's table) |
+| C2. a named surface per feature (`get_headers`, eight overloads: `def(Headers)`, `def(Int, Headers)`, stateful twins, both policies) | 10 + 10 + 8 | identical | not affected | yes, under a second name |
+| C3. a builder holding the app (`app.at["/me"]().on["GET"](me)`, the engine's overloads on the builder) | builder 8 | not measured (additive) | not affected | yes |
+| C3v. a route value moved into the app (`app.add(get["/me"](me))`, free functions with the engine's overloads) | `add` 1, `get` 8 | not measured (additive) | not affected | yes |
+| C4b. the engine beside `get`/`post`, under a new name (`app.route["GET", "/me"](me)`) | 10 + 10 + 8 | identical | not affected | yes, under the new name |
+| **C4r. the engine replacing `get`/`post` (selected)** | `get` 8, `post` 8 (arities 0 to 3) | 201 still match (134 identical); 68 lose their text; one of those compiles | **295 pass**; `check_flare.sh`, `check_unsafe.sh` and `check_boundaries.sh` pass | yes, under `get` |
+| C5. the engine's adapters behind today's unchanged signatures | 10 + 10 | not reached | not reached | no |
+
+- **C1, status quo.** The note budget is per method name. A failing call to the scratch `put` lists exactly `put`'s ten candidates, by the same rule `notes_are_per_method.mojo` pins below. So a new HTTP method fits the budget as its own copy, about 500 lines of overloads per method, and does not need restructuring; `docs/SPEC.md`'s grouping of methods with the others is corrected. Shapes on an existing method stay blocked: every `get` header shape drops candidate notes or reopens M2 (M3-012). A `String` route value costs `get` four more overloads (`def(String)`, both policies, each stateless and stateful) and `post` four, and `POST` without a body costs `post` eight. **Rejected:** the in-method features stay blocked on Mojo 1.1.0 (the selection does not depend on the cap rising).
+- **C2, named surfaces.** All 269 fixtures are identical. A header handler passed to `app.get` gets `get`'s ten notes and none names `get_headers`, so the right surface cannot be found from the error. A misuse on `get_headers` lists only that surface's candidates. Names multiply with combinations. Take headers or not × `Int` or `String` × zero to two route values: 7 route-value combinations × 2 = 14 shapes, at 4 overloads each that is 56 overloads, or 6 names of at most ten. **Rejected:** one concept spread over several names (M3-012 recorded the same for G), no error that leads to the sibling, and the name count grows with feature combinations.
+- **C3, builder.** The chain registers and dispatches. A builder must hold `Pointer[App, mut origin]`, and the scratch copy reproduces M3-001's A2 gap with it: an interior reference into `App._routes` taken after the builder exists survives a hundred registrations through it and compiles (`registrar_blind_mutation.mojo` pins the mechanism). Splitting axes across builder types (`.state(users)`) still ends in one overload set for the shapes. **Rejected:** the blind-mutation path.
+- **C3v, route value.** `app.add(get["/me"](me))` runs, and the route value owns its box, so no pointer is held. Shape selection is C4's engine. The only difference is the spelling, and every route changes to it: `app.get[route](h)` becomes `app.add(get[route](h))`, against DX's decision rule. **Rejected:** a spelling change for every route, with no capability C4r lacks.
+- **C4b, engine beside.** All 269 fixtures are identical. Typed `get` headers run under `route["GET", ...]` (`def(Headers)`, `def(Int, Headers)`, `def(State[S], Headers)`). But `get` and `post` stay frozen, so `/users/{id}` stays `app.get[...]` while `/users/{name}` would need `app.route["GET", ...]`. That is two spellings for one method, permanently unless M2 is reopened later. **Rejected:** a second spelling for every in-method feature, against DX's decision rule and section 18. M2 stays closed only until one spelling is wanted.
+- **C5, engine behind unchanged signatures.** Each of the 20 production overloads keeps its signature and names an engine adapter instead of its own. The twelve without an `Int` slot report no error. The eight with `def(Int)` or `def(State[S], Int)` fail: `cannot pass 'def(Int) raises E thin -> String' value, expected 'def(var Int) raises E thin -> String'` (the `_Bound` forms likewise). A typed borrowed value converts to no generic slot (`borrowed_overload_cannot_forward.mojo`, `typed_value_to_owned_slot.mojo`). So the engine and the signature change are one step and cannot be cut into an invisible refactor first. **Rejected** as a separate slice.
+- **D. Generic descriptor (method and shape in one type or value).** One generic entrypoint over the handler's own type is not expressible: Mojo 1.1.0 has no variadic function types (`state_fail/variadic_handler_type.mojo`) and no reflection over function parameters. The method as a compile-time parameter (`route[method, path]`, measured as C4b) is expressible. A shape type the handler declares (a parts tuple `Parts[Int, Headers]` as its one parameter) is expressible with variadic struct parameters, but it replaces `def get_user(id: Int)` with positional access into a tuple. **Rejected:** the expressible forms are C4b's spelling or a handler-signature change.
+
+**C4r in detail.**
+- **Shapes and selection.** Arity selects the overload, and the argument count separates the stateful family, as today. Inside an arity no overload competes, so the raw `post` handler no longer depends on the "shorter parameter list" rule (`Request` is a slot kind). A call with more parameters than the largest arity gets `no matching method` with all eight candidates printed (9 notes, none omitted). A fourth arity costs two overloads per method (10, the cap).
+- **What was measured.** The scratch engine classifies each slot with `comptime if A == Int` / `conforms_to(A, FromBody)`. It extracts with one helper per slot (`raises` a typed reject carrying the status) and keeps production's order, since route values come first and the body last: query 400 (`App.handle`), route value 400, 415, 413, rebuild 500, `from_body` 400, handler, result. It reuses `_Erased`, `_Call`, `_Bound`, `_handler_error`, `_json_status`, `_carrier_fields`, `_raw_request`, `_Route` and `App.handle` unchanged. All 295 existing tests pass on it, including the JSON and carrier order tests (`test_request_order_on_json_body_routes`, `test_json_inside_the_carrier_keeps_the_full_order`), and so does the Flare loopback suite. Typed `get` headers (a `Headers` slot) run on it with no overload added: `def(Headers)`, `def(Int, Headers)`, `def(State[S], Headers)`, and a bad route value is still 400.
+- **The rule check must guard the adapter.** A first build reported an adapter's own empty `constraint failed:` for `def(String)` on `get`, not the rule. Mojo 1.1.0 elaborates the `_Erased.__init__[call=...]` statement's parameters before the rule function the overload called first. With the adapter named only under `comptime if <rule holds>`, every rejected shape reports its rule's message (`slot_misuse_names_the_rule.mojo` pins this on the spike).
+- **Diagnostics of rejected calls.** All 269 fixtures still fail except one, `body_fail/post_owned_int_and_body` (below). 201 keep their expected text, 134 of them byte-identical. 68 lose it:
+
+| Class change | M2 fixtures | M3 fixtures |
+|---|---|---|
+| `no matching method` + candidate notes → `constraint failed: <Muntin rule>` | 14 (`storage_fail` 6, `body_fail` 8) | 15 |
+| `no matching method`, notes now naming the generic candidates (still rejected for the same reason, such as a `mut` or owned `State`) | 0 | 17 (`state_*_fail`) |
+| constraint message reworded by the scratch engine's check order (same rule) | 11 (`compile_fail`) | 10 |
+| now compiles (`var id: Int`) | 1 | 0 |
+
+  Examples of the new messages: `a handler takes at most one Int route value` (`def add(a: Int, b: Int)` on `get`, which was ten notes ending in `cannot be converted ... to 'def(Int) raises Never thin -> String'`), `a raw handler returns Response`, `a GET handler takes no request body`, `the request body is the handler's last parameter`, `the handler's result must be String or conform to ToResponse`. The new primary line is `function instantiation failed` at the enclosing function, with the registration call in the next note and the rule last. That is the class production `post` already uses for a body type that is not a `FromBody` (`compile_fail/post_without_from_body`), and it is what 95 of `main`'s 269 fixtures (the route-literal checks among them) already show. The intermediate notes print internal parameters (`"k1": 1`), which the slice names or hides. The 21 reworded constraint messages are a scratch artifact: their rules are unchanged, so the slice keeps their texts.
+- **Two changes to the accepted set** (an M2 reopen, besides the declarations):
+  - *widened:* an owned route value, `def h(var id: Int, body: Note)`, registers. Slots are `var A`, because owned bodies (`var body: Note`, move-only bodies) must keep registering. Borrowed slots reject them (spike mutation m8). M2-009's fixture `body_fail/post_owned_int_and_body` pins the old rejection. The handler receives its own copy of an `Int`, so nothing else observes the difference.
+  - *narrowed:* an explicitly typed function value, or a helper parameter, whose type has a borrowed parameter no longer registers: `var f: def(Int) thin raises Never -> String = get_user; app.get["/u/{id}"](f)`, or a generic `def register[E](mut app: App, h: def(Int) thin raises E -> String)` forwarding to `app.get`. It fails with `TODO: function type conversions between closures not supported yet`. The `var` spelling (`def(var Int) thin raises Never -> String`) registers on C4r. `main` rejects that spelling (`no matching method`), so code written for one does not compile on the other. Plain `def` handlers, the form every DX example uses, are unaffected, and typed values with no parameter or only owned ones (`def() ...`, `def(var Request) ...`) still register. No existing test registers a typed borrowed value, which is why all 295 pass. The slice adds the spelling rule to DX next to the existing `raises Never` rule.
+- **`rebind_var`.** `comptime if A == Int` does not refine `A` (`header_access_fail/generic_slot_does_not_refine.mojo`), so a parsed `Int` (and a `String` result) reaches the handler through `rebind_var`. On Mojo 1.1.0 `rebind_var` accepts a different struct with the same layout (`registration_known_gaps/rebind_var_layout_twins.mojo`: `Meters` read as `Seconds`) and rejects a different layout (`registration_fail/rebind_var_layout_mismatch.mojo`). So every rebind sits behind an exact type-equality assert in one helper (`_as[T, A]` in the spike; `guarded_rebind_rejects_layout_twin.mojo`). `check_unsafe.sh` does not flag `rebind_var` today, so the slice adds it to the pattern, allowed only in that helper.
+- **Unchanged under C4r:** `State` and its guarantee (the handle is still copied once into `_Bound` and borrowed per request); move-only bodies and handlers; the raw `Request` escape hatch (still the whole request, `Response` only, no route values); `ToErrorResponse` and the fixed 500; `Json[T]` and `WithHeaders[B]` as bodies; route-literal validation at the registration call, with the placeholder count matched against the route-value slots; first-registration-wins and the 404/400/415/413/500 boundaries (`App.handle` is unchanged); backend independence (no adapter change, `check_flare.sh` passes); `_Call`, `_Erased`, `_Bound` and `_handler_storage.mojo`. `App` stays non-generic.
+- **Implementation and storage cost.** The nine hand adapters (`_call_none` to `_call_state_raw`) become one adapter per arity, stateless and stateful, over a shared slot extractor and result policy. The scratch file grew by 300 lines (to 1,942) while it still contained the unused hand adapters. Nothing is allocated per request beyond today's raw arguments; registration still boxes one value per route. The `rebind_var` helper and its `check_unsafe.sh` rule are new. Build time was not compared (the timing runs were cache-warm).
+
+**How C4r admits the remaining candidates.** Each of these is its own later item, and the counts are per method:
+
+| Candidate | Cost under C4r | Notes |
+|---|---|---|
+| typed `get` headers | one slot kind (`Headers`) or the `WithHeaders` carrier, no overload (spike and scratch) | A `Headers` slot beside a non-carrier `Json[T]` body needs the carrier's even-count arity rule, because the exact arity answers 415 when fields follow the verdict. |
+| `String` route values | one slot kind and converter, no overload (spike) | `String` then cannot be a body type, which M2-005's disjointness already implies. |
+| several route values, path and query together | rule changes, no overload up to arity 3, two per method for arity 4 | Binding stays positional, in the literal's order. |
+| more HTTP methods | `put`, `patch` and `delete` each get the same eight overloads, delegating to the shared engine | The method's own rules (body or not) live in the check. |
+| `POST` without a body, raw route values, `ToResponse` raw results | rule changes, no overload | |
+| another injected kind | still a separate argument, so it doubles the stateful family as today | Unchanged by C4r; M3-001's condition applies. |
+
+**Why C4r rather than deferral or C4b.** The in-method features (`String` and several route values, typed `get` headers, `POST` without a body) are blocked on Mojo 1.1.0 under every candidate except a restructure: C1 measures them past the cap. Of the candidates that unblock them, only C4r keeps one spelling per method. C4b avoids the M2 reopen only while `get` and `post` stay frozen beside a second entrypoint. C2 hides the right surface from the error. C3 adds a write path the compiler does not track. C4r's costs are the diagnostics of rejected calls (of the 68 texts lost on the scratch copy, 29 change class, 17 keep `no matching method` with new candidate notes, 21 are rewordings the slice avoids, and 1 now compiles), one widened and one narrowed edge, and the `rebind_var` discipline. In exchange, rejected calls name the Muntin rule they break, as DX section 16 asks, instead of up to ten candidate notes. They stay under the note cap at any arity up to the largest. Each in-method feature then becomes a slot kind or a rule, not four overloads. If M3-015's review judges the reopen too costly, the fallback is C1 (defer), and the next independent item is more HTTP methods as copied overload sets.
+
+**Invariants** (for M3-015 and after):
+- One overload per arity and per family (stateless, stateful) on each method, at most ten per method. The argument count separates the families, and no two overloads of a method accept the same handler.
+- A slot's kind is decided from its type alone; positional binding: route values in the literal's order, the body last, `State` first.
+- Every rejected handler shape fails at the registration call with a Muntin message, through a rule check that guards the adapter. Rules that existed before keep their message.
+- Every generic-slot rebind goes through one helper that asserts exact type equality, and `check_unsafe.sh` allows `rebind_var` nowhere else.
+- The request steps, their order and statuses, first-registration-wins, `App.handle`, `_Route`, `_Call`, `_Erased`, `_Bound` and the storage module are unchanged by the restructure.
+- The raw `Request` handler stays the escape hatch on every method, stateless and stateful.
+
+**Migration and compatibility.** Every plain-`def` registration keeps compiling and behaving as before: all 295 tests pass on the scratch engine. Application code changes only where it spells a typed function value or helper parameter with a borrowed parameter; it then adds `var` (`def(var Int) ...`), which the compiler requests with the closure-conversion error. Code that relies on `var id: Int` being rejected has nothing to migrate. The M2 completion contract is amended in M3-015: overload declarations, the diagnostics of rejected calls, and the two edges above. Spellings, binding, results, errors, the raw escape hatch, ownership and the backend seam are unchanged.
+
+**Evidence:**
+- `tests/registration_spike.mojo` + `tests/test_spike_registration.mojo` (6 tests). The model: one overload per arity, 0 to 2, stateless and stateful, with each slot classified at compile time (`Int`, `String`, body, carrier, `Request`, `Headers`, `State`). The rule check is both asserts and a Bool that guards the adapter. The result policy is chosen at compile time. The one rebind helper asserts exact equality. Production's `_Erased`, `_Bound` and `_handler_error` are used unchanged. Tests:
+  - every shape production registers today selects the expected arity and classification: `String`, `StaticString` and `ToResponse` results, `Json[T]` and `WithHeaders[B]` bodies, raw and stateful raw, `raises T`;
+  - dispatch matches production, carrier included;
+  - a bad route value or body answers 400 before the handler, and the route value is checked before the body;
+  - `ToErrorResponse` and the fixed 500;
+  - owned and borrowed parameters both register;
+  - `String` and `Headers` slots, and `Headers` declared before a route value, bind without a new overload.
+- `tests/registration_fail` (6, `check.sh`):
+  - `notes_are_per_method.mojo`: `put`'s tenth note is printed beside ten `get` overloads;
+  - `typed_value_to_owned_slot.mojo`: a typed borrowed value converts to no generic slot;
+  - `borrowed_overload_cannot_forward.mojo`: C5's facade cannot forward;
+  - `rebind_var_layout_mismatch.mojo`;
+  - `guarded_rebind_rejects_layout_twin.mojo`;
+  - `slot_misuse_names_the_rule.mojo`.
+- `tests/registration_known_gaps/rebind_var_layout_twins.mojo` (must build).
+- Toolchain pins this decision also rests on, unchanged: `header_access_fail/eleven_candidates_drop_a_note.mojo` and `generic_slot_does_not_refine.mojo`, `state_fail/variadic_handler_type.mojo`, `state_known_gaps/registrar_blind_mutation.mojo`.
+- Scratch copies (not retained): C1 (`put`), C2 (`get_headers`), C3 (builder), C3v (route value), C4b (`route`), C4r and C5, with the measurements above. For C4r: `test.sh` (295), `check_flare.sh`, `check_unsafe.sh` and `check_boundaries.sh` exit 0; its `check.sh` fails exactly on the 68 fixtures listed above.
+- Mutations (planted in scratch copies, never in the tree), each red:
+  - `put`'s overloads renamed `get` (the tenth note is omitted);
+  - the spike's guard removed on the arity-1 overload (the rule's message is replaced by the adapter's failure);
+  - the typed value spelled `def(var Int)`, and the facade's parameter spelled `def(var Int)` (each fixture compiles);
+  - `slot[Int]` in the mismatch fixture (compiles);
+  - the helper's equality assert removed (the layout twin compiles);
+  - `String` classified as no slot kind;
+  - the `Headers` index ignoring the route values;
+  - the spike's slots made borrowed (owned handlers stop registering).
+
+  Inert, with the reason: in the typed-value and facade fixtures, changing the generic slot from `var A` to `A` leaves them failing the same way, because the borrowed value is the cause and the slot's convention is not. The fixtures were reworded to say so, and their distinguishing mutation is the value's spelling.
+
+**Revisit when:**
+- `header_access_fail/generic_slot_does_not_refine.mojo` compiles: type equality refines, so the rebind helper and its `check_unsafe.sh` allowance can go;
+- `registration_known_gaps/rebind_var_layout_twins.mojo` stops building: `rebind_var` checks nominal types, so the equality assert becomes a second check;
+- `state_fail/variadic_handler_type.mojo` compiles: one overload per method could replace the arity overloads;
+- `registration_fail/typed_value_to_owned_slot.mojo` compiles: typed borrowed values convert, and the narrowed edge disappears;
+- Mojo documents conformance extensions for standard-library types (an `Int` conforming to a Muntin trait): bounded slots could keep `no matching method` for types of no slot kind, which is the property M3-008's 4b rejection preferred. Re-measure the slot bound then;
+- a fifth arity is needed (twelve overloads per method), or another injected kind is proposed (M3-001's condition);
+- `registration_fail/notes_are_per_method.mojo` loses its text: overload notes are no longer counted per name, so re-measure C1 and the per-method sets;
+- `state_known_gaps/registrar_blind_mutation.mojo` stops building: a builder (C3) no longer opens an untracked write path, so re-measure it;
+- M3-015's review rejects the reopen: fall back to C1, with more HTTP methods as copied overload sets as the next independent item.
+
+**Next production slice (M3-015): registration on generic-arity slots, accepted handlers and messages unchanged where their rule is.** It reopens M2 for the overload declarations, the diagnostics of rejected calls, and the two edges above.
+- `src/muntin/app.mojo`:
+  - `get` and `post` each become six overloads: arities 0, 1 and 2, stateless and stateful. That is the largest arity a current shape uses: `State`, `Int`, body. Every slot is `var A` and `R` is generic.
+  - Slot kinds are exactly today's: an `Int` route value, a body (`FromBody` or `_HeaderCarrier`), `Request` (raw), and `State` as the stateful family's first parameter. No `String` or `Headers` slot.
+  - Rules are exactly today's: at most one route value, matched against the literal's placeholders; on `get` no body; on `post` a body last unless raw; a raw handler takes only the `Request`, returns `Response` and declares no placeholder; the result is `String`, `StaticString` or a `ToResponse`; `State` only first in the stateful family. Each rule is an assert with a message, and the same rules as one Bool guard the adapter. Every message an existing fixture expects as a constraint text is kept for the same rule, and each new message names the method it was registered on.
+  - The nine hand adapters are replaced by one adapter per arity and family over one slot extractor and one result policy, keeping production's request order. `_Route`, `App.handle`, `_json_status`, `_carrier_fields` and `_raw_request` are unchanged.
+  - One private rebind helper asserts exact equality before `rebind_var`.
+  - The module comment and docstrings are updated.
+- `scripts/check_unsafe.sh`: `rebind` added to the pattern for `src/muntin`, allowed only in the helper's definition.
+- Unchanged: `_Erased`, `_Call`, `_Bound`, `_handler_storage.mojo`; `State`, `Headers`, `Request`, `Response`, `Json`, `WithHeaders`, `FromBody`, `ToResponse`, `ToErrorResponse`; `testing.mojo`; `adapters/`; `App`'s other members.
+- Tests:
+  - every existing `tests/test_*.mojo` passes unchanged;
+  - new production tests pin the owned route value registering on `get` and `post`, and a typed value spelled `def(var Int) thin raises Never -> String` registering and answering.
+- Fixtures:
+  - every existing fixture except `post_owned_int_and_body` still fails. The 29 whose class changes and the 17 whose candidate notes change are re-pinned to the new Muntin message or candidate note, for the same documented reason, and the record lists each old → new pair. The 21 rewordings keep their text.
+  - `body_fail/post_owned_int_and_body.mojo` is deleted, replaced by the positive test, and `registration_fail/typed_value_to_owned_slot.mojo` becomes a production fixture registering a typed borrowed value on `App.get`;
+  - a production fixture shows a rejected shape reporting its rule (the guard), and one shows the helper rejecting a layout twin;
+  - `raw_fail/equal_parameter_lists.mojo` stays as M2-014's toolchain pin, though production no longer relies on the rule.
+- Diagnostics: all fixtures are built against `main`'s and the slice's `src` and compared in full, as above.
+- Mutations (scratch copies of `src/muntin`), each red:
+  - each rule removed in turn (route-value count, `GET` body, `POST` body last and required, raw result, raw sole parameter, raw placeholders, result type, `State` placement);
+  - the guard removed;
+  - `Request` or a carrier classified as a route value or not at all;
+  - the body converted before the route value;
+  - the JSON steps after `from_body`;
+  - the helper's assert removed (the layout-twin fixture compiles);
+  - `rebind_var` used outside the helper (`check_unsafe.sh` fails).
+- Docs:
+  - `docs/DX.md`: section 16 examples, and the typed-value spelling rule in sections 5, 8 and 9 beside the `raises Never` rule;
+  - `docs/ARCHITECTURE.md` "Current architecture": the registration surface, with the diagnostic budget replaced by the arity rule, and "When M2 reopens";
+  - `docs/SPEC.md`: the M2 completion contract amended, with a pointer to this record;
+  - `feature_list.json`, `AGENT_PROGRESS.md`.
+- Spike retirement: `tests/registration_spike.mojo`, `tests/test_spike_registration.mojo`, `slot_misuse_names_the_rule.mojo` and `guarded_rebind_rejects_layout_twin.mojo` are deleted, with production tests and fixtures taking over. The toolchain pins stay: `notes_are_per_method.mojo`, `borrowed_overload_cannot_forward.mojo`, `rebind_var_layout_mismatch.mojo` and `rebind_var_layout_twins.mojo`.
+- Done: the above; `check.sh`, `test.sh`, `check_flare.sh` and `git diff --check` exit 0; CI `verify` and `flare` pass; a fresh-context review finds no unresolved material issue.
+- Not in the slice: `String` or `Headers` slots, typed `get` headers, several route values, new methods, `POST` without a body, raw route values or results. Each is a later item that the arity overloads admit.

@@ -862,6 +862,33 @@
         "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0.",
         "A fresh-context review of the final HEAD found no unresolved material issue. CI on PR #42 passes (verify and flare on ubuntu-latest and macos-latest)."
       ]
+    },
+    {
+      "id": "M3-014",
+      "priority": 314,
+      "category": "registration",
+      "description": "Decide with pinned-compiler evidence how registration is structured so features can be added without multiplying one overloaded get/post method past Mojo 1.1.0's ten-note diagnostic budget; production and adapters unchanged.",
+      "acceptance": [
+        "At least these candidates are measured on Mojo 1.1.0: the status quo or deferral; separate named registration surfaces with their own overload sets; a builder or intermediate registration object; a generic or descriptor-based entrypoint; and any smaller design found. Each records call syntax for current stateless and stateful typed, raw, body, Json[T] and WithHeaders[B] routes, whether existing spellings stay valid, overload counts and failing-call diagnostics, the effect on State, ownership and move-only handlers, raw Request, the result and error policies, route-literal validation, first-registration-wins and backend independence, how typed get headers, more methods and more route-value arities would be admitted, and the cost to _Call, _Erased, _Bound and unsafe code; each rejected candidate has a measured reason.",
+        "The selected design (or an explicit deferral) states its costs, invariants, migration and compatibility story and revisit conditions; if it changes an M2 signature, diagnostic class or accepted handler set, the record says so and names the M2 reopen. It ships no typed get headers, new methods, new route-value types or arities, middleware or broader raw handlers.",
+        "Executable evidence: a retained spike exercising the selected mechanism and must-fail or must-build fixtures observing the toolchain premises the decision rests on, each failing for its documented reason, with mutations showing the evidence detects what it claims; realistic candidates built on scratch copies of src/muntin with canonical checks and every existing must-fail diagnostic compared with main's.",
+        "docs/history/architecture-decisions.md records the decision, rejected candidates, costs, invariants, revisit conditions pinned by fixtures and one exact next production slice (M3-015) or, if deferring, the next independent item, with a stub and revisit-index rows in docs/ARCHITECTURE.md; DX, SPEC, spec-items, feature_list and AGENT_PROGRESS record only the decision facts; check.sh, test.sh, check_flare.sh and git diff --check exit 0; git diff main -- src adapters is empty; CI verify and flare pass on its PR; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
+    },
+    {
+      "id": "M3-015",
+      "priority": 315,
+      "category": "registration",
+      "description": "Registration on generic-arity slots in production, the M3-014 slice: get and post each take one overload per handler arity (0 to 2, stateless and stateful) with generic slots and a generic result, today's slot kinds and rules only; reopens M2 for the overload declarations, rejected-call diagnostics and two recorded edges of the accepted set.",
+      "acceptance": [
+        "src/muntin/app.mojo replaces the twenty get/post overloads with six per method (arities 0, 1 and 2, stateless and stateful), every slot var A classified at compile time as an Int route value, a body (FromBody or WithHeaders carrier), a raw Request, or State first in the stateful family, and R generic with the String/StaticString/ToResponse policy chosen at compile time. Each of today's rules is an assert with a message and, as one Bool, guards the adapter's instantiation; messages existing fixtures expect for an unchanged rule are kept. One adapter per arity and family replaces the nine hand adapters, keeping the request order; one private helper asserts exact type equality before rebind_var, and scripts/check_unsafe.sh rejects rebind elsewhere in src/muntin. _Route, App.handle, _Call, _Erased, _Bound, the storage module, the public types, testing.mojo and adapters/ are unchanged.",
+        "Every existing tests/test_*.mojo passes unchanged, and check_flare.sh passes. New tests pin an owned Int route value registering on get and post and a typed value spelled def(var Int) thin raises Never -> String registering. Every existing fixture except body_fail/post_owned_int_and_body still fails; each whose expected text changes is re-pinned to its new message for the same documented reason, with the old and new text listed in the record; production fixtures pin a typed borrowed function value failing on App.get, a rejected shape reporting its rule, and the helper rejecting a layout twin.",
+        "Mutations in scratch copies, each red: each rule removed in turn, the guard removed, a slot kind misclassified, the body converted before the route value, the JSON steps after from_body, the helper's assert removed, rebind_var used outside the helper. The M2 completion contract in docs/SPEC.md, docs/ARCHITECTURE.md (registration surface, When M2 reopens) and docs/DX.md (section 16, the typed-value spelling rule) are updated; the M3-014 spike and its two spike fixtures are deleted with the toolchain pins kept; check.sh, test.sh, check_flare.sh and git diff --check exit 0; CI verify and flare pass; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }

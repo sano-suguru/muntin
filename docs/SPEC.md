@@ -186,7 +186,7 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: **active**. M3-001 to M3-012 are merged and passing in `feature_list.json`. M3-013 (production, the M3-012 slice) is PR #42. Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
+Status: **active**. M3-001 to M3-013 are merged and passing in `feature_list.json`. M3-014 (decision, the registration structure) is in progress; M3-015, its production slice, reopens M2. Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
 
 | Item | Kind | Scope | PR / status |
 |---|---|---|---|
@@ -203,6 +203,8 @@ Status: **active**. M3-001 to M3-012 are merged and passing in `feature_list.jso
 | M3-011 | production | `TestClient` request header fields | PR #40 |
 | M3-012 | decision | typed header access: a `WithHeaders[B]` body carrier for typed `post` handlers, no overload and no injected slot; typed `get` stays raw | PR #41 |
 | M3-013 | production | typed header access for `post` handlers (`WithHeaders[B]`) | PR #42 |
+| M3-014 | decision | registration structure: one overload per handler arity with generic slots on the existing method names; spellings unchanged; reopens M2 for overload declarations, rejected-call diagnostics and two edges of the accepted set | in progress |
+| M3-015 | production | registration on generic-arity slots for `get` and `post`, today's slot kinds and rules only (M2 reopened) | next |
 
 Each item's scope paragraph, and the result paragraphs written when it merged, are in [`docs/history/spec-items.md`](history/spec-items.md#m3-items) (the item order there is the order they were written, not the ID order); citations such as `docs/SPEC.md`, "M3-003 result" refer to those paragraphs. State went first because it was the M3 item most likely to change an M2 signature or M2-005's binding rule; it did not.
 
@@ -214,12 +216,12 @@ Each becomes its own decision-first item. The reason each is additive is from M2
 
 - **OpenAPI/schema output, and its foundations** (moved from M2): it needs a type-to-format mapping; the M3-008 codec maps fields by hand, so a schema source waits for a derived codec;
 - **JSON follow-ups** left out of M3-009: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;
-- **typed header access on `get`, compile-time header names, a `FromHeaders` converter:** left out by M3-012, which gave typed `post` handlers a body carrier (production since M3-013). Every measured typed header shape in `get`'s overload set exceeds Mojo 1.1.0's ten-note cap or changes an M2 signature, so `get` waits for a registration-structure decision, which more methods, more route-value arities and broader raw handlers need as well;
-- **more route values:** non-`Int` types (`String` first, which also makes `/users/{name}` routable), several values, path and query values together, optional/default query values, percent-decoding. The M2-005 positional rule already covers several values; each type adds a converter;
-- **more HTTP methods** (`put`, `patch`, `delete`, `POST` without a body): overload families that repeat the `get`/`post` contract (and, with a stateful twin, two overloads per result policy each);
+- **typed header access on `get`, compile-time header names, a `FromHeaders` converter:** left out by M3-012, which gave typed `post` handlers a body carrier (production since M3-013). Every measured typed header shape in `get`'s overload set exceeds Mojo 1.1.0's ten-note cap or changes an M2 signature, so `get` waits for registration on generic-arity slots (M3-014 selected it; M3-015 is its first slice), after which a `Headers` slot or the carrier adds no overload;
+- **more route values:** non-`Int` types (`String` first, which also makes `/users/{name}` routable), several values, path and query values together, optional/default query values, percent-decoding. The M2-005 positional rule already covers several values; each type adds a converter. Each needs four overloads per method today, past the note cap; after M3-015 a value type is a slot kind and several values a rule (M3-014);
+- **more HTTP methods** (`put`, `patch`, `delete`, `POST` without a body): a new method is its own overload set, and Mojo 1.1.0 counts the note budget per method name, so `put`, `patch` and `delete` fit without restructuring (M3-014, C1); after M3-015 each is the same arity overloads delegating to the shared engine. `POST` without a body adds shapes to `post`, so it waits for M3-015, after which it is a rule change;
 - **more body shapes:** `String`/builtin, optional, multiple and streaming bodies, and binary (bytes) bodies, which need a non-`String` body representation;
 - **fallible conversions and parameter-name checking:** a raising `to_response`/`to_error_response` needs its own error answer (M2-007, M2-012). Name checking needs function-parameter reflection, which Mojo 1.1.0 lacks;
-- **broader raw handlers:** raw route values, `String`/`ToResponse` raw results. Each is an additive overload under the M2-014 parameter-list rule, and an eleventh overload on `get` or `post` must be measured against the diagnostic note budget (M3-007);
+- **broader raw handlers:** raw route values, `String`/`ToResponse` raw results. Today each is an additive overload under the M2-014 parameter-list rule, past the note budget on `get` and `post` (M3-007); after M3-015 each is a rule change (M3-014);
 - middleware;
 - structured errors, including the application-level error mappers that M2-012 rejected on Mojo 1.1.0 (its revisit conditions apply);
 - observability hooks, including logging of dropped handler errors;

@@ -162,17 +162,21 @@ for t in tests/compile_fail/*.mojo; do fixtures+=(route "$t"); done
 # ten-note cap, a generic slot needing rebind, and type-level asserts.
 # tests/with_headers_api_fail: production muntin.WithHeaders is not a
 # FromBody, takes only a FromBody body and is a post body only, last
-# (M3-013).
-must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail tests/header_access_fail tests/with_headers_api_fail)
+# (M3-013). tests/registration_fail: the premises of docs/ARCHITECTURE.md
+# "Registration structure decision (M3-014)": the note budget is per
+# method name, typed borrowed function values convert to no generic slot,
+# a generic slot is rebound only behind an exact-equality assert, and the
+# rule check guards the adapter's instantiation.
+must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail tests/header_access_fail tests/with_headers_api_fail tests/registration_fail)
 for dir in "${must_fail_dirs[@]}"; do
     for t in "$dir"/*.mojo; do fixtures+=(must_fail "$t"); done
 done
 
-# Known gaps the decisions rest on (M3-001, M3-004, M3-002, M3-008): each file must build
+# Known gaps the decisions rest on (M3-001, M3-004, M3-002, M3-008, M3-014): each file must build
 # and is never run. A file that stops building means the toolchain changed
 # what the decision measured; docs/ARCHITECTURE.md lists the revisit
 # condition.
-for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo tests/headers_known_gaps/*.mojo tests/json_known_gaps/*.mojo; do
+for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo tests/headers_known_gaps/*.mojo tests/json_known_gaps/*.mojo tests/registration_known_gaps/*.mojo; do
     fixtures+=(known_gap "$t")
 done
 
