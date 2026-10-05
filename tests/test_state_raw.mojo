@@ -577,7 +577,7 @@ def test_existing_routes_are_unchanged_beside_stateful_raw() raises:
     var typed = app.handle(Request("POST", "/keys", "n"))
     assert_equal(typed.status, 201)
     assert_equal(typed.body, "typed n")
-    # Typed routes still receive no header strings (M3-005).
+    # Typed routes without a carrier still receive no header strings (M3-005).
     var with_fields = app.handle(Request("GET", "/keys/4", "", _headers()))
     assert_equal(with_fields.body, "sha256=k 4")
     assert_equal(_from_body_calls(), 3)

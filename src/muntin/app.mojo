@@ -2,12 +2,14 @@
 
 from ._handler_storage import _Erased
 from .body import FromBody
+from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
 from .state import State, _InjectedState
 
 # Argument shapes App accepts: `def()` and `def(Int)` for GET, and `def(B)`
-# (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody`; and on
+# (M2-006) and `def(Int, B)` (M2-009) for POST with `B: FromBody` (or,
+# since M3-013, a `WithHeaders[B]` carrier, below); and on
 # both, the raw `def(var Request) -> Response` (M2-015). Mojo 1.1.0
 # function types spelled without `thin` are traits and cannot be stored, so
 # `App.get` takes thin function values; ordinary `def` functions convert
@@ -45,8 +47,8 @@ from .state import State, _InjectedState
 # query and body as its first four raw arguments, then each header field's
 # name and value (M3-005; docs/ARCHITECTURE.md "Headers decision (M3-002)",
 # R1), and nothing else runs; `_call_raw` rebuilds the `Request`, headers
-# included, and moves it into the handler. Typed routes get no header
-# strings. The
+# included, and moves it into the handler. A typed route gets header
+# strings only when its body is a `WithHeaders[B]` carrier (below). The
 # body overloads' `not B == Request` guard only improves the message for
 # calls no overload accepts; it takes no part in selection.
 #
@@ -101,6 +103,25 @@ from .state import State, _InjectedState
 # verdict), then 413 when the body is over 1 MiB, after the route value and
 # before `from_body`. Order on a JSON body route: 404, query 400
 # (`App.handle`), route-value 400, 415, 413, JSON 400 (`from_body`), handler.
+#
+# Header carriers (M3-013, docs/ARCHITECTURE.md "Typed header access decision
+# (M3-012)"): `WithHeaders[B]` (`headers_body.mojo`) is accepted in the body
+# slot of the eight body overloads without being a `FromBody`: their last
+# assert accepts `FromBody` or the private marker `_HeaderCarrier`, with its
+# message unchanged, and each sets `_Route.headers` for a carrier. For such
+# a route only, `App.handle` appends each request header field's name and
+# value after the body and the JSON verdict (the R1 transport raw routes
+# use). The four body adapters then rebuild the fields into a `Headers`
+# (`_carrier_fields`; a failure, which only the M3-002 `_fields` gap can
+# cause, is the fixed 500) and build the carrier with `B._from_parts`, which
+# converts the body with the inner `from_body` (a raise: 400). The carrier
+# forwards `_JsonBody` exactly when its body does, so a
+# `WithHeaders[Json[T]]` route keeps the order above; its arity check
+# allows only name and value pairs after the verdict, and every other JSON
+# body keeps the exact arity. Muntin chooses no status for the fields the
+# handler reads and gives them no meaning; the `Content-Type` verdict for a
+# `Json[T]` body (415) and the rebuild failure (500) still answer before the
+# handler.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -326,36 +347,104 @@ def _call_int[
     return respond(result^)
 
 
+def _json_status[B: AnyType](args: List[String], body_at: Int) -> Int:
+    """For a JSON body (`_JsonBody`): 0 when the body may be converted,
+    else the status to answer, 415 or 413, without parsing.
+
+    The `Content-Type` verdict follows the body (`args[body_at + 1]`) and
+    must be `"1"`. For any other JSON body the arguments end there (an exact
+    arity check, so a body can never stand in for a missing verdict); a
+    carrier route (`_HeaderCarrier`) allows only header name and value pairs
+    after it, an even count. Then a body over 1 MiB is 413."""
+    var verdict = body_at + 1
+    if len(args) <= verdict or args[verdict] != "1":
+        return 415
+    comptime if conforms_to(B, _HeaderCarrier):
+        if (len(args) - verdict - 1) % 2 != 0:
+            return 415
+    else:
+        if len(args) != verdict + 1:
+            return 415
+    if args[body_at].byte_length() > _MAX_BODY_BYTES:
+        return 413
+    return 0
+
+
+def _json_answer(status: Int) -> Response:
+    """The response for a nonzero `_json_status`."""
+    if status == 415:
+        return _unsupported_media_type()
+    return _content_too_large()
+
+
+def _carrier_fields[
+    B: AnyType
+](args: List[String], body_at: Int) raises -> Headers:
+    """Rebuilds a carrier route's header fields from the name and value
+    pairs after the body (and after the verdict, for a JSON body), in
+    order. `Headers.add` validates each field again: fields that came from
+    a `Headers` pass, so only the M3-002 `_fields` gap can make this raise,
+    and the adapters answer that with the fixed 500, never 400."""
+    var i = body_at + 1
+    comptime if conforms_to(B, _JsonBody):
+        i += 1
+    var headers = Headers()
+    while i + 1 < len(args):
+        headers.add(args[i], args[i + 1])
+        i += 2
+    return headers^
+
+
 def _call_body[
     B: Movable & Deinitable,
     E: Deinitable,
     R: Movable & Deinitable,
     respond: _Respond[R],
 ](handler: def(var B) thin raises E -> R, args: List[String]) -> Response:
-    """Converts the one argument, the request body, with `B.from_body` and
-    moves the value into `handler`; answers 400 itself, without calling
-    `handler`, if `from_body` raises. For a JSON body (`_JsonBody`) it
-    first answers 415 unless the arguments are exactly the body and the
-    `Content-Type` verdict `"1"` (the arity check keeps a route registered
+    """Converts the one argument, the request body, and moves the value
+    into `handler`: an ordinary body with `B.from_body`; a `WithHeaders`
+    carrier, after its fields are rebuilt, through `B._from_parts`, which
+    converts the inner body (below). Answers 400 itself, without calling
+    `handler`, if `from_body` raises. For a JSON body (`_JsonBody`) that is
+    not a carrier it first answers 415 unless the arguments are exactly the
+    body and the `Content-Type` verdict `"1"` (the arity check keeps a route registered
     without its `json` flag from reading a body `"1"` as the verdict), then
-    413 for a body over 1 MiB, without parsing it.
+    413 for a body over 1 MiB, without parsing it (`_json_status`).
+
+    For a `WithHeaders[B]` carrier (`_HeaderCarrier`) the arguments go on
+    with the header fields' names and values. After the JSON steps for a
+    `Json[T]` inner body (`_json_status` allows the trailing pairs), the
+    fields are rebuilt into `Headers` (a failure is the fixed 500), then the
+    carrier is built with `B._from_parts`, whose inner `from_body` raise is
+    the same 400.
 
     `B` is refined here rather than bounded, as in `App.post`: forwarding a
     handler with an explicit `B` to a callee that requires `B: FromBody`
     fails on Mojo 1.1.0 (docs/ARCHITECTURE.md, "Argument extraction
     decision (M2-005)").
     """
-    comptime assert conforms_to(B, FromBody)
+    comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
     comptime if conforms_to(B, _JsonBody):
-        if len(args) != 2 or args[1] != "1":
-            return _unsupported_media_type()
-        if args[0].byte_length() > _MAX_BODY_BYTES:
-            return _content_too_large()
+        var status = _json_status[B](args, 0)
+        if status != 0:
+            return _json_answer(status)
     var body: B
-    try:
-        body = B.from_body(args[0])
-    except:
-        return _bad_request()
+    comptime if conforms_to(B, _HeaderCarrier):
+        var fields: Headers
+        try:
+            fields = _carrier_fields[B](args, 0)
+        except:
+            return _internal_error()  # only the `_fields` gap gets here
+        try:
+            body = B._from_parts(args[0], fields^)
+        except:
+            return _bad_request()
+    else:
+        comptime assert conforms_to(B, FromBody)
+        try:
+            body = B.from_body(args[0])
+        except:
+            return _bad_request()
     var result: R
     try:
         result = handler(body^)
@@ -379,22 +468,33 @@ def _call_int_body[
     the 415 and 413 steps of `_call_body` run between the two. `B` is
     refined as in `_call_body`.
     """
-    comptime assert conforms_to(B, FromBody)
+    comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
     var id: Int
     try:
         id = _parse_int(args[0])
     except:
         return _bad_request()
     comptime if conforms_to(B, _JsonBody):
-        if len(args) != 3 or args[2] != "1":
-            return _unsupported_media_type()
-        if args[1].byte_length() > _MAX_BODY_BYTES:
-            return _content_too_large()
+        var status = _json_status[B](args, 1)
+        if status != 0:
+            return _json_answer(status)
     var body: B
-    try:
-        body = B.from_body(args[1])
-    except:
-        return _bad_request()
+    comptime if conforms_to(B, _HeaderCarrier):
+        var fields: Headers
+        try:
+            fields = _carrier_fields[B](args, 1)
+        except:
+            return _internal_error()  # only the `_fields` gap gets here
+        try:
+            body = B._from_parts(args[1], fields^)
+        except:
+            return _bad_request()
+    else:
+        comptime assert conforms_to(B, FromBody)
+        try:
+            body = B.from_body(args[1])
+        except:
+            return _bad_request()
     var result: R
     try:
         result = handler(id, body^)
@@ -519,17 +619,28 @@ def _call_state_body[
     """`_call_body` with the route's state handle passed first, by borrow:
     answers 400 itself, without calling `handler`, if `from_body` raises,
     after the same 415 and 413 steps for a JSON body."""
-    comptime assert conforms_to(B, FromBody)
+    comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
     comptime if conforms_to(B, _JsonBody):
-        if len(args) != 2 or args[1] != "1":
-            return _unsupported_media_type()
-        if args[0].byte_length() > _MAX_BODY_BYTES:
-            return _content_too_large()
+        var status = _json_status[B](args, 0)
+        if status != 0:
+            return _json_answer(status)
     var body: B
-    try:
-        body = B.from_body(args[0])
-    except:
-        return _bad_request()
+    comptime if conforms_to(B, _HeaderCarrier):
+        var fields: Headers
+        try:
+            fields = _carrier_fields[B](args, 0)
+        except:
+            return _internal_error()  # only the `_fields` gap gets here
+        try:
+            body = B._from_parts(args[0], fields^)
+        except:
+            return _bad_request()
+    else:
+        comptime assert conforms_to(B, FromBody)
+        try:
+            body = B.from_body(args[0])
+        except:
+            return _bad_request()
     var result: R
     try:
         result = bound.handler(bound.state, body^)
@@ -552,22 +663,33 @@ def _call_state_int_body[
     borrow: a bad route value (`args[0]`) answers 400 before the body
     (`args[1]`) is converted, then a JSON body gets the 415 and 413 steps,
     a `from_body` raise answers 400, and none calls `handler`."""
-    comptime assert conforms_to(B, FromBody)
+    comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
     var id: Int
     try:
         id = _parse_int(args[0])
     except:
         return _bad_request()
     comptime if conforms_to(B, _JsonBody):
-        if len(args) != 3 or args[2] != "1":
-            return _unsupported_media_type()
-        if args[1].byte_length() > _MAX_BODY_BYTES:
-            return _content_too_large()
+        var status = _json_status[B](args, 1)
+        if status != 0:
+            return _json_answer(status)
     var body: B
-    try:
-        body = B.from_body(args[1])
-    except:
-        return _bad_request()
+    comptime if conforms_to(B, _HeaderCarrier):
+        var fields: Headers
+        try:
+            fields = _carrier_fields[B](args, 1)
+        except:
+            return _internal_error()  # only the `_fields` gap gets here
+        try:
+            body = B._from_parts(args[1], fields^)
+        except:
+            return _bad_request()
+    else:
+        comptime assert conforms_to(B, FromBody)
+        try:
+            body = B.from_body(args[1])
+        except:
+            return _bad_request()
     var result: R
     try:
         result = bound.handler(bound.state, id, body^)
@@ -611,6 +733,11 @@ struct _Route(Movable):
     """Whether that body is a `Json[T]` (`_JsonBody`): `App.handle` then
     appends the request's `Content-Type` verdict after the body, and the
     adapter answers 415 and 413 before `from_body` (M3-009)."""
+    var headers: Bool
+    """Whether that body is a `WithHeaders[B]` carrier (`_HeaderCarrier`):
+    `App.handle` then appends each request header field's name and value
+    after the body and any verdict, and the adapter rebuilds the fields
+    into the carrier (M3-013)."""
     var raw: Bool
     """Whether the handler receives the whole request (`_call_raw`,
     `_call_state_raw`): its raw
@@ -625,12 +752,14 @@ struct _Route(Movable):
         var handler: _Erased,
         body: Bool = False,
         json: Bool = False,
+        headers: Bool = False,
         raw: Bool = False,
     ):
         """Splits `route` like `Request` splits a target: at its first `?`."""
         self.method = method
         self.body = body
         self.json = json
+        self.headers = headers
         self.raw = raw
         var mark = route.find("?")
         if mark < 0:
@@ -947,11 +1076,19 @@ struct App(Movable):
     ](mut self, handler: def(var B) thin raises E -> String):
         """Registers `handler` for `POST path`, where `handler`'s one
         parameter is the request body and `path` declares no path or query
-        parameter. `B` is an application type conforming to `FromBody`; the
-        body is converted with `B.from_body` before `handler` runs, and a
+        parameter. An ordinary body `B` is an application type conforming
+        to `FromBody`, converted with `B.from_body` before `handler` runs; a
         conversion failure yields 400 without calling `handler`. A handler
         may declare `body: B` or `var body: B`; `B` may be move-only. A
-        raise is converted or the fixed 500, as for `get` on `def()`."""
+        raise is converted or the fixed 500, as for `get` on `def()`.
+
+        `B` may instead be a `WithHeaders[B2]` carrier with `B2: FromBody`,
+        which has no `from_body`: its fields are rebuilt (the fixed 500 on
+        failure) and it is built through `_from_parts`, which converts the
+        inner body with `B2.from_body` (400 on failure). The handler also
+        receives the request's header fields, for which Muntin chooses no
+        status (a `Json[T]` inner body keeps its `Content-Type` 415 step).
+        This holds for every body overload, stateless or stateful."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
         ), "malformed route literal"
@@ -972,7 +1109,9 @@ struct App(Movable):
             " stateful post handler takes State first and the body last, and"
             " the state is the registration's second argument"
         )
-        comptime assert conforms_to(B, FromBody), (
+        comptime assert conforms_to(B, FromBody) or conforms_to(
+            B, _HeaderCarrier
+        ), (
             "the handler's parameter is the request body; its type must"
             " conform to FromBody"
         )
@@ -983,6 +1122,7 @@ struct App(Movable):
                 _Erased.__init__[call=_call_body[B, E, String, _text]](handler),
                 body=True,
                 json=conforms_to(B, _JsonBody),
+                headers=conforms_to(B, _HeaderCarrier),
             )
         )
 
@@ -1019,7 +1159,9 @@ struct App(Movable):
             " stateful post handler takes State first and the body last, and"
             " the state is the registration's second argument"
         )
-        comptime assert conforms_to(B, FromBody), (
+        comptime assert conforms_to(B, FromBody) or conforms_to(
+            B, _HeaderCarrier
+        ), (
             "the handler's parameter is the request body; its type must"
             " conform to FromBody"
         )
@@ -1032,6 +1174,7 @@ struct App(Movable):
                 ),
                 body=True,
                 json=conforms_to(B, _JsonBody),
+                headers=conforms_to(B, _HeaderCarrier),
             )
         )
 
@@ -1068,7 +1211,9 @@ struct App(Movable):
             " stateful post handler takes State first and the body last, and"
             " the state is the registration's second argument"
         )
-        comptime assert conforms_to(B, FromBody), (
+        comptime assert conforms_to(B, FromBody) or conforms_to(
+            B, _HeaderCarrier
+        ), (
             "the handler's last parameter is the request body; its type must"
             " conform to FromBody"
         )
@@ -1081,6 +1226,7 @@ struct App(Movable):
                 ),
                 body=True,
                 json=conforms_to(B, _JsonBody),
+                headers=conforms_to(B, _HeaderCarrier),
             )
         )
 
@@ -1117,7 +1263,9 @@ struct App(Movable):
             " stateful post handler takes State first and the body last, and"
             " the state is the registration's second argument"
         )
-        comptime assert conforms_to(B, FromBody), (
+        comptime assert conforms_to(B, FromBody) or conforms_to(
+            B, _HeaderCarrier
+        ), (
             "the handler's last parameter is the request body; its type must"
             " conform to FromBody"
         )
@@ -1130,6 +1278,7 @@ struct App(Movable):
                 ),
                 body=True,
                 json=conforms_to(B, _JsonBody),
+                headers=conforms_to(B, _HeaderCarrier),
             )
         )
 
@@ -1177,8 +1326,10 @@ struct App(Movable):
         state: State[S],
     ):
         """Registers the stateful `handler` for `POST path`, as `post` on
-        `def(var B)`: the request body is converted with `B.from_body`
-        before `handler` runs (400 without calling it on failure), its
+        `def(var B)`: the request body is converted before `handler` runs
+        (an ordinary body with `B.from_body`, a carrier as there, whose
+        rebuild failure is the fixed 500; a conversion failure is 400
+        without calling it), its
         String result becomes a 200 text response, and a raise is converted
         or the fixed 500. `handler`'s first parameter is `State[S]`, the
         type of `state`, and its last the body; the route keeps one copy of
@@ -1201,7 +1352,9 @@ struct App(Movable):
         comptime assert not conforms_to(
             B, _InjectedState
         ), "a handler takes at most one State, as its first parameter"
-        comptime assert conforms_to(B, FromBody), (
+        comptime assert conforms_to(B, FromBody) or conforms_to(
+            B, _HeaderCarrier
+        ), (
             "the handler's last parameter is the request body; its type must"
             " conform to FromBody"
         )
@@ -1214,6 +1367,7 @@ struct App(Movable):
                 ),
                 body=True,
                 json=conforms_to(B, _JsonBody),
+                headers=conforms_to(B, _HeaderCarrier),
             )
         )
 
@@ -1251,7 +1405,9 @@ struct App(Movable):
         comptime assert not conforms_to(
             B, _InjectedState
         ), "a handler takes at most one State, as its first parameter"
-        comptime assert conforms_to(B, FromBody), (
+        comptime assert conforms_to(B, FromBody) or conforms_to(
+            B, _HeaderCarrier
+        ), (
             "the handler's last parameter is the request body; its type must"
             " conform to FromBody"
         )
@@ -1264,6 +1420,7 @@ struct App(Movable):
                 ](_Bound(handler, state)),
                 body=True,
                 json=conforms_to(B, _JsonBody),
+                headers=conforms_to(B, _HeaderCarrier),
             )
         )
 
@@ -1303,7 +1460,9 @@ struct App(Movable):
         comptime assert not conforms_to(
             B, _InjectedState
         ), "a handler takes at most one State, as its first parameter"
-        comptime assert conforms_to(B, FromBody), (
+        comptime assert conforms_to(B, FromBody) or conforms_to(
+            B, _HeaderCarrier
+        ), (
             "the handler's last parameter is the request body; its type must"
             " conform to FromBody"
         )
@@ -1316,6 +1475,7 @@ struct App(Movable):
                 ](_Bound(handler, state)),
                 body=True,
                 json=conforms_to(B, _JsonBody),
+                headers=conforms_to(B, _HeaderCarrier),
             )
         )
 
@@ -1354,7 +1514,9 @@ struct App(Movable):
         comptime assert not conforms_to(
             B, _InjectedState
         ), "a handler takes at most one State, as its first parameter"
-        comptime assert conforms_to(B, FromBody), (
+        comptime assert conforms_to(B, FromBody) or conforms_to(
+            B, _HeaderCarrier
+        ), (
             "the handler's last parameter is the request body; its type must"
             " conform to FromBody"
         )
@@ -1367,6 +1529,7 @@ struct App(Movable):
                 ](_Bound(handler, state)),
                 body=True,
                 json=conforms_to(B, _JsonBody),
+                headers=conforms_to(B, _HeaderCarrier),
             )
         )
 
@@ -1417,12 +1580,16 @@ struct App(Movable):
         receives `request.method`, `path`, `query` and `body`, then each
         header field's name and value, as its raw arguments, and nothing else
         runs (no query gathering, no conversion); `_call_raw` or
-        `_call_state_raw` rebuilds the `Request` (`_raw_request`). Typed routes receive no headers. A body route receives
+        `_call_state_raw` rebuilds the `Request` (`_raw_request`). A typed
+        route receives no headers unless its body is a `WithHeaders[B]`
+        carrier (`_Route.headers`). A body route receives
         `request.body` as its last raw argument, after its route value if it
         has one; its call trampoline (`_call_body`, `_call_int_body`)
         converts it and answers 400 itself if that fails. A JSON body route
         (`_Route.json`) also receives the request's `Content-Type` verdict
-        after the body, for the trampoline's 415 step.
+        after the body, for the trampoline's 415 step. A carrier route then
+        receives each header field's name and value, in order, after the
+        body and any verdict.
 
         No matching route is 404. A missing or duplicated query value is 400
         here; the adapter answers its own 400s and turns a handler error
@@ -1461,6 +1628,10 @@ struct App(Movable):
                     args.append(
                         "1" if _json_content_type(request.headers) else ""
                     )
+                if route.headers:
+                    for h in range(len(request.headers)):
+                        args.append(request.headers.name(h))
+                        args.append(request.headers.value(h))
             # No adapter raises: each answers its own 400s and turns a
             # handler error into a response. A raise here is a server fault,
             # never a client error.

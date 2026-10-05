@@ -111,6 +111,17 @@ M3-009 serves `json_app()`: the JSON body route `POST /greet` ->
 `application/json` itself) and `text/plain` are 415, a body over 1 MiB is
 413, and malformed JSON is 400; each status, body and `Content-Type` equals
 `App.handle` with the same fields. The adapter is unchanged.
+
+M3-013 registers the stateful carrier route `POST /signed-greet` ->
+`signed_greet(gate: State[Gate], input: WithHeaders[Json[Greeting]])
+raises Unsigned -> Json[Greeting]` on `json_app()`, with `Gate` defined
+here. The handler reads the credential and echoes the repeated `X-A`/`x-a`
+fields, in order and with their casing, as Muntin received them (Flare's
+client adds fields of its own, which the handler does not echo). Over
+HTTP/1.1 the fields reach the handler, a missing credential is the
+handler's 401 (`Unsigned`), and a missing `Content-Type` is 415 before the
+handler, with 200 when it is sent; each status and body equals
+`App.handle` with the test's fields. The adapter is unchanged.
 """
 
 from std.ffi import c_uint, external_call
@@ -146,6 +157,7 @@ from muntin import (
     ToErrorResponse,
     ToJson,
     ToResponse,
+    WithHeaders,
 )
 from muntin.testing import TestClient
 from muntin_flare import MuntinHandler
@@ -1058,10 +1070,29 @@ def greet_staff(
     return Json(Greeting(greeter[].title + g.name + " #" + String(id)))
 
 
+@fieldwise_init
+struct Gate(Movable):
+    var token: String
+
+
+def signed_greet(
+    gate: State[Gate], input: WithHeaders[Json[Greeting]]
+) raises Unsigned -> Json[Greeting]:
+    var token = input.headers.get("authorization")
+    if not token or token.value() != gate[].token:
+        raise Unsigned("no credential")
+    var seen = String()
+    for i in range(len(input.headers)):
+        if input.headers.name(i).lower() == "x-a":
+            seen += " " + input.headers.name(i) + "=" + input.headers.value(i)
+    return Json(Greeting(input.body.value.name + seen))
+
+
 def json_app() -> App:
     var app = App()
     app.post["/greet"](greet)
     app.post["/greet/{id}"](greet_staff, State(Greeter("Dr. ")))
+    app.post["/signed-greet"](signed_greet, State(Gate("t0k")))
     return app^
 
 
@@ -1123,6 +1154,56 @@ def test_json_over_localhost_matches_app_handle() raises:
             '{"hello":"Adé \\"x\\""}',
         )
         assert_equal(big.byte_length(), 1_048_577)
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+def test_with_headers_over_localhost_matches_app_handle() raises:
+    var child = _serve_in_child(json_app())
+    var base = String("http://127.0.0.1:", child.port)
+    try:
+        var client = _client()
+        var app = json_app()
+        var good = String('{"name":"Ada"}')
+        var ct = String("application/json")
+        # (Content-Type, credential, status): 200 with both, the handler's
+        # 401 without the credential, 415 without Content-Type.
+        var cases = [
+            (ct, String("t0k"), 200),
+            (ct, String(""), 401),
+            (String(""), String("t0k"), 415),
+        ]
+        for c in cases:
+            var req = FlareRequest(
+                "POST", base + "/signed-greet", List(good.as_bytes())
+            )
+            var mh = Headers()
+            req.headers.append("X-A", "1")
+            mh.add("X-A", "1")
+            if c[0].byte_length() > 0:
+                req.headers.append("Content-Type", c[0])
+                mh.add("Content-Type", c[0])
+            if c[1].byte_length() > 0:
+                req.headers.append("Authorization", c[1])
+                mh.add("Authorization", c[1])
+            req.headers.append("x-a", "2")
+            mh.add("x-a", "2")
+            var resp = client.send(req)
+            var local = app.handle(Request("POST", "/signed-greet", good, mh^))
+            var label = c[0] + " " + c[1]
+            print(
+                "observed: POST /signed-greet",
+                label,
+                resp.status,
+                repr(resp.text()),
+            )
+            assert_equal(resp.status, c[2], label)
+            assert_equal(resp.status, local.status, label)
+            assert_equal(resp.text(), local.body, label)
+            if c[2] == 200:
+                # The fields in order, with their casing, over the wire.
+                assert_equal(resp.text(), '{"hello":"Ada X-A=1 x-a=2"}')
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)

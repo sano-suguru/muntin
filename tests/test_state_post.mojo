@@ -468,7 +468,7 @@ def test_test_client_before_and_after_an_app_move() raises:
 
 
 def test_request_headers_take_no_part() raises:
-    # Typed routes receive no header strings (M3-005): a stateful POST
+    # Typed routes without a carrier receive no header strings (M3-005): a stateful POST
     # answers the same through App.handle with or without fields.
     _reset()
     var users = _users()

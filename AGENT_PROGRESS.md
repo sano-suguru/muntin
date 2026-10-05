@@ -4,7 +4,7 @@ The current handoff between coding sessions: state, what is easy to get wrong no
 
 ## Active milestone
 
-M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-012 has `passes: true`; M3-013 is next.
+M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-013 has `passes: true` (M3-013: PR #42).
 
 M3 so far:
 
@@ -14,17 +14,17 @@ M3 so far:
 | headers | M3-002 (`muntin.Headers`, PR #28) | M3-005 (PR #29) |
 | JSON | M3-008 (`Json[T]` over `FromJson`/`ToJson`, PR #32) | M3-009 (PR #36) |
 | `TestClient` request headers | M3-010 (PR #39) | M3-011 (PR #40) |
-| typed header access | M3-012 (`WithHeaders[B]` body carrier on `post`, PR #41) | M3-013 (next) |
+| typed header access | M3-012 (`WithHeaders[B]` body carrier on `post`, PR #41) | M3-013 (PR #42) |
 
 ## Current increment
 
-M3-012 (decision only; PR #41): typed `post` handlers will read request header fields through a Muntin body carrier, `WithHeaders[B]`, in the existing body slot, with no overload and no injected slot; typed `get` handlers stay on the raw `get`. `src/muntin` and `adapters/` are unchanged. `tests/header_access_spike.mojo` (`CarrierApp`, `SpikeWithHeaders`) is decision evidence, not production. Record: `docs/history/architecture-decisions.md`, "Typed header access decision (M3-012)".
+M3-013 (production, the M3-012 slice; PR #42): typed `post` handlers read request header fields through `muntin.WithHeaders[B]` (`src/muntin/headers_body.mojo`), accepted in the body slot of the eight existing body overloads without being a `FromBody`. Among typed routes, only carrier routes transport fields; the adapters rebuild them into the carrier. No overload, injected kind, storage or adapter change. The M3-012 spike and its carrier fixtures are deleted; `tests/test_with_headers.mojo` and `tests/with_headers_api_fail` replace them. Record: `docs/history/architecture-decisions.md`, "Typed header access in production (M3-013)".
 
 ## Easy to get wrong now
 
 The current contract is `docs/ARCHITECTURE.md`, "Current architecture". Points a new session tends to miss:
 
-- Typed handlers cannot read headers until M3-013 lands, and then only on `post` (`WithHeaders[B]`). Header access on typed `get` handlers stays a target that waits for a registration-structure decision: each measured `get` shape drops candidate notes past Mojo 1.1.0's cap or changes an M2 signature, so it is not "one more overload". The JSON `Content-Type` check is a separate verdict for `Json[T]` bodies only, not header extraction.
+- Typed handlers read headers only on `post`, through a `WithHeaders[B]` body. `WithHeaders` is a body-slot type but not a `FromBody` (the accepted cost): generic code bounded by `B: FromBody` does not take it. Header access on typed `get` handlers stays a target that waits for a registration-structure decision: each measured `get` shape drops candidate notes past Mojo 1.1.0's cap or changes an M2 signature, so it is not "one more overload". The JSON `Content-Type` check is a separate verdict for `Json[T]` bodies only, not header extraction.
 - `TestClient` sends header fields only through `headers=`: `client.post(target, body)` to a JSON body route is still 415, and `tests/test_json.mojo` pins that on purpose. The client never adds a field (no automatic `Content-Type`, no per-client defaults); a test that needs the field sends it.
 - `get` and `post` have ten overloads each, Mojo 1.1.0's ten-note diagnostic cap; an eleventh must measure its diagnostics first.
 - M2 is closed: a new item adds to the M2 contract; changing an M2 signature or the 400/404/500 boundary reopens M2 (`docs/ARCHITECTURE.md`, "When M2 reopens").
@@ -40,11 +40,11 @@ Time-bound operational notes. Each says when to delete it.
 
 ## Latest verification evidence
 
-M3-012: the local canonical checks pass, and `src/muntin` and `adapters/` are unchanged. Full evidence: the decision record.
+M3-013: the local canonical checks pass, and the existing must-fail diagnostics equal `main`'s except the 11 the decision measured, which differ only in the echoed assert line. Full evidence: the production record.
 
 ## Next step
 
-M3-013, exactly the record's "Next production slice (M3-013)" (`WithHeaders[B]` in a new module, the carrier branch in `src/muntin/app.mojo`, `tests/test_with_headers.mojo`, `tests/with_headers_api_fail`, one loopback route, the M3-012 spike and its carrier fixtures deleted). Acceptance: `feature_list.json` M3-013.
+After PR #42's CI passes and it merges: the next M3 item from `docs/SPEC.md`, "Remaining candidates" (typed header access on `get` waits for a registration-structure decision).
 
 ## Where things are
 
