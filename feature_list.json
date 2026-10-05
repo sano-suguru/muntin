@@ -892,7 +892,8 @@
         "Re-review round 8: no false claim about M3-014 itself; the slice's where-clause fixtures (twelve, with each overload's red signal), the update rule's src/muntin scope, a revisit condition for borrowed_overload_cannot_forward and the rebind_var check wording fixed.",
         "PR review (#43, third): arity-4 note degradation recorded as an accepted cost with its revisit condition; arity defined as request-slot arity excluding the leading State[S]; the Muntin-message overview limited to shapes passing the where clause.",
         "Re-review round 9: one material finding fixed (typed -> StaticString function values register on the model and are the TODO error on main: recorded as a third, widened edge with a spike test and a slice test); minors applied.",
-        "PR review (#43, third) answered and review loop closed: round 9 found the typed -> StaticString edge (recorded); round 10, scoped to that fix, found one wrong example, fixed. The loop stops here by decision."
+        "PR review (#43, third) answered and review loop closed: round 9 found the typed -> StaticString edge (recorded); round 10, scoped to that fix, found one wrong example, fixed. The loop stops here by decision.",
+        "Round 11, a full fresh-context review of the final HEAD (requested by the third PR review): one material finding (DX's status sentence omitted the owned Int edge), fixed; minors applied. Per the agreed exit rule, no further round."
       ]
     },
     {
