@@ -914,7 +914,12 @@
         "docs/history/architecture-decisions.md records the decision, rejected candidates, costs, invariants, revisit conditions pinned by fixtures and one exact next production slice (M3-017) or the deferral, with a stub and revisit-index rows in docs/ARCHITECTURE.md; DX, SPEC, spec-items, feature_list and AGENT_PROGRESS record only the decision facts; check.sh, test.sh, check_flare.sh and git diff --check exit 0; git diff of src/muntin and adapters against M3-015's HEAD is empty; after the branch is rebased onto main with M3-015 merged, CI verify and flare pass on its PR; a fresh-context review finds no unresolved material issue."
       ],
       "passes": false,
-      "evidence": []
+      "evidence": [
+        "Decision: a Headers request slot on get, the last request parameter after at most one Int route value, stateless and stateful, by exact type equality; a fresh Headers rebuilt per request, no Muntin status for a field, the rebuild's fixed 500 the only added pre-handler failure; post keeps WithHeaders[B] and its messages; the get no-kind message names Headers. Details: docs/ARCHITECTURE.md \"Typed get header access decision (M3-016)\".",
+        "Evidence: tests/get_headers_spike.mojo + tests/test_spike_get_headers.mojo; tests/get_headers_fail (check.sh); scratch copies of M3-015: the slot passes check.sh, test.sh and check_flare.sh, with every fixture's diagnostic and 46 shape probes compared with M3-015's in full; the wrapper and FromHeaders copies pass the scratch tests, check_unsafe.sh and check_flare.sh, with every fixture's diagnostic compared; spike and scratch mutations red. Counts: the record.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; git diff 37a1c7a -- src/muntin adapters empty.",
+        "Fresh-context review: one full round; its findings (an unpinned post shape the _post_rule edit protects, docs the slice missed, incomplete measurements of the rejected candidates) fixed; CI pending until the branch is rebased onto main after PR #44 merges."
+      ]
     },
     {
       "id": "M3-017",
