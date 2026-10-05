@@ -17,7 +17,13 @@
 #                                (raw), Headers, State (only first, through
 #                                the stateful overloads), FromBody or a
 #                                WithHeaders carrier (body), anything else
-#   _shape_ok / _check_shape     every rule as one Bool and as asserts with
+#   where (R == String or ...)   the result rule, on every overload: a
+#                                `where` clause is checked by identity at
+#                                the call site, which a check in the body
+#                                cannot do for `StaticString`
+#                                (tests/registration_fail/
+#                                immutable_origin_result_rejected.mojo)
+#   _shape_ok / _check_shape     every other rule as one Bool and as asserts with
 #                                Muntin's messages; the Bool guards the
 #                                adapter instantiation, so a rejected shape
 #                                reports the rule, not an adapter's failure
@@ -123,8 +129,6 @@ def _shape_ok[
     var places = _path_params(path) + _query_params(path)
     if _count[_RAW, k1, k2]() > 0:
         return k2 == _ABSENT and R == Response and places == 0
-    if not (_is_text[R]() or conforms_to(R, ToResponse)):
-        return False
     var nbody = _count[_BODY, k1, k2]()
     if nbody > 1 or places != _values[k1, k2]():
         return False
@@ -157,9 +161,6 @@ def _check_shape[
         comptime assert R == Response, "a raw handler returns Response"
         comptime assert places == 0, "a raw route declares no parameter"
     else:
-        comptime assert _is_text[R]() or conforms_to(
-            R, ToResponse
-        ), "the handler's result must be String or conform to ToResponse"
         comptime assert (
             _count[_BODY, k1, k2]() <= 1
         ), "a handler takes at most one request body"

@@ -1,6 +1,6 @@
 # Must not compile: an explicitly typed function value with a borrowed
 # parameter (`def(Int) thin raises Never -> String`, the `raises Never`
-# spelling DX section 5 documents for typed values, shown there for
+# spelling DX section 6 documents for typed values, shown there for
 # `def()`) does not convert to a generic slot,
 # owned (`def(var A)`, here) or borrowed (`def(A)`, measured the same),
 # although a plain `def` with that signature does
