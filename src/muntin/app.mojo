@@ -412,9 +412,11 @@ def _call_body[
     413 for a body over 1 MiB, without parsing it (`_json_status`).
 
     For a `WithHeaders[B]` carrier (`_HeaderCarrier`) the arguments go on
-    with the header fields' names and values: they are rebuilt into
-    `Headers` first (a failure is the fixed 500), then the carrier is built
-    with `B._from_parts`, whose inner `from_body` raise is the same 400.
+    with the header fields' names and values. After the JSON steps for a
+    `Json[T]` inner body (`_json_status` allows the trailing pairs), the
+    fields are rebuilt into `Headers` (a failure is the fixed 500), then the
+    carrier is built with `B._from_parts`, whose inner `from_body` raise is
+    the same 400.
 
     `B` is refined here rather than bounded, as in `App.post`: forwarding a
     handler with an explicit `B` to a callee that requires `B: FromBody`
@@ -1325,8 +1327,9 @@ struct App(Movable):
     ):
         """Registers the stateful `handler` for `POST path`, as `post` on
         `def(var B)`: the request body is converted before `handler` runs
-        (an ordinary body with `B.from_body`, a carrier as there; 400
-        without calling it on failure), its
+        (an ordinary body with `B.from_body`, a carrier as there, whose
+        rebuild failure is the fixed 500; a conversion failure is 400
+        without calling it), its
         String result becomes a 200 text response, and a raise is converted
         or the fixed 500. `handler`'s first parameter is `State[S]`, the
         type of `state`, and its last the body; the route keeps one copy of

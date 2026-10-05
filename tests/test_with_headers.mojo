@@ -379,7 +379,7 @@ def test_absent_and_empty_fields_are_left_to_the_handler() raises:
 
 
 def test_a_missing_field_gets_the_handlers_status() raises:
-    # Muntin answers no field itself: the handler chose 401 through its
+    # Muntin answers no missing field itself: the handler chose 401 through its
     # error type, on every JSON carrier shape.
     var prefix = State(Prefix("p:"))
     var app = _app(prefix)

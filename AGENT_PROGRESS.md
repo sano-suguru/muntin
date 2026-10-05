@@ -18,7 +18,7 @@ M3 so far:
 
 ## Current increment
 
-M3-013 (production, the M3-012 slice; PR #42): typed `post` handlers read request header fields through `muntin.WithHeaders[B]` (`src/muntin/headers_body.mojo`), accepted in the body slot of the eight existing body overloads without being a `FromBody`. Only carrier routes transport fields; the adapters rebuild them into the carrier. No overload, injected kind, storage or adapter change. The M3-012 spike and its carrier fixtures are deleted; `tests/test_with_headers.mojo` and `tests/with_headers_api_fail` replace them. Record: `docs/history/architecture-decisions.md`, "Typed header access in production (M3-013)".
+M3-013 (production, the M3-012 slice; PR #42): typed `post` handlers read request header fields through `muntin.WithHeaders[B]` (`src/muntin/headers_body.mojo`), accepted in the body slot of the eight existing body overloads without being a `FromBody`. Among typed routes, only carrier routes transport fields; the adapters rebuild them into the carrier. No overload, injected kind, storage or adapter change. The M3-012 spike and its carrier fixtures are deleted; `tests/test_with_headers.mojo` and `tests/with_headers_api_fail` replace them. Record: `docs/history/architecture-decisions.md`, "Typed header access in production (M3-013)".
 
 ## Easy to get wrong now
 
@@ -40,7 +40,7 @@ Time-bound operational notes. Each says when to delete it.
 
 ## Latest verification evidence
 
-M3-013: the local canonical checks pass, and the existing must-fail diagnostics match `main`'s as the decision measured. Full evidence: the production record.
+M3-013: the local canonical checks pass, and the existing must-fail diagnostics equal `main`'s except the 11 the decision measured, which differ only in the echoed assert line. Full evidence: the production record.
 
 ## Next step
 
