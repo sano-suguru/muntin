@@ -891,7 +891,8 @@
         "Re-review round 7: C3 and C3v (and test.sh for C1, C2, C4b) now measured against main's 269 fixtures (identical, 295 pass); the extra-notes cause corrected to a borrowed Int beside the first parameter; history records keep their citations; minors applied.",
         "Re-review round 8: no false claim about M3-014 itself; the slice's where-clause fixtures (twelve, with each overload's red signal), the update rule's src/muntin scope, a revisit condition for borrowed_overload_cannot_forward and the rebind_var check wording fixed.",
         "PR review (#43, third): arity-4 note degradation recorded as an accepted cost with its revisit condition; arity defined as request-slot arity excluding the leading State[S]; the Muntin-message overview limited to shapes passing the where clause.",
-        "Re-review round 9: one material finding fixed (typed -> StaticString function values register on the model and are the TODO error on main: recorded as a third, widened edge with a spike test and a slice test); minors applied."
+        "Re-review round 9: one material finding fixed (typed -> StaticString function values register on the model and are the TODO error on main: recorded as a third, widened edge with a spike test and a slice test); minors applied.",
+        "PR review (#43, third) answered and review loop closed: round 9 found the typed -> StaticString edge (recorded); round 10, scoped to that fix, found one wrong example, fixed. The loop stops here by decision."
       ]
     },
     {
