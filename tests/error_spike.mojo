@@ -183,7 +183,7 @@ struct _ERoute(Movable):
 
 
 struct ErrorApp(Movable):
-    """Production `App`'s eight registration overloads with each handler
+    """Production `App`'s eight registration overloads as of M2-010, with each handler
     function type widened by an inferred error type `E`, and production's
     dispatch with the 400/500 boundary above.
 

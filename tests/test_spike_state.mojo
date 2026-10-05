@@ -288,7 +288,7 @@ def test_raw_handlers_take_state_then_the_request() raises:
 def test_stateless_m2_shapes_resolve_as_before() raises:
     # One-argument calls never meet the stateful family: every M2 shape,
     # including the raw one on `post` (shorter-list rule), resolves to its
-    # production overload in an app that also has stateful routes.
+    # copy of the production overload in an app that also has stateful routes.
     var users = _users()
     var app = StateApp()
     app.get["/hello"](hello)

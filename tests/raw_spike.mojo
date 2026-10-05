@@ -2,7 +2,7 @@
 # models production `App` with the selected raw `Request -> Response`
 # registration added, separately from the application module
 # (tests/test_spike_raw.mojo) that defines the handlers and error types.
-# The eight typed overloads are production's, copied with their signatures
+# The eight typed overloads are production's as of M2-014, copied with their signatures
 # and asserts unchanged, so overload resolution is measured against the
 # real set; their adapters and response policies are local copies of
 # production's as of M3-014 (below the imports), and route checks,
@@ -265,7 +265,8 @@ struct _RawRoute(Movable):
 
 
 struct RawApp(Movable):
-    """Production `App` plus the raw overloads and the `Request` guard."""
+    """Production `App` as of M2-014 plus the raw overloads and the `Request`
+    guard."""
 
     var _routes: List[_RawRoute]
 
@@ -316,7 +317,7 @@ struct RawApp(Movable):
             )
         )
 
-    # Production's eight overloads, signatures and asserts unchanged; the
+    # Production's eight overloads as of M2-014, signatures and asserts unchanged; the
     # four body overloads gain the `Request` guard.
 
     def get[

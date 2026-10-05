@@ -8,7 +8,7 @@
 # copies of production's typed adapters and response policies as of M3-014,
 # imports production's route checks, matching and `_Erased` unchanged, and
 # copies
-# production's ten overloads (signatures and asserts; the four body
+# production's ten overloads as of M3-001 (signatures and asserts; the four body
 # overloads gain the `State` guard, worded for A2) so `App`'s overload set
 # and diagnostics are measured as production would have them. The
 # application side is tests/test_spike_scoped_state.mojo; the decision is
@@ -351,7 +351,7 @@ struct ScopedApp(Movable):
         parameter is `State[S]`."""
         return StateRoutes(self, state)
 
-    # Production's ten overloads.
+    # Production's ten overloads as of M3-001.
 
     def get[
         E: Deinitable, //, path: StaticString

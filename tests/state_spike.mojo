@@ -3,8 +3,8 @@
 # (candidate A1, `app.get[route](handler, state)`; the rejected scoped
 # registrar A2 is tests/scoped_state_spike.mojo, which reuses this file's
 # shared parts) added, separately from the application module (tests/test_spike_state.mojo)
-# that defines the state types and handlers. Production's ten overloads are
-# copied with their signatures and asserts unchanged (docstrings dropped),
+# that defines the state types and handlers. Production's ten overloads as of
+# M3-001 are copied with their signatures and asserts unchanged (docstrings dropped),
 # so overload resolution is measured against the real set; the adapters
 # and response policies are local copies of production's as of M3-014
 # (below the imports), and route checks, matching, query gathering and
@@ -30,7 +30,7 @@
 #              production `_Erased` as one `_Bound[H, S]` value; the
 #              stateful adapters borrow both per request (no copy, no
 #              refcount change, no allocation).
-#   guard      production's four body overloads reject a `State` body by
+#   guard      the copies of production's four body overloads reject a `State` body by
 #              conformance to the private marker `_InjectedState`, so a
 #              stateful handler registered without its state gets a state
 #              message instead of the `FromBody` one (diagnostics only).
@@ -769,7 +769,7 @@ struct StateApp(Movable):
             )
         )
 
-    # Production's ten overloads, signatures and asserts unchanged; the
+    # Production's ten overloads as of M3-001, signatures and asserts unchanged; the
     # four body overloads gain the `State` guard.
 
     def get[
