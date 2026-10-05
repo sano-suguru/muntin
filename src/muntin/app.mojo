@@ -66,8 +66,8 @@ from .state import State, _InjectedState
 # `Int`, a rebuilt `Request` and a text result reach their generic type
 # through the one rebind helper `_as`, which asserts type equality first
 # (the rebind alone accepts a different type of the same layout:
-# tests/registration_known_gaps/rebind_var_layout_twins.mojo), and
-# `scripts/check.sh` fails on any other rebind. The handler and its adapter
+# tests/registration_known_gaps/rebind_var_layout_twins.mojo), and the
+# confinement step of `scripts/check.sh` fails on any other `rebind_var`. The handler and its adapter
 # are stored together in an `_Erased` box (`_handler_storage.mojo`), so
 # dispatch is one call whatever the shape.
 # Where a route value comes from (path segment or query key) is route data,
@@ -417,18 +417,22 @@ def _post_rule(
     """`post`'s rules for slot kinds `k1`, `k2` (`_ABSENT` when missing):
     `def(B)` with no placeholder, `def(Int, B)` with exactly one, or the raw
     `def(Request) -> Response` with none. The order keeps the messages the
-    per-shape overloads gave before M3-015: for `def(X)`, the placeholders
-    and then `X`; for `def(Int, X)`, the placeholders and then `X`. A first
-    slot other than `Int` in a two-slot handler is reported before the
+    per-shape overloads gave before M3-015: a raw handler returning
+    `Response` gets the raw placeholder messages; for any other `def(X)`
+    (a `Request` with another result included), the placeholders and then
+    `X`; for `def(Int, X)`, the placeholders and then `X`. A first slot
+    other than `Int` in a two-slot handler is reported before the
     placeholders."""
     if k1 == _ABSENT:
         return _POST_NO_BODY
     if k1 == _RAW:
         if k2 != _ABSENT:
             return _POST_STATE_RAW if stateful else _POST_RAW
-        if not response:
-            return _STATE_REQUEST_AS_BODY if stateful else _REQUEST_AS_BODY
-        return _takes_none(paths, queries)
+        if response:
+            return _takes_none(paths, queries)
+        if paths + queries != 0:
+            return _POST_BODY_PLACES
+        return _STATE_REQUEST_AS_BODY if stateful else _REQUEST_AS_BODY
     var body = k1
     if k2 != _ABSENT:
         if k1 == _STATE:
@@ -670,8 +674,8 @@ def _as[T: Movable, A: Movable](var value: T) -> A:
     equality asserted here is exact for origin-free types (`Int`,
     `String`, `Request`); generic `==` ignores which origin a slice has, so
     for a `StaticString` result exactness comes from the overloads' `where`
-    clause. `scripts/check.sh` requires the rebind on the line after this
-    assert and nowhere else."""
+    clause. The confinement step of `scripts/check.sh` requires the
+    `rebind_var` on the line after this assert and nowhere else."""
     comptime assert A == T, "rebind requires generic type equality"
     return rebind_var[A](value^)
 

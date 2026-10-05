@@ -15,11 +15,11 @@ M3 so far:
 | JSON | M3-008 (`Json[T]` over `FromJson`/`ToJson`, PR #32) | M3-009 (PR #36) |
 | `TestClient` request headers | M3-010 (PR #39) | M3-011 (PR #40) |
 | typed header access | M3-012 (`WithHeaders[B]` body carrier on `post`, PR #41) | M3-013 (PR #42) |
-| registration structure | M3-014 (generic-arity slots on `get`/`post`, PR #43) | M3-015 (in review; reopens M2) |
+| registration structure | M3-014 (generic-arity slots on `get`/`post`, PR #43) | M3-015 (PR #44, in review; reopens M2) |
 
 ## Current increment
 
-M3-015 (production, the M3-014 slice): `get` and `post` have six overloads each, one per request-slot arity (0 to 2), stateless and stateful; every slot is `var A` classified from its type (`Int` route value, `FromBody` or carrier body, `Request`), and `R` is accepted only through `where (R == String or R == StaticString or conforms_to(R, ToResponse))`. One ordered rule function (`_rule`) feeds the rule asserts (`_check`) and the guard (`_admits`) of the adapter's instantiation, whose `else` aborts at registration. Six adapters over `_slot` and `_respond` replace the ten hand adapters; the request order is unchanged. The one `rebind_var` is in `_as`, after `comptime assert A == T`, enforced by `check_unsafe.sh`. M2 reopened exactly for the three recorded edges: `var id: Int` route values and typed `-> StaticString` values register, typed values with a borrowed `Int` do not. Every existing constraint text is kept; 45 fixtures are re-pinned (old and new texts in the record), `body_fail/post_owned_int_and_body` is deleted, and the M3-014 spike is retired. Record: `docs/history/architecture-decisions.md`, "Registration on generic-arity slots in production (M3-015)".
+M3-015 (production, the M3-014 slice): `get` and `post` have six overloads each, one per request-slot arity (0 to 2), stateless and stateful; every slot is `var A` classified from its type (`Int` route value, `FromBody` or carrier body, `Request`), and `R` is accepted only through `where (R == String or R == StaticString or conforms_to(R, ToResponse))`. One ordered rule function (`_rule`) feeds the rule asserts (`_check`) and the guard (`_admits`) of the adapter's instantiation, whose `else` aborts at registration. Six adapters over `_slot` and `_respond` replace the ten hand adapters; the request order is unchanged. The one `rebind_var` is in `_as`, after `comptime assert A == T`, enforced by `check_unsafe.sh`. M2 reopened exactly for the three recorded edges: `var id: Int` route values and typed values or helpers whose result satisfies the `where` clause without being spelled `String` (`-> StaticString`, a generic `R` with `where R == String`) register; typed values with a borrowed `Int` do not. Every existing constraint text is kept; 45 fixtures are re-pinned (old and new texts in the record), `body_fail/post_owned_int_and_body` is deleted, and the M3-014 spike is retired. Record: `docs/history/architecture-decisions.md`, "Registration on generic-arity slots in production (M3-015)".
 
 ## Easy to get wrong now
 
@@ -43,7 +43,7 @@ Time-bound operational notes. Each says when to delete it.
 
 ## Latest verification evidence
 
-M3-015: `check.sh`, `test.sh` (30 files, 301 tests), `check_flare.sh`, `check_unsafe.sh` and `git diff --check` pass on the branch. All 278 must-fail fixtures of `main` were built against both `src` trees and compared in full; 42 production mutations were red. Details: the M3-015 record.
+M3-015: `check.sh`, `test.sh` (30 files, 302 tests), `check_flare.sh`, `check_unsafe.sh` and `git diff --check` pass on the branch. All 278 must-fail fixtures of `main` were built against both `src` trees and compared in full; 43 production mutations were red. A fresh-context review's two material findings are fixed (one restored message, now pinned; one edge case recorded), and CI on PR #44 passes. Details: the M3-015 record.
 
 ## Next step
 

@@ -1,14 +1,16 @@
 # Registration on generic-arity slots (M3-015): the accepted-set edges the
-# restructure ships. An owned `Int` route value registers on `get` and
-# `post`; `StaticString` and string-literal results register as text; an
-# explicitly typed function value spelled with `var` slots registers, and so
-# does a typed `-> StaticString` value, also through a generic helper
-# parameter. On the per-shape overloads before M3-015 the owned route value
-# and the `var` spelling were `no matching method`, and the typed
+# restructure ships. An owned `Int` route value registers on `get` and `post`;
+# `StaticString` and string-literal results register as text; an explicitly
+# typed function value spelled with `var` slots registers, and so does a typed
+# `-> StaticString` value, also through a generic helper parameter, and a
+# helper generic over its result type whose own `where` clause proves the
+# registration's. On the per-shape overloads before M3-015 the owned route
+# value and the `var` spelling were `no matching method`, and the typed
 # `StaticString` value and helper were `TODO: function type conversions
-# between closures not supported yet`. The narrowed edge (a typed value
-# with a borrowed `Int`) is tests/registration_api_fail. Decision:
-# docs/ARCHITECTURE.md, "Registration structure decision (M3-014)".
+# between closures not supported yet`, and the generic-result helper `no
+# matching method`. The narrowed edge (a typed value with a borrowed `Int`) is
+# tests/registration_api_fail. Decision: docs/ARCHITECTURE.md, "Registration
+# structure decision (M3-014)".
 
 from std.testing import assert_equal, TestSuite
 
@@ -69,6 +71,14 @@ def register_static[
 ](mut app: App, h: def() thin raises E -> StaticString):
     """A generic helper forwarding a typed `-> StaticString` value."""
     app.get["/helper"](h)
+
+
+def register_text[
+    R: Movable & Deinitable
+](mut app: App, h: def() thin raises Never -> R) where R == String:
+    """A helper generic over the result, whose own `where` clause proves the
+    registration's."""
+    app.get["/generic"](h)
 
 
 def test_owned_route_value_registers_on_get() raises:
@@ -137,6 +147,15 @@ def test_generic_helper_forwards_a_typed_static_string_value() raises:
     register_static(app, static_text)
     var client = TestClient(app^)
     var r = client.get("/helper")
+    assert_equal(r.status, 200)
+    assert_equal(r.text(), "static")
+
+
+def test_generic_result_helper_forwards_a_text_value() raises:
+    var app = App()
+    register_text(app, string_text)
+    var client = TestClient(app^)
+    var r = client.get("/generic")
     assert_equal(r.status, 200)
     assert_equal(r.text(), "static")
 
