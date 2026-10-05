@@ -929,7 +929,7 @@
       "acceptance": [
         "Exactly the \"Next production slice (M3-017)\" in docs/ARCHITECTURE.md, \"Typed get header access decision (M3-016)\": the slot kind, rules, messages, slot rebuild and route flag in src/muntin/app.mojo, with every other file and message listed there unchanged.",
         "tests/test_get_headers.mojo, tests/get_headers_api_fail and a Flare loopback route as listed there pass; the two re-pinned fixtures expect the reworded message; every other existing fixture's diagnostic is identical to the base's in full; the listed mutations are red; the M3-016 spike and its fixtures are retired.",
-        "Docs as the slice lists them; check.sh, test.sh, check_flare.sh and git diff --check exit 0; CI verify and flare pass on its PR; a fresh-context review finds no unresolved material issue."
+        "Docs as the slice lists them; check.sh (its unsafe confinement step runs check_unsafe.sh), test.sh, check_flare.sh and git diff --check exit 0, and production's only rebind_var is still the one in _as; CI verify and flare pass on its PR; a fresh-context review finds no unresolved material issue."
       ],
       "passes": false,
       "evidence": []
