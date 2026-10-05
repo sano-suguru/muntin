@@ -198,6 +198,15 @@ def register_full_clause[
     app.get["/full-clause"](h)
 
 
+def register_full_clause_reordered[
+    R: Movable & Deinitable
+](mut app: App, h: def() thin raises Never -> R) where (
+    R == StaticString or R == String or conforms_to(R, ToResponse)
+):
+    """The registration's clause with its branches reordered."""
+    app.get["/full-clause-reordered"](h)
+
+
 def note_text(var body: Note) -> String:
     return String("note ", body.text)
 
@@ -330,6 +339,7 @@ def test_more_generic_forwarding_forms() raises:
     register_body_text(app, note_text)
     register_slot_and_result(app, by_id)
     register_full_clause(app, static_text)
+    register_full_clause_reordered(app, static_text)
     var client = TestClient(app^)
     assert_equal(client.post("/state-slots/3", "x").text(), "db 3: x")
     assert_equal(client.get("/state-raw-slot").text(), "db GET")
@@ -337,6 +347,9 @@ def test_more_generic_forwarding_forms() raises:
     assert_equal(client.post("/body-generic", "b").text(), "note b")
     assert_equal(client.get("/slot-generic/6").text(), "typed 6")
     assert_equal(client.get("/full-clause").text(), "static")
+    var r = client.get("/full-clause-reordered")
+    assert_equal(r.status, 200)
+    assert_equal(r.text(), "static")
 
 
 def main() raises:
