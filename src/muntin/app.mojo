@@ -664,7 +664,8 @@ def _raw_request(args: List[String]) raises -> Request:
 
 
 def _as[T: Movable, A: Movable](var value: T) -> A:
-    """`value` as `A`, which must equal `T`: the one rebind in `src/muntin`.
+    """`value` as `A`, which must equal `T`: the one `rebind_var` in
+    `src/muntin`.
 
     `comptime if A == Int` does not refine `A` on Mojo 1.1.0
     (tests/header_access_fail/generic_slot_does_not_refine.mojo), so a

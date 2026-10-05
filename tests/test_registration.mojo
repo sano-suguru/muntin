@@ -1,20 +1,23 @@
 # Registration on generic-arity slots (M3-015): the accepted-set edges the
-# restructure ships. An owned `Int` route value registers on `get` and `post`;
-# `StaticString` and string-literal results register as text; an explicitly
-# typed function value spelled with `var` slots registers, and so does a typed
-# `-> StaticString` value, also through a generic helper parameter, and a
-# helper generic over its result type whose own `where` clause proves the
-# registration's. On the per-shape overloads before M3-015 the owned route
-# value and the `var` spelling were `no matching method`, and the typed
-# `StaticString` value and helper were `TODO: function type conversions
-# between closures not supported yet`, and the generic-result helper `no
-# matching method`. The narrowed edge (a typed value with a borrowed `Int`) is
-# tests/registration_api_fail. Decision: docs/ARCHITECTURE.md, "Registration
-# structure decision (M3-014)".
+# restructure ships. Edge 1: an owned `Int` route value registers on `get` and
+# `post`. Edge 2: a typed `-> StaticString` function value registers, also
+# through a helper parameter; `StaticString` and string-literal results are
+# text. Edge 3 (the narrowed one, tests/registration_api_fail): a typed value
+# with a borrowed `Int` no longer registers, and the `var` spelling does. Edge
+# 4, added by M3-015's amendment of M3-014: helpers generic over the result
+# (`where R == String`, `where R == StaticString`) or over a request parameter
+# (`def(var A)`, `def(State[S], var A)`, `def(var A, var B)`, a raw `Request`
+# slot) forward to `get` and `post`. On `main` the owned route value, the
+# `var` spelling and every edge-4 form were `no matching method` (the generic
+# raw slot on `post` a `Request` rule), and the typed `StaticString` value and
+# helper were `TODO: function type conversions between closures not supported
+# yet`. Decision: docs/ARCHITECTURE.md, "Registration structure decision
+# (M3-014)" and "Registration structure amendment: generic forwarding
+# (M3-015)".
 
 from std.testing import assert_equal, TestSuite
 
-from muntin import App, FromBody, State
+from muntin import App, FromBody, Request, Response, State, ToResponse
 from muntin.testing import TestClient
 
 
@@ -73,12 +76,88 @@ def register_static[
     app.get["/helper"](h)
 
 
+@fieldwise_init
+struct Count(ToResponse):
+    var n: Int
+
+    def to_response(deinit self) -> Response:
+        return Response.text(String("count ", self.n))
+
+
+def count() -> Count:
+    return Count(3)
+
+
+def raw_path(req: Request) -> Response:
+    return Response.text(String("raw ", req.method, " ", req.path))
+
+
+def stateful_by_id(db: State[Db], id: Int) -> String:
+    return String(db[].name, " ", id)
+
+
+# Generic forwarding (edge 4, the M3-015 amendment of M3-014): helpers
+# generic over the result or a request parameter, forwarding to `get` and
+# `post`. Each registers on the generic-arity overloads; on the per-shape
+# overloads each was `no matching method`, except the conformance branch,
+# which `main`'s `ToResponse` overloads already took (a control).
+
+
 def register_text[
     R: Movable & Deinitable
 ](mut app: App, h: def() thin raises Never -> R) where R == String:
-    """A helper generic over the result, whose own `where` clause proves the
-    registration's."""
+    """Generic result, `where R == String`."""
     app.get["/generic"](h)
+
+
+def register_static_r[
+    R: Movable & Deinitable
+](mut app: App, h: def() thin raises Never -> R) where R == StaticString:
+    """Generic result, `where R == StaticString`."""
+    app.get["/generic-static"](h)
+
+
+def register_converted[
+    R: Movable & Deinitable
+](mut app: App, h: def() thin raises Never -> R) where conforms_to(
+    R, ToResponse
+):
+    """Generic result, `where conforms_to(R, ToResponse)` (registered on
+    `main` too)."""
+    app.get["/generic-converted"](h)
+
+
+def register_slot_get[
+    A: Movable & Deinitable
+](mut app: App, h: def(var A) thin raises Never -> String):
+    """Generic slot on `get` (an `Int` route value here)."""
+    app.get["/slot/{id}"](h)
+
+
+def register_slot_state_get[
+    S: Movable & Deinitable, A: Movable & Deinitable
+](
+    mut app: App,
+    h: def(State[S], var A) thin raises Never -> String,
+    st: State[S],
+):
+    """Generic slot after a `State` on `get`."""
+    app.get["/state-slot/{id}"](h, st)
+
+
+def register_slots_post[
+    A: Movable & Deinitable, B: Movable & Deinitable
+](mut app: App, h: def(var A, var B) thin raises Never -> String):
+    """Two generic slots on `post` (an `Int` route value, then a body)."""
+    app.post["/slots/{id}"](h)
+
+
+def register_raw_slot[
+    A: Movable & Deinitable
+](mut app: App, h: def(var A) thin raises Never -> Response):
+    """A generic slot filled by `Request`: a raw handler on both methods."""
+    app.get["/raw-slot"](h)
+    app.post["/raw-slot"](h)
 
 
 def test_owned_route_value_registers_on_get() raises:
@@ -158,6 +237,35 @@ def test_generic_result_helper_forwards_a_text_value() raises:
     var r = client.get("/generic")
     assert_equal(r.status, 200)
     assert_equal(r.text(), "static")
+
+
+def test_generic_result_helpers_forward_each_where_branch() raises:
+    var app = App()
+    register_static_r(app, static_text)
+    register_converted(app, count)
+    var client = TestClient(app^)
+    var s = client.get("/generic-static")
+    assert_equal(s.status, 200)
+    assert_equal(s.text(), "static")
+    var c = client.get("/generic-converted")
+    assert_equal(c.status, 200)
+    assert_equal(c.text(), "count 3")
+
+
+def test_generic_slot_helpers_forward() raises:
+    var app = App()
+    register_slot_get(app, by_id)
+    register_slot_state_get(app, stateful_by_id, State(Db("db")))
+    register_slots_post(app, update_note)
+    register_raw_slot(app, raw_path)
+    var client = TestClient(app^)
+    assert_equal(client.get("/slot/5").text(), "typed 5")
+    assert_equal(client.get("/slot/x").status, 400)
+    assert_equal(client.get("/state-slot/4").text(), "db 4")
+    assert_equal(client.post("/slots/2", "hi").text(), "note 20: hi")
+    assert_equal(client.post("/slots/x", "bad").status, 400)
+    assert_equal(client.get("/raw-slot").text(), "raw GET /raw-slot")
+    assert_equal(client.post("/raw-slot", "b").text(), "raw POST /raw-slot")
 
 
 def main() raises:
