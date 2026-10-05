@@ -142,17 +142,30 @@ def version() -> StaticString:
     return "1.0"
 
 
+def register_static[
+    E: Deinitable
+](mut reg: Registrar, h: def() thin raises E -> StaticString):
+    """A generic helper forwarding a typed `-> StaticString` parameter, as
+    an application might; `main`'s `App.get` rejects the same helper with
+    the `TODO: function type conversions` error."""
+    reg.on["GET", "/helper"](h)
+
+
 def test_typed_static_string_value_registers() raises:
     """The third recorded change to the accepted set: a typed function
-    value whose result is `StaticString` registers as text on the model.
+    value whose result is `StaticString`, as a local or as a generic
+    helper's parameter, registers as text on the model.
     Production's text overloads take `def(...) -> String`, and a typed
     value does not convert, so `main` rejects it with the `TODO: function
     type conversions` error."""
     var reg = Registrar()
     var f: def() thin raises Never -> StaticString = version
     reg.on["GET", "/version"](f)
+    register_static(reg, version)
     assert_equal(reg.shapes[0], "GET () -> text")
     assert_equal(_show(reg.invoke(0, _args())), "200 1.0")
+    assert_equal(reg.shapes[1], "GET () -> text")
+    assert_equal(_show(reg.invoke(1, _args())), "200 1.0")
 
 
 def guarded(id: Int) raises Unauthorized -> String:
