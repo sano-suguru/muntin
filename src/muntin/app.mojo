@@ -118,9 +118,10 @@ from .state import State, _InjectedState
 # forwards `_JsonBody` exactly when its body does, so a
 # `WithHeaders[Json[T]]` route keeps the order above; its arity check
 # allows only name and value pairs after the verdict, and every other JSON
-# body keeps the exact arity. Muntin assigns no status to the fields the
-# handler reads; the only header-driven step on a carrier route is the
-# `Content-Type` verdict for a `Json[T]` body, unchanged.
+# body keeps the exact arity. Muntin chooses no status for the fields the
+# handler reads and gives them no meaning; the `Content-Type` verdict for a
+# `Json[T]` body (415) and the rebuild failure (500) still answer before the
+# handler.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -400,8 +401,10 @@ def _call_body[
     R: Movable & Deinitable,
     respond: _Respond[R],
 ](handler: def(var B) thin raises E -> R, args: List[String]) -> Response:
-    """Converts the one argument, the request body, with `B.from_body` and
-    moves the value into `handler`; answers 400 itself, without calling
+    """Converts the one argument, the request body, and moves the value
+    into `handler`: an ordinary body with `B.from_body`; a `WithHeaders`
+    carrier, after its fields are rebuilt, through `B._from_parts`, which
+    converts the inner body (below). Answers 400 itself, without calling
     `handler`, if `from_body` raises. For a JSON body (`_JsonBody`) that is
     not a carrier it first answers 415 unless the arguments are exactly the
     body and the `Content-Type` verdict `"1"` (the arity check keeps a route registered
@@ -1071,17 +1074,18 @@ struct App(Movable):
     ](mut self, handler: def(var B) thin raises E -> String):
         """Registers `handler` for `POST path`, where `handler`'s one
         parameter is the request body and `path` declares no path or query
-        parameter. `B` is an application type conforming to `FromBody` (or a
-        carrier, below); the body is converted with `B.from_body` before
-        `handler` runs, and a conversion failure yields 400 without calling
-        `handler`. A handler
+        parameter. An ordinary body `B` is an application type conforming
+        to `FromBody`, converted with `B.from_body` before `handler` runs; a
+        conversion failure yields 400 without calling `handler`. A handler
         may declare `body: B` or `var body: B`; `B` may be move-only. A
         raise is converted or the fixed 500, as for `get` on `def()`.
 
-        `B` may instead be `WithHeaders[B2]` with `B2: FromBody`: the body
-        is converted with `B2.from_body` (400 on failure) and the handler
-        also receives the request's header fields, to which Muntin assigns
-        no status (a `Json[T]` inner body keeps its `Content-Type` 415 step).
+        `B` may instead be a `WithHeaders[B2]` carrier with `B2: FromBody`,
+        which has no `from_body`: its fields are rebuilt (the fixed 500 on
+        failure) and it is built through `_from_parts`, which converts the
+        inner body with `B2.from_body` (400 on failure). The handler also
+        receives the request's header fields, for which Muntin chooses no
+        status (a `Json[T]` inner body keeps its `Content-Type` 415 step).
         This holds for every body overload, stateless or stateful."""
         comptime assert (
             _path_params(path) >= 0 and _query_params(path) >= 0
@@ -1320,8 +1324,9 @@ struct App(Movable):
         state: State[S],
     ):
         """Registers the stateful `handler` for `POST path`, as `post` on
-        `def(var B)`: the request body is converted with `B.from_body`
-        before `handler` runs (400 without calling it on failure), its
+        `def(var B)`: the request body is converted before `handler` runs
+        (an ordinary body with `B.from_body`, a carrier as there; 400
+        without calling it on failure), its
         String result becomes a 200 text response, and a raise is converted
         or the fixed 500. `handler`'s first parameter is `State[S]`, the
         type of `state`, and its last the body; the route keeps one copy of
