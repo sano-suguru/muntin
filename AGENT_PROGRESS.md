@@ -4,7 +4,7 @@ The current handoff between coding sessions: state, what is easy to get wrong no
 
 ## Active milestone
 
-M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-014 has `passes: true` (M3-014: PR #43). M3-015 (its slice) is `passes: false` until its PR passes CI and review.
+M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-015 has `passes: true` (M3-014: PR #43; M3-015: PR #44, passing after CI and review, not yet merged).
 
 M3 so far:
 
@@ -47,7 +47,7 @@ M3-015: `check.sh`, `test.sh` (30 files, 302 tests), `check_flare.sh`, `check_un
 
 ## Next step
 
-After the M3-015 PR passes CI and review and merges, mark it passing and pick the next item from `docs/SPEC.md`, "Remaining candidates" (each is decision-first; typed `get` headers, `String` route values, more methods and `POST` without a body are now slot kinds or rules on the arity overloads).
+After PR #44 merges, pick the next item from `docs/SPEC.md`, "Remaining candidates" (each is decision-first; typed `get` headers, `String` route values, more methods and `POST` without a body are now slot kinds or rules on the arity overloads).
 
 ## Where things are
 

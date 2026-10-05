@@ -67,9 +67,9 @@ from .state import State, _InjectedState
 # through the one rebind helper `_as`, which asserts type equality first
 # (the rebind alone accepts a different type of the same layout:
 # tests/registration_known_gaps/rebind_var_layout_twins.mojo), and the
-# confinement step of `scripts/check.sh` fails on any other `rebind_var`. The handler and its adapter
-# are stored together in an `_Erased` box (`_handler_storage.mojo`), so
-# dispatch is one call whatever the shape.
+# confinement step of `scripts/check.sh` fails on any other `rebind_var`.
+# The handler and its adapter are stored together in an `_Erased` box
+# (`_handler_storage.mojo`), so dispatch is one call whatever the shape.
 # Where a route value comes from (path segment or query key) is route data,
 # not part of the shape. Whether a route takes the request body is route
 # data too (`_Route.body`): `App.handle` appends the body as the last raw
