@@ -1733,7 +1733,7 @@ Effect of each rejected candidate on what the acceptance names. "Same" means as 
   - a bad route value or body answers 400 before the handler. The route value is checked before the body: on `def(Int, WithHeaders[Note])` with both invalid, the bad route value answers 400 before the carrier's field rebuild would answer 500;
   - `ToErrorResponse` and the fixed 500;
   - owned and borrowed parameters both register;
-  - a typed `def() thin raises Never -> StaticString` value registers as text (the third edge);
+  - a typed `-> StaticString` value, and a generic helper parameter forwarding one, register as text (the third edge);
   - `String` and `Headers` slots, and `Headers` declared before a route value, bind without a new overload.
 - `tests/registration_fail` (9, `check.sh`):
   - `notes_are_per_method.mojo`: `put`'s tenth note is printed beside ten `get` overloads (`get`'s take a second parameter, so all twenty are distinct);
@@ -1801,7 +1801,7 @@ Effect of each rejected candidate on what the acceptance names. "Same" means as 
 - Unchanged (types and behavior; docstrings that describe the old overloads change under the update rule below): `_Erased`, `_Call`, `_Bound`, `_handler_storage.mojo`; `State`, `Headers`, `Request`, `Response`, `Json`, `WithHeaders`, `FromBody`, `ToResponse`, `ToErrorResponse`; `testing.mojo`; `adapters/`; `App`'s other members.
 - Tests:
   - every existing `tests/test_*.mojo` passes, apart from the deleted spike test; the five older spike modules change only by local copies of the helpers that leave `app.mojo` and the comments saying so;
-  - new production tests pin the owned route value registering on `get` and `post`, `StaticString` results and handlers declared `-> StringLiteral[...]` (whose function type returns `String`) registering as text, a typed value spelled `def(var Int) thin raises Never -> String` registering and answering, and a typed `def() thin raises Never -> StaticString` value registering and answering (its pre-change check: on `main` it is the `TODO` error).
+  - new production tests pin the owned route value registering on `get` and `post`, `StaticString` results and handlers declared `-> StringLiteral[...]` (whose function type returns `String`) registering as text, a typed value spelled `def(var Int) thin raises Never -> String` registering and answering, a typed `def() thin raises Never -> StaticString` value registering and answering, and the same through a generic helper parameter `h: def() thin raises E -> StaticString` forwarding to `app.get` (pre-change check for both: on `main` each is the `TODO` error).
 - Fixtures:
   - every fixture the slice does not delete still fails. Each fixture whose expected text no longer matches is re-pinned to its new text (a Muntin message, a new candidate note, or the clause's `violated constraint`) for the same documented reason, and the M3-015 production record lists each old → new pair; the scratch classes above are a guide, not the slice's result. The 21 rewordings keep their text.
   - `body_fail/post_owned_int_and_body.mojo` is deleted, replaced by the positive test;
