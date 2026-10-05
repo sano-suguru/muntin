@@ -787,7 +787,7 @@ def _content_too_large() -> Response:
 def model_post[
     B: FromBody, R: ToResponse, E: Deinitable
 ](handler: def(var B) thin raises E -> R, request: Request) -> Response:
-    """Mirror of `_call_body` with the selected JSON steps: for a JSON body
+    """Mirror of production's `_call_body` as of M3-008 with the selected JSON steps: for a JSON body
     (`_JsonBody`), a request without `application/json` is 415, then a body
     over `MAX_BODY_BYTES` is 413, both before `from_body` parses anything;
     other bodies are unchanged. A handler error is the fixed

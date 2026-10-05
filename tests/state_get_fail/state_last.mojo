@@ -1,6 +1,7 @@
-# Must not compile: State is the first parameter of a stateful handler,
-# never after the route value (M3-003).
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(id: Int, db: State[Db]) thin -> String' to 'def(State[S], Int) raises Never thin -> String'
+# Must not compile: State is the first parameter of a stateful handler, never
+# after the route value (M3-003). The stateful overloads fix `State[S]` first,
+# so the call selects no overload (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(id: Int, db: State[Db]) thin -> String' to 'def(State[S], var A) raises Never thin -> String'
 from muntin import App, State
 
 

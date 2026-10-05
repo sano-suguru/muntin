@@ -1,6 +1,7 @@
 # Must not compile: a stateful raw handler returns Response, never another
-# ToResponse type (M3-007).
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(db: State[Db], req: Request) thin -> Echo' to 'def(State[S], var Request) raises Never thin -> Response'
+# ToResponse type (M3-007). It selects get's stateful one-slot overload, whose
+# rule check reports the raw rule (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a stateful raw get handler takes State first, then only the Request, and returns Response
 from muntin import App, Request, Response, State, ToResponse
 
 

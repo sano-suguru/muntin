@@ -1,12 +1,11 @@
 # Typed header access for `post` handlers in production (M3-013): the
-# `WithHeaders[B]` body carrier on the eight existing body overloads of
-# `App.post` (body only and route value then body, stateless and stateful,
-# `String` and `ToResponse` results), through `App.handle` and `TestClient`
-# (`headers=`), composed with `State` and `Json[T]`; the routes that take
-# no carrier unchanged; and docs/DX.md section 4's typed header access
-# example as written there. Decision: docs/ARCHITECTURE.md, "Typed header
-# access decision (M3-012)". Must-not-compile counterparts:
-# tests/with_headers_api_fail.
+# `WithHeaders[B]` body carrier in the body slot of `App.post` (body only and
+# route value then body, stateless and stateful, `String` and `ToResponse`
+# results), through `App.handle` and `TestClient` (`headers=`), composed with
+# `State` and `Json[T]`; the routes that take no carrier unchanged; and
+# docs/DX.md section 4's typed header access example as written there.
+# Decision: docs/ARCHITECTURE.md, "Typed header access decision (M3-012)".
+# Must-not-compile counterparts: tests/with_headers_api_fail.
 
 from std.collections import Optional
 from std.testing import assert_equal, assert_true, TestSuite
@@ -652,8 +651,7 @@ def test_a_carrier_built_by_hand_takes_explicit_headers() raises:
 
 # The GET path the decision leaves to application code: a function
 # parameterized by a typed handler is itself a raw handler, so production
-# `App` registers it on the existing raw `get` overloads, stateless and
-# stateful. No Muntin change; it has no route values (raw literals declare
+# `App` registers it as a raw `get` handler, stateless and stateful. No Muntin change; it has no route values (raw literals declare
 # none) and the result policy is the helper's.
 
 
@@ -760,8 +758,8 @@ def update_note(id: Int, var input: WithHeaders[Note]) -> String:
 def test_dx_typed_header_access_example() raises:
     var users = State(Users("secret"))
     var app = App()
-    app.post["/users"](create_user, users)  # the existing stateful overload
-    app.post["/notes/{id}"](update_note)  # the existing def(Int, B) overload
+    app.post["/users"](create_user, users)  # stateful, body only
+    app.post["/notes/{id}"](update_note)  # def(Int, B)
     var client = TestClient(app)
     var body = String('{"name":"Ada","age":36}')
     var r = client.post(

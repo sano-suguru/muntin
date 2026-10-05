@@ -1,7 +1,7 @@
 # Must not compile: a raw handler returning String on App.get. Raw handlers
-# return Response only (M2-015); no GET overload takes a Request with a String
-# result, so overload resolution fails with a note for the raw candidate.
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(req: Request) thin -> String' to 'def(var Request) raises Never thin -> Response'
+# return Response only (M2-015); the handler selects get's one-slot overload,
+# whose rule check reports the raw rule (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a raw get handler takes only the Request and returns Response
 
 from muntin import App, Request
 

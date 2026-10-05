@@ -1,5 +1,5 @@
-# Must not compile: a body type without FromBody conformance on the
-# ToResponse overload of App.post (M2-008).
+# Must not compile: a body type without FromBody conformance on App.post,
+# for a handler with a ToResponse result (M2-008).
 # Expected diagnostic (checked by scripts/check.sh): the handler's parameter is the request body; its type must conform to FromBody
 
 from muntin import App, Response

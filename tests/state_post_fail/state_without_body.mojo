@@ -1,6 +1,7 @@
-# Must not compile: POST has no stateful shape without a body; a handler taking
-# only State, registered with its state, matches no post overload (M3-006).
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(db: State[Db]) thin -> String' to 'def(State[S], var B) raises Never thin -> String'
+# Must not compile: POST has no stateful shape without a body; a handler
+# taking only State, registered with its state, selects post's stateful
+# parameterless overload, whose rule check requires the body (M3-006, M3-015).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler takes the request body as its last parameter
 from muntin import App, FromBody, State
 
 

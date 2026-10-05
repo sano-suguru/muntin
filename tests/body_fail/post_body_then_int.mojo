@@ -1,9 +1,7 @@
 # Must not compile: the body before the route value, (B, Int). Binding is
-# positional, route value first (M2-005); there is no reversed overload.
-# Expected text is the compiler's note for App.post's String (Int, B)
-# overload, def(Int, var B) thin -> String (M2-009); the other three post
-# overloads add their own notes ('no matching method').
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(body: UpdateUser, id: Int) thin -> String' to 'def(Int, var B) raises Never thin -> String'
+# positional, route value first (M2-005); the handler selects post's two-slot
+# overload, whose rule check reports that the body comes last (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler takes one request body, as its last parameter
 
 from muntin import App, FromBody
 

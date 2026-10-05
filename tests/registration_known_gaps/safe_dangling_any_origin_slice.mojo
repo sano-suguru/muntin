@@ -6,7 +6,7 @@
 # compiler would otherwise track. This is why the selected design must not
 # accept such a result as text: copying it would read freed memory. Its
 # `where` clause rejects it, as production `App.get` does
-# (tests/registration_fail/immutable_origin_result_rejected.mojo).
+# (tests/registration_api_fail/immutable_origin_result_*.mojo).
 #
 # If this file stops building, safe code can no longer erase a local's
 # origin this way, and this reason for the clause weakens.

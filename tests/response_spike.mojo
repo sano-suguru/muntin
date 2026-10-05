@@ -14,7 +14,7 @@
 #
 #   extraction  how a matched route's raw strings become handler arguments:
 #               one adapter per argument shape (`_call_none`, `_call_int`,
-#               `_call_body`), as in production.
+#               `_call_body`), as in production until M3-015.
 #   response    how the handler's result becomes a `Response`: a compile-time
 #               parameter `respond` of every adapter. `String` results use
 #               `_text`; results of a type conforming to `ToResponse` use
@@ -57,7 +57,8 @@ comptime _Respond[R: AnyType] = def(var R) thin -> Response
 
 
 def _text(var result: String) -> Response:
-    """The `String` policy: a 200 text response, as production today."""
+    """The `String` policy: a 200 text response, as production gave until
+    M3-015."""
     return Response.text(result^)
 
 
@@ -86,7 +87,7 @@ def _call_int[
     R: Movable & Deinitable, respond: _Respond[R]
 ](handler: def(Int) thin -> R, args: List[String]) raises -> Response:
     """Raises, without calling `handler`, if the argument is not an
-    integer (production's `_call_int` contract)."""
+    integer (the contract of production's `_call_int` until M3-015)."""
     return respond(handler(_parse_int(args[0])))
 
 
@@ -94,8 +95,8 @@ def _call_body[
     B: Movable & Deinitable, R: Movable & Deinitable, respond: _Respond[R]
 ](handler: def(var B) thin -> R, args: List[String]) -> Response:
     """Converts the body with `B.from_body` (400 itself on a raise, handler
-    not called), then moves the value in (production's `_call_body`
-    contract)."""
+    not called), then moves the value in (the contract of production's
+    `_call_body` until M3-015)."""
     comptime assert conforms_to(B, FromBody)
     var body: B
     try:
@@ -137,7 +138,8 @@ struct ResponseApp(Movable):
     """Production `App`'s registration syntax and dispatch, plus one generic
     overload per shape for results conforming to `ToResponse`.
 
-    The `String` overloads keep production's exact signatures, so a handler
+    The `String` overloads keep the exact signatures production had until
+    M3-015, so a handler
     whose function type is compatible with `def(...) thin -> String` (a
     declared `-> String`, or `-> StaticString` through Mojo's implicit
     conversion) still resolves to them. The generic overloads bind `R` with

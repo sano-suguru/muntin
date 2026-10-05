@@ -1,6 +1,7 @@
 # Must not compile: a body handler on GET. Body-taking registrations belong to
-# App.post; App.get accepts only def() and def(Int) handlers.
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(body: CreateUser) thin -> String' to 'def(Int) raises Never thin -> String'
+# App.post; the handler selects get's one-slot overload, whose rule check
+# rejects a body there (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a get handler takes no request body
 
 from muntin import App, FromBody, Request, Response
 

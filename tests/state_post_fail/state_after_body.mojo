@@ -1,6 +1,7 @@
 # Must not compile: State is the first parameter of a stateful POST handler,
-# never after the body (M3-006).
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(body: Note, db: State[Db]) thin -> String' to 'def(State[S], var B) raises Never thin -> String'
+# never after the body (M3-006). The stateful overloads fix `State[S]` first,
+# so the call selects no overload (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(body: Note, db: State[Db]) thin -> String' to 'def(State[S], var A) raises Never thin -> String'
 from muntin import App, FromBody, State
 
 

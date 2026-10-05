@@ -1,7 +1,8 @@
 # Must not compile: an (Int, B) handler whose result is neither
-# String-compatible nor ToResponse. Expected text is the note for the
-# ToResponse (Int, B) overload, naming the trait (M2-009).
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(id: Int, body: UpdateUser) thin -> Int' to 'def(Int, var B) raises Never thin -> R', argument type 'Int' does not conform to trait 'ToResponse'
+# String-compatible nor ToResponse. Every overload accepts its result only
+# through the `where` clause, so the call is a 'no matching method' and the
+# two-slot candidate's note is the clause's violated constraint (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): identical(R, StringSpan[ImmStaticOrigin])
 
 from muntin import App, FromBody
 

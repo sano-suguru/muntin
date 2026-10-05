@@ -1,6 +1,6 @@
-# Must not compile: a state argument for a POST handler that takes none has no
-# overload; the state is never silently ignored (M3-006).
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(body: Note) thin -> String' to 'def(State[S], var B) raises Never thin -> String'
+# Must not compile: a state argument for a POST handler that takes none
+# selects no overload; the state is never silently ignored (M3-006, M3-015).
+# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def h(body: Note) thin -> String' to 'def(State[S], var A) raises Never thin -> String'
 from muntin import App, FromBody, State
 
 

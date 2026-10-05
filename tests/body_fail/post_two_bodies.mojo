@@ -1,9 +1,6 @@
-# Must not compile: two body parameters; a handler takes at most one body.
-# Expected text is the compiler's note for App.post's String overload,
-# def(var B) thin -> String with B: FromBody (M2-006); the ToResponse
-# overload (M2-008) and the two (Int, B) overloads (M2-009) add their own
-# notes, so the call is a 'no matching method'.
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(a: CreateUser, b: CreateUser) thin -> String' to 'def(var B) raises Never thin -> String'
+# Must not compile: two body parameters; a handler takes at most one body. It
+# selects post's two-slot overload, whose rule check reports it (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler takes one request body, as its last parameter
 
 from muntin import App, FromBody, Request, Response
 

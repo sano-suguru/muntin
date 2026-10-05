@@ -1,8 +1,8 @@
-# Must not compile: a carrier handler registered on `get`. `get` has no
-# body slot, so no `get` overload takes `WithHeaders[B]`; a `get` route
-# that needs header fields uses the raw `get` (M3-013; docs/ARCHITECTURE.md,
-# "Typed header access decision (M3-012)").
-# Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'def read_note(input: WithHeaders[Note]) thin -> String' to 'def() raises Never thin -> String'
+# Must not compile: a carrier handler registered on `get`. `get` takes no
+# body, so get's one-slot overload reports it; a `get` route that needs header
+# fields uses the raw `get` (M3-013, M3-015; docs/ARCHITECTURE.md, "Typed
+# header access decision (M3-012)").
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a get handler takes no request body
 
 from muntin import App, FromBody, WithHeaders
 

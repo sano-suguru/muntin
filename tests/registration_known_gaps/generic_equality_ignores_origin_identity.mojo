@@ -11,7 +11,7 @@
 # express and bind; production `App.get` accepts only `StaticString`. The
 # selected design therefore states its result rule as a `where` clause,
 # which the compiler checks by identity at the call site
-# (tests/registration_fail/immutable_origin_result_rejected.mojo).
+# (tests/registration_api_fail/immutable_origin_result_*.mojo).
 #
 # If this file stops building, see which assert failed. A non-generic
 # inequality: the types now compare equal outside a generic context; the

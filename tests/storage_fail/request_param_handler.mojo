@@ -1,7 +1,7 @@
 # Must not compile: a Request handler returning String on App.get. Raw
-# handlers return Response only (M2-015,
-# storage_fail/raw_get_string_return.mojo has the raw candidate's note).
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def raw(req: Request) thin -> String' to 'def(Int) raises Never thin -> String'
+# handlers return Response only (M2-015); the handler selects get's one-slot
+# overload, whose rule check reports the raw rule (M3-015).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a raw get handler takes only the Request and returns Response
 
 from muntin import App, Request
 

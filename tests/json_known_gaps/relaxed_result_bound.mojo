@@ -6,7 +6,8 @@
 # `downcast` result inside the registrar, and a non-conforming result then
 # fails as an instantiation `constraint failed`
 # (tests/json_fail/relaxed_result_bound_diagnostic.mojo) instead of
-# `no matching method ... does not conform to trait 'ToResponse'`.
+# `no matching method` (then `does not conform to trait 'ToResponse'`; since
+# M3-015 production's `where` clause's violated constraint).
 from std.builtin.rebind import downcast
 
 from muntin import Response, ToResponse
