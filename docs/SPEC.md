@@ -186,7 +186,7 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: **active**. M3-001 to M3-013 are merged and passing in `feature_list.json`. M3-014 (decision, the registration structure) is in progress; M3-015, its production slice, reopens M2. Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
+Status: **active**. M3-001 to M3-013 are merged and passing in `feature_list.json`. M3-014 (decision, the registration structure) is PR #43; M3-015, its production slice, reopens M2. Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
 
 | Item | Kind | Scope | PR / status |
 |---|---|---|---|
@@ -203,7 +203,7 @@ Status: **active**. M3-001 to M3-013 are merged and passing in `feature_list.jso
 | M3-011 | production | `TestClient` request header fields | PR #40 |
 | M3-012 | decision | typed header access: a `WithHeaders[B]` body carrier for typed `post` handlers, no overload and no injected slot; typed `get` stays raw | PR #41 |
 | M3-013 | production | typed header access for `post` handlers (`WithHeaders[B]`) | PR #42 |
-| M3-014 | decision | registration structure: one overload per handler arity with generic slots on the existing method names; spellings unchanged; reopens M2 for overload declarations, rejected-call diagnostics and two edges of the accepted set | in progress |
+| M3-014 | decision | registration structure: one overload per handler arity with generic slots on the existing method names; spellings unchanged; reopens M2 for overload declarations, rejected-call diagnostics and two edges of the accepted set | PR #43 |
 | M3-015 | production | registration on generic-arity slots for `get` and `post`, today's slot kinds and rules only; reopens M2 | next |
 
 Each item's scope paragraph, and the result paragraphs written when it merged, are in [`docs/history/spec-items.md`](history/spec-items.md#m3-items) (the item order there is the order they were written, not the ID order); citations such as `docs/SPEC.md`, "M3-003 result" refer to those paragraphs. State went first because it was the M3 item most likely to change an M2 signature or M2-005's binding rule; it did not.
