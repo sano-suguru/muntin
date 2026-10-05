@@ -1688,7 +1688,7 @@ Effect of each rejected candidate on what the acceptance names. "Same" means as 
 
 | Candidate | Cost under C4r | Notes |
 |---|---|---|
-| typed `get` headers | one slot kind (`Headers`) or the `WithHeaders` carrier; no overload up to arity 2, two per method once a handler takes three slots, such as `def(Int, Headers, var B)` (spike and scratch) | A `Headers` slot beside a non-carrier `Json[T]` body needs the carrier's even-count arity rule, because the exact arity answers 415 when fields follow the verdict. |
+| typed `get` headers | one slot kind (`Headers`) or the `WithHeaders` carrier; no overload up to arity 2, two per method once a handler takes three slots, such as `def(Int, Int, Headers)` (spike and scratch) | A `Headers` slot beside a non-carrier `Json[T]` body needs the carrier's even-count arity rule, because the exact arity answers 415 when fields follow the verdict. |
 | `String` route values | one slot kind and converter, no overload (spike) | `String` then cannot be a body type, which M2-005's disjointness already implies. |
 | several route values, path and query together | rule changes; no overload up to arity 2, then two per method for arity 3 and two more for arity 4 (ten, the cap) | Binding stays positional, in the literal's order. |
 | more HTTP methods | `put`, `patch` and `delete` each get the same arity overloads (six today), delegating to the shared engine | The method's own rules (body or not) live in the check. |

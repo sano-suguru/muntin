@@ -875,7 +875,12 @@
         "docs/history/architecture-decisions.md records the decision, rejected candidates, costs, invariants, revisit conditions pinned by fixtures and one exact next production slice (M3-015) or, if deferring, the next independent item, with a stub and revisit-index rows in docs/ARCHITECTURE.md; DX, SPEC, spec-items, feature_list and AGENT_PROGRESS record only the decision facts; check.sh, test.sh, check_flare.sh and git diff --check exit 0; git diff main -- src adapters is empty; CI verify and flare pass on its PR; a fresh-context review finds no unresolved material issue."
       ],
       "passes": false,
-      "evidence": []
+      "evidence": [
+        "Decision: C4r, one overload per handler arity on each method (stateless and stateful) with generic slots classified at compile time and a generic result; spellings, binding, request steps and storage unchanged; M3-015 reopens M2 for overload declarations, rejected-call diagnostics, an owned Int route value accepted and typed borrowed function values needing var. Details: docs/ARCHITECTURE.md \"Registration structure decision (M3-014)\".",
+        "Evidence: tests/registration_spike.mojo + tests/test_spike_registration.mojo 6/6; tests/registration_fail 6 and tests/registration_known_gaps 1 (check.sh); scratch copies of C1, C2, C3, C3v, C4b, C4r and C5 measured against main's 269 fixtures (C1, C2, C4b identical; C4r 295 tests and check_flare.sh pass, 68 texts lost, listed in the record); spike and fixture mutations red, inert ones recorded with their reason.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; git diff main -- src adapters empty.",
+        "Fresh-context review: nine material findings fixed (a per-method note mutation that proved nothing, an over-broad diagnostics invariant, guard drift dropping routes silently, an unobserved order claim, overload counts inconsistent with the slice, the 68 fixtures unlisted, an unenforceable rebind rule, deferral not weighed and the reopen left contingent, the effects matrix missing); re-review: all resolved, minors applied."
+      ]
     },
     {
       "id": "M3-015",
