@@ -28,10 +28,13 @@
 #                                registration instead of dropping the
 #                                route (a compile-time `else` assert would
 #                                be reported instead of the rule)
-#   _as[T, A]                    the only `rebind_var`: exact type equality
+#   _as[T, A]                    the only `rebind_var`: type equality
 #                                asserted first, because `rebind_var`
 #                                reinterprets layout twins
-#                                (tests/registration_known_gaps)
+#                                (tests/registration_known_gaps); exact for
+#                                origin-free types, while generic `==`
+#                                equates `StaticString` with
+#                                `StringSlice[ImmutAnyOrigin]`
 #
 # Route literals, matching, JSON and carrier steps are production's and are
 # not modelled here; the scratch copies of src/muntin measured them (the

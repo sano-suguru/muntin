@@ -142,6 +142,10 @@ def version() -> StaticString:
     return "1.0"
 
 
+def any_origin_text() -> StringSlice[ImmutAnyOrigin]:
+    return StringSlice[ImmutAnyOrigin](StaticString("any"))
+
+
 def guarded(id: Int) raises Unauthorized -> String:
     if id == 0:
         raise Unauthorized()
@@ -332,6 +336,18 @@ def test_owned_and_borrowed_parameters_both_register() raises:
     reg.on["POST", "/d"](note_owned)
     assert_equal(_show(reg.invoke(1, _args("4"))), "200 owned 4")
     assert_equal(_show(reg.invoke(3, _args("x"))), "200 owned x")
+
+
+def test_any_origin_text_result_registers() raises:
+    """The third recorded change to the accepted set: a
+    `StringSlice[ImmutAnyOrigin]` result takes the `StaticString` text
+    branch (generic equality does not tell them apart,
+    tests/registration_known_gaps) and is copied into the response;
+    production `App.get` rejects this handler."""
+    var reg = Registrar()
+    reg.on["GET", "/any"](any_origin_text)
+    assert_equal(reg.shapes[0], "GET () -> text")
+    assert_equal(_show(reg.invoke(0, _args())), "200 any")
 
 
 def test_new_slot_types_add_no_overload() raises:
