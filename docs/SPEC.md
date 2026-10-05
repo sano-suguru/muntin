@@ -188,7 +188,7 @@ M2 deliberately does not provide (the M3 list below places each item):
 
 ## M3 — composition and production ergonomics
 
-Status: **active**. M3-001 to M3-014 are merged and passing in `feature_list.json`. M3-015, the production slice of M3-014's registration structure, reopens M2 (PR #44, in review). Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
+Status: **active**. M3-001 to M3-016 are merged and passing in `feature_list.json`; M3-015, the production slice of M3-014's registration structure, reopened M2 (PR #44). M3-016 decides typed header access on `get`; its production slice is M3-017. Each row gives its PR, or `next` for an item not yet started. Each item is cut decision-first: a gate decides with pinned-compiler evidence and names an exact production slice, which is the next item.
 
 | Item | Kind | Scope | PR / status |
 |---|---|---|---|
@@ -207,6 +207,8 @@ Status: **active**. M3-001 to M3-014 are merged and passing in `feature_list.jso
 | M3-013 | production | typed header access for `post` handlers (`WithHeaders[B]`) | PR #42 |
 | M3-014 | decision | registration structure: one overload per request-slot arity (a stateful family keeps a fixed leading `State[S]`) with generic slots on the existing method names; spellings unchanged; reopens M2 for overload declarations, rejected-call diagnostics and three edges of the accepted set (result types for plain `def` handlers stay as production's through a `where` clause); raw `String` is a route value, never a body | PR #43 |
 | M3-015 | production | registration on generic-arity slots for `get` and `post`, today's slot kinds and rules only; reopens M2; amends M3-014 with a fourth accepted-set edge (generic forwarding) | PR #44 |
+| M3-016 | decision | typed header access on `get`: a `Headers` request slot, the handler's last request parameter after at most one `Int` route value, stateless and stateful; the fields rebuilt per request with `Headers`'s semantics, no Muntin status for them; no overload, type or injected kind; `post` keeps `WithHeaders[B]` and its messages | PR #45 |
+| M3-017 | production | typed header access on `get` (`Headers` slot) | next |
 
 Each item's scope paragraph, and the result paragraphs written when it merged, are in [`docs/history/spec-items.md`](history/spec-items.md#m3-items) (the item order there is the order they were written, not the ID order); citations such as `docs/SPEC.md`, "M3-003 result" refer to those paragraphs. State went first because it was the M3 item most likely to change an M2 signature or M2-005's binding rule; it did not.
 
@@ -218,7 +220,7 @@ Each becomes its own decision-first item. The reason each is additive is from M2
 
 - **OpenAPI/schema output, and its foundations** (moved from M2): it needs a type-to-format mapping; the M3-008 codec maps fields by hand, so a schema source waits for a derived codec;
 - **JSON follow-ups** left out of M3-009: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;
-- **typed header access on `get`, compile-time header names, a `FromHeaders` converter:** left out by M3-012, which gave typed `post` handlers a body carrier (production since M3-013). Under the per-shape overloads every measured typed header shape on `get` exceeded Mojo 1.1.0's ten-note cap or changed an M2 signature; since M3-015 a `Headers` slot or the carrier adds no overload up to slot arity 2 (M3-014);
+- **compile-time header names, a `FromHeaders` converter:** left out by M3-012 and M3-016. Typed header access itself is decided on both methods: the `WithHeaders[B]` carrier on `post` (production since M3-013) and a `Headers` slot on `get` (M3-016, production next as M3-017). A `FromHeaders` converter would make Muntin choose a status for header values and needs its own decision; `Headers` can conform to it without changing the `get` shapes (M3-016);
 - **more route values:** non-`Int` types (`String` first, which also makes `/users/{name}` routable), several values, path and query values together, optional/default query values, percent-decoding. The M2-005 positional rule already covers several values; each type adds a converter. Since M3-015 a value type is a slot kind and several values a rule, with no overload up to slot arity 2 (M3-014);
 - **more HTTP methods** (`put`, `patch`, `delete`, `POST` without a body): a new method is its own overload set, and Mojo 1.1.0 counts the note budget per method name, so `put`, `patch` and `delete` fit without restructuring (M3-014, C1); each is the same six arity overloads over the shared rules and adapters. `POST` without a body is a rule change on `post` since M3-015;
 - **more body shapes:** a Muntin text type conforming to `FromBody` (raw `String` is a route-value type and never a body: M3-014; whether other builtins can be bodies is this item's decision), optional, multiple and streaming bodies, and binary (bytes) bodies, which need a non-`String` body representation;

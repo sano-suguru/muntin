@@ -901,6 +901,38 @@
         "Mutations in a scratch worktree, 44 red: each rule removed (18), the where clause removed from each of the twelve overloads, the guard removed, a guard-only condition (aborts at registration), four slot misclassifications, body before route value, JSON steps after from_body, the rebind assert removed, rebind_var outside the helper (app.mojo, storage comment, storage import), the Request rule before the placeholders on post, the where clause removed with a local-origin result.",
         "./scripts/check.sh, ./scripts/test.sh (305 tests), ./scripts/check_flare.sh, ./scripts/check_unsafe.sh and git diff --check exit 0. Amendment: generic forwarding probed against main (13 forms differ, 5 controls equal, 2 rejected on both with a new message) and accepted as edge 4. PR review findings answered by the amendment; fresh-context reviews of it converged (full round, then reviews scoped to each fix) with no material issue; CI on PR #44 passes (verify and flare on ubuntu-latest and macos-latest)."
       ]
+    },
+    {
+      "id": "M3-016",
+      "priority": 316,
+      "category": "extraction",
+      "description": "Decide with pinned-compiler evidence, on M3-015's generic-arity registration, the smallest typed API by which a get handler reads request header fields without the whole raw Request; production and adapters unchanged.",
+      "acceptance": [
+        "At least these candidates are measured on Mojo 1.1.0 against M3-015's registration: a direct Headers request slot (def(Headers), def(Int, Headers), def(State[S], Headers), def(State[S], Int, Headers)); a Muntin-owned header wrapper; a FromHeaders conversion trait; explicit deferral. Each records the handler spelling, stateless/stateful and zero/one-Int composition, borrowed and owned parameters in plain defs, typed function values and generic forwarding, field semantics (order, casing, repeats, empty values), missing fields, request order and statuses, raw Request and WithHeaders[B], Headers on post, duplicate and misplaced header parameters, rule order and diagnostics, slot arity, the result where clause, storage, _Call/_Erased/adapters and the unsafe surface, TestClient and Flare, and whether it creates a general request-injection mechanism; each rejected candidate has a measured reason.",
+        "The selected design (or an explicit deferral with a concrete revisit condition) states ownership, extraction semantics, ordering and placement rules, every existing message it changes with the reason, invariants, costs and revisit conditions; it designs no compile-time header names, FromHeaders, middleware, request-scoped injection, cookies or authentication unless the evidence shows them inseparable from the minimal capability.",
+        "Executable evidence: a retained spike on production's registration pieces exercising the selected mechanism (State, a route value, generic forwarding, TestClient included) and must-fail fixtures observing the premises it rests on, each with one error and failing for its documented reason, with mutations showing the evidence detects what it claims; the selected design on a scratch copy of src/muntin passes check.sh, test.sh and check_flare.sh, and every existing must-fail diagnostic is compared with M3-015's in full, with unfixtured shapes probed against both.",
+        "docs/history/architecture-decisions.md records the decision, rejected candidates, costs, invariants, revisit conditions pinned by fixtures and one exact next production slice (M3-017) or the deferral, with a stub and revisit-index rows in docs/ARCHITECTURE.md; DX, SPEC, spec-items, feature_list and AGENT_PROGRESS record only the decision facts; check.sh, test.sh, check_flare.sh and git diff --check exit 0; git diff of src/muntin and adapters against M3-015's HEAD is empty; after the branch is rebased onto main with M3-015 merged, CI verify and flare pass on its PR; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": true,
+      "evidence": [
+        "Decision: a Headers request slot on get, the last request parameter after at most one Int route value, stateless and stateful, by exact type equality; a fresh Headers rebuilt per request, no Muntin status for a field, the rebuild's fixed 500 the only added pre-handler failure; post keeps WithHeaders[B] and its messages; the get no-kind message names Headers. Details: docs/ARCHITECTURE.md \"Typed get header access decision (M3-016)\".",
+        "Evidence: tests/get_headers_spike.mojo + tests/test_spike_get_headers.mojo; tests/get_headers_fail (check.sh); scratch copies of M3-015: the slot passes check.sh, test.sh and check_flare.sh, with every fixture's diagnostic and 46 shape probes compared with M3-015's in full; the wrapper and FromHeaders copies pass the scratch tests, check_unsafe.sh and check_flare.sh, with every fixture's diagnostic compared; spike and scratch mutations red. Counts: the record.",
+        "./scripts/check.sh, ./scripts/test.sh, ./scripts/check_flare.sh and git diff --check exit 0; git diff main -- src/muntin adapters empty (main with M3-015 merged).",
+        "Fresh-context reviews' findings are addressed (the record), the last on the final HEAD; CI on PR #45 passes (verify and flare on ubuntu-latest and macos-latest)."
+      ]
+    },
+    {
+      "id": "M3-017",
+      "priority": 317,
+      "category": "extraction",
+      "description": "Typed header access on get in production, the M3-016 slice: a Headers request slot as a get handler's last request parameter (def(Headers), def(Int, Headers) and their stateful twins), with no overload added and post unchanged.",
+      "acceptance": [
+        "Exactly the \"Next production slice (M3-017)\" in docs/ARCHITECTURE.md, \"Typed get header access decision (M3-016)\": the slot kind, rules, messages, slot rebuild and route flag in src/muntin/app.mojo, with every other file and message listed there unchanged.",
+        "tests/test_get_headers.mojo, tests/get_headers_api_fail and a Flare loopback route as listed there pass; the two re-pinned fixtures expect the reworded message; every other existing fixture's diagnostic is identical to the base's in full; the listed mutations are red; the M3-016 spike and its fixtures are retired.",
+        "Docs as the slice lists them; check.sh (its unsafe confinement step runs check_unsafe.sh), test.sh, check_flare.sh and git diff --check exit 0, and production's only rebind_var is still the one in _as; CI verify and flare pass on its PR; a fresh-context review finds no unresolved material issue."
+      ],
+      "passes": false,
+      "evidence": []
     }
   ]
 }

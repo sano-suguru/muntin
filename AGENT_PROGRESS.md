@@ -4,7 +4,7 @@ The current handoff between coding sessions: state, what is easy to get wrong no
 
 ## Active milestone
 
-M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-015 has `passes: true` (M3-014: PR #43; M3-015: PR #44).
+M3 (composition and production ergonomics) is active. M0, M0.5, M1 and M2 are complete (M2 closed by M2-016, PR #24; contract in `docs/SPEC.md`, "M2 completion contract"). Every feature in `feature_list.json` up to M3-016 has `passes: true` (M3-015: PR #44; M3-016: PR #45). M3-017, the production slice of M3-016, is next.
 
 M3 so far:
 
@@ -15,17 +15,18 @@ M3 so far:
 | JSON | M3-008 (`Json[T]` over `FromJson`/`ToJson`, PR #32) | M3-009 (PR #36) |
 | `TestClient` request headers | M3-010 (PR #39) | M3-011 (PR #40) |
 | typed header access | M3-012 (`WithHeaders[B]` body carrier on `post`, PR #41) | M3-013 (PR #42) |
-| registration structure | M3-014 (generic-arity slots on `get`/`post`, PR #43) | M3-015 (PR #44, in review; reopens M2) |
+| registration structure | M3-014 (generic-arity slots on `get`/`post`, PR #43) | M3-015 (PR #44; reopens M2) |
+| typed header access on `get` | M3-016 (`Headers` slot, last, PR #45) | M3-017 (next) |
 
 ## Current increment
 
-M3-015 (production, the M3-014 slice plus one decision amendment): `get` and `post` have six overloads each, one per request-slot arity (0 to 2), stateless and stateful; every slot is `var A` classified from its type (`Int` route value, `FromBody` or carrier body, `Request`), and `R` is accepted only through `where (R == String or R == StaticString or conforms_to(R, ToResponse))`. One ordered rule function (`_rule`) feeds the rule asserts (`_check`) and the guard (`_admits`) of the adapter's instantiation, whose `else` aborts at registration. Six adapters over `_slot` and `_respond` replace the ten hand adapters; the request order is unchanged. The one `rebind_var` is in `_as`, after `comptime assert A == T`, enforced by `check_unsafe.sh`. M2 reopened for M3-014's three edges (`var id: Int` route values and typed `-> StaticString` values register, typed values with a borrowed `Int` do not) and a fourth edge, generic forwarding, accepted by "Registration structure amendment: generic forwarding (M3-015)" after the PR review found the slice wider than M3-014 decided. Every existing constraint text is kept; 45 fixtures are re-pinned (old and new texts in the record), `body_fail/post_owned_int_and_body` is deleted, and the M3-014 spike is retired. Record: `docs/history/architecture-decisions.md`, "Registration on generic-arity slots in production (M3-015)".
+M3-016 (decision; `src/muntin` and `adapters/` unchanged): typed header access on `get` is a `Headers` request slot, the handler's last request parameter after at most one `Int` route value (`def(Headers)`, `def(Int, Headers)`, the same after `State[S]`), through the existing six overloads. The handler gets a fresh `Headers` rebuilt from the transported fields (M3-002's semantics; no Muntin status for a field; the only added pre-handler failure is the rebuild's fixed 500); the existing `_Route.headers` transport carries it, with `App.handle` unchanged. `post` keeps `WithHeaders[B]` and every `Headers` message it has. The `get` no-kind message is reworded to name `Headers` (its fixtures are re-pinned in M3-017). Rejected: other positions (the rule alone crashes on the first request), a wrapper type, `FromHeaders`, deferral. Evidence: `tests/get_headers_spike.mojo`, `tests/test_spike_get_headers.mojo`, `tests/get_headers_fail`; a scratch copy measured against M3-015 in full. Record and the exact M3-017 slice: `docs/history/architecture-decisions.md`, "Typed get header access decision (M3-016)".
 
 ## Easy to get wrong now
 
 The current contract is `docs/ARCHITECTURE.md`, "Current architecture". Points a new session tends to miss:
 
-- Typed handlers read headers only on `post`, through a `WithHeaders[B]` body. `WithHeaders` is a body-slot type but not a `FromBody` (the accepted cost): generic code bounded by `B: FromBody` does not take it. Header access on typed `get` handlers stays a target; on the arity overloads it is a `Headers` slot kind or the carrier, with no overload up to slot arity 2 (M3-014). The JSON `Content-Type` check is a separate verdict for `Json[T]` bodies only, not header extraction.
+- Typed handlers read headers only on `post` today, through a `WithHeaders[B]` body. `WithHeaders` is a body-slot type but not a `FromBody` (the accepted cost): generic code bounded by `B: FromBody` does not take it. Typed `get` header access is decided (M3-016: a `Headers` slot, last, by exact type equality) and not yet production (M3-017). `post` takes no `Headers` slot, and M3-017 must keep every `post` message for a `Headers` shape (`tests/get_headers_fail/post_*`). The JSON `Content-Type` check is a separate verdict for `Json[T]` bodies only, not header extraction.
 - `TestClient` sends header fields only through `headers=`: `client.post(target, body)` to a JSON body route is still 415, and `tests/test_json.mojo` pins that on purpose. The client never adds a field (no automatic `Content-Type`, no per-client defaults); a test that needs the field sends it.
 - `get` and `post` have six overloads each (slot arities 0 to 2). A new shape is a slot kind or a rule in `_get_rule`/`_post_rule` plus its message in `_check`, not an overload; keep the rule order that preserves existing messages. Slot arity 3 makes eight overloads per method, 4 makes ten (Mojo 1.1.0's note cap, counted per method name; a rejected result then loses a candidate note), 5 is past it.
 - `rebind_var` accepts a different struct with the same layout (`tests/registration_known_gaps`): every production use of `rebind_var` goes through `_as` after its type-equality assert (the import-free `rebind` is not checked; a follow-up) (exact for origin-free types; for `StaticString` results the `where` clause gives exactness), and `check_unsafe.sh` fails on any other `rebind_var[`, comments included. Write "the rebind" in prose; the existing unsafe pattern also matches the word `check_unsafe` inside `src/muntin`.
@@ -43,11 +44,11 @@ Time-bound operational notes. Each says when to delete it.
 
 ## Latest verification evidence
 
-M3-015: `check.sh`, `test.sh` (30 files, 305 tests), `check_flare.sh`, `check_unsafe.sh` and `git diff --check` pass on the branch. All 278 must-fail fixtures of `main` were built against both `src` trees and compared in full; 44 production mutations were red. The PR review's blocking findings (generic forwarding outside M3-014's edges; the result-error statement) are answered by the amendment record and two pinned fixtures; fresh-context reviews of the amendment converged with no material issue, and CI on PR #44 passes. Details: the M3-015 record.
+M3-016: `check.sh` (with `tests/get_headers_fail`), `test.sh` (the spike test included), `check_flare.sh` and `git diff --check` pass on the branch, and `git diff main -- src/muntin adapters` is empty. The selected design was measured on a scratch copy of M3-015 (its `check.sh`, `test.sh` and `check_flare.sh` pass; every fixture's diagnostic compared in full); spike and scratch mutations are red; a fresh-context review of the final HEAD found nothing open, and CI on PR #45 passes. Full evidence: the M3-016 record.
 
 ## Next step
 
-After PR #44 merges, pick the next item from `docs/SPEC.md`, "Remaining candidates" (each is decision-first; typed `get` headers, `String` route values, more methods and `POST` without a body are now slot kinds or rules on the arity overloads).
+M3-017, exactly the record's "Next production slice (M3-017)".
 
 ## Where things are
 
