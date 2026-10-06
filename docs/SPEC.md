@@ -63,6 +63,7 @@ Each M3 area is cut decision-first: a decision item picks the design with pinned
 | registration on generic-arity slots (one `get`/`post` overload per request-slot arity) | shipped |
 | request header fields in typed `get` handlers (a `Headers` parameter, last) | shipped |
 | `String` route values, with every route value percent-decoded at capture | shipped |
+| `PUT`, `PATCH` and `DELETE` (`app.put`/`app.patch` with `post`'s shapes, `app.delete` with `get`'s; `TestClient.put`, `.patch`, `.delete`) | shipped |
 
 ### Remaining candidates
 
@@ -72,7 +73,7 @@ Each becomes its own decision-first item.
 - **JSON follow-ups**: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;
 - **compile-time header names, a `FromHeaders` converter**: a converter makes Muntin choose a status for header values; `Headers` can conform to it without changing the `get` shapes;
 - **more route values**: several values, path and query values together, optional/default query values, other value types. A value type is a slot kind and several values a rule, with no new overload up to slot arity 2;
-- **more HTTP methods** (`POST` without a body, `HEAD`, `OPTIONS`, 405 with `Allow`): `put`, `patch` and `delete` are decided ([M3-020](history/architecture-decisions.md#http-methods-decision-m3-020)); their production item is M3-021. `POST` without a body is a rule change on `post`, and 405 changes the M2 contract's 404;
+- **more HTTP methods** (bodyless typed `post`, `put` and `patch` handlers, `HEAD`, `OPTIONS`, 405 with `Allow`, a typed `DELETE` body, methods outside `GET`, `POST`, `PUT`, `PATCH`, `DELETE` or a generic entrypoint): each has a revisit condition in [M3-020](history/architecture-decisions.md#http-methods-decision-m3-020). A bodyless shape is a rule change on `post`'s family, and 405 changes the M2 contract's 404;
 - **more body shapes**: a Muntin text type conforming to `FromBody` (raw `String` is a route-value type, never a body), optional, multiple, streaming and binary bodies (binary needs a non-`String` body representation);
 - **fallible conversions and parameter-name checking**: a raising `to_response`/`to_error_response` needs its own error answer; name checking needs function-parameter reflection, which Mojo 1.1.0 lacks;
 - **broader raw handlers**: raw route values, `String`/`ToResponse` raw results (each a rule change on the arity overloads);

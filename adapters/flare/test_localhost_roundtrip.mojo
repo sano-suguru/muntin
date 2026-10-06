@@ -131,6 +131,16 @@ casing. Over HTTP/1.1 the fields reach the handler (200), a missing
 credential is the handler's 401 (`Unsigned`), and an invalid route value is
 400 before the fields are rebuilt; each status and body equals `App.handle`
 with the test's fields. The adapter is unchanged.
+
+M3-021 registers `PUT /notes/{id}` -> `replace_note`, `PATCH /notes/{id}` ->
+`patch_note` (each an `Int` then a `CreateUser` body), `DELETE /notes/{id}`
+-> `delete_note(id: Int)` and the raw `DELETE /purge` -> `purge`, which
+echoes the request, on `users_app()`. Flare delivers each method with its
+body unchanged: `PUT` and `PATCH` with a body, `DELETE` without one and, to
+the raw route, with one. Each status and body equals `TestClient`'s new
+method, or `App.handle` for the `DELETE` with a body. A lowercase `delete` is
+400 from Flare's parser before `App.handle`, which would answer it 404: a
+current backend limit, not Muntin's matching. The adapter is unchanged.
 """
 
 from std.ffi import c_uint, external_call
@@ -420,6 +430,26 @@ def keyed(signer: State[Signer], req: Request) raises Unsigned -> Response:
     return resp^
 
 
+def replace_note(id: Int, body: CreateUser) -> String:
+    return "replaced " + String(id) + " " + body.name
+
+
+def patch_note(id: Int, body: CreateUser) -> String:
+    return "patched " + String(id) + " " + body.name
+
+
+def delete_note(id: Int) -> String:
+    return "deleted " + String(id)
+
+
+def purge(req: Request) -> Response:
+    """A raw `delete` handler: a `DELETE` body reaches only a raw handler."""
+    return Response.text(
+        req.method + "|" + req.path + "|" + req.query + "|" + req.body,
+        status=202,
+    )
+
+
 def headers_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -465,6 +495,10 @@ def users_app() -> App:
     app.get["/staff/{id}"](find_staff, staff)
     app.post["/staff"](hire, staff)
     app.post["/staff/{id}"](assign, staff)
+    app.put["/notes/{id}"](replace_note)
+    app.patch["/notes/{id}"](patch_note)
+    app.delete["/notes/{id}"](delete_note)
+    app.delete["/purge"](purge)
     return app^
 
 
@@ -774,6 +808,111 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             var local = in_memory.post(path, body)
             assert_equal(response.status, local.status, path + " " + body)
             assert_equal(response.text(), local.body, path + " " + body)
+
+        # M3-021: Flare delivers `PUT`, `PATCH` and `DELETE`, with and
+        # without a body, to `App.handle` with the method and body
+        # unchanged; "replaced 42 Ada" only if the route value and the body
+        # were converted, and the raw route echoes the `DELETE` body.
+        var methods = [
+            (
+                String("PUT"),
+                String("/notes/042"),
+                String("name=Ada"),
+                200,
+                String("replaced 42 Ada"),
+            ),
+            (
+                String("PUT"),
+                String("/notes/x"),
+                String("name=Ada"),
+                400,
+                String("Bad Request"),
+            ),
+            (
+                String("PUT"),
+                String("/notes/1"),
+                String("Ada"),
+                400,
+                String("Bad Request"),
+            ),
+            (
+                String("PATCH"),
+                String("/notes/7"),
+                String("name=Bo"),
+                200,
+                String("patched 7 Bo"),
+            ),
+            (
+                String("DELETE"),
+                String("/notes/7"),
+                String(""),
+                200,
+                String("deleted 7"),
+            ),
+            (
+                String("DELETE"),
+                String("/notes/x"),
+                String(""),
+                400,
+                String("Bad Request"),
+            ),
+            (
+                String("DELETE"),
+                String("/purge?k=v"),
+                String(""),
+                202,
+                String("DELETE|/purge|k=v|"),
+            ),
+            (
+                String("DELETE"),
+                String("/purge"),
+                String(" a=b&c?d \n"),
+                202,
+                String("DELETE|/purge|| a=b&c?d \n"),
+            ),
+            (
+                String("POST"),
+                String("/notes/7"),
+                String("name=Ada"),
+                404,
+                String("Not Found"),
+            ),
+        ]
+        for want in methods:
+            var method = want[0]
+            var path = want[1]
+            var body = want[2]
+            var at = method + " " + path + " " + body
+            var response = client.send(
+                FlareRequest(method, base + path, List(body.as_bytes()))
+            )
+            print("observed:", at, response.status, repr(response.text()))
+            assert_equal(response.status, want[3], at)
+            assert_equal(response.text(), want[4], at)
+
+            var local: Response
+            if method == "PUT":
+                local = in_memory.put(path, body)
+            elif method == "PATCH":
+                local = in_memory.patch(path, body)
+            elif method == "POST":
+                local = in_memory.post(path, body)
+            elif body:
+                local = app.handle(Request(method, path, body))
+            else:
+                local = in_memory.delete(path)
+            assert_equal(response.status, local.status, at)
+            assert_equal(response.text(), local.body, at)
+
+        # A current Flare limit: its HTTP/1.1 parser answers a method with a
+        # lowercase letter 400 before `App.handle`, which matches methods
+        # byte for byte and would answer 404.
+        var lowercase = client.send(
+            FlareRequest("delete", base + "/notes/7", List[UInt8]())
+        )
+        print("observed: delete /notes/7", lowercase.status)
+        assert_equal(lowercase.status, 400)
+        assert_equal(app.handle(Request("delete", "/notes/7")).status, 404)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)

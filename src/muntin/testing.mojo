@@ -33,3 +33,31 @@ struct TestClient[origin: Origin[mut=False]]:
         into the `Request` as given (pass `headers=h^` or
         `headers=h.copy()`); none are sent by default."""
         return self._app[].handle(Request("POST", target, body, headers^))
+
+    def put(
+        self,
+        target: String,
+        body: String,
+        *,
+        var headers: Headers = Headers(),
+    ) -> Response:
+        """Sends `PUT target` with `body`, as `post` sends `POST`."""
+        return self._app[].handle(Request("PUT", target, body, headers^))
+
+    def patch(
+        self,
+        target: String,
+        body: String,
+        *,
+        var headers: Headers = Headers(),
+    ) -> Response:
+        """Sends `PATCH target` with `body`, as `post` sends `POST`."""
+        return self._app[].handle(Request("PATCH", target, body, headers^))
+
+    def delete(
+        self, target: String, *, var headers: Headers = Headers()
+    ) -> Response:
+        """Sends `DELETE target` with an empty body, as `get` sends `GET`. A
+        test that sends a `DELETE` body builds the `Request` and calls
+        `App.handle`."""
+        return self._app[].handle(Request("DELETE", target, "", headers^))
