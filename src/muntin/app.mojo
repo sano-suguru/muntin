@@ -64,11 +64,11 @@ from .state import State, _InjectedState
 # `Headers` slot.
 # `comptime if A == Int` does not refine `A` on Mojo 1.1.0, so a parsed
 # `Int`, a `String` route value, a rebuilt `Request` or `Headers` and a text
-# result reach their
-# generic type through the one rebind helper `_as`, which asserts type
-# equality first (the rebind alone accepts a different type of the same
-# layout: tests/registration_known_gaps/rebind_var_layout_twins.mojo), and the
-# confinement step of `scripts/check.sh` fails on any other `rebind_var`.
+# result reach their generic type through the one rebind helper `_as`, which
+# asserts type equality first (the rebind alone accepts a different type of
+# the same layout: tests/registration_known_gaps/rebind_var_layout_twins.mojo),
+# and the confinement step of `scripts/check.sh` fails on any other
+# `rebind_var`.
 # The handler and its adapter are stored together in an `_Erased` box
 # (`_handler_storage.mojo`), so dispatch is one call whatever the shape.
 # Where a route value comes from (path segment or query key) is route data,
@@ -815,10 +815,10 @@ def _slot[
     """Converts the request slot of type `A` whose raw argument is
     `args[at]`, already decoded if it is a route value (`App.handle`). An
     `Int` route value is parsed (`_parse_int`; 400 if invalid); a `String`
-    route value is a copy of the decoded text. A raw `Request` is rebuilt from all the arguments
-    (`_raw_request`; a failure is the fixed 500). A `Headers` slot is
-    rebuilt from the field pairs from `args[at]` on (`_header_slot`; a
-    failure is the fixed 500). A body is converted with
+    route value is a copy of the decoded text. A raw `Request` is rebuilt
+    from all the arguments (`_raw_request`; a failure is the fixed 500). A
+    `Headers` slot is rebuilt from the field pairs from `args[at]` on
+    (`_header_slot`; a failure is the fixed 500). A body is converted with
     `A.from_body` (400 if it raises); for a JSON body (`_JsonBody`) the 415
     and 413 steps run first (`_json_status`); a `WithHeaders` carrier has
     its header fields rebuilt (the fixed 500 on failure) and is built
@@ -1150,9 +1150,10 @@ struct App(Movable):
         converted to `Int` or passed as the decoded `String`, by position
         (names are not checked against the handler); a missing, duplicated
         or empty value, a bad escape, text that is not UTF-8, or, for an
-        `Int`, a non-integer yields 400 without calling `handler`. A `Headers` parameter receives the request's header
-        fields (`path` declares no parameter): a fresh `Headers` with every
-        field in order, rebuilt from the request's; Muntin chooses no status
+        `Int`, a non-integer yields 400 without calling `handler`. A
+        `Headers` parameter receives the request's header fields (`path`
+        declares no parameter): a fresh `Headers` with every field in
+        order, rebuilt from the request's; Muntin chooses no status
         for a field, and only a field held invalidly in memory (the M3-002
         `_fields` gap) is answered before `handler`, with the fixed 500. A
         `Request` parameter makes a raw handler, which returns
@@ -1245,10 +1246,9 @@ struct App(Movable):
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
         `def(var A)` after the state: an `Int` or `String` route value, the
-        request's `Headers`, or the raw `Request` returning `Response`. The state is
-        passed as for `get` on
-        `def(State[S])`; a leading `State[S]` keeps its spelling in a typed
-        function value."""
+        request's `Headers`, or the raw `Request` returning `Response`. The
+        state is passed as for `get` on `def(State[S])`; a leading
+        `State[S]` keeps its spelling in a typed function value."""
         _check["GET", True, path, R, A, _NoSlot]()
         comptime if _admits["GET", True, path, R, A, _NoSlot]():
             self._routes.append(
@@ -1278,8 +1278,8 @@ struct App(Movable):
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
         `def(var A, var B)` after the state: an `Int` or `String` route
-        value, then the request's `Headers`. The state is passed as for `get` on
-        `def(State[S])`."""
+        value, then the request's `Headers`. The state is passed as for
+        `get` on `def(State[S])`."""
         _check["GET", True, path, R, A, B]()
         comptime if _admits["GET", True, path, R, A, B]():
             self._routes.append(
@@ -1369,11 +1369,11 @@ struct App(Movable):
         body the second, as for `post` on `def(var A)`; a `String` is never
         the body. An invalid matched path value, or a missing, duplicated,
         empty or invalid query value, yields 400 before the body is
-        converted (a missing path segment does not match
-        the route: 404); the body's own steps follow; neither calls
-        `handler`. The route value may be borrowed or `var`; an explicitly
-        typed function value spells both parameters `var`. Results and
-        raises as for `get` on `def()`."""
+        converted (a missing path segment does not match the route: 404);
+        the body's own steps follow; neither calls `handler`. The route
+        value may be borrowed or `var`; an explicitly typed function value
+        spells both parameters `var`. Results and raises as for `get` on
+        `def()`."""
         _check["POST", False, path, R, A, B]()
         comptime if _admits["POST", False, path, R, A, B]():
             self._routes.append(

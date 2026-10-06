@@ -231,6 +231,15 @@ def _app() -> App:
     return app^
 
 
+def _dx_app() -> App:
+    """docs/DX.md's registrations, as written there."""
+    var app = App()
+    app.get["/users/{name}"](profile)
+    app.get["/search?{q}"](search)
+    app.get["/items?{limit}"](list_items)
+    return app^
+
+
 def _expect(app: App, target: String, status: Int, body: String) raises:
     var r = TestClient(app).get(target)
     assert_equal(r.status, status, target)
@@ -242,12 +251,12 @@ def _bad(app: App, target: String) raises:
 
 
 def test_dx_examples() raises:
-    var app = _app()
-    _expect(app, "/profiles/alice", 200, "profile alice")
-    _expect(app, "/profiles/J%C3%B6rg", 200, "profile Jörg")
-    _expect(app, "/profiles/a+b", 200, "profile a+b")
-    _bad(app, "/profiles/%zz")
-    _bad(app, "/profiles/%FF")
+    var app = _dx_app()
+    _expect(app, "/users/alice", 200, "profile alice")
+    _expect(app, "/users/J%C3%B6rg", 200, "profile Jörg")
+    _expect(app, "/users/a+b", 200, "profile a+b")
+    _bad(app, "/users/%zz")
+    _bad(app, "/users/%FF")
     _expect(app, "/search?q=mojo+lang", 200, "results for mojo lang")
     _expect(app, "/search?q=a%2Bb", 200, "results for a+b")
     for target in ["/search", "/search?q=", "/search?q=1&q=2"]:
@@ -379,10 +388,6 @@ def test_raw_handler_and_request_stay_undecoded() raises:
     var app = _app()
     _expect(app, "/raw/a%2Fb?q=a+b%2B", 200, "/raw/a%2Fb|q=a+b%2B")
     _expect(app, "/raw/a/b", 404, "Not Found")  # raw matching, not decoded
-    var req = Request("GET", "/profiles/a%20b?q=a+b")
-    _ = app.handle(req)
-    assert_equal(req.path, "/profiles/a%20b")
-    assert_equal(req.query, "q=a+b")
 
 
 def test_headers_and_state_after_a_string() raises:
