@@ -2147,7 +2147,7 @@ Status: **decision** (PR #48; `src/muntin`, `adapters/`, `tests/`, `scripts/` an
 
 ### String route value decision (M3-018)
 
-Status: **decision** (M3-018; `src/muntin`, `adapters/` and `tests/` are unchanged in it). It decides how a typed handler receives a route value as text, so that `/users/{name}` is routable. M2-016 named non-`Int` route values the most visible gap; M3-014 decided that raw `String` is a route-value type and never a body, and that adding it is one slot kind and converter, no overload.
+Status: **decision** (M3-018, PR #49; `src/muntin`, `adapters/` and `tests/` are unchanged in it). It decides how a typed handler receives a route value as text, so that `/users/{name}` is routable. M2-016 named non-`Int` route values the most visible gap; M3-014 decided that raw `String` is a route-value type and never a body, and that adding it is one slot kind and converter, no overload.
 
 **Why this candidate.** Of SPEC's remaining candidates:
 - `String` route values: every route that names something other than a number (`/users/{name}`, `/tags/{slug}`, `/search?{q}`) is unreachable by a typed handler today, and raw literals declare no placeholder, so it is not reachable by a raw one either. What the `String` holds (raw or decoded text) is a semantic default that cannot change later without silently changing the bytes an unchanged `def(String)` receives, and later route-value items (several values, path and query together, optional values, other value types) build on it.
