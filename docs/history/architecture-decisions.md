@@ -2144,3 +2144,31 @@ Status: **decision** (PR #48; `src/muntin`, `adapters/`, `tests/`, `scripts/` an
 **Revisit when:** a defect reaches `main` that a skipped base-wide comparison, loopback case or slice mutation would have caught; the adapter starts depending on the route (for example, converting header fields only for routes that read them); or a production item outside the trigger still needs the base-wide comparison to settle a question.
 
 **Next action: deferral.** There is no production slice: this record's pull request writes the policy into `docs/DEVELOPMENT.md`, and the next production item follows it. Revisit under the conditions above.
+
+### String route value decision (M3-018)
+
+Status: **decision, open** (M3-018; `src/muntin` and `adapters/` are unchanged in it). It decides how a typed handler receives a route value as text, so that `/users/{name}` is routable. M2-016 named non-`Int` route values the most visible gap; M3-014 decided that raw `String` is a route-value type and never a body, and that adding it is one slot kind and converter, no overload.
+
+**Why this candidate.** Of SPEC's remaining candidates:
+- `String` route values: every route that names something other than a number (`/users/{name}`, `/tags/{slug}`, `/search?{q}`) is unreachable by a typed handler today, and raw literals declare no placeholder, so it is not reachable by a raw one either. What the `String` holds (raw or decoded text) is a semantic default that cannot change later without silently changing the bytes an unchanged `def(String)` receives, and later route-value items (several values, path and query together, optional values, other value types) build on it.
+- Middleware: more leverage overall, but `App.handle` is already the one seam and no handler shape depends on what wraps it, so postponing it builds nothing on a wrong seam; its design is also the largest and least settled on Mojo 1.1.0 (no captures, no existentials).
+- `put`, `patch`, `delete`: M3-014 settled the structure (six arity overloads each over the shared rules); there is little design uncertainty left, so it is production work, not a decision.
+- `POST` without a body and `FromHeaders`: both are M3-016 revisit conditions whose triggers have not fired.
+- `app.run()`/lifecycle: serving belongs to the backend (SPEC, M2-016 item 1) and depends on Flare's server API more than on Muntin's.
+- Several route values: a rule change that is cheaper after the value types are settled; `(Int, Int, B)` on `post` is slot arity 3, eight overloads.
+
+**Question.** When a typed handler takes a `String` route value from a `{name}` path segment or a `{key}` query item, what text does it receive, which requests are answered before the handler and with which status, and which handler shapes and diagnostics change?
+
+**What settles it:**
+- the value's content: what clients can send (over Flare a request target carries only `!`..`~`, so any other byte reaches Muntin percent-encoded), the encodings in RFC 3986 section 2.1 and the WHATWG URL standard's `application/x-www-form-urlencoded` parser, and Mojo 1.1.0's behavior when a `String` is built from decoded bytes that are not UTF-8 (measured);
+- shapes, statuses and messages: a scratch copy of production with a `String` kind, built and run with `check.sh` (which expected texts change), `test.sh` and `TestClient` probes of each status;
+- whether an M2 statement changes: the M2 contract's 400 list, `Int` conversion, the raw handler's `Request`.
+
+**Boundaries that do not change silently:**
+- `Int` route values: conversion, the set of inputs answered 400, nothing decoded; query keys compared byte for byte; `Request.path` and `Request.query` raw; matching on the raw path; raw handlers;
+- M3-014: `String` is a route value and never a body;
+- the registration structure: six overloads per method, the `where` clause, the rule guard, one `rebind_var`, the storage module and unsafe confinement;
+- every existing diagnostic, unless this record names the change and why;
+- the M2 contract's 400/404/500 boundary (SPEC, "M2 completion contract"); a change to it reopens M2.
+
+**Candidates to measure:** (1) a `String` slot holding the raw text; (2) a `String` slot holding the percent-decoded text, with `+` in query values as the sub-question; (3) a Muntin text wrapper type as the slot; (4) a conversion trait for application route-value types; (D0) deferral.
