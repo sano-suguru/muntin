@@ -4,7 +4,7 @@
 # Mojo 1.1.0 reports the adapter's own failure first and the rule's message
 # never appears (docs/history/architecture-decisions.md, "Registration structure
 # decision (M3-014)").
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: a get handler's parameter is an Int route value, the request Headers or, for a raw handler, the Request
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a get handler's parameter is an Int or String route value, the request Headers or, for a raw handler, the Request
 from muntin import App
 
 

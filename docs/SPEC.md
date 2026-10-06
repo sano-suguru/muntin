@@ -45,6 +45,8 @@ On Mojo 1.1.0, through `TestClient` and, for the same `App`, a real loopback req
 
 M3-015 amended the contract (decided by M3-014): the registration overloads are one per request-slot arity with generic slots and a `where` clause on the result, rejected calls report the Muntin rule they break, an owned `var id: Int` route value and typed `-> StaticString` function values register, typed function values spell each request parameter `var`, and helpers generic over the result or a request parameter forward to `get` and `post`. Spellings, binding, the results of plain `def` handlers, errors, the raw escape hatch, ownership and the backend seam are unchanged ([Registration on generic-arity slots in production (M3-015)](history/architecture-decisions.md#registration-on-generic-arity-slots-in-production-m3-015)).
 
+M3-019 amended the contract (decided by M3-018): a route value is percent-decoded once when it is captured, before it is converted, so an escaped `Int` value whose decoded text is a valid `Int` (`/users/%34%32`, `?limit=%31%30`) is accepted where it was 400. A value written without escapes keeps its meaning, every invalid value is still 400 before the handler, and query keys, `Request` and raw handlers stay undecoded ([Route-value decoding and String route values decision (M3-018)](history/architecture-decisions.md#route-value-decoding-and-string-route-values-decision-m3-018)).
+
 Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it. What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
 
 ## M3 — composition and production ergonomics
@@ -60,6 +62,7 @@ Each M3 area is cut decision-first: a decision item picks the design with pinned
 | request header fields in typed `post` handlers (`WithHeaders[B]`) | shipped |
 | registration on generic-arity slots (one `get`/`post` overload per request-slot arity) | shipped |
 | request header fields in typed `get` handlers (a `Headers` parameter, last) | shipped |
+| `String` route values, with every route value percent-decoded at capture | shipped |
 
 ### Remaining candidates
 
@@ -68,7 +71,7 @@ Each becomes its own decision-first item.
 - **OpenAPI/schema output**: needs a type-to-format mapping; codecs are hand-mapped today, so a schema source waits for a derived codec;
 - **JSON follow-ups**: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;
 - **compile-time header names, a `FromHeaders` converter**: a converter makes Muntin choose a status for header values; `Headers` can conform to it without changing the `get` shapes;
-- **more route values**: several values, path and query values together, optional/default query values, other value types. Route-value decoding, which reopens M2 for `Int` values, and `String` route values are decided ([M3-018](history/architecture-decisions.md#route-value-decoding-and-string-route-values-decision-m3-018)); their production item is M3-019. A value type is a slot kind and several values a rule, with no new overload up to slot arity 2;
+- **more route values**: several values, path and query values together, optional/default query values, other value types. A value type is a slot kind and several values a rule, with no new overload up to slot arity 2;
 - **more HTTP methods** (`put`, `patch`, `delete`, `POST` without a body): each new method is its own six arity overloads over the shared rules; the compiler's note budget is per method name, so they fit without restructuring. `POST` without a body is a rule change on `post`;
 - **more body shapes**: a Muntin text type conforming to `FromBody` (raw `String` is a route-value type, never a body), optional, multiple, streaming and binary bodies (binary needs a non-`String` body representation);
 - **fallible conversions and parameter-name checking**: a raising `to_response`/`to_error_response` needs its own error answer; name checking needs function-parameter reflection, which Mojo 1.1.0 lacks;

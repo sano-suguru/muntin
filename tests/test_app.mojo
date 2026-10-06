@@ -221,6 +221,9 @@ def test_query_parameter_reaches_handler_as_int() raises:
         client.get("/items?limit=9223372036854775807").text(),
         "items 9223372036854775807",
     )
+    # M3-019 (decided by M3-018) reopened M2: the value is decoded before
+    # conversion, so escaped digits are the plain value (400 before).
+    assert_equal(client.get("/items?limit=%31%30").text(), "items 10")
 
 
 def test_unrelated_query_keys_are_ignored() raises:
@@ -266,7 +269,6 @@ def test_invalid_query_value_is_bad_request() raises:
         "/items?limit= 10",
         "/items?limit=%2010",
         "/items?limit=1_0",
-        "/items?limit=%31%30",
         "/items?limit=10#x",
         "/items?limit=9223372036854775808",
     ]:
