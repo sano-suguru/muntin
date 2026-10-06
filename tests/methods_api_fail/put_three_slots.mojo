@@ -1,8 +1,8 @@
-# Must not compile: Three request slots, no `State` and no state argument match
-# none of `put`'s six overloads, so the compiler's own diagnostic names the
-# method. Decision: docs/history/architecture-decisions.md, "HTTP methods
-# decision (M3-020)".
-# Expected diagnostic (checked by scripts/check.sh): no matching method in call to 'put'
+# Must not compile: a route value and two bodies on `put` select its
+# slot-arity-3 overload, which reports that a handler takes one body, last.
+# Decisions: docs/history/architecture-decisions.md, "HTTP methods decision
+# (M3-020)" and "Several route values decision (M3-022)".
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a put handler takes one request body, as its last parameter
 from muntin import App, FromBody
 
 

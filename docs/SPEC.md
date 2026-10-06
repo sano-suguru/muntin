@@ -47,6 +47,8 @@ M3-015 amended the contract (decided by M3-014): the registration overloads are 
 
 M3-019 amended the contract (decided by M3-018): a route value is percent-decoded once when it is captured, before it is converted, so an escaped `Int` value whose decoded text is a valid `Int` (`/users/%34%32`, `?limit=%31%30`) is accepted where it was 400. A value written without escapes keeps its meaning, every invalid value is still 400 before the handler, and query keys, `Request` and raw handlers stay undecoded ([Route-value decoding and String route values decision (M3-018)](history/architecture-decisions.md#route-value-decoding-and-string-route-values-decision-m3-018)).
 
+M3-023 amended the contract (decided by M3-022): a typed handler takes up to two route values, bound by position in the literal's order (path placeholders, then query placeholders), and a literal's query keys must differ. M2 is not reopened, because nothing that registers or answers today changes. By kind: the accepted set only grows (handlers with two route values register; no handler that registers today is rejected or registers differently); the overload set is added to (each method name gains its two slot-arity-3 overloads, and the existing declarations, signatures and `where` clause are unchanged); specific rejected-call diagnostics change (the two `at most one` messages are replaced by the two-value messages, a call with three request parameters that matched no overload now reports a Muntin rule, including a stateful handler registered without its state, and every call that still matches no overload lists eight candidates' notes instead of six); and runtime behavior is unchanged, the 400/404/500 boundary included ([Several route values decision (M3-022)](history/architecture-decisions.md#several-route-values-decision-m3-022)).
+
 Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it. What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
 
 ## M3 — composition and production ergonomics
@@ -64,6 +66,7 @@ Each M3 area is cut decision-first: a decision item picks the design with pinned
 | request header fields in typed `get` handlers (a `Headers` parameter, last) | shipped |
 | `String` route values, with every route value percent-decoded at capture | shipped |
 | `PUT`, `PATCH` and `DELETE` (`app.put`/`app.patch` with `post`'s shapes, `app.delete` with `get`'s; `TestClient.put`, `.patch`, `.delete`) | shipped |
+| two route values (path, query or one of each, bound in the literal's order) on every method | shipped |
 
 ### Remaining candidates
 
@@ -72,7 +75,7 @@ Each becomes its own decision-first item.
 - **OpenAPI/schema output**: needs a type-to-format mapping; codecs are hand-mapped today, so a schema source waits for a derived codec;
 - **JSON follow-ups**: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;
 - **compile-time header names, a `FromHeaders` converter**: a converter makes Muntin choose a status for header values; `Headers` can conform to it without changing the `get` shapes;
-- **more route values**: several values, path and query values together, optional/default query values, other value types. A value type is a slot kind and several values a rule, with no new overload up to slot arity 2;
+- **more route values**: three or more values, optional/default query values, other value types, a named carrier that checks placeholder names. A value type is a slot kind; a third value beside a body or `Headers` needs slot arity 4 ([M3-022](history/architecture-decisions.md#several-route-values-decision-m3-022));
 - **more HTTP methods** (bodyless typed `post`, `put` and `patch` handlers, `HEAD`, `OPTIONS`, 405 with `Allow`, a typed `DELETE` body, methods outside `GET`, `POST`, `PUT`, `PATCH`, `DELETE` or a generic entrypoint): each has a revisit condition in [M3-020](history/architecture-decisions.md#http-methods-decision-m3-020). A bodyless shape is a rule change on `post`'s family, and 405 changes the M2 contract's 404;
 - **more body shapes**: a Muntin text type conforming to `FromBody` (raw `String` is a route-value type, never a body), optional, multiple, streaming and binary bodies (binary needs a non-`String` body representation);
 - **fallible conversions and parameter-name checking**: a raising `to_response`/`to_error_response` needs its own error answer; name checking needs function-parameter reflection, which Mojo 1.1.0 lacks;

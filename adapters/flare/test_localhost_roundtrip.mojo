@@ -205,6 +205,14 @@ def search(q: String) -> String:
     return "results for " + q
 
 
+def pair_of(a: Int, b: String) -> String:
+    return String("pair ", a, " ", b)
+
+
+def field_of(id: Int, field: String) -> String:
+    return String("field ", id, " ", field)
+
+
 struct CreateUser(FromBody):
     var name: String
 
@@ -476,6 +484,8 @@ def users_app() -> App:
     app.get["/items?{limit}"](list_items)
     app.get["/names/{name}"](name_of)
     app.get["/search?{q}"](search)
+    app.get["/pairs/{a}/{b}"](pair_of)
+    app.get["/fields/{id}?{field}"](field_of)
     app.post["/users"](create_user)
     app.post["/echo"](echo)
     app.get["/people/{id}"](get_person)
@@ -629,6 +639,20 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/search?q=a+b%2B"), 200, String("results for a b+")),
             (String("/users/%34%32"), 200, String("42")),
             (String("/users/%2534"), 400, String("Bad Request")),
+            # M3-023: two route values, each decoded once. Decoded twice, the
+            # second "%2541" would be "A"; "%zz" and "%FF" in the second
+            # value are 400 after a valid first one.
+            (String("/pairs/042/%2541"), 200, String("pair 42 %41")),
+            (String("/pairs/1/a%2Fb"), 200, String("pair 1 a/b")),
+            (String("/pairs/1/%zz"), 400, String("Bad Request")),
+            (String("/pairs/x/a"), 400, String("Bad Request")),
+            (
+                String("/fields/7?x=1&field=%2541+b"),
+                200,
+                String("field 7 %41 b"),
+            ),
+            (String("/fields/7?field=%FF"), 400, String("Bad Request")),
+            (String("/fields/7"), 400, String("Bad Request")),
         ]
         for want in expected:
             var path = want[0]
