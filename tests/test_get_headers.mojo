@@ -1,15 +1,12 @@
-# M3-016 typed `get` header access decision spike, application side: a `Headers`
-# request slot on `get`, last, registered through the spike's model of the six
-# arity overloads (tests/get_headers_spike.mojo) on a production `App` and
-# dispatched by production `App.handle`, through `App.handle` and `TestClient`
-# (`headers=`); composed with an `Int` route value, `State`, both result
-# policies, raises and generic forwarding; the routes without a `Headers` slot
-# (registered through production `get` and `post`) unchanged. Decision:
-# docs/history/architecture-decisions.md, "Typed get header access decision
-# (M3-016)". Must-not-compile counterparts: tests/get_headers_fail.
+# Typed `get` header access (M3-017): a `Headers` request slot on `get`, last,
+# through `App.handle` and `TestClient` (`headers=`); composed with an `Int`
+# route value, `State`, both result policies, raises and generic forwarding;
+# routes without a `Headers` slot unchanged; and docs/DX.md section 9's typed
+# `get` example, as written. Decision: docs/history/architecture-decisions.md,
+# "Typed get header access decision (M3-016)". Must-not-compile counterparts:
+# tests/get_headers_api_fail.
 
-from std.collections import Optional
-from std.testing import assert_equal, assert_true, assert_false, TestSuite
+from std.testing import assert_equal, TestSuite
 
 from muntin import (
     App,
@@ -24,8 +21,6 @@ from muntin import (
 )
 from muntin.testing import TestClient
 from muntin.http import _Field
-
-from get_headers_spike import get
 
 
 @fieldwise_init
@@ -94,13 +89,6 @@ def owned_fields(var headers: Headers) raises -> String:
     return _dump(headers)
 
 
-def me(headers: Headers) raises Unauthorized -> String:
-    var auth = headers.get("authorization")
-    if not auth:
-        raise Unauthorized()
-    return "me " + auth.value()
-
-
 def by_id(id: Int, headers: Headers) -> String:
     return String(id, " ", _dump(headers))
 
@@ -137,19 +125,56 @@ def update(id: Int, input: WithHeaders[Note]) -> String:
     return String(id, " ", input.body.text, " ", _dump(input.headers))
 
 
-# Generic forwarding (M3-015 edge 4) reaching the new kind.
+# docs/DX.md section 9, typed header access on `get`, as written there.
+
+
+struct Users(Movable):
+    var tokens: List[String]
+
+    def __init__(out self, var tokens: List[String]):
+        self.tokens = tokens^
+
+    def allows(self, token: String) -> Bool:
+        for t in self.tokens:
+            if t == token:
+                return True
+        return False
+
+
+def me(headers: Headers) raises Unauthorized -> String:
+    var token = headers.get("authorization")  # Optional[String]
+    if not token:
+        raise Unauthorized()  # ToErrorResponse: 401
+    return "me " + token.value()
+
+
+def note(id: Int, headers: Headers) -> String:  # route value, then the fields
+    var traces = headers.get_all("x-trace")  # every value, in order
+    return String(id, " traces=", len(traces))
+
+
+def private_note(
+    users: State[Users], id: Int, headers: Headers
+) raises Unauthorized -> String:  # State first, as always
+    var token = headers.get("authorization")
+    if not token or not users[].allows(token.value()):
+        raise Unauthorized()
+    return String("private ", id)
+
+
+# Generic forwarding (M3-015 edge 4) reaching the `Headers` kind.
 
 
 def fwd_one[
     A: Movable & Deinitable
 ](mut app: App, h: def(var A) thin raises Never -> String):
-    get["/fwd"](app, h)
+    app.get["/fwd"](h)
 
 
 def fwd_two[
     A: Movable & Deinitable, B: Movable & Deinitable
 ](mut app: App, h: def(var A, var B) thin raises Never -> String):
-    get["/fwd/{id}"](app, h)
+    app.get["/fwd/{id}"](h)
 
 
 def fwd_state[
@@ -159,25 +184,25 @@ def fwd_state[
     h: def(State[S], var A) thin raises Never -> String,
     s: State[S],
 ):
-    get["/fwd-state"](app, h, s)
+    app.get["/fwd-state"](h, s)
 
 
 def fwd_typed(mut app: App, h: def(var Headers) thin raises Never -> String):
-    get["/fwd-typed"](app, h)
+    app.get["/fwd-typed"](h)
 
 
 def _app(prefix: State[Prefix]) -> App:
     var app = App()
-    get["/all"](app, all_fields)
-    get["/owned"](app, owned_fields)
-    get["/me"](app, me)
-    get["/p/{id}"](app, by_id)
-    get["/q?{id}"](app, by_id)
-    get["/count"](app, counted)
-    get["/static"](app, static_text)
-    get["/raise"](app, raising)
-    get["/st"](app, st, prefix)
-    get["/st/{id}"](app, st_id, prefix)
+    app.get["/all"](all_fields)
+    app.get["/owned"](owned_fields)
+    app.get["/me"](me)
+    app.get["/p/{id}"](by_id)
+    app.get["/q?{id}"](by_id)
+    app.get["/count"](counted)
+    app.get["/static"](static_text)
+    app.get["/raise"](raising)
+    app.get["/st"](st, prefix)
+    app.get["/st/{id}"](st_id, prefix)
     app.get["/plain/{id}"](plain_id)
     app.get["/raw"](raw)
     app.post["/n/{id}"](update)
@@ -279,8 +304,8 @@ def test_testclient_headers() raises:
 def test_first_registration_wins() raises:
     var app = App()
     app.get["/a/{id}"](plain_id)
-    get["/a/{id}"](app, by_id)
-    get["/b/{id}"](app, by_id)
+    app.get["/a/{id}"](by_id)
+    app.get["/b/{id}"](by_id)
     app.get["/b/{id}"](plain_id)
     assert_equal(_get(app, "/a/1", _h("A", "1")).body, "plain 1")
     assert_equal(_get(app, "/b/1", _h("A", "1")).body, "1 A=1;")
@@ -293,12 +318,43 @@ def test_generic_and_typed_forwarding() raises:
     fwd_state(app, st, State(Prefix("s:")))
     fwd_typed(app, all_fields)
     var typed: def(var Headers) thin raises Never -> String = all_fields
-    get["/typed"](app, typed)
+    app.get["/typed"](typed)
     assert_equal(_get(app, "/fwd", _h("A", "1")).body, "A=1;")
     assert_equal(_get(app, "/fwd/5", _h("A", "1")).body, "5 A=1;")
     assert_equal(_get(app, "/fwd-state", _h("A", "1")).body, "s:A=1;")
     assert_equal(_get(app, "/fwd-typed", _h("A", "1")).body, "A=1;")
     assert_equal(_get(app, "/typed", _h("A", "1")).body, "A=1;")
+
+
+def test_dx_example() raises:
+    var tokens = List[String]()
+    tokens.append("t1")
+    var users = State(Users(tokens^))
+    var app = App()
+    app.get["/me"](me)
+    app.get["/notes/{id}"](note)
+    app.get["/private/{id}"](private_note, users)
+    var client = TestClient(app)
+    var ok = client.get("/me", headers=_h("Authorization", "t1"))
+    assert_equal(ok.status, 200)
+    assert_equal(ok.body, "me t1")
+    var missing = client.get("/me")
+    assert_equal(missing.status, 401)
+    assert_equal(missing.body, "Unauthorized")
+    var traced = client.get(
+        "/notes/3", headers=_h("X-Trace", "a", "x-trace", "b")
+    )
+    assert_equal(traced.status, 200)
+    assert_equal(traced.body, "3 traces=2")
+    assert_equal(client.get("/notes/x").status, 400)
+    var mine = client.get("/private/3", headers=_h("Authorization", "t1"))
+    assert_equal(mine.status, 200)
+    assert_equal(mine.body, "private 3")
+    assert_equal(
+        client.get("/private/3", headers=_h("Authorization", "t2")).status, 401
+    )
+    assert_equal(client.get("/private/3").status, 401)
+    assert_equal(client.get("/private/x").status, 400)
 
 
 def main() raises:
