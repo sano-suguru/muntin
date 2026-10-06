@@ -15,9 +15,9 @@ from .state import State, _InjectedState
 #
 # Registration (M3-014): each registration method (`get`, `post`, and, since
 # M3-020, `put`, `patch` and `delete`) has one overload per request-slot
-# arity, 0 to 3 (M3-022), in a stateless and a stateful family. `put` and `patch` are
-# copies of `post` and take its shapes, `delete` a copy of `get`; `_rule`
-# picks the shape family from the method. A request slot is a handler
+# arity, 0 to 3 (M3-022), in a stateless and a stateful family. `put` and
+# `patch` are copies of `post` and take its shapes, `delete` a copy of `get`;
+# `_rule` picks the shape family from the method. A request slot is a handler
 # parameter that comes from the request. The stateful family takes a fixed
 # leading `State[S]`, which is not a slot, and the state as the
 # registration's second argument, so the argument count separates the
@@ -61,10 +61,10 @@ from .state import State, _InjectedState
 #
 # Adapters: one per arity and family (`_call_0` to `_call_state_3`). Each
 # converts its slots in order (`_slot`), so a route value is converted
-# before the next one and before the body; calls the handler alone in a `try`, whose error becomes
-# `_handler_error`; then applies `_respond`. A slot's raw argument index is
-# its position, because the route values come first, before the body or the
-# `Headers` slot.
+# before the next one and before the body; calls the handler alone in a
+# `try`, whose error becomes `_handler_error`; then applies `_respond`. A
+# slot's raw argument index is its position, because the route values come
+# first, before the body or the `Headers` slot.
 # `comptime if A == Int` does not refine `A` on Mojo 1.1.0, so a parsed
 # `Int`, a `String` route value, a rebuilt `Request` or `Headers` and a text
 # result reach their generic type through the one rebind helper `_as`, which
@@ -155,9 +155,10 @@ from .state import State, _InjectedState
 # never compared with the handler's parameters. `App.handle` decodes each raw
 # capture once (`_decode_value`), after matching on the raw path, before any
 # conversion: path captures in place, then each query value as `_query_value`
-# finds it; an empty value, a bad escape or decoded bytes that are not UTF-8 are 400 there. The
-# `String` slot takes the decoded text and the `Int` slot parses it. Query
-# keys, `Request.path`, `Request.query` and raw routes stay undecoded.
+# finds it; an empty value, a bad escape or decoded bytes that are not UTF-8
+# are 400 there. The `String` slot takes the decoded text and the `Int` slot
+# parses it. Query keys, `Request.path`, `Request.query` and raw routes stay
+# undecoded.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -2541,8 +2542,9 @@ struct App(Movable):
         A typed route's route values are percent-decoded once here, after
         matching on the raw path and before any conversion (`_decode_value`):
         the path captures in place, left to right, then each query value
-        after `_query_value` finds it, in the literal's order (M3-022). Query keys, `request.path`, `request.query` and raw routes
-        are never decoded.
+        after `_query_value` finds it, in the literal's order (M3-022). Query
+        keys, `request.path`, `request.query` and raw routes are never
+        decoded.
 
         No matching route is 404. A missing or duplicated query value, an
         empty value, a bad escape or decoded text that is not UTF-8 is 400

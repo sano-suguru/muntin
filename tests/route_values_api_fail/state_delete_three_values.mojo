@@ -13,8 +13,8 @@ struct P(Movable):
         self.n = n
 
 
-def h(p: State[P], a: String, b: Int, c: String) -> String:
-    return a + c
+def h(p: State[P], a: Int, b: Int, c: Int) -> String:
+    return String(a + b + c)
 
 
 def main():
