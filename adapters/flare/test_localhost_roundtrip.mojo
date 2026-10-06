@@ -187,6 +187,14 @@ def list_items(limit: Int) -> String:
     return "items " + String(limit)
 
 
+def name_of(name: String) -> String:
+    return "name " + name
+
+
+def search(q: String) -> String:
+    return "results for " + q
+
+
 struct CreateUser(FromBody):
     var name: String
 
@@ -436,6 +444,8 @@ def users_app() -> App:
     app.get["/hello"](hello)
     app.get["/users/{id}"](get_user)
     app.get["/items?{limit}"](list_items)
+    app.get["/names/{name}"](name_of)
+    app.get["/search?{q}"](search)
     app.post["/users"](create_user)
     app.post["/echo"](echo)
     app.get["/people/{id}"](get_person)
@@ -576,6 +586,15 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/staff/2"), 409, String("out of stock 2")),
             (String("/staff/x"), 400, String("Bad Request")),
             (String("/staff"), 404, String("Not Found")),
+            # M3-019: Muntin decodes a route value once, so the backend must
+            # pass the target encoded. Decoded twice, "%2541" would be "A",
+            # "a%2Fb" would split a segment (404), and "%2534" would be 4.
+            (String("/names/%2541"), 200, String("name %41")),
+            (String("/names/a%2Fb"), 200, String("name a/b")),
+            (String("/names/a+b"), 200, String("name a+b")),
+            (String("/search?q=a+b%2B"), 200, String("results for a b+")),
+            (String("/users/%34%32"), 200, String("42")),
+            (String("/users/%2534"), 400, String("Bad Request")),
         ]
         for want in expected:
             var path = want[0]
