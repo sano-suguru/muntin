@@ -208,7 +208,7 @@ Transport through the box: an adapter receives `List[String]` raw arguments, in 
 
 `MuntinHandler` owns an `App` and implements Flare's `Handler`; its `serve` converts, calls `App.handle` and converts back, and never routes. Policy (module docstring):
 
-- method and request target (path plus query, undecoded) copied verbatim; body bytes decoded as UTF-8 with invalid sequences replaced by U+FFFD (binary bodies are not representable); version and peer dropped;
+- method and request target (path plus query, undecoded) copied verbatim; over HTTP/1.1 Flare v0.11.0 itself answers a method token in lowercase or mixed case (measured: `get`, `post`, `Get`, `put`, `delete`) with 400 before `App.handle`, which would answer it 404 as an unmatched method, and passes an unknown uppercase token (`FOO`) through ([M3-020](history/architecture-decisions.md#http-methods-decision-m3-020)); body bytes decoded as UTF-8 with invalid sequences replaced by U+FFFD (binary bodies are not representable); version and peer dropped;
 - request header fields rebuilt from Flare's public `HeaderMap.encode_to` and verified against `len()` and `get_all(name)` by position (over cleartext HTTP/2 a name may contain `:`, which a first-colon parse would misread); a field that fails the check or `Headers.add` is answered 400 before `App.handle`;
 - response status, body and fields copied, reason left to Flare; fields go out in order except `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`, `TE`, `Trailer` and every field a `Connection` value names; each field is re-checked with `Headers.add`, and a failure answers 500.
 
