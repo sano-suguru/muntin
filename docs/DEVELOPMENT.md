@@ -29,13 +29,20 @@ A change is not complete because the code looks plausible. Use, as applicable: a
 
 A must-not-build fixture states its expected diagnostic on a line starting `# Expected diagnostic (checked by scripts/check.sh): `; `scripts/build_one.sh` reads it.
 
+CI runs all three scripts on every pull request that changes code (section 4); a passing `ci-ok` on the final HEAD is the evidence that they pass, and running them locally first is the author's choice. A production item adds only the following, and a "Next production slice" prescribes no verification beyond them ([why](history/architecture-decisions.md#production-verification-policy-decision)):
+
+- Tests and fixtures for the new behavior. Each rule statement the item adds to `docs/DX.md` or `docs/ARCHITECTURE.md` needs a test or fixture that fails without it. Where no pin plainly targets a statement, a mutation planted in a scratch copy shows whether one does. A slice does not list mutations that repeat what its decision item measured; nothing counts mutations.
+- Each new must-not-build fixture that pins the change is also built against the base's `src`, and the pull request says whether it fails there with the same text. One that does is a regression pin, not evidence for the change.
+- A comparison of every existing fixture's whole normalized compiler output against the base, only when the item changes output the expected texts do not check: a `get` or `post` overload added or removed, an overload's signature or `where` clause, `_check`'s parameters or the call chain to it, a signature a fixture's notes print, or the Mojo version. A rule's branch or message (`_kind`, `_get_rule`, `_post_rule`, the text in `_check`) changes only the message line, which the expected texts check.
+- A new route in `adapters/flare/test_localhost_roundtrip.mojo`, and a local `check_flare.sh` run before pushing (a failure in the `flare` environment is slow to iterate on through CI), only when the change can reach the wire: `adapters/`, `compat/`, the `Request`, `Response` or `Headers` types or their conversion, how `App.handle` reads the request or builds the response, or a limit or status that depends on the backend. The adapter converts every request the same way whatever the route, so a new handler shape proven through `App.handle` needs neither.
+
 ## 4. CI and merging
 
 CI runs on pull requests only. `verify` (`check.sh` with `git diff --check`, and `test.sh`, as separate jobs) and `flare` run on ubuntu-latest and macos-latest, except when every changed file is under `docs/` or ends in `.md`; then both are skipped. `ci-ok` passes only when both ran and passed, or both were skipped for a docs-only change; it is the one required status check for `main`, where a ruleset also requires a pull request that is up to date with `main`. A new push cancels the running checks; nothing reruns after a merge.
 
 ## 5. Review important boundaries skeptically
 
-For public API, architecture, ownership/lifetime, backend seam, unsafe code or dependency changes, use a fresh-context review when practical. It should look for backend details leaking into Muntin APIs, inverted dependencies, acceptance weakened by tests, tests that bypass real dispatch, lifetime assumptions that hold for one backend only, speculative abstractions, and application verbosity added for internal convenience. Review counts as evidence only when the reviewer inspected the diff and the verification results.
+For public API, architecture, ownership/lifetime, backend seam, unsafe code or dependency changes, use a fresh-context review when practical. It should look for backend details leaking into Muntin APIs, inverted dependencies, acceptance weakened by tests, tests that bypass real dispatch, lifetime assumptions that hold for one backend only, speculative abstractions, and application verbosity added for internal convenience. It also checks each rule statement the item adds to `docs/DX.md` or `docs/ARCHITECTURE.md` against a test or fixture that fails without it. Review counts as evidence only when the reviewer inspected the diff and the verification results. One full round is followed by a review scoped to its fixes; a material finding after that goes to the user before another round.
 
 ## 6. Finish an item
 
