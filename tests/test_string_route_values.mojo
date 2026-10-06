@@ -232,7 +232,7 @@ def _app() -> App:
 
 
 def _dx_app() -> App:
-    """docs/DX.md's registrations, as written there."""
+    """docs/DX.md's registrations, as written there, on its own `App`."""
     var app = App()
     app.get["/users/{name}"](profile)
     app.get["/search?{q}"](search)

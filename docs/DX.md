@@ -102,6 +102,7 @@ def search(q: String) -> String:
     return "results for " + q
 
 
+var app = App()                       # its own App: in the one above, /users/{id} answers first
 app.get["/users/{name}"](profile)
 # GET /users/alice        -> 200 "profile alice"
 # GET /users/J%C3%B6rg    -> 200 "profile Jörg"
@@ -111,7 +112,7 @@ app.get["/search?{q}"](search)
 # GET /search?q=mojo+lang -> 200 "results for mojo lang"
 # GET /search?q=a%2Bb     -> 200 "results for a+b"
 # GET /search, /search?q=, /search?q=1&q=2 -> 400 "Bad Request"
-# and, for app.get["/items?{limit}"](list_items) above:
+app.get["/items?{limit}"](list_items)  # list_items as above
 # GET /items?limit=%31%30 -> 200 "items 10"
 ```
 
