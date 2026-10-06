@@ -6,13 +6,13 @@ Read `AGENT_PROGRESS.md`, check `git status` and recent commits, and run the che
 
 ## 2. Pick one increment
 
-Take the next item that advances the active milestone and can be verified on its own: one observable outcome, a bounded file set, a real executable check, and no unrelated future work. For an uncertain Mojo feature, make a small compilation experiment before designing around it.
+Take one coherent item that can be verified on its own: one observable outcome, a bounded file set, a real executable check, and no unrelated future work. For an uncertain Mojo feature, make a small compilation experiment before designing around it.
 
 Where an item's contract is written depends on its kind, and nowhere else:
 
 | Item | Its contract | Written when |
 |---|---|---|
-| decision (a design question, measured with spikes and fixtures under `tests/`, `src/muntin` unchanged) | its new record in `docs/history/architecture-decisions.md`: the question and what would settle it, then the choice and exactly one "Next production slice" | the question and settling condition before any measurement; the choice and slice after the evidence |
+| decision (a design question, measured with spikes and fixtures under `tests/`, `src/muntin` unchanged) | its new record in `docs/history/architecture-decisions.md`: the question and what would settle it, then the choice and exactly one next action: a "Next production slice", or an explicit deferral with a concrete revisit condition | the question and settling condition before any measurement; the choice and next action after the evidence |
 | production (implements a decided slice) | the decision record's "Next production slice", as written | already, by the decision item |
 | production that cannot follow its slice as written | an amendment record: the delta to the slice, why, and the invariant or compatibility boundary it affects | before the change merges; a new design question is a new decision item, not an amendment |
 | fix, tooling or docs with no design question | the pull request | with the pull request |
