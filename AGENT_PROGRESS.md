@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-Next item: none is decided. Pick the next M3 decision item from `docs/SPEC.md`'s remaining candidates and write its question and settling condition first (`docs/DEVELOPMENT.md`, section 2). Blockers: none.
+Next item: M3-021, `put`, `patch` and `delete`, exactly as the "Next production slice" of [HTTP methods decision (M3-020)](docs/history/architecture-decisions.md#http-methods-decision-m3-020) states it. Blockers: none.
 
 ## Easy to miss
 
