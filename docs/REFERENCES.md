@@ -15,6 +15,11 @@ Upstream sources behind assumptions that may change. Re-check them when toolchai
 - Percent-encoding (RFC 3986, section 2.1): https://www.rfc-editor.org/rfc/rfc3986#section-2.1
 - WHATWG URL Standard, `application/x-www-form-urlencoded` parser (Muntin takes only its `+` rule; M3-018 lists the differences): https://url.spec.whatwg.org/#concept-urlencoded-parser
 
+## HTTP
+
+- HTTP Semantics (RFC 9110): methods servers support (section 9.1), method content rules (sections 9.3.1, 9.3.4, 9.3.5), 404 and 405 (sections 15.5.5, 15.5.6): https://www.rfc-editor.org/rfc/rfc9110
+- `PATCH` (RFC 5789): https://www.rfc-editor.org/rfc/rfc5789
+
 ## Flare
 
 - Repository: https://github.com/ehsanmok/flare
