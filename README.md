@@ -49,7 +49,7 @@ Muntin owns the application contract: routes, typed extraction, results, errors,
 App.handle(Request) -> Response
 ```
 
-and never defines what a route, a handler or an error means. Flare is one such backend. It is not your application API.
+and never defines what a route, a handler or an application error means. Flare is one such backend (used only in tests today; see [Status](#status)). It is not your application API.
 
 ```text
 application code
@@ -71,8 +71,8 @@ application code
 What Muntin deliberately does not do:
 
 - **No framework-owned runtime.** Muntin publishes no executor, future or task model of its own; sockets, TLS, HTTP/2, HTTP/3 and QUIC belong to backends.
-- **No transport types in application code.** Handlers, routes and state never mention Flare.
-- **No speculative backend abstraction.** There is no backend trait until a second backend exists; until then the seam is that one method.
+- **No transport types in application code.** Muntin's handler, route and state APIs name no Flare type.
+- **No speculative backend abstraction.** Both backends call `App.handle` directly. There is no backend trait until a second network backend exists, and a hypothetical one is not a reason to add it.
 
 The name comes from the window: a muntin is the narrow bar that divides and supports the panes. It holds the structure together without being what you look at.
 
@@ -80,8 +80,8 @@ The name comes from the window: a muntin is the narrow bar that divides and supp
 
 Muntin rejects what it can at compile time and answers bad requests before your handler runs:
 
-- **At compile time:** a malformed route literal, or a route whose path and query parameters do not fit the handler's parameters, fails at the registration call with a message naming the rule it breaks.
-- **Before the handler:** a route value that does not convert (`/users/abc` for an `Int`), a missing or duplicated query value, or a body that does not convert is a 400, and the handler is not called.
+- **At compile time:** a malformed route literal, or a route whose placeholders do not match the handler's route values, fails at the registration call, in most cases with a message naming the rule it breaks. Binding is positional; names are not compared.
+- **Before the handler:** on typed routes, a route value that does not convert (`/users/abc` for an `Int`), a missing or duplicated query value, or a body that does not convert is a 400, and the handler is not called. A JSON body is checked for its `Content-Type` (415) and size (413) first.
 - **After the handler:** anything a handler raises is a fixed 500 whose body never contains the error text, unless the handler's declared error type opts in to answering with its own response.
 
 The exact rules and messages are in [`docs/DX.md`](docs/DX.md).
@@ -90,24 +90,24 @@ The exact rules and messages are in [`docs/DX.md`](docs/DX.md).
 
 The architecture is checked, not just drawn:
 
-- **Boundary check:** `scripts/check.sh` fails if Muntin's core imports or mentions Flare or socket modules.
-- **Unsafe confinement:** unsafe pointer and ownership operations live in one private storage module, and the check fails if they appear in any other module.
-- **Must-not-compile fixtures:** the compile-time rules are pinned by programs that must fail to build with the documented message, and CI checks that they still do.
-- **Same app, two backends:** behavior that crosses the backend seam is exercised in memory through `TestClient` and over a real loopback connection through the Flare adapter, on Ubuntu and macOS.
+- **Boundary check:** `scripts/check.sh` fails if Muntin's core imports Flare or socket modules, or mentions Flare.
+- **Unsafe confinement:** in Muntin's core, unsafe pointer and ownership operations live in one private storage module and the one layout rebind in a single guarded helper; the check fails if they appear anywhere else in `src/muntin`.
+- **Must-not-compile fixtures:** documented diagnostics are pinned by programs that must fail to build with the expected text, and CI checks that they still do.
+- **Same app, two backends:** requests are exercised in memory through `TestClient` and, for behavior that reaches the wire, over a real loopback connection through the Flare adapter, on Ubuntu and macOS.
 
 ## Status
 
-Muntin today handles typed routing (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`), `Int` and `String` route values, typed request bodies and results (including JSON), application errors, shared application state, headers, and a raw `Request -> Response` escape hatch.
+Muntin today handles typed routing (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`), one `Int` or `String` route value per route (path or query), typed request bodies and results (including JSON), application errors, shared application state, headers, and a raw `Request -> Response` escape hatch.
 
 There is no public API for serving an application yet: no `app.run()`, and serving through Flare is test code only. Middleware is not implemented. Flare is a candidate production networking backend, not a supported deployment path. Shipped and remaining capabilities are listed in [`docs/SPEC.md`](docs/SPEC.md).
 
-The design target, which `docs/DX.md` tracks section by section, keeps the same shape and adds serving:
+The design target, which `docs/DX.md` tracks section by section, also shows a run call. Whether Muntin owns one is undecided:
 
 ```mojo
 def main():
     var app = App()
     app.get["/"](hello)
-    app.run()   # target, not yet implemented
+    app.run()   # target; whether Muntin owns app.run() is undecided
 ```
 
 When the current Mojo toolchain cannot express a target form, the limitation is reproduced in a minimal program and documented, and Muntin ships the closest type-safe alternative.
