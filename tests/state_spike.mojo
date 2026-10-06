@@ -1,17 +1,17 @@
-# M3-001 application-state decision spike, library side. Not production
-# code: it models production `App` with the selected state registration
-# (candidate A1, `app.get[route](handler, state)`; the rejected scoped
-# registrar A2 is tests/scoped_state_spike.mojo, which reuses this file's
-# shared parts) added, separately from the application module (tests/test_spike_state.mojo)
-# that defines the state types and handlers. Production's ten overloads as of
-# M3-001 are copied with their signatures and asserts unchanged (docstrings dropped),
-# so overload resolution is measured against the real set; the adapters
-# and response policies are local copies of production's as of M3-014
-# (below the imports), and route checks, matching, query gathering and
-# `_handler_error` are imported from production. Handlers are stored in the production `_Erased` box,
+# M3-001 application-state decision spike, library side. Not production code: it
+# models production `App` with the selected state registration (candidate A1,
+# `app.get[route](handler, state)`; the rejected scoped registrar A2 is
+# tests/scoped_state_spike.mojo, which reuses this file's shared parts) added,
+# separately from the application module (tests/test_spike_state.mojo) that
+# defines the state types and handlers. Production's ten overloads as of M3-001
+# are copied with their signatures and asserts unchanged (docstrings dropped),
+# so overload resolution is measured against the real set; the adapters and
+# response policies are local copies of production's as of M3-014 (below the
+# imports), and route checks, matching, query gathering and `_handler_error` are
+# imported from production. Handlers are stored in the production `_Erased` box,
 # unchanged. check.sh builds it through that test (--Werror) and through
 # tests/state_lib_only/driver.mojo; test.sh runs it. Decision and evidence:
-# docs/ARCHITECTURE.md, "Application state decision (M3-001)".
+# docs/history/architecture-decisions.md, "Application state decision (M3-001)".
 # Must-not-compile evidence: tests/state_fail.
 #
 # What changes against production, and only that:
@@ -128,7 +128,7 @@ def _call_body[
 
     `B` is refined here rather than bounded, as in `App.post`: forwarding a
     handler with an explicit `B` to a callee that requires `B: FromBody`
-    fails on Mojo 1.1.0 (docs/ARCHITECTURE.md, "Argument extraction
+    fails on Mojo 1.1.0 (docs/history/architecture-decisions.md, "Argument extraction
     decision (M2-005)").
     """
     comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
@@ -769,8 +769,8 @@ struct StateApp(Movable):
             )
         )
 
-    # Production's ten overloads as of M3-001, signatures and asserts unchanged; the
-    # four body overloads gain the `State` guard.
+    # Production's ten overloads as of M3-001, signatures and asserts unchanged;
+    # the four body overloads gain the `State` guard.
 
     def get[
         E: Deinitable, //, path: StaticString

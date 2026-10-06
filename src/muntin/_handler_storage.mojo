@@ -4,7 +4,7 @@ box `_Shared`.
 Not part of Muntin's public API; nothing here is exported from `muntin`.
 This is the only module in `src/muntin` allowed to use unsafe pointer or
 ownership operations (`scripts/check_unsafe.sh` fails otherwise). Decision
-and evidence: docs/ARCHITECTURE.md, "Handler storage decision (M2)" and its
+and evidence: docs/history/architecture-decisions.md, "Handler storage decision (M2)" and its
 "Production implementation (M2-004)" for `_Erased`, "State storage decision
 (M3-004)" for `_Shared`.
 

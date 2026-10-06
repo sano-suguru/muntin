@@ -1,5 +1,5 @@
 # M3-002 headers decision spike, application side. Decision and evidence:
-# docs/ARCHITECTURE.md, "Headers decision (M3-002)".
+# docs/history/architecture-decisions.md, "Headers decision (M3-002)".
 
 from std.testing import assert_equal, assert_false, assert_raises
 from std.testing import assert_true, TestSuite

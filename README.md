@@ -4,7 +4,7 @@ Muntin is an experimental, typed web application framework for Mojo.
 
 The project is deliberately focused on the layer above networking: application routing, typed extraction, validation, serialization, middleware, errors, observability, testing, and developer experience. Networking implementations live behind a narrow adapter boundary.
 
-Muntin is pre-alpha. The repository starts by proving the architecture and public API direction before attempting a production feature set.
+Muntin is pre-alpha: the public API is still changing.
 
 ## Why Muntin
 
@@ -27,7 +27,7 @@ application code
          v           v
   in-memory       Flare
   reference       adapter
-  backend         (M1+)
+  backend
 ```
 
 Flare is a candidate production networking backend. It is not part of Muntin's public application contract.
@@ -61,53 +61,18 @@ app.get["/users/{id}"](get_user)
 
 These examples are design targets, not claims that every syntax form is already supported by the current Mojo toolchain. `docs/DX.md` defines how to handle language limitations: prove the limitation with a minimal reproduction, document it, then choose the closest type-safe syntax.
 
-## Milestones
+## What it does
 
-### M0 — architecture bootstrap
-
-Prove that Muntin owns its application model and can dispatch requests through an in-memory backend with no Flare dependency.
-
-### M1 — Flare adapter
-
-Connect the existing Muntin application seam to a pinned Flare release and prove a real localhost HTTP round trip without leaking Flare types into application code.
-
-### M2 — typed application API
-
-Complete (M2-016). Typed routes, `Int` path/query extraction, typed request bodies, response conversion, an application-error model and a raw `Request -> Response` escape hatch, all independent of the transport. `docs/SPEC.md` ("M2 completion contract") lists what M2 guarantees and what it leaves out.
-
-### M3 — composition and production ergonomics
-
-In progress. Available now:
-
-- application state shared with handlers;
-- request and response headers;
-- JSON request bodies and responses;
-- request header fields from `TestClient` (`headers=`);
-- request header fields in typed `post` handlers (`WithHeaders[B]`).
-
-Still planned:
-
-- typed header access on `get` handlers;
-- schema/OpenAPI output;
-- middleware and observability;
-- streaming;
-- lifecycle (`app.run()`);
-- more HTTP methods and route-value types.
-
-Each is decided before it is built. Details and the full candidate list: `docs/SPEC.md`, M3.
+Muntin handles typed routing, request bodies and results (including JSON), application errors, shared application state, headers and a raw `Request -> Response` escape hatch, in memory through `TestClient` and over HTTP through the Flare adapter. There is no public API for serving an application yet. Shipped and remaining capabilities: `docs/SPEC.md`; exact usage and semantics: `docs/DX.md`.
 
 ## Repository guide
 
-- `docs/DX.md` — current public API with its status, and the developer-experience target.
-- `docs/ARCHITECTURE.md` — current architecture, dependency boundaries and invariants, and the index of decisions and revisit conditions.
-- `docs/SPEC.md` — milestone scope, item index and remaining candidates (acceptance criteria are in `feature_list.json`).
-- `docs/DEVELOPMENT.md` — engineering and verification loop.
-- `docs/CLAUDE_CODE.md` — Claude Code `/goal` and model/harness guidance.
-- `docs/GOALS.md` — ready-to-paste `/goal` conditions.
-- `docs/REFERENCES.md` — authoritative sources behind volatile assumptions.
-- `feature_list.json` — machine-readable completion state.
-- `AGENT_PROGRESS.md` — concise handoff between coding sessions.
-- `docs/history/` — decision records (`architecture-decisions.md`), completed item scope (`spec-items.md`) and the earlier progress log (`progress-log.md`).
+- `docs/DX.md` — how to write Muntin applications: API, examples, semantics.
+- `docs/ARCHITECTURE.md` — how Muntin works now: boundaries, invariants, current limits.
+- `docs/history/architecture-decisions.md` — why: one record per design decision.
+- `docs/SPEC.md` — product scope and roadmap.
+- `docs/DEVELOPMENT.md` — verification commands, CI, and which document owns what.
+- `docs/REFERENCES.md` — upstream sources and the Flare pin.
 
 ## Development
 
@@ -122,7 +87,3 @@ git diff --check
 ```
 
 `pixi run check` and `pixi run test` run the same scripts. `pixi run format` formats sources.
-
-## Current status
-
-M0, M1 and M2 are complete; M3 is active. Status lives in `feature_list.json` and `AGENT_PROGRESS.md`. Nothing is considered verified until the checks there have executable evidence. `docs/DX.md` separates syntax proven on the current toolchain from target syntax.

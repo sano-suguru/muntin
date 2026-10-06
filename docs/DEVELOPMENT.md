@@ -1,136 +1,61 @@
 # Muntin development loop
 
-This repository is structured for long-running agentic development while keeping progress auditable, test-driven, and recoverable.
+## 1. Orient
 
-## 1. Orient before editing
+Read `AGENT_PROGRESS.md`, check `git status` and recent commits, and run the cheapest relevant check. Read the document that owns what the next change touches (section 7). Do not re-plan the project when the repository state is coherent.
 
-At the start of a session:
+## 2. Pick one increment
 
-1. inspect the working directory and repository status;
-2. read `AGENT_PROGRESS.md`;
-3. read `feature_list.json`;
-4. inspect recent local commits;
-5. run the cheapest existing smoke/check command;
-6. read the constitutional document relevant to the next change (`DX`, `ARCHITECTURE`, or `SPEC`).
+Take one coherent item that can be verified on its own: one observable outcome, a bounded file set, a real executable check, and no unrelated future work. For an uncertain Mojo feature, make a small compilation experiment before designing around it.
 
-Do not re-plan the whole project from scratch when repository evidence is already coherent.
+Where an item's contract is written depends on its kind, and nowhere else:
 
-## 2. Select the smallest useful increment
+| Item | Its contract | Written when |
+|---|---|---|
+| decision (a design question, measured with spikes and fixtures under `tests/`, `src/muntin` unchanged) | its new record in `docs/history/architecture-decisions.md`: the question and what would settle it, then the choice and exactly one next action: a "Next production slice", or an explicit deferral with a concrete revisit condition | the question and settling condition before any measurement; the choice and next action after the evidence |
+| production (implements a decided slice) | the decision record's "Next production slice", as written | already, by the decision item |
+| production that cannot follow its slice as written | an amendment record: the delta to the slice, why, and the invariant or compatibility boundary it affects | before the change merges; a new design question is a new decision item, not an amendment |
+| fix, tooling or docs with no design question | the pull request | with the pull request |
 
-Choose the highest-priority failing feature that advances the active milestone and can be verified independently.
+An item ID (`M3-017`) is assigned where the item is first named: a decision record's title or its "Next production slice". `docs/SPEC.md` and `AGENT_PROGRESS.md` refer to it; nothing else tracks it.
 
-A good increment has one observable outcome, a bounded file set, a real executable acceptance check, and no unrelated future-milestone work.
+## 3. Verify with the strongest available oracle
 
-Do not mark several features passing because one command happened to succeed unless that command truly exercises every criterion.
+A change is not complete because the code looks plausible. Use, as applicable: a focused executable test for the changed behavior, the broader suites, build/type/static checks, end-to-end execution, architecture/dependency checks, and `git diff --check`. A syntax-only check, a command that failed to start, or a skipped test is not passing evidence.
 
-## 3. Establish the contract before implementation
+- `./scripts/check.sh`: toolchain version, formatting, architecture boundary, unsafe confinement, package and example builds, the library-only spike drivers, and every must-not-build and must-build fixture under `tests/` (in parallel; reports in file order). It does not build `tests/test_*.mojo`.
+- `./scripts/test.sh [FILE...]`: builds each `tests/test_*.mojo` (or the named files) with `--Werror` in parallel, then runs them one at a time.
+- `./scripts/check_flare.sh`: the Flare adapter and its localhost round trips, in the `flare` environment.
 
-For a public-API or architecture change, write down what success means before coding. Use the existing feature acceptance criteria; if they are genuinely incomplete, update them deliberately before implementation and explain why.
+A must-not-build fixture states its expected diagnostic on a line starting `# Expected diagnostic (checked by scripts/check.sh): `; `scripts/build_one.sh` reads it.
 
-Never weaken acceptance because the implementation is inconvenient.
+## 4. CI and merging
 
-For an uncertain Mojo feature, make a small compilation experiment first. This is especially important for compile-time string parameters, callable introspection, reflection, ownership/lifetimes, and error semantics.
+CI runs on pull requests only. `verify` (`check.sh` with `git diff --check`, and `test.sh`, as separate jobs) and `flare` run on ubuntu-latest and macos-latest, except when every changed file is under `docs/` or ends in `.md`; then both are skipped. `ci-ok` passes only when both ran and passed, or both were skipped for a docs-only change; it is the one required status check for `main`, where a ruleset also requires a pull request that is up to date with `main`. A new push cancels the running checks; nothing reruns after a merge.
 
-## 4. Investigate only what is needed
+## 5. Review important boundaries skeptically
 
-For changing external APIs, prefer authoritative upstream documentation and the installed toolchain.
+For public API, architecture, ownership/lifetime, backend seam, unsafe code or dependency changes, use a fresh-context review when practical. It should look for backend details leaking into Muntin APIs, inverted dependencies, acceptance weakened by tests, tests that bypass real dispatch, lifetime assumptions that hold for one backend only, speculative abstractions, and application verbosity added for internal convenience. Review counts as evidence only when the reviewer inspected the diff and the verification results.
 
-Keep broad research from dominating the implementation context. A fresh context/subagent may investigate a narrow question and return only conclusions, constraints, minimal reproductions, and source links.
+## 6. Finish an item
 
-## 5. Implement a vertical slice
+An item's pull request updates only the owners whose facts changed (section 7), in the same diff: `docs/ARCHITECTURE.md` when the current architecture changes (a revisit index row when the item pins fixtures), `docs/DX.md` when user-visible semantics change, `docs/SPEC.md` when a capability's status or the product scope changes, and `AGENT_PROGRESS.md` when the next action or an easy-to-miss current constraint changes. A typo, script or test-speed fix usually touches none of them. The item is complete when the pull request merges; `main` requires CI to pass first, so nothing is recorded after CI. Test counts, mutation lists, review findings and CI runs go in the pull request description; a new decision or amendment record names its pull request.
 
-Prefer one path that works end to end over many unfinished abstractions.
+## 7. Where information lives
 
-For M0, a real `GET /hello` application dispatch is more valuable than elaborate generic router types that have never handled a request.
+Each fact has one owner. Other documents link to it instead of restating it.
 
-For M1, one real localhost request through the Flare adapter is more valuable than wrapping every Flare feature.
-
-## 6. Verify with the strongest available oracle
-
-A change is not complete because the code looks plausible.
-
-Use, in order as applicable:
-
-1. a focused executable test for the changed behavior;
-2. broader project tests;
-3. build/type/static checks;
-4. end-to-end/example execution;
-5. architecture/dependency checks;
-6. `git diff --check`.
-
-A syntax-only check, a test command that failed to start, or a skipped test due to missing declared dependencies is not passing evidence.
-
-Record the exact successful commands in the feature's `evidence` array.
-
-The canonical commands:
-
-- `./scripts/check.sh`: toolchain, formatting, architecture boundary, unsafe confinement, package and example builds, the library-only spike drivers (built in parallel), and every must-not-build and must-build fixture under `tests/` (built in parallel, one job per CPU, reports printed in file order). It does not build `tests/test_*.mojo`.
-- `./scripts/test.sh [FILE...]`: builds each `tests/test_*.mojo` (or only the named files) with `--Werror` in parallel, then runs the binaries one at a time. With no arguments it runs every test file; CI always runs it without arguments.
-- `./scripts/check_flare.sh`: the Flare adapter and its localhost round trips, in the `flare` environment (binaries built in parallel, then run in order).
-
-CI runs on pull requests only. `verify` (`check.sh` with `git diff --check`, and `test.sh`, as separate jobs) and `flare` run on ubuntu-latest and macos-latest, except when every changed file is under `docs/` or ends in `.md`; then both are skipped. `ci-ok` always runs and passes only when both ran and passed, or both were skipped for a docs-only change; it is the one required status check for `main`, where a repository ruleset also requires a pull request that is up to date with `main`. A new push to a pull request cancels its running checks. Nothing reruns after a merge.
-
-## 7. Review important boundaries skeptically
-
-For public API, architecture, ownership/lifetime, backend seam, unsafe code, or dependency changes, use an independent/fresh-context review when practical.
-
-The reviewer should actively try to find:
-
-- Flare or backend details leaking into Muntin APIs;
-- accidental coupling in imports/dependencies;
-- acceptance criteria silently weakened by tests;
-- bypass paths where tests do not exercise real routing/dispatch;
-- lifetime or ownership assumptions that only work for one backend;
-- speculative abstractions without a current consumer;
-- application API verbosity introduced only for internal convenience.
-
-Treat review approval as evidence only when the reviewer has inspected the relevant diff and verification results.
-
-## 8. Update state after proof
-
-Only after successful verification:
-
-- change `passes` from `false` to `true` for the satisfied feature;
-- append concrete evidence rather than prose like "works now";
-- update `AGENT_PROGRESS.md` with the new verified state and next smallest step, and delete the previous slice's slice-specific description (append it to `docs/history/progress-log.md` only if it records something not kept elsewhere);
-- update the canonical source section 9 assigns to the change, and the short summaries that link to it;
-- make a local coherent commit when git is initialized.
-
-Do not rewrite feature descriptions or acceptance criteria as a routine way to achieve passing state.
-
-## 9. Keep handoffs small
-
-`AGENT_PROGRESS.md` is not a diary. It should tell the next session:
-
-- what is verified;
-- what is broken or blocked;
-- what decision is currently in force;
-- what exact command last passed/failed;
-- what to do next.
-
-Large design explanations belong in `docs/`, not the handoff. The handoff keeps only what the next session could get wrong right now; when a new slice lands, the previous slice's specific description goes. A time-bound operational note goes under "Temporary watch" with the condition for deleting it.
-
-Each kind of detail has one canonical source. Entry documents (`AGENT_PROGRESS.md`, `docs/ARCHITECTURE.md`'s current architecture, `docs/SPEC.md`, `README.md`) may summarize it, but each summary links to the canonical source and adds no requirement of its own; when they disagree, the canonical source wins and the summary is fixed:
-
-| Detail | Canonical place |
+| Information | Owner |
 |---|---|
-| decision record: the contract as decided, reasons, compiler evidence, rejected candidates, mutations, review findings, "Revisit when", the next production slice; and the production record of each slice (what changed, diagnostics, test counts) | `docs/history/architecture-decisions.md`, one `###` record per item, with a same-titled stub (heading and link only) under `docs/ARCHITECTURE.md`'s "Decision records", and a revisit index row when it pins a fixture |
-| current architecture contract | `docs/ARCHITECTURE.md`, "Current architecture": edit the affected subsection to state the new result; do not append history there |
-| current public API, runnable examples, current limits, targets | `docs/DX.md` (the status table and the section's status) |
-| milestone scope, open item scope, remaining candidates | `docs/SPEC.md`; when an item merges, move its scope and result paragraphs to `docs/history/spec-items.md` and keep one row in the item table |
-| acceptance, `passes`, executable evidence | `feature_list.json`; evidence states the commands, counts and CI result briefly and points to the record for narrative |
-| current handoff | `AGENT_PROGRESS.md` |
+| how to use Muntin: API, examples, user-visible semantics and diagnostics | `docs/DX.md` |
+| how Muntin works now: invariants, registration, request handling, storage, backend seam, current limits, revisit index | `docs/ARCHITECTURE.md` |
+| why: the decision, candidates, costs, measured premises, revisit conditions; the next production item's contract | `docs/history/architecture-decisions.md`, one record per decision or amendment |
+| product scope: milestones, shipped and remaining capabilities, product boundaries, the M2 contract | `docs/SPEC.md` |
+| evidence that an item was verified | its pull request |
+| what to do next | `AGENT_PROGRESS.md` |
+| behavior and invariants | tests, fixtures, `scripts/` and CI |
+| upstream sources and the Flare pin | `docs/REFERENCES.md`, `pixi.lock` |
 
-Test counts, mutation lists and review narratives go in the record only; summaries do not repeat them. A long paragraph in a record keeps contract, reasons, evidence, limits and revisit conditions in separate labeled parts.
+## 8. Stop at the requested boundary
 
-## 10. Stop at the requested boundary
-
-When the active goal and milestone criteria are satisfied, stop. Do not use leftover context to add unrelated framework features.
-
-If an attractive follow-up exists, record it as a future feature or mention it in the completion report rather than implementing it opportunistically.
-
-## Why this loop exists
-
-Long-running coding agents can prematurely declare victory, lose context across sessions, and over-trust their own evaluation. Muntin therefore keeps durable state in structured repository artifacts and uses executable verification as the completion oracle.
-
-See `docs/CLAUDE_CODE.md` and `docs/REFERENCES.md` for the Anthropic guidance that motivated this structure.
+When the active goal is satisfied, stop. Mention attractive follow-ups instead of implementing them.

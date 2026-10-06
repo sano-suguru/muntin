@@ -8,10 +8,10 @@
 #   () -> String          (Int) -> String          (String) -> String
 #   (Int, Int) -> String  (Int, String) -> String  (Int) -> User
 #
-# `User` is defined in this module, as an application type would be; the
-# boxed candidate's library code lives in tests/handler_storage_spike.mojo.
-# The shapes are investigation fixtures, not supported Muntin APIs.
-# Decision and the evidence for every rejected candidate: docs/ARCHITECTURE.md,
+# `User` is defined in this module, as an application type would be; the boxed
+# candidate's library code lives in tests/handler_storage_spike.mojo. The shapes
+# are investigation fixtures, not supported Muntin APIs. Decision and the
+# evidence for every rejected candidate: docs/history/architecture-decisions.md,
 # "Handler storage decision (M2)". Compile-time negatives: tests/spike_fail.
 
 from std.memory import ArcPointer

@@ -1,12 +1,11 @@
-# Application-defined error responses in production (M2-013): a handler
-# declared `raises T`, where `T` declares `ToErrorResponse` (directly,
-# through a refining trait, or conditionally), is answered with
-# `T.to_error_response()` when it raises, on every argument shape and with
-# `String` and `ToResponse` results. Every other error type, bare `raises`
-# (`Error`) and a raised `ToResponse`-only value stay the fixed 500. The
-# error converts once and the result conversion does not run; 400 and 404
-# run neither. Decision: docs/ARCHITECTURE.md, "Error-response decision
-# (M2-012)".
+# Application-defined error responses in production (M2-013): a handler declared
+# `raises T`, where `T` declares `ToErrorResponse` (directly, through a refining
+# trait, or conditionally), is answered with `T.to_error_response()` when it
+# raises, on every argument shape and with `String` and `ToResponse` results.
+# Every other error type, bare `raises` (`Error`) and a raised `ToResponse`-only
+# value stay the fixed 500. The error converts once and the result conversion
+# does not run; 400 and 404 run neither. Decision:
+# docs/history/architecture-decisions.md, "Error-response decision (M2-012)".
 
 from std.os import getenv, setenv, unsetenv
 from std.utils import Variant

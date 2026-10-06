@@ -3,7 +3,7 @@
 # tests/registration_known_gaps/rebind_var_layout_twins.mojo builds: a
 # type with the same layout is accepted. So a generic slot is rebound only
 # behind a type-equality assert (exact for origin-free types)
-# (docs/ARCHITECTURE.md, "Registration
+# (docs/history/architecture-decisions.md, "Registration
 # structure decision (M3-014)").
 # Expected diagnostic (checked by scripts/check.sh): rebind input type
 from std.builtin.rebind import rebind_var

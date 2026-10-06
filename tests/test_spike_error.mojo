@@ -1,6 +1,6 @@
-# M2-010 application-error decision spike, application side. Handlers and
-# their error types live here; the library side (tests/error_spike.mojo)
-# never names them. Decision and evidence: docs/ARCHITECTURE.md,
+# M2-010 application-error decision spike, application side. Handlers and their
+# error types live here; the library side (tests/error_spike.mojo) never names
+# them. Decision and evidence: docs/history/architecture-decisions.md,
 # "Application-error decision (M2-010)".
 
 from std.os import getenv, setenv, unsetenv

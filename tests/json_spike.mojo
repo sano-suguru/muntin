@@ -1,14 +1,14 @@
-# M3-008 JSON codec decision spike, library side. Not production code: it
-# models the selected contract (candidate A with the application traits of
-# candidate 2: a Muntin-owned `Json[T]` wrapper that is a `FromBody` and a
-# `ToResponse` through the existing traits, for `T: FromJson` / `T: ToJson`),
-# the Muntin-owned codec the wrapper uses (`JsonValue`, `parse_json`,
-# `JsonWriter`), the request Content-Type rule and body cap, and a mirror of the body
-# adapters' steps with the selected order (`model_post`, `model_post_int`).
-# The application module is tests/test_spike_json.mojo; check.sh builds this
-# file through it (--Werror) and through tests/json_lib_only/driver.mojo;
-# test.sh runs it. Decision and evidence: docs/ARCHITECTURE.md, "JSON codec
-# decision (M3-008)". Must-not-compile evidence: tests/json_fail.
+# M3-008 JSON codec decision spike, library side. Not production code: it models
+# the selected contract (candidate A with the application traits of candidate 2:
+# a Muntin-owned `Json[T]` wrapper that is a `FromBody` and a `ToResponse`
+# through the existing traits, for `T: FromJson` / `T: ToJson`), the
+# Muntin-owned codec the wrapper uses (`JsonValue`, `parse_json`, `JsonWriter`),
+# the request Content-Type rule and body cap, and a mirror of the body adapters'
+# steps with the selected order (`model_post`, `model_post_int`). The
+# application module is tests/test_spike_json.mojo; check.sh builds this file
+# through it (--Werror) and through tests/json_lib_only/driver.mojo; test.sh
+# runs it. Decision and evidence: docs/history/architecture-decisions.md, "JSON
+# codec decision (M3-008)". Must-not-compile evidence: tests/json_fail.
 #
 # Only documented Mojo 1.1.0 features are used: conditional conformance with
 # `where`-gated methods (manual/generics.mdx, "Conditional trait
@@ -441,7 +441,7 @@ struct JsonValue(Copyable, Movable, Sized):
     def float(self) raises -> Float64:
         """A number literal as a finite `Float64`, through Mojo 1.1.0's
         `atof`: not always correctly rounded, and raising on long literals
-        (docs/ARCHITECTURE.md, "JSON codec decision (M3-008)")."""
+        (decision record "JSON codec decision (M3-008)")."""
         if self._kind() != _NUMBER:
             raise Error("JSON value is not a number")
         var x = atof(self._literal())

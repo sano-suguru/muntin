@@ -4,17 +4,16 @@
 # module (tests/test_spike_get_headers.mojo) defines the handlers.
 #
 # The six `get` overloads are free functions here (`get[path](app, h)`, with
-# production's signatures and `where` clause, `mut self` becoming
-# `mut app: App`), so overload resolution is measured against the same set.
-# Registration appends to production `App._routes`, and requests go through
-# production `App.handle`, unchanged: a `Headers` route sets the existing
-# `_Route.headers` flag, and `App.handle` already appends each field's name
-# and value after the route value on a route without a body. Production's
-# `_kind`, placeholder counts, rule codes, `_Erased`, `_Bound`, the arity-0
-# adapters, `_slot`, `_as`, `_rejected`, `_respond` and `_handler_error` are
-# imported unchanged. Decision and evidence: docs/ARCHITECTURE.md, "Typed get
-# header access decision (M3-016)". Must-not-compile evidence:
-# tests/get_headers_fail.
+# production's signatures and `where` clause, `mut self` becoming `mut app:
+# App`), so overload resolution is measured against the same set. Registration
+# appends to production `App._routes`, and requests go through production
+# `App.handle`, unchanged: a `Headers` route sets the existing `_Route.headers`
+# flag, and `App.handle` already appends each field's name and value after the
+# route value on a route without a body. Production's `_kind`, placeholder
+# counts, rule codes, `_Erased`, `_Bound`, the arity-0 adapters, `_slot`, `_as`,
+# `_rejected`, `_respond` and `_handler_error` are imported unchanged. Decision
+# and evidence: docs/history/architecture-decisions.md, "Typed get header access
+# decision (M3-016)". Must-not-compile evidence: tests/get_headers_fail.
 #
 # What changes against production `get`, and only that:
 #

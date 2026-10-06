@@ -1,12 +1,12 @@
-# Must not compile: one generic first handler parameter `I` standing for
-# either `State[S]` or a per-request context built from it (the "generic
-# injected slot" and "relaxed get slot" candidates). `comptime if
-# I == State[S]` does not refine `I` on Mojo 1.1.0, so passing the
-# route's handle (or a context) where the handler expects `I` needs
-# `rebind`, the M3-008 4b rejection class (docs/ARCHITECTURE.md, "Typed
-# header access decision (M3-012)"). The else branch uses `rebind` only so
-# that the one error left is the if branch's: if `comptime if` starts
-# refining `I`, this compiles; re-measure those candidates then.
+# Must not compile: one generic first handler parameter `I` standing for either
+# `State[S]` or a per-request context built from it (the "generic injected slot"
+# and "relaxed get slot" candidates). `comptime if I == State[S]` does not
+# refine `I` on Mojo 1.1.0, so passing the route's handle (or a context) where
+# the handler expects `I` needs `rebind`, the M3-008 4b rejection class
+# (docs/history/architecture-decisions.md, "Typed header access decision
+# (M3-012)"). The else branch uses `rebind` only so that the one error left is
+# the if branch's: if `comptime if` starts refining `I`, this compiles;
+# re-measure those candidates then.
 # Expected diagnostic (checked by scripts/check.sh): value cannot be converted from 'State[S]' to 'I'
 
 from muntin import Headers, State

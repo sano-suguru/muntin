@@ -1,10 +1,11 @@
 # M3-008 JSON codec decision spike, application side (library side:
-# tests/json_spike.mojo). Application types conform to `FromJson`/`ToJson`
-# here; `Json[T]` reaches the production `App` through the existing
-# `FromBody`/`ToResponse` overloads, with no App change. The Content-Type
-# step and its order are measured on the spike's mirror of the body adapters
+# tests/json_spike.mojo). Application types conform to `FromJson`/`ToJson` here;
+# `Json[T]` reaches the production `App` through the existing
+# `FromBody`/`ToResponse` overloads, with no App change. The Content-Type step
+# and its order are measured on the spike's mirror of the body adapters
 # (`model_post`, `model_post_int`), since production does not have it yet.
-# Decision: docs/ARCHITECTURE.md, "JSON codec decision (M3-008)".
+# Decision: docs/history/architecture-decisions.md, "JSON codec decision
+# (M3-008)".
 
 from std.collections import Optional
 from std.memory import bitcast
@@ -763,7 +764,7 @@ def test_float_rounding_gaps_on_mojo_1_1_0() raises:
     # Pinned Mojo 1.1.0 behavior, each 1 ulp from the correctly rounded
     # value (Python's in the comments). `float()` uses `atof`; the writer
     # uses `String(Float64)`. A fix in the toolchain turns these red: revisit
-    # (docs/ARCHITECTURE.md, "JSON codec decision (M3-008)").
+    # (docs/history/architecture-decisions.md, "JSON codec decision (M3-008)").
     # Shortest-repr doubles as JS/Python clients send them: correct
     # 0xc42dddc22f41f7cd and 0x4429c9f9333a6521.
     assert_equal(

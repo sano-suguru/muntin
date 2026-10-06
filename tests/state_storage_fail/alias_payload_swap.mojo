@@ -1,4 +1,4 @@
-# Must not compile (M3-004): the review's case. A second handle cannot
+# Must not compile (M3-004): a second handle cannot
 # replace the shared value: the sealed box has no subscript, unlike the
 # ArcPointer field it replaces (state_storage_known_gaps/arc_alias_swap.mojo).
 # Expected diagnostic (checked by scripts/check.sh): '_Shared[Db]' is not subscriptable

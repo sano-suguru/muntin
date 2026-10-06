@@ -1,16 +1,15 @@
-# M2-012 error-response decision spike, library side. Not production code:
-# it models what Muntin's library could contain, separately from the
-# application module (tests/test_spike_error_response.mojo) that defines
-# handlers and error types, so an opted-in error type crosses a module
-# boundary as it would in a real application and this module never names
-# it. Handlers are stored in the production `_Erased` box, unchanged; route
-# matching, `Int` conversion, query gathering, `FromBody`, `ToResponse` and
-# the response policies are local copies of production's as of M3-014
-# (below the imports). check.sh builds it through
+# M2-012 error-response decision spike, library side. Not production code: it
+# models what Muntin's library could contain, separately from the application
+# module (tests/test_spike_error_response.mojo) that defines handlers and error
+# types, so an opted-in error type crosses a module boundary as it would in a
+# real application and this module never names it. Handlers are stored in the
+# production `_Erased` box, unchanged; route matching, `Int` conversion, query
+# gathering, `FromBody`, `ToResponse` and the response policies are local copies
+# of production's as of M3-014 (below the imports). check.sh builds it through
 # that test (--Werror) and, without the application module, through
 # tests/error_response_lib_only/driver.mojo; test.sh runs it. Decision and
-# evidence: docs/ARCHITECTURE.md, "Error-response decision (M2-012)".
-# Must-not-compile evidence: tests/error_response_fail.
+# evidence: docs/history/architecture-decisions.md, "Error-response decision
+# (M2-012)". Must-not-compile evidence: tests/error_response_fail.
 #
 # What changes against production, and only that: `_handler_error[E]`
 # converts a caught `e: E` with `to_error_response` when `E` conforms to

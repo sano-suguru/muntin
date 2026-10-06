@@ -5,7 +5,7 @@
 # refinement inheriting requirements, not a refining trait implementing its
 # parent's requirement, so B is evidence, not a basis. If this stops
 # building, B is gone; if the manual documents it, re-measure B against A
-# (docs/ARCHITECTURE.md, "JSON codec decision (M3-008)").
+# (docs/history/architecture-decisions.md, "JSON codec decision (M3-008)").
 from muntin import App, FromBody
 from muntin.testing import TestClient
 

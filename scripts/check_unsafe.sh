@@ -7,7 +7,7 @@
 # standard library and `.http`; or if it names request or body data (M2-006) or result/error
 # conversion (M2-013); or if `rebind_var` appears anywhere but the one guarded
 # rebind in app.mojo (M3-015, below). A confinement guard, not a safety proof:
-# the invariant itself is in the module docstring and docs/ARCHITECTURE.md
+# the invariant itself is in the module docstring and docs/history/architecture-decisions.md
 # "Handler storage decision (M2)". tests/ is not checked (spikes and storage
 # tests use these operations on purpose).
 set -euo pipefail

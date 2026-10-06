@@ -41,9 +41,11 @@ mkdir -p build
 "${MOJO[@]}" precompile --Werror src/muntin -o build/muntin.mojoc
 echo "ok"
 
-# Library-only spike drivers. Each copies a spike and its driver into a
-# directory without the application module and builds the driver there; all
-# eight build at once, then each runs in order.
+# Library-only spike drivers. Mojo 1.1.0 accepts a circular import between
+# two modules on one include path, so each spike's library side is copied with
+# its driver into a directory without the application module that defines the
+# application types, and built there. All build at once, then each runs in
+# order.
 lib_dirs=()
 lib_titles=()
 lib_pids=()
@@ -58,45 +60,27 @@ lib_only() { # DIR TITLE FILE...
     lib_titles+=("$title")
 }
 
-# The library side of the argument-extraction spike must not depend on the
-# application module that defines its body types. Mojo 1.1.0 accepts a
-# circular import between two modules on one include path, so build a driver
-# that instantiates it from a directory without the application module.
 lib_only lib_only "extraction spike library builds without the application module" \
     tests/extraction_spike.mojo tests/extraction_lib_only/driver.mojo
 
-# Same check for the typed-response spike (M2-007): its library side must
-# convert return types defined only by the application.
 lib_only response_lib_only "response spike library builds without the application module" \
     tests/response_spike.mojo tests/response_lib_only/driver.mojo
 
-# Same check for the application-error spike (M2-010): its library side
-# must catch error types defined only by the application.
 lib_only error_lib_only "error spike library builds without the application module" \
     tests/error_spike.mojo tests/error_lib_only/driver.mojo
 
-# Same check for the error-response spike (M2-012): its library side must
-# detect an error-trait conformance declared only by the application.
 lib_only error_response_lib_only "error-response spike library builds without the application module" \
     tests/error_response_spike.mojo tests/error_response_lib_only/driver.mojo
 
-# Same check for the application-state spike (M3-001): its library side
-# must store and inject state types defined only by the application.
 lib_only state_lib_only "state spike library builds without the application module" \
     tests/state_spike.mojo tests/scoped_state_spike.mojo tests/state_lib_only/driver.mojo
 
-# Same check for the state-storage spike (M3-004): its sealed box must
-# share state types defined only by the application.
 lib_only state_storage_lib_only "state-storage spike library builds without the application module" \
     tests/state_storage_spike.mojo tests/state_storage_lib_only/driver.mojo
 
-# Same check for the headers spike (M3-002): its raw transport must carry
-# headers to handlers defined only by the application.
 lib_only headers_lib_only "headers spike library builds without the application module" \
     tests/headers_spike.mojo tests/headers_lib_only/driver.mojo
 
-# Same check for the JSON codec spike (M3-008): `Json[T]` and the codec must
-# convert application types defined only by the application.
 lib_only json_lib_only "JSON spike library builds without the application module" \
     tests/json_spike.mojo tests/json_lib_only/driver.mojo
 
@@ -119,84 +103,24 @@ fixtures=()
 # with "constraint failed: <expected diagnostic>".
 for t in tests/compile_fail/*.mojo; do fixtures+=(route "$t"); done
 
-# Fixtures whose expected text is the compiler's own diagnostic.
-# tests/spike_fail: evidence for docs/ARCHITECTURE.md "Handler storage decision
-# (M2)"; one that starts compiling after a toolchain change means the decision
-# must be revisited. tests/storage_fail: production handler storage (M2-004)
-# rejects a mismatched adapter and copies, App.get still accepts only the
-# supported handler shapes, and result types must be String-compatible or
-# conform to the non-raising ToResponse (M2-008); an error-only type is not a
-# result and ToErrorResponse is non-raising (M2-013); raw handlers return
-# Response and explicit raw function values have Mojo 1.1.0 limits (M2-015).
-# tests/extraction_fail: evidence for
-# docs/ARCHITECTURE.md "Argument extraction decision" (M2-005).
-# tests/body_fail: App.post accepts only the body-only (M2-006), the
-# route-value-then-body (M2-009) and the raw (M2-015) shapes, and App.get takes
-# no body handler. tests/response_fail: evidence for
-# docs/ARCHITECTURE.md "Typed response decision (M2-007)". tests/error_fail:
-# evidence for docs/ARCHITECTURE.md "Application-error decision (M2-010)".
-# tests/error_response_fail: evidence for docs/ARCHITECTURE.md
-# "Error-response decision (M2-012)". tests/raw_fail: evidence for
-# docs/ARCHITECTURE.md "Raw Request decision (M2-014)". tests/state_fail:
-# evidence for docs/ARCHITECTURE.md "Application state decision (M3-001)".
-# tests/state_storage_fail: evidence for docs/ARCHITECTURE.md "State storage
-# decision (M3-004)". tests/headers_fail: evidence for docs/ARCHITECTURE.md
-# "Headers decision (M3-002)". tests/headers_api_fail: the same invariants
-# on production muntin.Headers and Request (M3-005). tests/state_get_fail: production App.get takes a
-# stateful handler only with its State, first, borrowed and read-only; a
-# reference from state[] cannot outlive its handle; a second handle cannot
-# replace or mutate the shared value (M3-003). tests/state_post_fail: the
-# same for production App.post, whose stateful shapes take the body last
-# (M3-006). tests/state_raw_fail: the stateful raw shape on both methods
-# takes its State, first, borrowed and read-only, then only the Request, and
-# returns Response (M3-007); the reference-lifetime and second-handle cases
-# are the shared State's, pinned in tests/state_get_fail. tests/json_fail:
-# evidence for docs/ARCHITECTURE.md "JSON codec decision (M3-008)".
-# tests/json_api_fail: the same invariants on production muntin.Json,
-# FromJson, ToJson, JsonValue and JsonWriter (M3-009).
-# tests/testclient_headers_api_fail: production muntin.testing.TestClient
-# takes request header fields keyword-only and by move, as decided in
-# docs/ARCHITECTURE.md "TestClient request headers decision (M3-010)"
-# (M3-011). tests/header_access_fail: the toolchain premises of
-# docs/ARCHITECTURE.md "Typed header access decision (M3-012)": the
-# ten-note cap, a generic slot needing rebind, and type-level asserts.
-# tests/with_headers_api_fail: production muntin.WithHeaders is not a
-# FromBody, takes only a FromBody body and is a post body only, last
-# (M3-013). tests/registration_fail: the toolchain premises of
-# docs/ARCHITECTURE.md "Registration structure decision (M3-014)": the note
-# budget is per method name, typed borrowed function values convert to no
-# generic slot (so the engine cannot sit behind the old signatures), a
-# rebind to another layout is rejected, and the result rule is a `where`
-# clause because no check in a generic body sees an origin's identity
-# (`Origin.equals` only in `where`; an exact `StaticString` overload breaks
-# `String` handlers). tests/registration_api_fail: production `get`/`post`
-# on generic-arity slots (M3-015): a typed borrowed `Int` value no longer
-# registers, the rule check guards the adapter's instantiation, the rebind
-# helper rejects a layout twin, and each of the twelve overloads rejects an
-# immutable-origin result through its `where` clause.
-# tests/get_headers_fail: evidence for docs/ARCHITECTURE.md "Typed get header
-# access decision (M3-016)": on the spike's `get`, a `Headers` slot is one,
-# last, and typed values spell it `var`; on production `post`, `Headers`
-# shapes keep today's messages, which the M3-017 slice preserves.
+# Must-not-build fixtures whose expected text is the compiler's own
+# diagnostic. Each file states what it pins; docs/ARCHITECTURE.md's revisit
+# index maps each directory to the decision it protects.
 must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail tests/header_access_fail tests/with_headers_api_fail tests/registration_fail tests/registration_api_fail tests/get_headers_fail)
 for dir in "${must_fail_dirs[@]}"; do
     for t in "$dir"/*.mojo; do fixtures+=(must_fail "$t"); done
 done
 
-# Known gaps the decisions rest on (M3-001, M3-004, M3-002, M3-008, M3-014): each file must build
-# and is never run. A file that stops building means the toolchain changed
-# what the decision measured; docs/ARCHITECTURE.md lists the revisit
-# condition.
+# Known gaps the decisions rest on: each must build (--Werror) and is never
+# run. One that stops building fires a revisit condition (docs/ARCHITECTURE.md,
+# revisit index).
 for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo tests/headers_known_gaps/*.mojo tests/json_known_gaps/*.mojo tests/registration_known_gaps/*.mojo; do
     fixtures+=(known_gap "$t")
 done
 
-# Mojo 1.1.0 toolchain-wide soundness gaps (M3-004): primitives that break
-# the State alias property for std types and existing Muntin storage too.
-# Each must build and is never run. Warnings are allowed: the deprecated
-# `memmove` warns. A file that stops building means the toolchain improved;
-# docs/ARCHITECTURE.md "State storage decision (M3-004)" says what to
-# reevaluate.
+# Mojo 1.1.0 toolchain-wide soundness gaps: primitives that break the State
+# alias property for std types and Muntin storage alike. Each must build
+# (warnings allowed: the deprecated `memmove` warns) and is never run.
 for t in tests/toolchain_soundness_gaps/*.mojo; do fixtures+=(toolchain_gap "$t"); done
 
 jobs="$(getconf _NPROCESSORS_ONLN)"

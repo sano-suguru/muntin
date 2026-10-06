@@ -1,13 +1,12 @@
-# M3-016 typed `get` header access decision spike, application side: a
-# `Headers` request slot on `get`, last, registered through the spike's
-# model of the six arity overloads (tests/get_headers_spike.mojo) on a
-# production `App` and dispatched by production `App.handle`, through
-# `App.handle` and `TestClient` (`headers=`); composed with an `Int` route
-# value, `State`, both result policies, raises and generic forwarding; the
-# routes without a `Headers` slot (registered through production `get` and
-# `post`) unchanged. Decision: docs/ARCHITECTURE.md, "Typed get header
-# access decision (M3-016)". Must-not-compile counterparts:
-# tests/get_headers_fail.
+# M3-016 typed `get` header access decision spike, application side: a `Headers`
+# request slot on `get`, last, registered through the spike's model of the six
+# arity overloads (tests/get_headers_spike.mojo) on a production `App` and
+# dispatched by production `App.handle`, through `App.handle` and `TestClient`
+# (`headers=`); composed with an `Int` route value, `State`, both result
+# policies, raises and generic forwarding; the routes without a `Headers` slot
+# (registered through production `get` and `post`) unchanged. Decision:
+# docs/history/architecture-decisions.md, "Typed get header access decision
+# (M3-016)". Must-not-compile counterparts: tests/get_headers_fail.
 
 from std.collections import Optional
 from std.testing import assert_equal, assert_true, assert_false, TestSuite

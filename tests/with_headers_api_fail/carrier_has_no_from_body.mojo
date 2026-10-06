@@ -1,7 +1,7 @@
-# Must not compile: `WithHeaders` is not a `FromBody`, so it has no
-# `from_body` and a body alone cannot produce one with the fields silently
-# missing. Building one by hand stays possible and takes an explicit
-# `Headers` (M3-013; docs/ARCHITECTURE.md, "Typed header access decision
+# Must not compile: `WithHeaders` is not a `FromBody`, so it has no `from_body`
+# and a body alone cannot produce one with the fields silently missing. Building
+# one by hand stays possible and takes an explicit `Headers` (M3-013;
+# docs/history/architecture-decisions.md, "Typed header access decision
 # (M3-012)").
 # Expected diagnostic (checked by scripts/check.sh): 'WithHeaders[Note]' value has no attribute 'from_body'
 

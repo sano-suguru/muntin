@@ -1,8 +1,8 @@
-# Typed handler results (M2-008): a handler returns an application-defined
-# type conforming to the public `muntin.ToResponse`, or Muntin's `Response`,
-# on every argument shape. The result types live here, in the application
-# module; `src/muntin` never names them. Decision: docs/ARCHITECTURE.md,
-# "Typed response decision (M2-007)".
+# Typed handler results (M2-008): a handler returns an application-defined type
+# conforming to the public `muntin.ToResponse`, or Muntin's `Response`, on every
+# argument shape. The result types live here, in the application module;
+# `src/muntin` never names them. Decision:
+# docs/history/architecture-decisions.md, "Typed response decision (M2-007)".
 
 from std.os import getenv, setenv, unsetenv
 from std.testing import assert_equal, assert_false, assert_true, TestSuite

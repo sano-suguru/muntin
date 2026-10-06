@@ -10,26 +10,24 @@ from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
 from .state import State, _InjectedState
 
-# Registration (M3-015; docs/ARCHITECTURE.md, "Registration structure
-# decision (M3-014)" and "Registration on generic-arity slots in production
-# (M3-015)"): `get` and `post` each have one overload per request-slot
-# arity, 0 to 2, in a stateless and a stateful family. A request slot is a
-# handler parameter that comes from the request. The stateful family takes
-# a fixed leading `State[S]`, which is not a slot, and the state as the
-# registration's second argument, so the argument count separates the
-# families and no two overloads of a method accept the same handler. Every
-# slot is a generic `var A` (a plain `def` with a borrowed parameter
-# converts to it too), and its kind is decided at compile time from its type
-# alone (`_kind`): an `Int` route value, a body (`FromBody`, or a
-# `WithHeaders` carrier, below), the raw `Request`, a misplaced `State`, or
-# none. Shapes accepted today: `def()`, `def(Int)` and the raw
-# `def(var Request) -> Response` on `get`; `def(B)`, `def(Int, B)` and the
-# raw handler on `post`; the same after a leading `State[S]`.
+# Tags such as (M3-014) name the item whose decision, in
+# docs/history/architecture-decisions.md, explains the code they mark.
+#
+# Registration (M3-014): `get` and `post` each have one overload per
+# request-slot arity, 0 to 2, in a stateless and a stateful family. A request
+# slot is a handler parameter that comes from the request. The stateful family
+# takes a fixed leading `State[S]`, which is not a slot, and the state as the
+# registration's second argument, so the argument count separates the families
+# and no two overloads of a method accept the same handler. Every slot is a
+# generic `var A` (a plain `def` with a borrowed parameter converts to it too),
+# and its kind is decided at compile time from its type alone (`_kind`): an
+# `Int` route value, a body (`FromBody`, or a `WithHeaders` carrier, below), the
+# raw `Request`, a misplaced `State`, or none.
 #
 # Mojo 1.1.0 function types spelled without `thin` are traits and cannot be
 # stored, so the overloads take thin function values; ordinary `def`
 # functions convert implicitly. Each function type is `thin raises E` with
-# `E` inferred (M2-011, Mojo's "parametric raises"): `Never` for a
+# `E` inferred (M2-010, Mojo's "parametric raises"): `Never` for a
 # non-raising handler, `Error` for `raises`, the application's type for
 # `raises T`. An explicitly typed function value spells every slot `var`
 # (`def(var Int) thin raises Never -> String`): a typed value with a
@@ -75,73 +73,62 @@ from .state import State, _InjectedState
 # data too (`_Route.body`): `App.handle` appends the body as the last raw
 # argument, after the route value if there is one.
 #
-# Raw handlers (M2-015, docs/ARCHITECTURE.md "Raw Request decision
-# (M2-014)"): `Request` is a slot kind, so a raw handler selects the arity-1
-# overload (after `State[S]` in the stateful family) like any one-slot
-# handler, and its rule requires `Response` as the result and no
-# placeholder. A raw route (`_Route.raw`) gets the request's method, path,
-# query and body as its first four raw arguments, then each header field's
-# name and value (M3-005; docs/ARCHITECTURE.md "Headers decision (M3-002)",
-# R1), and nothing else runs; `_raw_request` rebuilds the `Request`,
-# headers included, and the adapter moves it into the handler. A typed
-# route gets header strings only when its body is a `WithHeaders[B]`
-# carrier (below).
+# Raw handlers (M2-014): `Request` is a slot kind, so a raw handler selects the
+# arity-1 overload (after `State[S]` in the stateful family) like any one-slot
+# handler, and its rule requires `Response` as the result and no placeholder. A
+# raw route (`_Route.raw`) gets the request's method, path, query and body as
+# its first four raw arguments, then each header field's name and value (M3-002,
+# R1), and nothing else runs; `_raw_request` rebuilds the `Request`, headers
+# included, and the adapter moves it into the handler. A typed route gets header
+# strings only when its body is a `WithHeaders[B]` carrier (below).
 #
-# Stateful handlers (M3-003 for `get`, M3-006 for `post`, M3-007 for raw;
-# docs/ARCHITECTURE.md "Application state decision (M3-001)"): a
-# registration with a second argument, `(handler, state: State[S])`, takes
-# a handler whose first parameter is `State[S]` and whose slots follow,
-# bound and checked as the stateless shape of the same slots. `S` is
-# inferred from both arguments, so they must agree. The registration moves
-# the handler and one copy of the handle into the route's `_Erased` box as
-# one `_Bound[H, S]`; the stateful adapters borrow it and pass the handle by
-# borrow, so a request copies nothing, changes no reference count and
-# allocates nothing for the state. `State` conforms to the private marker
+# Stateful handlers (M3-001): a registration with a second argument, `(handler,
+# state: State[S])`, takes a handler whose first parameter is `State[S]` and
+# whose slots follow, bound and checked as the stateless shape of the same
+# slots. `S` is inferred from both arguments, so they must agree. The
+# registration moves the handler and one copy of the handle into the route's
+# `_Erased` box as one `_Bound[H, S]`; the stateful adapters borrow it and pass
+# the handle by borrow, so a request copies nothing, changes no reference count
+# and allocates nothing for the state. `State` conforms to the private marker
 # `_InjectedState`, so a `State` in a slot (a stateful handler registered
 # without its state, or a second `State`) is reported by its rule.
 #
-# Errors (M2-010, docs/ARCHITECTURE.md "Application-error decision"): a
-# request-side failure is answered by the step that fails, before the
-# handler runs (query gathering in `App.handle`, `_slot` in the adapters,
-# which raises the status as a `_Reject`); a raw route has no such step
-# except its rebuild, whose failure is the fixed 500. Only the handler call
+# Errors (M2-010): a request-side failure is answered by the step that fails,
+# before the handler runs (query gathering in `App.handle`, `_slot` in the
+# adapters, which raises the status as a `_Reject`); a raw route has no such
+# step except its rebuild, whose failure is the fixed 500. Only the handler call
 # sits in an adapter's handler `try`; whatever it raises goes to
 # `_handler_error[E]`, and the response policy runs only after it returns.
 # `_handler_error` converts an error whose declared type `E` conforms to
-# `ToErrorResponse` (M2-012, "Error-response decision") and answers every
-# other one with a fixed 500.
+# `ToErrorResponse` (M2-012) and answers every other one with a fixed 500.
 #
-# JSON bodies (M3-009, docs/ARCHITECTURE.md "JSON codec decision (M3-008)"):
-# `Json[T]` is an ordinary `FromBody` body slot; a route whose body conforms
-# to the private marker `_JsonBody` sets `_Route.json`. `FromBody.from_body`
-# sees only the body, so the request `Content-Type` is decided in
-# `App.handle`, which appends a verdict after the body for a JSON route only
-# (`"1"` when the request has exactly one `application/json` field, else
-# empty; other routes' arguments are unchanged). The body slot, for a JSON
-# body only, answers 415 unless the arguments end with the verdict `"1"` at
-# the expected position (an exact arity check, so a body can never stand in
-# for a missing verdict), then 413 when the body is over 1 MiB, after the
-# route value and before `from_body`. Order on a JSON body route: 404,
-# query 400 (`App.handle`), route-value 400, 415, 413, JSON 400
-# (`from_body`), handler.
+# JSON bodies (M3-008): `Json[T]` is an ordinary `FromBody` body slot; a route
+# whose body conforms to the private marker `_JsonBody` sets `_Route.json`.
+# `FromBody.from_body` sees only the body, so the request `Content-Type` is
+# decided in `App.handle`, which appends a verdict after the body for a JSON
+# route only (`"1"` when the request has exactly one `application/json` field,
+# else empty; other routes' arguments are unchanged). The body slot, for a JSON
+# body only, answers 415 unless the arguments end with the verdict `"1"` at the
+# expected position (an exact arity check, so a body can never stand in for a
+# missing verdict), then 413 when the body is over 1 MiB, after the route value
+# and before `from_body`. Order on a JSON body route: 404, query 400
+# (`App.handle`), route-value 400, 415, 413, JSON 400 (`from_body`), handler.
 #
-# Header carriers (M3-013, docs/ARCHITECTURE.md "Typed header access decision
-# (M3-012)"): `WithHeaders[B]` (`headers_body.mojo`) is a body slot without
-# being a `FromBody`: `_kind` accepts `FromBody` or the private marker
-# `_HeaderCarrier`, and the route sets `_Route.headers` for a carrier. For
-# such a route only, `App.handle` appends each request header field's name
-# and value after the body and the JSON verdict (the R1 transport raw
-# routes use). The body slot then rebuilds the fields into a `Headers`
-# (`_carrier_fields`; a failure, which only the M3-002 `_fields` gap can
-# cause, is the fixed 500) and builds the carrier with `B._from_parts`,
-# which converts the body with the inner `from_body` (a raise: 400). The
-# carrier forwards `_JsonBody` exactly when its body does, so a
-# `WithHeaders[Json[T]]` route keeps the order above; its arity check
-# allows only name and value pairs after the verdict, and every other JSON
-# body keeps the exact arity. Muntin chooses no status for the fields the
-# handler reads and gives them no meaning; the `Content-Type` verdict for a
-# `Json[T]` body (415) and the rebuild failure (500) still answer before the
-# handler.
+# Header carriers (M3-012): `WithHeaders[B]` (`headers_body.mojo`) is a body
+# slot without being a `FromBody`: `_kind` accepts `FromBody` or the private
+# marker `_HeaderCarrier`, and the route sets `_Route.headers` for a carrier.
+# For such a route only, `App.handle` appends each request header field's name
+# and value after the body and the JSON verdict (the R1 transport raw routes
+# use). The body slot then rebuilds the fields into a `Headers`
+# (`_carrier_fields`; a failure, which only the M3-002 `_fields` gap can cause,
+# is the fixed 500) and builds the carrier with `B._from_parts`, which converts
+# the body with the inner `from_body` (a raise: 400). The carrier forwards
+# `_JsonBody` exactly when its body does, so a `WithHeaders[Json[T]]` route
+# keeps the order above; its arity check allows only name and value pairs after
+# the verdict, and every other JSON body keeps the exact arity. Muntin chooses
+# no status for the fields the handler reads and gives them no meaning; the
+# `Content-Type` verdict for a `Json[T]` body (415) and the rebuild failure
+# (500) still answer before the handler.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -416,8 +403,8 @@ def _post_rule(
 ) -> Int:
     """`post`'s rules for slot kinds `k1`, `k2` (`_ABSENT` when missing):
     `def(B)` with no placeholder, `def(Int, B)` with exactly one, or the raw
-    `def(Request) -> Response` with none. The order keeps the messages the
-    per-shape overloads gave before M3-015: a raw handler returning
+    `def(Request) -> Response` with none. The order decides which message a
+    shape that breaks several rules gets: a raw handler returning
     `Response` gets the raw placeholder messages; for any other `def(X)`
     (a `Request` with another result included), the placeholders and then
     `X`; for `def(Int, X)`, the placeholders and then `X`. A first slot
@@ -501,8 +488,7 @@ def _check[
     B: AnyType,
 ]():
     """Every registration rule as a compile-time assert with Muntin's
-    message. Messages that existed before M3-015 are kept for the same
-    rule; each new one names the method."""
+    message."""
     comptime rule = _rule[method, stateful, path, R, A, B]()
     comptime assert rule != _MALFORMED, "malformed route literal"
     comptime assert (
@@ -712,7 +698,7 @@ def _slot[
 
     `A` is refined here rather than bounded: forwarding a handler with an
     explicit body type to a callee that requires `FromBody` fails on Mojo
-    1.1.0 (docs/ARCHITECTURE.md, "Argument extraction decision (M2-005)").
+    1.1.0 (docs/history/architecture-decisions.md, "Argument extraction decision (M2-005)").
     """
     comptime if A == Int:
         try:

@@ -1,7 +1,7 @@
 # M2-012 error-response decision spike, application side. Handlers and
 # their error types live here; the library side
 # (tests/error_response_spike.mojo) never names them. Decision and evidence:
-# docs/ARCHITECTURE.md, "Error-response decision (M2-012)".
+# docs/history/architecture-decisions.md, "Error-response decision (M2-012)".
 
 from std.os import getenv, setenv, unsetenv
 from std.testing import assert_equal, assert_false, TestSuite

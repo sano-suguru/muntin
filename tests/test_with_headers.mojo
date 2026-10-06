@@ -3,9 +3,9 @@
 # route value then body, stateless and stateful, `String` and `ToResponse`
 # results), through `App.handle` and `TestClient` (`headers=`), composed with
 # `State` and `Json[T]`; the routes that take no carrier unchanged; and
-# docs/DX.md section 4's typed header access example as written there.
-# Decision: docs/ARCHITECTURE.md, "Typed header access decision (M3-012)".
-# Must-not-compile counterparts: tests/with_headers_api_fail.
+# docs/DX.md section 4's typed header access example as written there. Decision:
+# docs/history/architecture-decisions.md, "Typed header access decision
+# (M3-012)". Must-not-compile counterparts: tests/with_headers_api_fail.
 
 from std.collections import Optional
 from std.testing import assert_equal, assert_true, TestSuite
@@ -649,10 +649,11 @@ def test_a_carrier_built_by_hand_takes_explicit_headers() raises:
     assert_equal(note.text, "n")
 
 
-# The GET path the decision leaves to application code: a function
-# parameterized by a typed handler is itself a raw handler, so production
-# `App` registers it as a raw `get` handler, stateless and stateful. No Muntin change; it has no route values (raw literals declare
-# none) and the result policy is the helper's.
+# The GET path the decision leaves to application code: a function parameterized
+# by a typed handler is itself a raw handler, so production `App` registers it
+# as a raw `get` handler, stateless and stateful. No Muntin change; it has no
+# route values (raw literals declare none) and the result policy is the
+# helper's.
 
 
 def headers_of[

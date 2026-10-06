@@ -1,15 +1,14 @@
-# M3-002 headers decision spike, library side. Not production code: it
-# models the selected representation (candidate A, `Headers`), the
-# `Request`/`Response` fields that would carry it, and the raw-handler
-# transport (R1: header names and values as extra raw argument strings
-# through the production `_Erased`, unchanged), separately from the
-# application module (tests/test_spike_headers.mojo). Rejected candidates B
-# (a dictionary keyed by the lowercased name) and C (one comma-joined value
-# per name) are modeled too, so their information loss is executable.
-# check.sh builds it through that test (--Werror) and through
-# tests/headers_lib_only/driver.mojo; test.sh runs it. Decision and
-# evidence: docs/ARCHITECTURE.md, "Headers decision (M3-002)". Must-not-
-# compile evidence: tests/headers_fail.
+# M3-002 headers decision spike, library side. Not production code: it models
+# the selected representation (candidate A, `Headers`), the `Request`/`Response`
+# fields that would carry it, and the raw-handler transport (R1: header names
+# and values as extra raw argument strings through the production `_Erased`,
+# unchanged), separately from the application module
+# (tests/test_spike_headers.mojo). Rejected candidates B (a dictionary keyed by
+# the lowercased name) and C (one comma-joined value per name) are modeled too,
+# so their information loss is executable. check.sh builds it through that test
+# (--Werror) and through tests/headers_lib_only/driver.mojo; test.sh runs it.
+# Decision and evidence: docs/history/architecture-decisions.md, "Headers
+# decision (M3-002)". Must-not- compile evidence: tests/headers_fail.
 
 from std.collections import Dict, Optional
 

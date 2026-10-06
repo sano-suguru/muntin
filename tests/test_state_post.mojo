@@ -1,9 +1,9 @@
-# Stateful POST handlers in production (M3-006): the four `App.post`
-# overloads taking `(handler, state)`, `def(State[S], B)` and
-# `def(State[S], Int, B)`, each returning `String` or `R: ToResponse`,
-# driven through `TestClient`. Decision: docs/ARCHITECTURE.md, "Application
-# state decision (M3-001)". Must-not-compile counterparts:
-# tests/state_post_fail and tests/compile_fail/state_post_*.
+# Stateful POST handlers in production (M3-006): the four `App.post` overloads
+# taking `(handler, state)`, `def(State[S], B)` and `def(State[S], Int, B)`,
+# each returning `String` or `R: ToResponse`, driven through `TestClient`.
+# Decision: docs/history/architecture-decisions.md, "Application state decision
+# (M3-001)". Must-not-compile counterparts: tests/state_post_fail and
+# tests/compile_fail/state_post_*.
 
 from std.memory import ArcPointer
 from std.os import getenv, setenv, unsetenv
@@ -468,8 +468,8 @@ def test_test_client_before_and_after_an_app_move() raises:
 
 
 def test_request_headers_take_no_part() raises:
-    # Typed routes without a carrier receive no header strings (M3-005): a stateful POST
-    # answers the same through App.handle with or without fields.
+    # Typed routes without a carrier receive no header strings (M3-005): a
+    # stateful POST answers the same through App.handle with or without fields.
     _reset()
     var users = _users()
     var app = App()

@@ -1,8 +1,8 @@
-# TestClient request header fields (M3-011): `TestClient.get` and `.post`
-# take a keyword-only, defaulted `headers=` argument and move it into the
-# `Request` they send through `App.handle`. Every response is compared with
-# `App.handle(Request(...))` built from the same arguments.
-# Decision: docs/ARCHITECTURE.md, "TestClient request headers decision
+# TestClient request header fields (M3-011): `TestClient.get` and `.post` take a
+# keyword-only, defaulted `headers=` argument and move it into the `Request`
+# they send through `App.handle`. Every response is compared with
+# `App.handle(Request(...))` built from the same arguments. Decision:
+# docs/history/architecture-decisions.md, "TestClient request headers decision
 # (M3-010)". Must-not-compile evidence: tests/testclient_headers_api_fail.
 
 from std.testing import assert_equal, TestSuite

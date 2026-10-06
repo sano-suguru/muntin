@@ -1,11 +1,11 @@
 # Must not compile: a compile-time header name checked where the type is
-# declared. Mojo 1.1.0 allows `comptime assert` only inside a function, so
-# a carrier parameterized by a header name can reject an invalid name only
-# when a function using it is instantiated (at the registration), as
-# "function instantiation failed" (docs/ARCHITECTURE.md, "Typed header
-# access decision (M3-012)", compile-time names). The name used is valid,
-# so the struct-level assert is the only error: if Mojo starts accepting
-# it, this compiles; revisit compile-time header names then.
+# declared. Mojo 1.1.0 allows `comptime assert` only inside a function, so a
+# carrier parameterized by a header name can reject an invalid name only when a
+# function using it is instantiated (at the registration), as "function
+# instantiation failed" (docs/history/architecture-decisions.md, "Typed header
+# access decision (M3-012)", compile-time names). The name used is valid, so the
+# struct-level assert is the only error: if Mojo starts accepting it, this
+# compiles; revisit compile-time header names then.
 # Expected diagnostic (checked by scripts/check.sh): 'comptime assert' must be inside a function
 
 

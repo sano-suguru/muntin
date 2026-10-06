@@ -1,17 +1,16 @@
 # M2-014 raw-Request decision spike, library side. Not production code: it
 # models production `App` with the selected raw `Request -> Response`
 # registration added, separately from the application module
-# (tests/test_spike_raw.mojo) that defines the handlers and error types.
-# The eight typed overloads are production's as of M2-014, copied with their signatures
-# and asserts unchanged, so overload resolution is measured against the
-# real set; their adapters and response policies are local copies of
-# production's as of M3-014 (below the imports), and route checks,
-# matching, query gathering and `_handler_error` are imported from
-# production. Handlers are stored in
-# the production `_Erased` box, unchanged. check.sh builds it through that
-# test (--Werror); test.sh runs it. Decision and evidence:
-# docs/ARCHITECTURE.md, "Raw Request decision (M2-014)". Must-not-compile
-# evidence: tests/raw_fail.
+# (tests/test_spike_raw.mojo) that defines the handlers and error types. The
+# eight typed overloads are production's as of M2-014, copied with their
+# signatures and asserts unchanged, so overload resolution is measured against
+# the real set; their adapters and response policies are local copies of
+# production's as of M3-014 (below the imports), and route checks, matching,
+# query gathering and `_handler_error` are imported from production. Handlers
+# are stored in the production `_Erased` box, unchanged. check.sh builds it
+# through that test (--Werror); test.sh runs it. Decision and evidence:
+# docs/history/architecture-decisions.md, "Raw Request decision (M2-014)".
+# Must-not-compile evidence: tests/raw_fail.
 #
 # What changes against production, and only that:
 #
@@ -122,7 +121,7 @@ def _call_body[
 
     `B` is refined here rather than bounded, as in `App.post`: forwarding a
     handler with an explicit `B` to a callee that requires `B: FromBody`
-    fails on Mojo 1.1.0 (docs/ARCHITECTURE.md, "Argument extraction
+    fails on Mojo 1.1.0 (docs/history/architecture-decisions.md, "Argument extraction
     decision (M2-005)").
     """
     comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
@@ -317,8 +316,8 @@ struct RawApp(Movable):
             )
         )
 
-    # Production's eight overloads as of M2-014, signatures and asserts unchanged; the
-    # four body overloads gain the `Request` guard.
+    # Production's eight overloads as of M2-014, signatures and asserts
+    # unchanged; the four body overloads gain the `Request` guard.
 
     def get[
         E: Deinitable, //, path: StaticString

@@ -16,26 +16,7 @@ Muntin should feel like a native Mojo framework rather than a mechanical transla
 
 ## Proven vs. target status
 
-All status below is for **Mojo 1.1.0 (8189361e)**, as of M3-015. Each numbered section from 1 on opens with the design target (a constraint on where the API should go, not a claim that it compiles) and then gives its status: what is production now (the section names the tests that prove it) and what is still a target. The "Proven" block below is the M0 baseline; the sections after it add each shape.
-
-| Capability | Status | Examples |
-|---|---|---|
-| `App`, `get` routes, `TestClient`, `App.handle` | production (M0) | this section |
-| one `Int` path or query value | production (M2-001, M2-002) | this section (sections 2 and 3 give the target and status) |
-| typed bodies (`FromBody`), route value then body | production (M2-006, M2-009) | this section, section 4 |
-| typed results (`ToResponse`, `-> Response`) | production (M2-008) | section 5 |
-| raising handlers, `ToErrorResponse` | production (M2-011, M2-013) | section 6 |
-| application state (`State[S]`) on `get`, `post` and raw handlers | production (M3-003, M3-006, M3-007) | section 8 |
-| raw `Request -> Response` handlers | production (M2-015) | section 9 |
-| request and response headers (`Headers`) for raw handlers and `Response` | production (M3-005) | section 9 |
-| JSON bodies and results (`Json[T]`) | production (M3-009) | sections 4, 5 |
-| `TestClient` request header fields (`headers=`) | production (M3-011) | sections 4, 10 |
-| typed header access for `post` handlers (`WithHeaders[B]`) | production (M3-013) | section 4 |
-| registration on generic-arity slots (one `get`/`post` overload per request-slot arity) | production (M3-015) | section 3 status, below |
-| typed header access on `get` (a `Headers` parameter, decided by M3-016) | target (M3-017) | "Still targets" below; `docs/SPEC.md` M3 table |
-| middleware, `app.run()`, more methods and route-value types, derived codecs, schema/OpenAPI, streaming | target | "Still targets" below; `docs/SPEC.md` M3 "Remaining candidates" |
-
-Every production row whose behavior crosses the backend seam also has a Flare loopback check in `adapters/flare/test_localhost_roundtrip.mojo` (`./scripts/check_flare.sh`). `TestClient` request header fields is a testing API that never reaches a backend, so its tests compare it with `App.handle` directly. M2 is complete (M2-016): its contract is `docs/SPEC.md`, "M2 completion contract", a record of what M2 provides; M3 rows above go beyond it.
+Everything below is for **Mojo 1.1.0 (8189361e)**. Each numbered section from 1 on opens with the design target (a constraint on where the API should go, not a claim that it compiles) and then gives its status: what is production now, with the tests that prove it, and what is still a target. Which capabilities are shipped and which remain is `docs/SPEC.md`. Production behavior that crosses the backend seam is also exercised over a real loopback connection through Flare (`adapters/flare/test_localhost_roundtrip.mojo`, `./scripts/check_flare.sh`).
 
 Proven baseline, verified by `tests/test_app.mojo` and `main.mojo` (run via `./scripts/test.sh` / `./scripts/check.sh`):
 
@@ -62,7 +43,7 @@ def main() raises:
 
 Unmatched method/path pairs return status 404.
 
-Typed path parameter (M2-001), proven by `tests/test_app.mojo`, `tests/compile_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo` (via `./scripts/check_flare.sh`):
+Typed path parameter, proven by `tests/test_app.mojo`, `tests/compile_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo` (via `./scripts/check_flare.sh`):
 
 ```mojo
 def get_user(id: Int) -> String:
@@ -83,10 +64,10 @@ Semantics:
 - Binding is positional. The handler's one `Int` parameter receives the one `{name}` segment; the name is not compared with the handler's parameter name, because Mojo 1.1.0 reflection does not expose function parameter names. `app.get["/users/{user}"](get_user)` is accepted.
 - `Int` conversion: an optional `-` followed by one or more ASCII digits, within `Int` range (`-9223372036854775808` to `9223372036854775807`); leading zeros are allowed (`/users/042` -> `Int(42)`). Anything else, including forms Mojo's `Int(String)` accepts (`+42`, ` 42`, `4_2`), returns 400 `Bad Request` without calling the handler.
 - The first registered route whose method and path match handles the request: with `/users/me` registered before `/users/{id}`, `GET /users/me` goes to the former. A conversion failure is 400; it does not fall through to later routes.
-- Arity is checked at compile time at the registration call: `app.get["/users/{id}"](hello)` fails with `constraint failed: route declares a path parameter but the handler takes none`; `app.get["/users"](get_user)` and `app.get["/users/{id}/posts/{post}"](get_user)` fail with `constraint failed: handler takes one Int parameter; route must declare exactly one path or query parameter` (M2-002 wording; M2-001 said `path parameter; route must declare one`).
-- Routes match the path only (M2-002, below): `/users/42?x=1` passes `Int(42)` and `/hello?x=1` is 200. Percent-encoding is not decoded.
+- Arity is checked at compile time at the registration call: `app.get["/users/{id}"](hello)` fails with `constraint failed: route declares a path parameter but the handler takes none`; `app.get["/users"](get_user)` and `app.get["/users/{id}/posts/{post}"](get_user)` fail with `constraint failed: handler takes one Int parameter; route must declare exactly one path or query parameter`.
+- Routes match the path only (below): `/users/42?x=1` passes `Int(42)` and `/hello?x=1` is 200. Percent-encoding is not decoded.
 
-Typed query parameter (M2-002), proven by the same tests and fixtures:
+Typed query parameter, proven by the same tests and fixtures:
 
 ```mojo
 def list_items(limit: Int) -> String:
@@ -110,7 +91,7 @@ Semantics:
 - The value converts with the path rule (optional `-`, ASCII digits, `Int` range). A missing key, a key that appears more than once (even with equal values), an empty value, or a non-integer value returns 400 `Bad Request` without calling the handler.
 - The query takes no part in route selection. With `/items?{limit}` registered before `/items`, `GET /items` matches the first route and is 400; it does not fall through.
 
-Typed request body (M2-006), proven by `tests/test_body.mojo`, `tests/compile_fail/post_*.mojo` and `tests/body_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
+Typed request body, proven by `tests/test_body.mojo`, `tests/compile_fail/post_*.mojo` and `tests/body_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
 
 ```mojo
 from muntin import App, FromBody
@@ -141,13 +122,13 @@ app.post["/users"](create_user)
 
 Semantics:
 
-- `FromBody` is a public Muntin trait refining `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`. The application type conforms to it in its own module; Muntin never names the type. `from_body(body: String)` is the current public body-conversion input contract (`from_body` receives the body as one `String` and sees no header fields or content type, although `Request` carries headers since M3-005); future body capabilities are added as new APIs without changing it.
-- The body-only shape of `app.post[route](handler)` is a handler (non-raising, or raising since M2-011, section 6) with one parameter, the body, on a route literal with no path or query placeholder (the route-value-then-body shape is below, M2-009). It returns `String` or `StaticString` (a string-literal result is text too) or, since M2-008, a type conforming to `ToResponse` (section 5). Parameter names are not consulted.
+- `FromBody` is a public Muntin trait refining `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`. The application type conforms to it in its own module; Muntin never names the type. `from_body(body: String)` is the current public body-conversion input contract (`from_body` receives the body as one `String` and sees no header fields or content type, although `Request` carries headers); future body capabilities are added as new APIs without changing it.
+- The body-only shape of `app.post[route](handler)` is a handler (non-raising or raising, section 6) with one parameter, the body, on a route literal with no path or query placeholder (the route-value-then-body shape is below). It returns `String` or `StaticString` (a string-literal result is text too) or a type conforming to `ToResponse` (section 5). Parameter names are not consulted.
 - Muntin calls `from_body(request.body)` before the handler. The body comes from the request body only, never from the path or query (`POST /users?name=Bob` with body `name=Ada` -> `created Ada`), byte for byte (an empty body or surrounding whitespace reaches `from_body` unchanged; over Flare this holds for UTF-8 bodies, because the adapter replaces invalid UTF-8 with U+FFFD), and the `Request` is borrowed, not consumed. If `from_body` raises, the response is 400 `Bad Request` and the handler is not called. Routes are selected by method and path as for `GET`; no match is 404 and `from_body` is not called.
-- Compile-time errors at `app.post`: a parameter type that is neither a `FromBody` body nor a `WithHeaders[B]` carrier (section 4), including `String` (`constraint failed: the handler's parameter is the request body; its type must conform to FromBody`; the message names only `FromBody`; M3-013 left it unchanged); a `Request` body parameter, i.e. `def(req: Request)` with a result other than `Response` or `def(id: Int, req: Request)` (since M2-015, section 9: `constraint failed: Request is the whole request, not a body; a raw handler takes only the Request and returns Response`; two `Request`s are `constraint failed: a raw post handler takes only the Request and returns Response`, and `mut req` matches no overload); an `Int` parameter (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a path or query placeholder (`constraint failed: handler takes only the request body; route must declare no path or query parameter`). No parameter is `constraint failed: a post handler takes the request body as its last parameter`, and two bodies `constraint failed: a post handler takes one request body, as its last parameter` (since M3-015; before, both were `no matching method in call to 'post'` with a note per candidate). A raw `def(request: Request) -> Response` handler is the raw shape (section 9) since M2-015. A body handler passed to `app.get` is `constraint failed: a get handler takes no request body`.
+- Compile-time errors at `app.post`: a parameter type that is neither a `FromBody` body nor a `WithHeaders[B]` carrier (section 4), including `String` (`constraint failed: the handler's parameter is the request body; its type must conform to FromBody`; the message names only `FromBody`); a `Request` body parameter, i.e. `def(req: Request)` with a result other than `Response` or `def(id: Int, req: Request)` (section 9: `constraint failed: Request is the whole request, not a body; a raw handler takes only the Request and returns Response`; two `Request`s are `constraint failed: a raw post handler takes only the Request and returns Response`, and `mut req` matches no overload); an `Int` parameter (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a path or query placeholder (`constraint failed: handler takes only the request body; route must declare no path or query parameter`). No parameter is `constraint failed: a post handler takes the request body as its last parameter`, and two bodies `constraint failed: a post handler takes one request body, as its last parameter`. A raw `def(request: Request) -> Response` handler is the raw shape (section 9). A body handler passed to `app.get` is `constraint failed: a get handler takes no request body`.
 - `TestClient.post(target, body)` sends `Request("POST", target, body)` through `App.handle`, like `TestClient.get`.
 
-Route value then body (M2-009), proven by `tests/test_int_body.mojo`, `tests/compile_fail/{,typed_}post_int_*.mojo` and `tests/body_fail/post_{body_then_int,int_and_two_bodies,int_body_*}.mojo` (via `./scripts/check.sh`), `tests/test_registration.mojo` (an owned route value) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
+Route value then body, proven by `tests/test_int_body.mojo`, `tests/compile_fail/{,typed_}post_int_*.mojo` and `tests/body_fail/post_{body_then_int,int_and_two_bodies,int_body_*}.mojo` (via `./scripts/check.sh`), `tests/test_registration.mojo` (an owned route value) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
 
 ```mojo
 struct UpdateUser(FromBody):              # as CreateUser above; may be move-only
@@ -170,61 +151,21 @@ app.post["/users?{id}"](update_user)      # or from a query item
 
 Semantics:
 
-- The handler takes exactly one `Int` route value, then one body. The route literal declares exactly one route value: one `{name}` path segment or one `{key}` query item, never both. Binding is positional (route value first, body second); parameter names are not consulted (`def update_note(n: Int, var text: Note)` on `/notes/{id}` works). The route value may be owned (`var id: Int`) since M3-015. The route value follows the `Int` rules of `app.get` (path and query sections above); the body follows the body-only rules (from the request body only, byte for byte, through `B.from_body`).
+- The handler takes exactly one `Int` route value, then one body. The route literal declares exactly one route value: one `{name}` path segment or one `{key}` query item, never both. Binding is positional (route value first, body second); parameter names are not consulted (`def update_note(n: Int, var text: Note)` on `/notes/{id}` works). The route value may be owned (`var id: Int`). The route value follows the `Int` rules of `app.get` (path and query sections above); the body follows the body-only rules (from the request body only, byte for byte, through `B.from_body`).
 - Order: no matching method and path is 404 with nothing converted. Otherwise the route value is gathered and converted first: a non-integer path value, or a missing, duplicated, empty or non-integer query value, is 400 and `from_body` is not called (a missing path segment does not match the path, so it is 404). Then the body: a `from_body` raise is 400 and the handler is not called. Then the handler runs once, and its result is converted once: `String` (or `String`-compatible, such as `StaticString`) to a 200 text response, `R: ToResponse` (an application type or `Response`) by `to_response()`. A matched route that answers 400 never falls through to a later route.
 - Compile-time errors at `app.post`, on both result policies: no route value, two path values, or a path and a query value (`constraint failed: handler takes one Int parameter and the request body; route must declare exactly one path or query parameter`); `(Int, Int)` (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a second parameter that does not conform (`constraint failed: the handler's last parameter is the request body; its type must conform to FromBody`). The body before the route value `(B, Int)` is `constraint failed: a post handler takes one request body, as its last parameter`. Three parameters, such as two bodies after the route value, match no overload (`no matching method in call to 'post'`, with a note per candidate such as `cannot be converted from '<handler type>' to 'def(var A, var B) raises Never thin -> String'`), and so does a result that is neither `String`, `StaticString` nor `ToResponse` (the candidate's note is `violated constraint`, then the `where` clause, which contains `identical(R, StringSpan[ImmStaticOrigin])`).
 
-Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` and `def(Int, B)` (M2-009) with `B: FromBody` (or, since M3-013, `WithHeaders[B]` around one, section 4) for `app.post`, plus, on both, the raw `def(req: Request) -> Response` (M2-015, section 9; `Response` only, under the same error model). Each may be non-raising or declare `raises` or `raises T` (M2-011, section 6; a `T` declaring `ToErrorResponse` chooses its own response, M2-013), and returns `String`, `StaticString` (or a string literal) or a type conforming to `ToResponse`, including `Response` (M2-008, section 5). Since M3-003, `app.get` also takes a stateful handler with its state as a second argument, `def(State[S])` or `def(State[S], Int)`, and since M3-007 the stateful raw `def(State[S], req: Request) -> Response` (section 8); `app.post` likewise takes `def(State[S], B)` and `def(State[S], Int, B)` since M3-006 and the stateful raw shape since M3-007. `Json[T]` (sections 4 and 5) is a body or a result type on these shapes, not a new shape.
+Current argument shapes are exactly `def()` and `def(Int)` for `app.get`, and `def(B)` and `def(Int, B)` with `B: FromBody` (or a `WithHeaders[B]` around one, section 4) for `app.post`, plus, on both, the raw `def(req: Request) -> Response` (section 9). Each may be non-raising or declare `raises` or `raises T` (section 6), and returns `String`, `StaticString` (or a string literal) or a type conforming to `ToResponse`, including `Response` (section 5). With a state as the registration's second argument, each shape also takes a leading `State[S]` (section 8). `Json[T]` (sections 4 and 5) is a body or a result type on these shapes, not a new shape.
 
-Registration, status (M3-015): **production**, decided in M3-014 (`docs/ARCHITECTURE.md`, "Registration structure decision (M3-014)" and "Registration on generic-arity slots in production (M3-015)"); proven by `tests/test_registration.mojo`, `tests/registration_api_fail/` and every test and fixture above. `app.get` and `app.post` each have one overload per number of request parameters (0, 1 or 2), stateless and stateful; the kind of each parameter (`Int` route value, body, `Request`) is decided from its type, and the result type through a `where` clause on each overload. The spellings, binding, request steps and statuses above are unchanged. What M3-015 changed:
+Registration rules, proven by `tests/test_registration.mojo`, `tests/registration_api_fail/` and every test and fixture above. `app.get` and `app.post` each have one overload per number of request parameters (0, 1 or 2), stateless and stateful; the kind of each parameter (`Int` route value, body, `Request`) is decided from its type, and the result type through a `where` clause on each overload.
 
 - An owned route value registers: `def get_user(var id: Int)` on `get`, `def update(var id: Int, body: Note)` on `post`.
-- A rejected shape that has an accepted parameter count reports the rule it breaks: `constraint failed: <rule>`, after `function instantiation failed` at the enclosing function and the registration call in the next note. Rules that had a message keep it; the new ones name the method: `a get handler takes no request body`, `a get handler takes at most one Int route value`, `a get handler's parameter is an Int route value or, for a raw handler, the Request` (a `String` parameter, for example), `a raw get handler takes only the Request and returns Response`, `a post handler takes the request body as its last parameter`, `a post handler takes one request body, as its last parameter`, `a raw post handler takes only the Request and returns Response`, and the stateful and `State` variants in section 8.
-- A call that no overload takes keeps `no matching method in call to 'get'` (or `'post'`) with one note per candidate, six candidates per method: more parameters than two (after a leading `State`), a `State` parameter that is `var`, `mut`, a plain value or not first, and a result that is not `String`, `StaticString` or a `ToResponse` (`candidate not viable: violated constraint`, then the `where` clause, e.g. `... Bool(identical(R, StringSpan[ImmStaticOrigin])) or conforms_to(R, ToResponse)`). But when the call does not let the compiler decide the clause, the error is `invalid call to '<method>': lacking evidence to prove correctness` instead. That happens for a result with a local's immutable origin (`origin_text[ImmOrigin(origin_of(s))]`), and for a forwarding helper's generic result whose own `where` is neither one branch of the clause nor the whole clause (no `where`, or a partial disjunction such as `where (R == String or R == StaticString)`). Candidate notes name the generic slots: `cannot be converted from 'def f(id: Int, a: Note, b: Note) thin -> String' to 'def(var A, var B) raises Never thin -> String'`.
-- An explicitly typed function value or helper parameter spells each request parameter `var`: `def(var Int) thin raises Never -> String` registers, and `def(Int) thin raises Never -> String` fails with `TODO: function type conversions between closures not supported yet` (it registered before M3-015). A leading `State[S]` keeps its spelling; borrowed bodies and `Request`s already needed `var`. Plain `def` handlers are unaffected. A typed `def() thin raises Never -> StaticString` value, and a generic helper parameter `h: def() thin raises E -> StaticString` forwarded to `app.get`, register as text since M3-015 (before, the `TODO` error).
-- Generic forwarding (M3-015, by an amendment of M3-014): a helper generic over a request parameter (for example `h: def(var A) thin raises Never -> String`, `def(State[S], var A, var B)`, or `def(var A) -> Response` filled by `Request`) or over the handler's result forwards to `app.get`/`app.post` and registers as the plain handler would, where the per-shape overloads rejected it. A generic result needs its own `where` clause that is one branch of the registration's (`where R == String`, `where R == StaticString`, `where conforms_to(R, ToResponse)`) or the whole clause (also with its branches reordered); with none, or with a partial disjunction such as `where (R == String or R == StaticString)`, the call is `invalid call ...: lacking evidence to prove correctness` even for an accepted type. The rules apply to the instantiated types as usual.
+- A rejected shape that has an accepted parameter count reports the rule it breaks: `constraint failed: <rule>`, after `function instantiation failed` at the enclosing function and the registration call in the next note. Besides the messages above: `a get handler takes no request body`, `a get handler takes at most one Int route value`, `a get handler's parameter is an Int route value or, for a raw handler, the Request` (a `String` parameter, for example), `a raw get handler takes only the Request and returns Response`, `a post handler takes the request body as its last parameter`, `a post handler takes one request body, as its last parameter`, `a raw post handler takes only the Request and returns Response`, and the stateful and `State` variants in section 8.
+- A call that no overload takes gets `no matching method in call to 'get'` (or `'post'`) with one note per candidate, six candidates per method: more parameters than two (after a leading `State`), a `State` parameter that is `var`, `mut`, a plain value or not first, and a result that is not `String`, `StaticString` or a `ToResponse` (`candidate not viable: violated constraint`, then the `where` clause, e.g. `... Bool(identical(R, StringSpan[ImmStaticOrigin])) or conforms_to(R, ToResponse)`). When the call does not let the compiler decide the clause, the error is `invalid call to '<method>': lacking evidence to prove correctness` instead: for a result with a local's immutable origin (`origin_text[ImmOrigin(origin_of(s))]`), and for a forwarding helper's generic result whose own `where` is neither one branch of the clause nor the whole clause (no `where`, or a partial disjunction such as `where (R == String or R == StaticString)`). Candidate notes name the generic slots: `cannot be converted from 'def f(id: Int, a: Note, b: Note) thin -> String' to 'def(var A, var B) raises Never thin -> String'`.
+- An explicitly typed function value or helper parameter spells each request parameter `var`: `def(var Int) thin raises Never -> String` registers, and `def(Int) thin raises Never -> String` fails with `TODO: function type conversions between closures not supported yet`. A leading `State[S]` keeps its spelling; bodies and `Request`s are `var` too. Plain `def` handlers are unaffected. A typed `def() thin raises Never -> StaticString` value, and a generic helper parameter `h: def() thin raises E -> StaticString` forwarded to `app.get`, register as text.
+- Generic forwarding: a helper generic over a request parameter (for example `h: def(var A) thin raises Never -> String`, `def(State[S], var A, var B)`, or `def(var A) -> Response` filled by `Request`) or over the handler's result forwards to `app.get`/`app.post` and registers as the plain handler would. A generic result needs its own `where` clause that is one branch of the registration's (`where R == String`, `where R == StaticString`, `where conforms_to(R, ToResponse)`) or the whole clause (also with its branches reordered); with none, or with a partial disjunction, the call is `invalid call ...: lacking evidence to prove correctness` even for an accepted type. The rules apply to the instantiated types as usual.
 
-Production beyond the shapes above: application state (section 8) for `get` since M3-003, for `post` since M3-006 and for raw handlers on both since M3-007; request and response headers since M3-005 (section 9), read and written by raw handlers and set on a `Response`; JSON bodies and results since M3-009 (`Json[T]`, sections 4 and 5); `TestClient` request header fields since M3-011 (`headers=`, sections 4 and 10); typed header access for `post` handlers since M3-013 (`WithHeaders[B]`, section 4).
-
-Still targets (not implemented yet; each placed in `docs/SPEC.md`, M3, "Remaining candidates"): `app.run()` (target API; a network backend is proven in M1, but whether Muntin owns a public run/lifecycle API, and its shape, is undecided), more than one route value with a body, a text body (a Muntin `FromBody` type: M3-014 decided that raw `String` is a route-value type and never a body), builtin non-`String` bodies (undecided), optional or multiple bodies, `POST` handlers without a body, other methods (`put`, `patch`, `delete`), multiple or non-`Int` path or query parameters, path and query values in one handler, optional/default query values (`limit: Int = 20`), percent-decoding, raising or fallible response conversion, compile-time header names, a `FromHeaders` converter, parameter-name checking, middleware, derived codecs, `+json` request types, a configurable JSON body cap, `Json(value, status=)` and top-level list results. Typed header access on `get` is decided but not implemented: M3-016 chose a `Headers` parameter as the handler's last request parameter (`def me(headers: Headers)`, `def note(id: Int, headers: Headers)`, also after `State[S]`), with the fields rebuilt in the order, casing, repeats and empty values `Request.headers` holds, and M3-017 implements it; until then typed `get` handlers read no fields, and a `get` route that needs them uses the raw `get`. Non-`Int` and several route values, `POST` without a body and broader raw handlers are each a later item on the generic-arity registration (M3-015, above): a slot kind or a rule, with no overload up to two request parameters. Default response fields are decided, not a target: `String` results and `Response.text` add none, and only `Json[T]` results add `Content-Type: application/json` (M3-002, M3-008).
-
-Mojo facts discovered while proving the above:
-
-- In Mojo 1.1.0, the function type spelled `def() -> String` is a *trait*, not a concrete type, so it cannot be stored in a struct field. The minimal reproduction
-
-  ```mojo
-  struct Route:
-      var handler: def() -> String
-  ```
-
-  fails with `error: struct fields do not support trait types; 'def() -> String' is a trait, use a concrete type or compile-time generic`, and passing `hello` to a parameter of that type fails with `cannot be converted from 'def hello() thin -> String' to 'def() -> String'`. Muntin therefore accepts thin function types internally (`def() thin raises E -> String` since M2-011, `def(var A) thin raises E -> R` since M3-015). Application code is unaffected: an ordinary `def hello() -> String` is passed as-is.
-- A `@staticmethod def text(body, status=200) -> Response` and an instance `def text(self) -> String` can coexist on `Response`, so both `Response.text("ok", status=200)` and `response.text()` from this document compile as written.
-- `TestClient(app)` borrows without copying via an inferred origin parameter (`struct TestClient[origin: Origin[mut=False]]` holding `Pointer[App, origin]`). The spellings `ImmutOrigin` and `ImmutableOrigin` do not exist in Mojo 1.1.0.
-- Overloading `get` on handler shape (`def() thin -> String` vs. `def(Request) thin -> ...`) resolves correctly in a scratch experiment, so the raw-request escape hatch does not require different registration syntax. Not implemented in M0 (decided in M2-014, implemented in M2-015, section 9).
-
-### Handler model (M0.5 spike)
-
-`tests/test_spike_handler_model.mojo` registers `root() -> String`, `get_user(id: Int) -> User`, and `raw(req: Request) -> Response` in one app with `app.get["/users/{id}"](get_user)`-style calls and dispatches all three through `handle(Request) -> Response`. `GET /users/42` returns `User(42, Alice)` and `GET /users/abc` returns 400. `src/muntin` is unchanged.
-
-Result: the registration shape is feasible on Mojo 1.1.0, so this document's syntax stands. The working prototype below is provisional and stays in `tests/`. M2-001 did not adopt it: production `App` stored handlers in a `Variant` of thin function types, which needs no unsafe code for the closed set of shapes it supports (comparison in `docs/ARCHITECTURE.md`, "Routing and handler storage"). Since M2-004 they are stored in a private typed box that erases a pointer to the handler, not the handler's bits (`docs/ARCHITECTURE.md`, "Handler storage decision (M2)"); the public syntax is unchanged. Approaches compared:
-
-| Approach | Result | Evidence |
-|---|---|---|
-| Capturing closure | does not work as storage | Capture works (`def a(s: String) {var h} -> String`), but every closure has its own type: storing a second closure of the identical signature fails with `cannot be converted from 'Route[def(s: String) -> String]' to 'Route[def(s: String) -> String]'`. The shared function type is a trait, and `struct fields do not support trait types`. A capturing closure cannot become a thin function: `cannot implicitly convert 'def(s: String) -> String' value to 'def(String) thin -> String'`. |
-| `rebind` between function types | rejected | `rebind input type ... does not match result type` |
-| Function pointer + context, type-erased, with trampoline | works, provisional (unsafe) | The handler's thin function value (8 bytes, the same as `Int`) is stored as `Int` address bits. A trampoline instantiated for the same type restores and calls it. Erase and restore use one type parameter inside one private generic function, guarded by `comptime assert size_of[F]() == size_of[Int]()`. |
-| Compile-time generated wrapper / handler as compile-time parameter | works (fallback only) | `app.get["/users/{id}", get_user]()`. No unsafe code, but framework storage concerns leak into the public syntax. Consider only if the runtime-value approach proves unworkable. |
-
-Return conversion: a Muntin-owned conversion from typed return values to `Response` is the direction. The M0.5 prototype below is history; the M2-007 decision (section 5) differs: the requirement is `def to_response(var self) -> Response`, `String` does not conform through `__extension` (it had its own overloads until M3-015 and is named in the registrations' `where` clause since), and `Response` conforms in its own module. The M0.5 prototype `trait ToResponse` with `def to_response(self) -> Response` covers all three result types. `User` conforms directly. `String` and `Response` conform through `__extension String(ToResponse)` / `__extension Response(ToResponse)`, which compiles under `--Werror` on 1.1.0. The double-underscore spelling suggests the extension feature is not yet stable, so the trait and this way of conforming stdlib types are provisional; an overload per stdlib type is the fallback. No JSON.
-
-Other facts measured on Mojo 1.1.0:
-
-- Handler types are inferred from a runtime argument: `def get[R: ToResponse](handler: def(Int) thin -> R)` binds `R` from `get_user`.
-- Generic return types used by value need `Deinitable` (otherwise `abandoned without being explicitly destroyed ... consider adding trait conformance to Deinitable`). `ToResponse` refines `Deinitable`.
-- The route literal is a compile-time `StaticString`, so a plain `def` can count `{` inside `comptime assert`. `app.get["/users/{id}"](root)` fails to compile; the notes point at that call and end with `constraint failed: route declares path parameters but the handler takes none`. A handler of the wrong shape fails overload resolution, for example `cannot be converted from 'def root() thin -> String' to 'def(Request) thin -> Response'`.
-- Reflection (`std.reflection`, `reflect[T]()`) covers struct fields only, not function parameter names, so path parameters bind by position. The `{id}`-to-`id` name check in section 16 is not possible yet.
-
-Limitations of the provisional prototype: handlers must be thin functions that do not raise, and only `Int` path parameters are prototyped. Equal `size_of` does not prove that storing a function value as `Int` bits is defined behavior (ABI, provenance, optimizer, future function representation), so this storage is not adopted; the spike test only detects breakage on Mojo upgrades.
+Sections below mark what is still a target; the list of shipped and remaining capabilities is `docs/SPEC.md`. Default response fields are decided, not a target: `String` results and `Response.text` add none, and only `Json[T]` results add `Content-Type: application/json`.
 
 ## Design principles
 
@@ -258,7 +199,7 @@ Returning a `String` should be convertible to a successful text response by Munt
 
 The parameterized `app.get["/"](...)` syntax is a target because route literals known at compile time may enable better validation. It becomes canonical only after it compiles cleanly on the supported Mojo version.
 
-Status: `app.get["/"](hello)` compiles and dispatches on Mojo 1.1.0 (see "Proven vs. target status"). `app.run()` remains a target: M1 proved a real network backend (Flare, M1-003) without adding it, and public run/lifecycle ownership is undecided.
+Status: `app.get["/"](hello)` compiles and dispatches (see "Proven vs. target status"). `app.run()` remains a target: whether Muntin owns a public run/lifecycle API is undecided.
 
 ## 2. Typed path parameters
 
@@ -294,7 +235,7 @@ get_user(id=42)
 
 Application code should not manually parse common path types.
 
-Status (M2-001): `app.get["/users/{id}"](get_user)` with `def get_user(id: Int) -> String` is proven, through `TestClient` and a real Flare loopback request; see "Proven vs. target status" for matching and conversion rules. Returning `User` is production since M2-008 (section 5).
+Status: `app.get["/users/{id}"](get_user)` with an `Int` parameter is production; see "Proven vs. target status" for matching and conversion rules, and section 5 for returning `User`.
 
 Where Mojo makes it practical, route/handler mismatches should be diagnosed at compile time. A route declaring `{id}` should not silently bind to an unrelated handler parameter. If compile-time name matching is not practical, fail as early and clearly as the language permits.
 
@@ -311,9 +252,9 @@ app.get["/search"](search)
 
 For `GET /search?query=mojo&limit=10`, the handler should receive typed values rather than raw strings. Missing required values and invalid conversions should become clear client errors.
 
-Exact optional/default extraction semantics are M3 work (`docs/SPEC.md` M3, more route values) and must be proven against Mojo's callable/reflection capabilities before they are frozen.
+Exact optional/default extraction semantics are a remaining candidate (`docs/SPEC.md`) and must be proven against Mojo's callable/reflection capabilities before they are frozen.
 
-Status (M2-002): one required `Int` query value is proven as `app.get["/items?{limit}"](list_items)` with `def list_items(limit: Int) -> String`; see "Proven vs. target status". The key sits in the route literal because handler parameter names cannot be reflected, so the name-based `app.get["/search"](search)` above is not possible on Mojo 1.1.0. `String` values, several keys, and defaults are not implemented.
+Status: one required `Int` query value is proven as `app.get["/items?{limit}"](list_items)` with `def list_items(limit: Int) -> String`; see "Proven vs. target status". The key sits in the route literal because handler parameter names cannot be reflected, so the name-based `app.get["/search"](search)` above is not possible on Mojo 1.1.0. `String` values, several keys, and defaults are not implemented.
 
 ## 4. Typed request bodies
 
@@ -340,7 +281,7 @@ HTTP body -> decode -> validate -> CreateUser -> handler
 
 Muntin should use Mojo's type system and reflection capabilities where they genuinely reduce duplication. Do not introduce opaque runtime reflection when compile-time information is available.
 
-Status (M2-006, M2-009): the body-only shape and the route-value-then-body shape are **production**: `app.post["/users"](create_user)` and `app.post["/users/{id}"](update_user)` with `from muntin import FromBody` (semantics in "Proven vs. target status"). The extraction contract was decided in M2-005 (`docs/ARCHITECTURE.md`, "Argument extraction decision"). An application `FromBody` type chooses its own format; JSON is Muntin's `Json[T]` (M3-009, below):
+Status: the body-only shape and the route-value-then-body shape are **production**: `app.post["/users"](create_user)` and `app.post["/users/{id}"](update_user)` with `from muntin import FromBody` (semantics in "Proven vs. target status"). An application `FromBody` type chooses its own format; JSON is Muntin's `Json[T]` (below):
 
 ```mojo
 struct CreateUser(FromBody):            # the application type conforms; Muntin never names it
@@ -355,15 +296,15 @@ def create_user(body: CreateUser) -> String:      # `var body: CreateUser` also 
     return body.name
 
 
-app.post["/users"](create_user)          # production (M2-006): the one parameter is the body
-app.post["/users/{id}"](update_user)    # production (M2-009): def update_user(id: Int, body: CreateUser), route value then body
+app.post["/users"](create_user)          # the one parameter is the body
+app.post["/users/{id}"](update_user)    # def update_user(id: Int, body: CreateUser), route value then body
 ```
 
-- Binding is positional (the decided rule; production implements no route value or exactly one `Int` route value before the body): route values (path segments, then the query key) fill the first parameters, and one more parameter, last, is the body. Route values are Muntin builtins (`Int`), bodies are types that conform to the body trait, and the two never overlap, so a forgotten `{id}` or a misplaced body type is a compile error at `app.post`, not a silent rebinding.
-- The application writes `from_body` and chooses the body format. For JSON, Muntin's `Json[T]` wrapper fills `from_body` with Muntin's codec (M3-009, below); routing and binding are the same.
+- Binding is positional (no route value or exactly one `Int` route value before the body): route values (path segments, then the query key) fill the first parameters, and one more parameter, last, is the body. Route values are Muntin builtins (`Int`), bodies are types that conform to the body trait, and the two never overlap, so a forgotten `{id}` or a misplaced body type is a compile error at `app.post`, not a silent rebinding.
+- The application writes `from_body` and chooses the body format. For JSON, Muntin's `Json[T]` wrapper fills `from_body` with Muntin's codec (below); routing and binding are the same.
 - A body that does not convert is 400 before the handler runs; a raising handler's error is a different outcome (500, section 6).
 
-JSON, status (M3-009): **production**, decided in M3-008 (`docs/ARCHITECTURE.md`, "JSON codec decision (M3-008)" and "JSON in production (M3-009)"); proven by `tests/test_json.mojo`, `tests/test_json_dx.mojo` (this section's example and section 5's), `tests/json_api_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. The application declares `FromJson`/`ToJson` on its own types and wraps them in Muntin's `Json[T]`, which is a body and a result through the existing traits, so registration is unchanged and no new handler shape exists:
+JSON, status: **production**; proven by `tests/test_json.mojo`, `tests/test_json_dx.mojo` (this section's example and section 5's), `tests/json_api_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. The application declares `FromJson`/`ToJson` on its own types and wraps them in Muntin's `Json[T]`, which is a body and a result through the existing traits, so registration is unchanged and no new handler shape exists:
 
 ```mojo
 from muntin import App, FromJson, Json, JsonValue, JsonWriter, ToJson
@@ -418,14 +359,14 @@ app.post["/users/{id}"](replace_user)    # route value, then body
 # malformed JSON, a missing member, a wrong kind -> 400 "Bad Request"
 ```
 
-- `def create_user(body: CreateUser) -> User`, with no wrapper, is not the JSON form: a `FromJson` type is not a body by itself (`tests/json_api_fail/from_json_alone_is_not_a_body.mojo`: `the handler's parameter is the request body; its type must conform to FromBody`). Making it one was measured in M3-008 (an overload ambiguous with the body overload of that time, a trait refining `FromBody` that implements its parent's requirement, compiling but not documented by the Mojo manual, and relaxed bounds in every typed overload), and all were rejected (ARCHITECTURE). Fields are mapped by hand: Mojo 1.1.0 reflection has no constructor, so a derived `from_json` would need a dummy `Defaultable` initializer in every type.
+- `def create_user(body: CreateUser) -> User`, with no wrapper, is not the JSON form: a `FromJson` type is not a body by itself (`tests/json_api_fail/from_json_alone_is_not_a_body.mojo`: `the handler's parameter is the request body; its type must conform to FromBody`). The alternatives that would make it one were rejected ([JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008)). Fields are mapped by hand: Mojo 1.1.0 reflection has no constructor, so a derived `from_json` would need a dummy `Defaultable` initializer in every type.
 - `body.value^` does not compile (`field 'body.value...' destroyed out of the middle of a value`); `body^.take()` on a `var body` moves the whole value out (a move-only `T` works). As for any Mojo 1.1.0 struct, moving one field out of that value needs a `deinit` method on the type; otherwise copy the field.
-- `Json[T]` requires `T: FromJson` as a body and `T: ToJson` as a result; otherwise the registration fails (`its type must conform to FromBody`; for the result, `no matching method` with the `where` clause's `violated constraint`, since M3-015).
+- `Json[T]` requires `T: FromJson` as a body and `T: ToJson` as a result; otherwise the registration fails (`its type must conform to FromBody`; for the result, `no matching method` with the `where` clause's `violated constraint`).
 - The RFC 8259 grammar, strictly, with Muntin's limits: comments, trailing commas, leading zeros, `NaN`, duplicate member names, a byte order mark, lone surrogates and nesting deeper than 64 are 400. Extra members are ignored. `int()` takes integer literals that fit `Int`, exactly. `float()` goes through Mojo 1.1.0's `atof`: long literals (`100000000000000000000000`) raise (400), and some values come back 1 ulp off (`-2.7546748226290886e+20`, `123456789012345678`); `String(Float64)` in the writer likewise does not always print text that reads back to the same double. Known toolchain gaps, pinned in `tests/test_json.mojo`; read exact values with `int()`.
 - Order on a JSON body route, each step before the next runs: no matching route 404; a missing, duplicated or invalid query value 400; an invalid path value 400; the `Content-Type` 415; the size 413; malformed JSON or a `from_json` raise 400; then the handler. Every shape that takes a `FromBody` body takes `Json[T]` (body only or `Int` then body, stateless or stateful, either result policy). Other body types keep their rules: no `Content-Type` required and no Muntin cap.
 - Through the Flare backend, invalid UTF-8 in a body arrives as U+FFFD and is not rejected.
 - JSON bodies are capped at 1 MiB (fixed; 413 above it, and `Json[T].from_body` raises on a larger body in a raw handler). Parsing is linear apart from a sort of each object's member names (duplicates); member lookup (`get`, `value[name]`) scans the object's members, so reading k fields of an m-member object costs O(k·m). At the cap parsing adds at most about 29 MB of memory (measured: 1 MiB of `[0,0,...]`; 1 MiB of typical records adds about 5 MB). Other body types have no Muntin cap.
-- A test reaches a JSON body route through `TestClient` by sending the field (M3-011; section 10):
+- A test reaches a JSON body route through `TestClient` by sending the field (section 10):
 
   ```mojo
   from muntin import Headers
@@ -440,7 +381,7 @@ app.post["/users/{id}"](replace_user)    # route value, then body
 
   The client adds no field itself, so `client.post(target, body)` stays 415, and its answer equals `app.handle(Request("POST", target, body, h^))` for a separate `Headers` value `h` with the same fields (`headers` itself is moved into the client's request).
 
-Typed header access, status (M3-013): **production**, decided in M3-012 (`docs/ARCHITECTURE.md`, "Typed header access decision (M3-012)" and "Typed header access in production (M3-013)"); proven by `tests/test_with_headers.mojo` (which runs this example as written), `tests/with_headers_api_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. A `post` handler that needs request header fields takes `WithHeaders[B]` where it would take the body `B`; registration is unchanged:
+Typed header access on `post`, status: **production**; proven by `tests/test_with_headers.mojo` (which runs this example as written), `tests/with_headers_api_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. A `post` handler that needs request header fields takes `WithHeaders[B]` where it would take the body `B`; registration is unchanged:
 
 ```mojo
 from muntin import App, Json, Response, State, ToErrorResponse, WithHeaders
@@ -507,7 +448,7 @@ def health() -> Response:
 
 Convenience must not eliminate low-level control.
 
-Status (M2-008): **production**. Decided in M2-007 (`docs/ARCHITECTURE.md`, "Typed response decision (M2-007)"); proven by `tests/test_response.mojo`, `tests/storage_fail/{non_conforming_return_handler,raising_to_response}.mojo`, `tests/body_fail/post_non_conforming_return.mojo`, `tests/compile_fail/typed_*.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. An application result type conforms to the public `muntin.ToResponse` in its own module, as body types conform to `FromBody`:
+Status: **production**; proven by `tests/test_response.mojo`, `tests/storage_fail/{non_conforming_return_handler,raising_to_response}.mojo`, `tests/body_fail/post_non_conforming_return.mojo`, `tests/compile_fail/typed_*.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. An application result type conforms to the public `muntin.ToResponse` in its own module, as body types conform to `FromBody`:
 
 ```mojo
 from muntin import App, Response, ToResponse
@@ -531,14 +472,14 @@ app.get["/users/{id}"](get_user)          # unchanged registration syntax
 app.get["/health"](health)                # def health() -> Response: Response conforms itself
 ```
 
-- `-> String`, `-> StaticString` and string-literal results are 200 text responses: neither needs a conformance. Since M3-015 the result type is generic, and each overload accepts it through `where (R == String or R == StaticString or conforms_to(R, ToResponse))`, which the compiler checks by identity, so other immutable-origin string slices (`StringSlice[ImmutAnyOrigin]`) are rejected as before.
+- `-> String`, `-> StaticString` and string-literal results are 200 text responses: neither needs a conformance. The result type is generic, and each overload accepts it through `where (R == String or R == StaticString or conforms_to(R, ToResponse))`, which the compiler checks by identity, so other immutable-origin string slices (`StringSlice[ImmutAnyOrigin]`) are rejected.
 - The trait requirement is `def to_response(var self) -> Response`: Muntin hands the result over. An implementation may declare `self`, `var self`, or `deinit self` (to move fields out). It does not raise. Raising handlers (section 6) do not need fallible conversion: the conversion only sees a returned value.
-- The same rule applies to every argument shape: `def create_user(body: CreateUser) -> User` and, since M2-009, `def replace_user(id: Int, body: UpdateUser) -> User` on `app.post` convert the same way.
+- The same rule applies to every argument shape: `def create_user(body: CreateUser) -> User` and `def replace_user(id: Int, body: UpdateUser) -> User` on `app.post` convert the same way.
 - `-> Response` uses the same trait: `Response` conforms and returns itself by move, so the handler's status and body reach the client unchanged (`GET /teapot` -> 418). There is no separate `Response` overload.
 - The conversion runs once, after the handler returns. A 400 (route value or body failed to convert) or 404 calls neither the handler nor the conversion; a handler that raises (section 6) skips the result conversion.
-- A result type that is neither `String`, `StaticString` nor conforming fails at the registration call: `no matching method in call to 'get'`, whose candidate note is `violated constraint` followed by the `where` clause (`... identical(R, StringSpan[ImmStaticOrigin]) ...`); until M3-015 the note was `argument type 'Int' does not conform to trait 'ToResponse'`. When the call does not let the compiler decide the clause (a local's immutable origin, or a forwarding helper whose generic result is not pinned down by its own `where`), the error is `invalid call to '<method>': lacking evidence to prove correctness` instead.
+- A result type that is neither `String`, `StaticString` nor conforming fails at the registration call: `no matching method in call to 'get'`, whose candidate note is `violated constraint` followed by the `where` clause (`... identical(R, StringSpan[ImmStaticOrigin]) ...`). When the call does not let the compiler decide the clause (a local's immutable origin, or a forwarding helper whose generic result is not pinned down by its own `where`), the error is `invalid call to '<method>': lacking evidence to prove correctness` instead.
 
-JSON results (M3-009, production): a handler returns `Json[T]` with `T: ToJson` (section 4). The response is 200 with exactly one field, `Content-Type: application/json`; `String` results and `Response.text` still add no field. Another status or media type is an explicit edit of the converted response:
+JSON results: a handler returns `Json[T]` with `T: ToJson` (section 4). The response is 200 with exactly one field, `Content-Type: application/json`; `String` results and `Response.text` still add no field. Another status or media type is an explicit edit of the converted response:
 
 ```mojo
 def create() raises -> Response:
@@ -558,7 +499,7 @@ The durable requirement is simpler: domain/application failures must be converti
 
 A future API might resemble an application-level error mapping or result type, but the exact syntax must be derived from executable Mojo code rather than copied from another language.
 
-Status (M2-011): **production**. Decided in M2-010 (`docs/ARCHITECTURE.md`, "Application-error decision (M2-010)"; evidence in `tests/test_spike_error.mojo` and `tests/error_fail/`); proven by `tests/test_error.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. Registration syntax is unchanged:
+Status: **production**; proven by `tests/test_error.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. Registration syntax is unchanged:
 
 ```mojo
 def get_user(id: Int) raises -> User:        # or raises T, an application error type that does not opt in
@@ -574,12 +515,12 @@ app.get["/users/{id}"](get_user)              # unchanged registration
 ```
 
 - Every argument shape (`def()`, `def(Int)`, `def(B)`, `def(Int, B)`) and both result policies (`String` or `StaticString` text, `ToResponse`) accept a non-raising handler, `raises`, or `raises T` for an application-defined `T`. Non-raising `def` handlers keep working unchanged. Mojo infers the handler's error type (`Never`, `Error`, or the application's type); compiler notes print a non-raising candidate type as `def(var A) raises Never thin -> String`.
-- Exception, a Mojo 1.1.0 limitation: a handler *value* whose type is spelled without `raises` (`var f: def() thin -> String = hello`, or a helper parameter of that type forwarded to `app.get`) no longer registers: `TODO: function type conversions between closures not supported yet` (`tests/storage_fail/typed_thin_value_handler.mojo`; it compiled before M2-011). Spell the type `def() thin raises Never -> String`, or make the helper generic: `def register[E: Deinitable](mut app: App, h: def() thin raises E -> String)`. Since M3-015 such a type also spells each request parameter `var`: `def(var Int) thin raises Never -> String`; `def(Int) thin raises Never -> String` fails with the same `TODO` error (`tests/registration_api_fail/typed_borrowed_int_value.mojo`). A leading `State[S]` keeps its spelling, and `-> StaticString` may be the result type.
+- Exception, a Mojo 1.1.0 limitation: a handler *value* whose type is spelled without `raises` (`var f: def() thin -> String = hello`, or a helper parameter of that type forwarded to `app.get`) does not register: `TODO: function type conversions between closures not supported yet` (`tests/storage_fail/typed_thin_value_handler.mojo`). Spell the type `def() thin raises Never -> String`, or make the helper generic: `def register[E: Deinitable](mut app: App, h: def() thin raises E -> String)`. Such a type also spells each request parameter `var`: `def(var Int) thin raises Never -> String`; `def(Int) thin raises Never -> String` fails with the same `TODO` error (`tests/registration_api_fail/typed_borrowed_int_value.mojo`). A leading `State[S]` keeps its spelling, and `-> StaticString` may be the result type.
 - An error type must be `Deinitable`, because Muntin drops it: a linear error type is rejected at registration (`tests/storage_fail/linear_error_type.mojo`).
 - Request failures stay 400 and are decided before the handler: an invalid value in a matched path segment, a missing, duplicated or invalid query value, a body that `from_body` rejects. No route match, including a missing path segment, stays 404. Anything the handler raises, unless its declared error type opts in (below), is a fixed 500 with the body `Internal Server Error`, whatever the error says: the same message raised by the handler and by a failing conversion step gives 500 and 400. The error value is dropped; Muntin has no logging hook yet.
 - Returning and raising mean different things. A returned value goes through the response conversion; a raised value is a handler error: 500, even if its type conforms to `ToResponse`, unless its declared type conforms to `ToErrorResponse` (below).
 
-Application-defined error responses, status (M2-013): **production**. Decided in M2-012 (`docs/ARCHITECTURE.md`, "Error-response decision (M2-012)"; evidence in `tests/test_spike_error_response.mojo` and `tests/error_response_fail/`); proven by `tests/test_error_response.mojo`, `tests/storage_fail/{error_type_is_not_a_result,raising_error_conversion}.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo` ("Application-defined error responses in production (M2-013)"). An error type opts in by declaring the public `muntin.ToErrorResponse`, separate from `ToResponse`; registration does not change:
+Application-defined error responses, status: **production**; proven by `tests/test_error_response.mojo`, `tests/storage_fail/{error_type_is_not_a_result,raising_error_conversion}.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. An error type opts in by declaring the public `muntin.ToErrorResponse`, separate from `ToResponse`; registration does not change:
 
 ```mojo
 from muntin import App, Response, ToErrorResponse
@@ -621,13 +562,13 @@ app.get["/users/{id}"](get_user)
 
 Middleware should be able to inspect a request, short-circuit, call the next layer, inspect/modify a response, and attach request-scoped typed context. The public middleware contract must be Muntin-owned even if an adapter internally translates to a backend-specific mechanism.
 
-Status: not implemented; M3 (`docs/SPEC.md`). `app.use` does not exist.
+Status: not implemented (`docs/SPEC.md`). `app.use` does not exist.
 
 ## 8. Application state
 
 Long-lived state should have explicit ownership and predictable lifetime behavior.
 
-Production for `get` since M3-003, for `post` since M3-006 and for raw handlers since M3-007 (decided in M3-001, `docs/ARCHITECTURE.md` "Application state decision (M3-001)"), proven by `tests/test_state.mojo` (this example included), `tests/test_state_post.mojo` (the `post` example below), `tests/test_state_raw.mojo` (the raw example below), `tests/state_get_fail`, `tests/state_post_fail`, `tests/state_raw_fail`, `tests/compile_fail/state_*.mojo`, `tests/compile_fail/post_*state_as_body.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
+Production on `get`, `post` and raw handlers, proven by `tests/test_state.mojo` (this example included), `tests/test_state_post.mojo` (the `post` example below), `tests/test_state_raw.mojo` (the raw example below), `tests/state_get_fail`, `tests/state_post_fail`, `tests/state_raw_fail`, `tests/compile_fail/state_*.mojo`, `tests/compile_fail/post_*state_as_body.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
 
 ```mojo
 from muntin import App, State
@@ -656,21 +597,19 @@ def main():
 
 Rules:
 
-- **Which parameter is injected:** a handler takes application state exactly when its registration passes a second argument, a `State[S]`. Its first parameter is then `State[S]` (the same `S`), and the rest is one of the M2 shapes, bound as before: route values in the literal's order, then the body. So `def(State[Users], Int, CreateUser)` on `post` is state, route value, body. The state is never a route value or a body, and parameter names are never read.
+- **Which parameter is injected:** a handler takes application state exactly when its registration passes a second argument, a `State[S]`. Its first parameter is then `State[S]` (the same `S`), and the rest is one of the stateless shapes, bound as before: route values in the literal's order, then the body. So `def(State[Users], Int, CreateUser)` on `post` is state, route value, body. The state is never a route value or a body, and parameter names are never read.
 - **Ownership:** `State(value)` takes the value. `State` is a shared handle: the application keeps its own, each registration keeps a copy, and the value is destroyed when the last handle goes. A request borrows the route's handle, so it copies nothing and allocates nothing. `users[]` is read-only through every handle (the handle's internal pointer is reachable by name, since Mojo 1.1.0 has no private fields; it is not API). A value that must change while the application serves keeps that mutability in its own fields, and its rules are the application's. A reference from `users[]` lives no longer than the handle it came from: using it after `users` is reassigned or moved is a compile error (`use of invalidated interior reference`).
 - **Several values:** one `State` per handler. Several values are the fields of one state type, and different routes may take different state types (`State[Users]` on some routes, `State[Config]` on others).
-- **Unchanged:** every M2 handler and registration, `App()`, `App.handle(Request) -> Response`, `TestClient(app)` and the backends. There are no globals and no hidden lookup: the state reaches the handler only through the registration that passed it.
+- **Unchanged:** every stateless handler and registration, `App()`, `App.handle(Request) -> Response`, `TestClient(app)` and the backends. There are no globals and no hidden lookup: the state reaches the handler only through the registration that passed it.
 
-A scoped registrar, `app.with_state(users).get[...](h)`, was measured too. It states the state once and leaves `App`'s compiler messages unchanged, but it is rejected on Mojo 1.1.0: the compiler does not track mutation through the registrar's stored pointer. With the decided form, every registration is an ordinary `mut` call on `App`, which the compiler tracks.
+State goes first so the body stays the last parameter. Access is `state[]` because a struct cannot forward field access to the value it holds.
 
-DX's earlier sketch put the state last (`def get_user(id: Int, state: State[AppState])`) and read it as `state.users`. A state-last family compiles on Mojo 1.1.0, but it is not the decided shape. State goes first so the body stays the last parameter (M2-005). Access is `state[]` because a struct cannot forward field access to the value it holds.
+On `get`, `app.get[route](handler, state)` takes `def(State[S])` or `def(State[S], Int)`, each non-raising or raising (`raises`, `raises T`, section 6) and returning `String` (or `String`-compatible) or `R: ToResponse` (section 5). Request handling is the stateless twin's: the same route checks and messages, the `Int` from a `{name}` segment or a `{key}` query item, 400 before the handler for an invalid, missing or duplicated value, `ToErrorResponse` or the fixed 500 for a raise, 404 without a match, and the first registration wins.
 
-Status (M3-003): production for `get`. `app.get[route](handler, state)` takes `def(State[S])` or `def(State[S], Int)`, each non-raising or raising (`raises`, `raises T`, section 6) and returning `String` (or `String`-compatible) or `R: ToResponse` (section 5). Request handling is the stateless twin's: the same route checks and messages, the `Int` from a `{name}` segment or a `{key}` query item, 400 before the handler for an invalid, missing or duplicated value, `ToErrorResponse` or the fixed 500 for a raise, 404 without a match, and the first registration wins.
-
-- Compile-time errors at `app.get`: a state of another type (`value passed to 'state' cannot be converted from 'State[Cache]' to 'State[Db]'`), the value instead of a handle (`cannot be converted from 'Db' to 'State[Db]'`), a stateful handler without its state (`constraint failed: State is injected application state; a stateful get handler takes State first, and the state is the registration's second argument`, since M3-015), a state for a stateless handler, the state after the route value or `var db: State[Db]` (each `no matching method`, with notes such as `cannot be converted from '<handler type>' to 'def(State[S]) raises Never thin -> String'` or `'def(State[S], var A) ...'`), mutation through `db[]` (`expression must be mutable ...`), using a `ref r = db[]` after `db` is reassigned (`use of invalidated interior reference`), a second handle replacing or mutating the value (`'_Shared[Db]' is not subscriptable`, `invalid use of mutating method`), and a placeholder count that does not fit the shape (the stateless twin's `constraint failed: ...`; the state is not a route value).
+- Compile-time errors at `app.get`: a state of another type (`value passed to 'state' cannot be converted from 'State[Cache]' to 'State[Db]'`), the value instead of a handle (`cannot be converted from 'Db' to 'State[Db]'`), a stateful handler without its state (`constraint failed: State is injected application state; a stateful get handler takes State first, and the state is the registration's second argument`), a state for a stateless handler, the state after the route value or `var db: State[Db]` (each `no matching method`, with notes such as `cannot be converted from '<handler type>' to 'def(State[S]) raises Never thin -> String'` or `'def(State[S], var A) ...'`), mutation through `db[]` (`expression must be mutable ...`), using a `ref r = db[]` after `db` is reassigned (`use of invalidated interior reference`), a second handle replacing or mutating the value (`'_Shared[Db]' is not subscriptable`, `invalid use of mutating method`), and a placeholder count that does not fit the shape (the stateless twin's `constraint failed: ...`; the state is not a route value).
 - Each registration copies the handle once, so the reference count rises by one per route and falls when the `App` is dropped. A request changes it by nothing. Moving the `App` moves the routes' handles, and the value is destroyed once, after the last handle. `TestClient(app)` serves a stateful `App` repeatedly, also after `var moved = app^` (a new client on `moved`).
 
-Status (M3-006): production for `post`. `app.post[route](handler, state)` takes `def(State[S], B)` or `def(State[S], Int, B)` with `B: FromBody` (or, since M3-013, a `WithHeaders[B]` carrier, section 4), each non-raising or raising and returning `String` (or `String`-compatible) or `R: ToResponse`. The state comes first, the route value (if any) next, the body last:
+On `post`, `app.post[route](handler, state)` takes `def(State[S], B)` or `def(State[S], Int, B)` with `B: FromBody` (or a `WithHeaders[B]` carrier, section 4), each non-raising or raising and returning `String` (or `String`-compatible) or `R: ToResponse`. The state comes first, the route value (if any) next, the body last:
 
 ```mojo
 def update_user(users: State[Users], id: Int, body: CreateUser) raises NotFound -> User:
@@ -688,7 +627,7 @@ Request handling is the stateless twin's (section 4): the route value is convert
 - Compile-time errors at `app.post` with a state: the stateless twin's placeholder-count, malformed-route, `Int`-as-body and `FromBody` messages (`constraint failed: ...`; the state is not a route value); a second `State` as the body (`constraint failed: a handler takes at most one State, as its first parameter`); a `def(State[S])` handler without a body (`constraint failed: a post handler takes the request body as its last parameter`); a state of another type, the value instead of a handle, a stateless handler given a state, the state after the body or the route value, `var db: State[Db]` or `mut db: State[Db]`, and a plain `db: Db` parameter (`no matching method in call to 'post'`, with notes such as `cannot be converted from '<handler type>' to 'def(State[S], var A) raises Never thin -> String'` or `'def(State[S], var A, var B) ...'`).
 - Without a state, `app.post[...](h)`: a handler with a `State` among its first two parameters (`def(State[Db], B)`, `def(State[Db])`, `def(Int, State[Db])`) is `constraint failed: State is injected application state, not the request body; a stateful post handler takes State first and the body last, and the state is the registration's second argument`; `def(State[Db], Int, B)` has three request parameters and is `no matching method`, with the stateful candidates' `missing required argument: 'state'`.
 
-Status (M3-007): production for raw handlers. `app.get[route](handler, state)` and `app.post[route](handler, state)` take `def(State[S], req: Request) -> Response` (`var req: Request` also works), the raw shape of section 9 with the state first. The handler reads the state and the whole request in the same call:
+Raw handlers: `app.get[route](handler, state)` and `app.post[route](handler, state)` take `def(State[S], req: Request) -> Response` (`var req: Request` also works), the raw shape of section 9 with the state first. The handler reads the state and the whole request in the same call:
 
 ```mojo
 @fieldwise_init
@@ -719,7 +658,7 @@ Request handling is the raw twin's (section 9): the route literal declares no pa
 
 ## 9. Raw Request/Response escape hatch
 
-Raw request handling is first-class (M2-015), proven by `tests/test_raw.mojo` (which registers this handler, verbatim, and checks the responses below), the raw fixtures in `tests/compile_fail`, `tests/storage_fail` and `tests/body_fail` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
+Raw request handling is first-class, proven by `tests/test_raw.mojo` (which registers this handler, verbatim, and checks the responses below), the raw fixtures in `tests/compile_fail`, `tests/storage_fail` and `tests/body_fail` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`:
 
 ```mojo
 from muntin import App, Request, Response
@@ -737,9 +676,9 @@ app.post["/webhook"](webhook)                # same syntax as typed handlers; ap
 # GET /webhook, POST /webhook/x    -> 404 "Not Found"  (webhook not called)
 ```
 
-The escape hatch is meant for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. Today it covers what can be decided from the method, path, query and body, as in the example above. Header-based authentication and custom content types use headers, production since M3-005 (below); streaming still needs a `Request`/`Response` capability that does not exist yet (M3). The example above is kept as the body-only form.
+The escape hatch is meant for webhooks, streaming, custom content types, unusual authentication, protocol integrations, and performance-sensitive endpoints. Header-based authentication and custom content types use headers (below); streaming still needs a `Request`/`Response` capability that does not exist yet.
 
-Headers (M3-005, production; decided in M3-002, `docs/ARCHITECTURE.md` "Headers decision (M3-002)"), proven by `tests/test_headers.mojo` (which registers this handler as `dx_webhook` and checks the responses below), `tests/headers_api_fail`, `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`:
+Headers, proven by `tests/test_headers.mojo` (which registers this handler as `dx_webhook` and checks the responses below), `tests/headers_api_fail`, `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`:
 
 ```mojo
 from muntin import App, Headers, Request, Response
@@ -762,19 +701,19 @@ app.post["/webhook"](webhook)
 - `muntin.Headers` is the header fields in order. Each keeps its name's casing, and a repeated name (`Set-Cookie`) is several fields. `get(name)` returns the first value as `Optional[String]` (an absent field and an empty value differ), `get_all(name)` every value, and `len`, `name(i)`, `value(i)` walk them. Names compare ASCII case-insensitively.
 - `add(name, value)` appends; `set(name, value)` removes every field with that name, then appends. Both raise on a name that is not an RFC 9110 token, or on a value with a control byte (other than HTAB) or SP/HTAB at either end. In a raising handler that error is the fixed 500, or its `ToErrorResponse`. Code that must not raise, such as `to_response`, wraps `add` in `try`.
 - `Request` has `headers` (as the backend received them); `Request(method, target, body, headers^)` builds one, and existing calls without headers are unchanged. `Response` has `headers`, empty from `Response(status, body)` and `Response.text`: Muntin adds no `Content-Type` or other default field.
-- Raw handlers read `req.headers` (a `var req` handler owns a copy it may change) and set fields on the `Response` they return. Typed `post` handlers read them through a `WithHeaders[B]` body (M3-013, section 4); typed `get` handlers read none. A typed result sets fields through the `Response` its `to_response` builds. `String` results set none.
+- Raw handlers read `req.headers` (a `var req` handler owns a copy it may change) and set fields on the `Response` they return. Typed `post` handlers read them through a `WithHeaders[B]` body (section 4); typed `get` handlers read none. A typed result sets fields through the `Response` its `to_response` builds. `String` results set none.
 - `TestClient.get` and `.post` send the fields passed as `headers=` and none otherwise (section 10); a test may also build `Request(..., headers^)` and call `app.handle`, the same seam.
 - Through Flare, a request field Muntin cannot represent is answered 400 before the handler: over HTTP/2 Flare admits a `:` inside a name or a control byte in a value. Fields the backend owns or that are connection-specific (`Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`, `TE`, `Trailer`), and any field a `Connection` value names, are not written to the wire; they stay in the in-memory `Response`. Over HTTP/2, names go out lowercase. Header values are text: Flare answers 400 to an HTTP/1.1 header byte ≥ 0x80 itself.
 
-Semantics (decided in M2-014, `docs/ARCHITECTURE.md` "Raw Request decision (M2-014)"; production facts in "Raw Request handlers in production (M2-015)"):
+Semantics:
 
-- Same registration syntax on `app.get` and `app.post`: `Request` is a kind of request parameter, so a raw handler registers through the one-parameter overload like any one-parameter handler, and the raw rule requires `Response` as the result (M3-015; from M2-015 to M3-014 each method had a dedicated raw overload, selected over the generic body overload by Mojo's "shorter parameter list" rule).
+- Same registration syntax on `app.get` and `app.post`: `Request` is a kind of request parameter, so a raw handler registers through the one-parameter overload like any one-parameter handler, and the raw rule requires `Response` as the result.
 - The handler may declare `req: Request` (canonical) or `var req: Request` (it owns a fresh copy of the request and can move `req.body` out). It returns `Response` only.
 - It may be non-raising, `raises` or `raises T`, under the error model of section 6: a `T` declaring `ToErrorResponse` answers its own response, anything else is the fixed 500 without the error text.
 - The route is selected by method and path as usual (404 otherwise, without calling the handler; first registration wins across raw and typed routes, and a typed route's 400 does not fall through to a later one). The route literal declares no path or query parameter (`def()`'s rule and messages: `route declares a path parameter but the handler takes none`, `... query parameter ...`, `malformed route literal`).
 - The handler reads `req.method`, `req.path`, `req.query` and `req.body` exactly as the backend built them (the query undecoded, an empty body included). Muntin runs no typed extraction on a raw route, so it generates no 400 before the handler; the handler's `Response` (or its error's `to_error_response()`) may use any status, 400 included.
-- A raw-shaped handler that breaks the raw rule on `post` (`def(req: Request) -> String` or `-> User`, `def(id: Int, req: Request)`) reports `constraint failed: Request is the whole request, not a body; a raw handler takes only the Request and returns Response` instead of the `FromBody` message, and one with an extra parameter after the `Request` `constraint failed: a raw post handler takes only the Request and returns Response`. On `get` each is `constraint failed: a raw get handler takes only the Request and returns Response` (since M3-015; before, `no matching method` with the raw candidate's note).
-- An explicitly typed function value must be spelled `def(var Request) thin raises Never -> Response` on Mojo 1.1.0; `def(Request) thin raises Never -> Response` or a type without `raises` fails with `TODO: function type conversions between closures not supported yet` (as for typed values since M2-011).
+- A raw-shaped handler that breaks the raw rule on `post` (`def(req: Request) -> String` or `-> User`, `def(id: Int, req: Request)`) reports `constraint failed: Request is the whole request, not a body; a raw handler takes only the Request and returns Response` instead of the `FromBody` message, and one with an extra parameter after the `Request` `constraint failed: a raw post handler takes only the Request and returns Response`. On `get` each is `constraint failed: a raw get handler takes only the Request and returns Response`.
+- An explicitly typed function value must be spelled `def(var Request) thin raises Never -> Response` on Mojo 1.1.0; `def(Request) thin raises Never -> Response` or a type without `raises` fails with `TODO: function type conversions between closures not supported yet` (as for typed values, section 6).
 
 ## 10. Testing without networking
 
@@ -796,7 +735,7 @@ def test_hello():
 
 The in-memory path must execute the same Muntin application dispatch seam used by real transports. This is an architecture proof, not merely test convenience.
 
-Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)` and `TestClient.post(target, body)` build a Muntin `Request` and call `App.handle`, the same entry point network adapters use. Since M3-011 both take the request's header fields as a keyword-only, defaulted argument, moved into the `Request` as `Request`'s initializer takes them (proven by `tests/test_testclient_headers.mojo` and `tests/testclient_headers_api_fail/`, via `./scripts/check.sh`):
+Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)` and `TestClient.post(target, body)` build a Muntin `Request` and call `App.handle`, the same entry point network adapters use. Both take the request's header fields as a keyword-only, defaulted argument, moved into the `Request` as `Request`'s initializer takes them (proven by `tests/test_testclient_headers.mojo` and `tests/testclient_headers_api_fail/`, via `./scripts/check.sh`):
 
 ```mojo
 var headers = Headers()
@@ -856,7 +795,7 @@ Compile-time machinery must earn its complexity through simpler application code
 
 The same type information used for request parsing and response serialization should eventually feed API schema generation. Application authors should not maintain a second copy of their data model solely for OpenAPI.
 
-Status: not part of M2. M2-016 moved schema/OpenAPI foundations to M3: `FromBody` and `ToResponse` leave the body format to the application, so there is no type-level schema source until a codec defines the mapping. The M3-008 codec does not define one either: `FromJson`/`ToJson` map fields by hand, so a schema source waits for a derived codec (its revisit conditions are in ARCHITECTURE, "JSON codec decision (M3-008)").
+Status: target. `FromBody` and `ToResponse` leave the body format to the application, and `FromJson`/`ToJson` map fields by hand, so there is no type-level schema source until a derived codec exists.
 
 ## 14. Async and streaming
 
@@ -892,7 +831,7 @@ but handler "get_user" has no compatible input for it
 
 over an opaque generic type-mismatch message when Muntin can provide context.
 
-Status (M3-015): a handler whose parameter count `get` or `post` accepts but whose shape breaks a registration rule gets that rule as `constraint failed: <rule>` (under `function instantiation failed` at the enclosing function, with the registration call in the next note) instead of up to ten candidate notes (section 3, "Registration, status (M3-015)"). A call no overload takes (a wrong number of parameters, a misdeclared `State`, an unaccepted result type) still gets the compiler's candidate notes. Names are not compared: the route literal and the handler bind by position.
+Status: a handler whose parameter count `get` or `post` accepts but whose shape breaks a registration rule gets that rule as `constraint failed: <rule>` (under `function instantiation failed` at the enclosing function, with the registration call in the next note) instead of up to ten candidate notes (section 3, "Registration rules"). A call no overload takes (a wrong number of parameters, a misdeclared `State`, an unaccepted result type) still gets the compiler's candidate notes. Names are not compared: the route literal and the handler bind by position.
 
 ## 17. Boilerplate budget
 
@@ -956,14 +895,14 @@ def main():
 
 The exact spellings are provisional. The durable properties are a small application surface, typed handlers, typed extraction, automatic conversion where safe, useful compile-time validation, low-level escape hatches, and backend independence.
 
-Status as of M3-013: the handler model of this example is production: `get_user(id: Int) -> User` with `app.get["/users/{id}"]` and `create_user(body: CreateUser) -> User` with `app.post["/users"]`, through `TestClient` and the Flare adapter. What still differs from the example:
+Status: the handler model of this example is production: `get_user(id: Int) -> User` with `app.get["/users/{id}"]` and `create_user(body: CreateUser) -> User` with `app.post["/users"]`, through `TestClient` and the Flare adapter. What still differs from the example:
 
-- JSON needs the wrapper (M3-009, section 4): `def create_user(body: Json[CreateUser]) -> Json[User]`, with `CreateUser: FromJson` and `User: ToJson` mapping their fields by hand. The bare `body: CreateUser` form needs `CreateUser` to conform to `FromBody` and parse its own body; a JSON-capable type is not a body by itself, and there is no derived codec;
-- the stdlib `List[User]` conforms to neither `ToResponse` nor `ToJson`, and top-level list results are not part of M3-009, so a list result needs an application type that conforms;
-- `users` is not a global: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`) and handlers cannot capture. Since M3-003 a `get` handler reaches it as `State` (section 8): `def get_user(users: State[Users], id: Int) -> User` registered as `app.get["/users/{id}"](get_user, users)`, and since M3-006 a `post` handler too: `def create_user(users: State[Users], body: CreateUser) -> User` registered as `app.post["/users"](create_user, users)`;
+- JSON needs the wrapper (section 4): `def create_user(body: Json[CreateUser]) -> Json[User]`, with `CreateUser: FromJson` and `User: ToJson` mapping their fields by hand. The bare `body: CreateUser` form needs `CreateUser` to conform to `FromBody` and parse its own body; a JSON-capable type is not a body by itself, and there is no derived codec;
+- the stdlib `List[User]` conforms to neither `ToResponse` nor `ToJson`, and top-level list results are not supported, so a list result needs an application type that conforms;
+- `users` is not a global: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`) and handlers cannot capture. A handler reaches it as `State` (section 8): `def get_user(users: State[Users], id: Int) -> User` registered as `app.get["/users/{id}"](get_user, users)`, and on `post`: `def create_user(users: State[Users], body: CreateUser) -> User` registered as `app.post["/users"](create_user, users)`;
 - there is no `app.run()`.
 
-Derived codecs and list results are remaining M3 candidates; `app.run()` is lifecycle work (M3, ownership undecided). The closest runnable form today is section 4's JSON example (`Json[CreateUser]` in, `Json[User]` out) with section 8's `State`: JSON request bodies through `TestClient.post(target, body, headers=headers^)` or `App.handle` with the `Content-Type` field set (without it, 415), JSON results through either. A handler that also needs a request field, such as a credential, takes `WithHeaders[Json[CreateUser]]` (section 4).
+Derived codecs, list results and `app.run()` are remaining candidates (`docs/SPEC.md`). The closest runnable form today is section 4's JSON example (`Json[CreateUser]` in, `Json[User]` out) with section 8's `State`: JSON request bodies through `TestClient.post(target, body, headers=headers^)` or `App.handle` with the `Content-Type` field set (without it, 415), JSON results through either. A handler that also needs a request field, such as a credential, takes `WithHeaders[Json[CreateUser]]` (section 4).
 
 ## 20. Non-goals
 

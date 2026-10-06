@@ -1,7 +1,7 @@
-# Must not compile: production `post` takes no `Headers` slot after its
-# body. The message is production's existing body-last rule, which M3-016
-# keeps. Decision: docs/ARCHITECTURE.md, "Typed get header access decision
-# (M3-016)".
+# Must not compile: production `post` takes no `Headers` slot after its body.
+# The message is production's existing body-last rule, which M3-016 keeps.
+# Decision: docs/history/architecture-decisions.md, "Typed get header access
+# decision (M3-016)".
 # Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler takes one request body, as its last parameter
 from muntin import App, FromBody, Headers
 

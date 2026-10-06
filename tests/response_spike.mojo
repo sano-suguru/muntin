@@ -1,14 +1,14 @@
-# M2-007 typed-response decision spike, library side. Not production code:
-# it models what Muntin's library could contain, separately from the
-# application module (tests/test_spike_response.mojo) that defines the
-# return types, so `User` crosses a module boundary as it would in a real
-# application and this module never names it. Handlers are stored in the
-# production `_Erased` box, unchanged; route matching, `Int` conversion and
-# body conversion are production's own helpers and production `FromBody`.
-# check.sh builds it through that test (--Werror) and, without the
-# application module, through tests/response_lib_only/driver.mojo; test.sh
-# runs it. Decision and evidence: docs/ARCHITECTURE.md, "Typed response
-# decision (M2-007)". Must-not-compile evidence: tests/response_fail.
+# M2-007 typed-response decision spike, library side. Not production code: it
+# models what Muntin's library could contain, separately from the application
+# module (tests/test_spike_response.mojo) that defines the return types, so
+# `User` crosses a module boundary as it would in a real application and this
+# module never names it. Handlers are stored in the production `_Erased` box,
+# unchanged; route matching, `Int` conversion and body conversion are
+# production's own helpers and production `FromBody`. check.sh builds it through
+# that test (--Werror) and, without the application module, through
+# tests/response_lib_only/driver.mojo; test.sh runs it. Decision and evidence:
+# docs/history/architecture-decisions.md, "Typed response decision (M2-007)".
+# Must-not-compile evidence: tests/response_fail.
 #
 # Two independent concerns, two independent places in this file:
 #

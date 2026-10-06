@@ -1,11 +1,7 @@
-# Mojo 1.1.0 toolchain-wide soundness gap: must build, never run
-# (scripts/check.sh). It breaks the property M3-004 guarantees, one State
-# alias replacing, mutating or destroying the payload another alias
-# observes, but through a primitive that breaks the same property for
-# standard-library types and existing Muntin storage, so it is outside the
-# guarantee (docs/ARCHITECTURE.md, "State storage decision (M3-004)").
-# If this stops building, the toolchain improved: reevaluate whether the
-# sealed box and its unsafe boundary can be simplified.
+# Mojo 1.1.0 toolchain-wide soundness gap, outside the State guarantee
+# (docs/history/architecture-decisions.md, "State storage decision
+# (M3-004)"): must build, never run. If it stops building, reevaluate whether
+# the sealed box and its unsafe boundary can be simplified.
 #
 # Primitive: the deprecated public `memmove` bit-copies one handle over
 # another (a deprecation warning only, so this directory builds without

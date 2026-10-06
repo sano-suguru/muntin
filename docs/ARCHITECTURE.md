@@ -2,7 +2,7 @@
 
 Muntin owns the application model. Transports adapt to `App.handle(Request) -> Response`; they do not define application semantics.
 
-This file gives the thesis, the invariants, the [current architecture](#current-architecture-as-of-m3-011) and a [revisit index](#revisit-index). Reasons, evidence and revisit conditions are in the [decision records](history/architecture-decisions.md); this file restates their results and adds no decision, and a disagreement no later record explains is an inconsistency to fix. Public API semantics: `docs/DX.md`. Milestones: `docs/SPEC.md`. Acceptance: `feature_list.json`.
+This file is the current state: the thesis, the invariants, the [current architecture](#current-architecture) and a [revisit index](#revisit-index). Why each part is as it is (reasons, rejected candidates, measurements, revisit conditions) is in the [decision records](history/architecture-decisions.md), one record per decision. Milestone tags below, such as (M3-015), name the item; the links name a specific record. Public API and user-visible semantics: `docs/DX.md`. Product scope: `docs/SPEC.md`.
 
 ## Architectural thesis
 
@@ -54,7 +54,7 @@ Never invert this relationship merely because an adapter has a convenient abstra
 
 ### A3. Replaceability is executable
 
-Transport independence is not a diagram claim. M0 must include an in-memory/reference path that exercises the same application-dispatch seam intended for transport adapters.
+Transport independence is not a diagram claim. An in-memory/reference path exercises the same application-dispatch seam as transport adapters.
 
 A refactor that makes the in-memory path bypass real routing/dispatch is an architecture regression even if tests stay green.
 
@@ -104,21 +104,7 @@ muntin/adapters/flare/
 
 Filesystem names may change. Dependency direction may not.
 
-## M0 core model
-
-M0 scope, kept for the record; the current model is "Current architecture" below. M0 needs only enough concepts to prove a real dispatch:
-
-- `App` or equivalent application registry/dispatcher;
-- Muntin-owned `Request`;
-- Muntin-owned `Response`;
-- minimal HTTP method/status/body representations;
-- route registration for at least one static `GET` route;
-- a backend/application dispatch entry point;
-- an in-memory driver/test client.
-
-Do not design the final middleware, schema, DI, async, or streaming system during M0.
-
-## Current architecture (as of M3-015)
+## Current architecture
 
 Toolchain: Mojo 1.1.0 (8189361e) via pixi 0.81.0, pinned by `pixi.lock`; `scripts/check.sh` fails on any other Mojo version, so an upgrade is a deliberate change to the script and the docs. Flare v0.11.0 (commit `59bda50f`) exists only in the separate `flare` pixi environment.
 
@@ -162,10 +148,10 @@ The public surface is the exported names and `muntin.testing.TestClient`. `_`-pr
 
 - **Route literals** are compile-time strings checked at the registration call: a leading `/`, static or `{name}` segments, an optional query part of `{key}` items joined by `&` (keys visible ASCII, none of `{}=&?#`). The placeholder count must equal the handler's route-value count (zero or one `Int`); raw routes declare none. Names are never compared with handler parameter names: binding is positional (route values in the literal's order, then the body). Literals are stored and split as runtime `String`s per request.
 - **Disjointness** (M2-005): a slot is an `Int` route value by type equality, never a body; an ordinary body is an application type conforming to `FromBody`. `Json[T]` is a body or a result like any other, so JSON adds no shape.
-- **Header carrier in the body slot** (M3-013): the body kind is `FromBody` or the private `_HeaderCarrier`, so `WithHeaders[B]` with `B: FromBody` is a body without being a `FromBody`, and the `FromBody` rule keeps its message. `FromBody` therefore does not name every type a `post` body slot accepts (the accepted cost). `get` takes no body, so typed `get` handlers read no fields and use the raw `get`; M3-016 decided a `Headers` slot on `get`, last, for them (production next: M3-017).
+- **Header carrier in the body slot** (M3-013): the body kind is `FromBody` or the private `_HeaderCarrier`, so `WithHeaders[B]` with `B: FromBody` is a body without being a `FromBody`, and the `FromBody` rule keeps its message. `FromBody` therefore does not name every type a `post` body slot accepts (the accepted cost). `get` takes no body, so typed `get` handlers read no fields and use the raw `get`.
 - **One injected slot** (M3-001): a handler takes state exactly when its registration passes a second argument, a `State[S]`; it is then the first parameter, and the rest is one stateless shape. Argument count separates the two families. The slot is registration-bound; M3-012 keeps request header fields out of it (they travel in the body slot, above). A second injected kind, request-scoped injection included, needs its own decision, because a second injected kind doubles the stateful family (M3-014).
 - **Rules guard the adapter** (M3-015): one ordered rule function (`_rule`) holds every registration rule except the result's. `_check` states each rule as a compile-time assert with Muntin's message, and `_admits`, the same rules as one Bool, guards the adapter's instantiation: without the guard Mojo 1.1.0 reports the adapter's own failure before the rule's message (`tests/registration_api_fail/slot_misuse_names_the_rule.mojo`). If the Bool ever rejects a shape the asserts accept, the guard's `else` aborts at registration instead of leaving the route unregistered. Rules that had a message before M3-015 keep it; new ones name the method.
-- **Raw handlers** select the one-slot overload like any other shape: `Request` is a slot kind, and the rule requires `Response` as the result and no placeholder. From M2-015 to M3-014 raw handlers had their own overloads, selected over the body overloads by Mojo's "shorter parameter list" rule; production no longer relies on it (its pin, `tests/raw_fail/equal_parameter_lists.mojo`, stays).
+- **Raw handlers** select the one-slot overload like any other shape: `Request` is a slot kind, and the rule requires `Response` as the result and no placeholder.
 - **Diagnostics:** a shape that selects an overload and breaks a rule reports the rule, `constraint failed: <rule>`; the primary line is `function instantiation failed` at the enclosing function, with the registration call in the next note. A call that selects none (more than two slots; with the state passed, a `State` that is owned, `mut`, a plain value or not first; a result outside the `where` clause) is `no matching method` with the six candidates' notes; a rejected result's note is `violated constraint` and the clause. But when the call does not let the compiler decide the clause, the error is `invalid call to '<method>': lacking evidence to prove correctness` instead. That happens for a result with a local's immutable origin (`origin_text[ImmOrigin(origin_of(s))]`), and for a forwarding helper's generic result whose own `where` is neither one branch of the clause nor the whole clause (no `where`, or a partial disjunction such as `where (R == String or R == StaticString)`) (`tests/registration_api_fail/local_origin_result_rejected.mojo`, `generic_result_disjunction_lacks_evidence.mojo`, `generic_result_without_where_lacks_evidence.mojo`). A typed function value with a borrowed `Int` slot fails before any overload is chosen (`TODO: function type conversions between closures not supported yet`).
 - **Arity budget:** Mojo 1.1.0 prints at most ten notes per diagnostic, counted per method name (`tests/header_access_fail/eleven_candidates_drop_a_note.mojo`, `tests/registration_fail/notes_are_per_method.mojo`). Slot arity 3 would make eight overloads per method with every candidate note printed; slot arity 4 makes ten, where a rejected result loses one candidate note (an accepted cost); slot arity 5 is past the cap.
 
@@ -204,7 +190,7 @@ Transport through the box: an adapter receives `List[String]` raw arguments, in 
 
 - `muntin.Headers` is an ordered list of fields: original casing, repeated names kept in order, ASCII case-insensitive `get` (`Optional[String]`, first value) and `get_all`; `len`, `name(i)`, `value(i)`. `add` appends and `set` removes every same-name field, then appends; both raise on a name that is not an RFC 9110 token or a value with a control byte (other than HTAB) or SP/HTAB at either end. Copies are explicit (`.copy()`).
 - `Request.headers` is what the backend received; `Response.headers` is empty from `Response(status, body)` and `Response.text`. Muntin adds no default field: `String` results and `Response.text` set none, and `Json[T]` results set exactly `Content-Type: application/json`.
-- Raw handlers read `req.headers` and set fields on their `Response`. Typed `post` handlers read them through a `WithHeaders[B]` body (M3-013): `input.headers` is the request's `Headers`, every field in order with its casing, repeats and empty values, and `input.body` is converted by `B.from_body`; `take_body(deinit self)` moves the body out. Muntin chooses no status for the fields `input.headers` exposes and gives them no meaning (a missing field is `None`; a value's status is the handler's error type to choose). Two existing checks still answer before the handler: a `Json[T]` body's `Content-Type` verdict (415), and the rebuild of a field an in-memory `Headers` holds invalidly (the fixed 500). The carrier composes with `State` and with `Json[T]`. Typed `get` handlers read no fields and stay on the raw `get` until M3-017 adds the `Headers` slot that M3-016 decided (`def(Headers)`, `def(Int, Headers)` and their stateful twins, the fields rebuilt per request with this model; `post` keeps the carrier). The JSON `Content-Type` check is not header extraction: it is a fixed verdict `App.handle` computes for `Json[T]` body routes only, carried or not.
+- Raw handlers read `req.headers` and set fields on their `Response`. Typed `post` handlers read them through a `WithHeaders[B]` body (M3-013): `input.headers` is the request's `Headers`, every field in order with its casing, repeats and empty values, and `input.body` is converted by `B.from_body`; `take_body(deinit self)` moves the body out. Muntin chooses no status for the fields `input.headers` exposes and gives them no meaning (a missing field is `None`; a value's status is the handler's error type to choose). Two existing checks still answer before the handler: a `Json[T]` body's `Content-Type` verdict (415), and the rebuild of a field an in-memory `Headers` holds invalidly (the fixed 500). The carrier composes with `State` and with `Json[T]`. Typed `get` handlers read no fields; a `get` route that needs them is raw. The JSON `Content-Type` check is not header extraction: it is a fixed verdict `App.handle` computes for `Json[T]` body routes only, carried or not.
 - Known gap: `headers._fields` is reachable by name and bypasses `add` (`tests/headers_known_gaps`); the Flare adapter re-checks every outgoing field, and a carrier route answers such a request field with the fixed 500.
 
 ### JSON
@@ -245,11 +231,10 @@ Not implemented (candidates in `docs/SPEC.md` M3): `app.run()`/lifecycle, middle
 - `main.mojo` imports `muntin.testing` only because `app.run()` does not exist.
 - The localhost round trip needs `fork(2)` (Windows is out of scope); the child exits only by SIGKILL or the 30 s alarm, because v0.11.0's `close()`/`drain()` need a second thread. Its first `/hello` request is slow on a cold start (about 26 s locally once, up to 64 s on macOS CI); look there before blaming routing if it flakes.
 - The `flare` CI job rebuilds Flare's C/C++ FFI wrappers on every run (about a minute, no cache). Flare v0.11.0's old server spellings (`bind_many`, `serve_tls`, ...) are shims removed in v0.12: use `HttpServer.bind`/`serve`. Flare's `Request` is `Movable` with `List[UInt8]` bodies, so the adapter copies into Muntin's `String` types. Flare HTTP/3 is unavailable from the conda build.
-- CI: `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19; the recorded M2-era runs were on Ubuntu 24. If the `flare` job breaks after that date, compare `ImageOS`/`ImageVersion` in the `runner image` step before blaming Muntin or Flare.
 
 ### When M2 reopens
 
-M2 is closed (M2-016; contract in `docs/SPEC.md`, "M2 completion contract"). Reopen it, rather than add an M3 item, when a toolchain upgrade changes what the contract rests on (overload resolution, parametric raises inference, `conforms_to` detection), when an M3 design must change an M2 public signature or semantics instead of adding to them (the `Request(method, target, body)` initializer, the 400/404/500 boundary, a fallible `ToResponse`/`ToErrorResponse`), or when a statement DX labels proven stops passing its test. Exact text: "M2 closure (M2-016)" in the decision records. M3-015 reopened it, as decided by M3-014, for the registration overload declarations, the diagnostics of rejected calls and three edges of the accepted set (`var Int` route values accepted; typed `-> StaticString` function values and helper parameters accepted; typed function values with a borrowed `Int` rejected), and, by an amendment made in M3-015 ("Registration structure amendment: generic forwarding (M3-015)"), a fourth: helpers generic over the result or a request parameter forward to `get` and `post`. The contract records all four.
+M2 is closed (M2-016); its contract is `docs/SPEC.md`, "M2 completion contract". Reopen it, rather than add an M3 item, when a toolchain upgrade changes what the contract rests on (overload resolution, parametric raises inference, `conforms_to` detection), when a design must change an M2 public signature or semantics instead of adding to them (the `Request(method, target, body)` initializer, the 400/404/500 boundary, a fallible `ToResponse`/`ToErrorResponse`), or when a statement DX labels proven stops passing its test. Exact conditions: [M2 closure (M2-016)](history/architecture-decisions.md#m2-closure-m2-016).
 
 ## Revisit index
 
@@ -278,155 +263,9 @@ If one of these pins changes (a must-fail fixture compiles, or `scripts/build_on
 | a toolchain change that lets an overload see how a caller spelled a type; a new slot kind (generic forwarding reaches it too) | [Registration structure amendment: generic forwarding (M3-015)](history/architecture-decisions.md#registration-structure-amendment-generic-forwarding-m3-015) |
 | `tests/get_headers_fail` (a fixture compiles or loses its text: the spike's `Headers` rule, its order after the body rule, a typed borrowed `Headers` value converting, or a `post` message for a `Headers` shape); `POST` without a body decided; the R1 transport changed; several route values or another request part beside the fields proposed | [Typed get header access decision (M3-016)](history/architecture-decisions.md#typed-get-header-access-decision-m3-016) |
 
-## Decision records
-
-Stubs that keep the titles other documents cite as `docs/ARCHITECTURE.md "<title>"`. Each links to its record in [`docs/history/architecture-decisions.md`](history/architecture-decisions.md).
-
-### Implemented M0 layout (Mojo 1.1.0)
-
-Record: [Implemented M0 layout (Mojo 1.1.0)](history/architecture-decisions.md#implemented-m0-layout-mojo-110).
-
-### Flare adapter (M1-002)
-
-Record: [Flare adapter (M1-002)](history/architecture-decisions.md#flare-adapter-m1-002).
-
-### Real localhost round trip (M1-003)
-
-Record: [Real localhost round trip (M1-003)](history/architecture-decisions.md#real-localhost-round-trip-m1-003).
-
-### Routing and handler storage (M2-001)
-
-Record: [Routing and handler storage (M2-001)](history/architecture-decisions.md#routing-and-handler-storage-m2-001).
-
-### Request target boundary and query extraction (M2-002)
-
-Record: [Request target boundary and query extraction (M2-002)](history/architecture-decisions.md#request-target-boundary-and-query-extraction-m2-002).
-
-### Handler storage decision (M2)
-
-Record: [Handler storage decision (M2)](history/architecture-decisions.md#handler-storage-decision-m2).
-
-### Production implementation (M2-004)
-
-Record: [Production implementation (M2-004)](history/architecture-decisions.md#production-implementation-m2-004).
-
-### Argument extraction decision (M2-005)
-
-Record: [Argument extraction decision (M2-005)](history/architecture-decisions.md#argument-extraction-decision-m2-005).
-
-### Body-only POST (M2-006)
-
-Record: [Body-only POST (M2-006)](history/architecture-decisions.md#body-only-post-m2-006).
-
-### Typed response decision (M2-007)
-
-Record: [Typed response decision (M2-007)](history/architecture-decisions.md#typed-response-decision-m2-007).
-
-### Typed results in production (M2-008)
-
-Record: [Typed results in production (M2-008)](history/architecture-decisions.md#typed-results-in-production-m2-008).
-
-### Route value then body in production (M2-009)
-
-Record: [Route value then body in production (M2-009)](history/architecture-decisions.md#route-value-then-body-in-production-m2-009).
-
-### Application-error decision (M2-010)
-
-Record: [Application-error decision (M2-010)](history/architecture-decisions.md#application-error-decision-m2-010).
-
-### Raising handlers in production (M2-011)
-
-Record: [Raising handlers in production (M2-011)](history/architecture-decisions.md#raising-handlers-in-production-m2-011).
-
-### Error-response decision (M2-012)
-
-Record: [Error-response decision (M2-012)](history/architecture-decisions.md#error-response-decision-m2-012).
-
-### Application-defined error responses in production (M2-013)
-
-Record: [Application-defined error responses in production (M2-013)](history/architecture-decisions.md#application-defined-error-responses-in-production-m2-013).
-
-### Raw Request decision (M2-014)
-
-Record: [Raw Request decision (M2-014)](history/architecture-decisions.md#raw-request-decision-m2-014).
-
-### Raw Request handlers in production (M2-015)
-
-Record: [Raw Request handlers in production (M2-015)](history/architecture-decisions.md#raw-request-handlers-in-production-m2-015).
-
-### M2 closure (M2-016)
-
-Record: [M2 closure (M2-016)](history/architecture-decisions.md#m2-closure-m2-016).
-
-### Application state decision (M3-001)
-
-Record: [Application state decision (M3-001)](history/architecture-decisions.md#application-state-decision-m3-001).
-
-### State storage decision (M3-004)
-
-Record: [State storage decision (M3-004)](history/architecture-decisions.md#state-storage-decision-m3-004).
-
-### Headers decision (M3-002)
-
-Record: [Headers decision (M3-002)](history/architecture-decisions.md#headers-decision-m3-002).
-
-### Headers in production (M3-005)
-
-Record: [Headers in production (M3-005)](history/architecture-decisions.md#headers-in-production-m3-005).
-
-### Stateful POST in production (M3-006)
-
-Record: [Stateful POST in production (M3-006)](history/architecture-decisions.md#stateful-post-in-production-m3-006).
-
-### Stateful raw handlers in production (M3-007)
-
-Record: [Stateful raw handlers in production (M3-007)](history/architecture-decisions.md#stateful-raw-handlers-in-production-m3-007).
-
-### JSON codec decision (M3-008)
-
-Record: [JSON codec decision (M3-008)](history/architecture-decisions.md#json-codec-decision-m3-008).
-
-### JSON in production (M3-009)
-
-Record: [JSON in production (M3-009)](history/architecture-decisions.md#json-in-production-m3-009).
-
-### TestClient request headers decision (M3-010)
-
-Record: [TestClient request headers decision (M3-010)](history/architecture-decisions.md#testclient-request-headers-decision-m3-010).
-
-### TestClient request headers in production (M3-011)
-
-Record: [TestClient request headers in production (M3-011)](history/architecture-decisions.md#testclient-request-headers-in-production-m3-011).
-
-### Typed header access decision (M3-012)
-
-Record: [Typed header access decision (M3-012)](history/architecture-decisions.md#typed-header-access-decision-m3-012).
-
-### Typed header access in production (M3-013)
-
-Record: [Typed header access in production (M3-013)](history/architecture-decisions.md#typed-header-access-in-production-m3-013).
-
-### Registration structure decision (M3-014)
-
-Record: [Registration structure decision (M3-014)](history/architecture-decisions.md#registration-structure-decision-m3-014).
-
-### Registration structure amendment: generic forwarding (M3-015)
-
-Record: [Registration structure amendment: generic forwarding (M3-015)](history/architecture-decisions.md#registration-structure-amendment-generic-forwarding-m3-015).
-
-### Registration on generic-arity slots in production (M3-015)
-
-Record: [Registration on generic-arity slots in production (M3-015)](history/architecture-decisions.md#registration-on-generic-arity-slots-in-production-m3-015).
-
-### Typed get header access decision (M3-016)
-
-Record: [Typed get header access decision (M3-016)](history/architecture-decisions.md#typed-get-header-access-decision-m3-016).
-
 ## Request/Response ownership
 
-M0 should choose the simplest ownership model that compiles cleanly and supports deterministic tests. Do not prematurely optimize around zero-copy wire buffers if that leaks backend lifetimes into Muntin's durable API.
-
-Before changing the ownership model later, measure the cost and document the concrete requirement that justifies additional lifetime complexity.
+`Request` and `Response` own their data. Do not optimize around zero-copy wire buffers if that leaks backend lifetimes into the public API; before changing the ownership model, measure the cost and record the concrete requirement that justifies more lifetime complexity.
 
 ## Flare policy
 
@@ -463,12 +302,12 @@ At minimum, tests should establish:
 1. an application route is dispatched through the Muntin-owned app model;
 2. the in-memory backend can drive that route without Flare or sockets;
 3. core/public modules do not import Flare;
-4. once M1 exists, a real localhost request traverses Flare -> adapter -> Muntin app -> adapter -> Flare;
+4. a real localhost request traverses Flare -> adapter -> Muntin app -> adapter -> Flare;
 5. the same application handler can be exercised by both in-memory and Flare paths without changing its public signature.
 
 ## Architecture decision threshold
 
-Create an ADR or update this document before:
+Record a decision before:
 
 - exposing any third-party type publicly;
 - introducing a custom runtime/executor/task model;
