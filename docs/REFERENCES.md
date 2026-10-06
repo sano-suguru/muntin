@@ -17,7 +17,7 @@ Upstream sources behind assumptions that may change. Re-check them when toolchai
 
 ## HTTP
 
-- HTTP Semantics (RFC 9110): method content rules (sections 9.3.1, 9.3.4, 9.3.5), 404 and 405 (sections 15.5.5, 15.5.6): https://www.rfc-editor.org/rfc/rfc9110
+- HTTP Semantics (RFC 9110): methods servers support (section 9.1), method content rules (sections 9.3.1, 9.3.4, 9.3.5), 404 and 405 (sections 15.5.5, 15.5.6): https://www.rfc-editor.org/rfc/rfc9110
 - `PATCH` (RFC 5789): https://www.rfc-editor.org/rfc/rfc5789
 
 ## Flare
