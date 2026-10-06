@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-Next item: M3-019, `String` route values, exactly as the "Next production slice" of [String route value decision (M3-018)](docs/history/architecture-decisions.md#string-route-value-decision-m3-018) states it. Blockers: none.
+Next item: M3-019, route-value decoding and `String` route values, exactly as the "Next production slice" of [String route value decision (M3-018)](docs/history/architecture-decisions.md#string-route-value-decision-m3-018) states it. Blockers: none.
 
 ## Easy to miss
 
