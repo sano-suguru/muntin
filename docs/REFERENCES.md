@@ -10,6 +10,11 @@ Upstream sources behind assumptions that may change. Re-check them when toolchai
 - Error handling and typed-error constraints: https://docs.modular.com/mojo/manual/errors/
 - Changelog (reflection, language evolution): https://docs.modular.com/mojo/changelog
 
+## URLs
+
+- Percent-encoding (RFC 3986, section 2.1): https://www.rfc-editor.org/rfc/rfc3986#section-2.1
+- WHATWG URL Standard, `application/x-www-form-urlencoded` parser (Muntin takes only its `+` rule; M3-018 lists the differences): https://url.spec.whatwg.org/#concept-urlencoded-parser
+
 ## Flare
 
 - Repository: https://github.com/ehsanmok/flare
