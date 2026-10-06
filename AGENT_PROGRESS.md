@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-Next item: none chosen. M3-021 shipped `put`, `patch` and `delete` as [HTTP methods decision (M3-020)](docs/history/architecture-decisions.md#http-methods-decision-m3-020) specified. The next M3 item is a new decision item taken from the remaining candidates in `docs/SPEC.md`. Blockers: none.
+Next item: M3-023, two route values, exactly as the "Next production slice" of [Several route values decision (M3-022)](docs/history/architecture-decisions.md#several-route-values-decision-m3-022) specifies. Blockers: none.
 
 ## Easy to miss
 
