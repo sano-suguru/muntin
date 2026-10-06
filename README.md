@@ -1,6 +1,6 @@
 # Muntin
 
-Muntin is a typed application layer for building web services in Mojo. Your handlers depend on Muntin, not on sockets, reactors, TLS or a particular networking stack.
+Muntin is a typed application layer for building web services in Mojo. Your handlers depend on Muntin, not on Flare or another networking runtime.
 
 Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and there is no supported way to serve one yet.
 
@@ -39,7 +39,7 @@ app.get["/users/{id}"](hello)
 # compile error: route declares a path parameter but the handler takes none
 ```
 
-Muntin rejects, at compile time, a route whose placeholders do not match the handler's parameters. At runtime, typed inputs that do not convert are rejected before your handler runs, and an error your handler raises becomes a 500 that does not leak its text unless its type opts in to its own response. Exact rules and messages: [`docs/DX.md`](docs/DX.md).
+Muntin rejects route and handler shape mismatches at compile time. At runtime, typed inputs that do not convert are rejected before your handler runs, and an error your handler raises becomes a 500 that does not leak its text unless its type opts in to its own response. Exact rules and messages: [`docs/DX.md`](docs/DX.md).
 
 ## Why Muntin
 
@@ -74,7 +74,7 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 
 ## Status
 
-- **Today:** typed routing (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`), one `Int` or `String` route value per route (path or query), typed request bodies and results (including JSON), application errors, shared application state, headers, and a raw `Request -> Response` escape hatch.
+- **Today:** typed routing, typed request bodies and results (including JSON), application errors, shared application state, headers, and a raw `Request -> Response` escape hatch.
 - **Not yet:** serving an application (serving through Flare is test code only, and Flare is a candidate production backend, not a supported deployment path) and middleware.
 
 Shipped and remaining capabilities: [`docs/SPEC.md`](docs/SPEC.md). Long-term API targets: [`docs/DX.md`](docs/DX.md).
