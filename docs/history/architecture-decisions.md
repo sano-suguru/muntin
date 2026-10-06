@@ -2147,7 +2147,7 @@ Status: **decision** (PR #48; `src/muntin`, `adapters/`, `tests/`, `scripts/` an
 
 ### String route value decision (M3-018)
 
-Status: **decision, open** (M3-018; `src/muntin` and `adapters/` are unchanged in it). It decides how a typed handler receives a route value as text, so that `/users/{name}` is routable. M2-016 named non-`Int` route values the most visible gap; M3-014 decided that raw `String` is a route-value type and never a body, and that adding it is one slot kind and converter, no overload.
+Status: **decision** (M3-018; `src/muntin`, `adapters/` and `tests/` are unchanged in it). It decides how a typed handler receives a route value as text, so that `/users/{name}` is routable. M2-016 named non-`Int` route values the most visible gap; M3-014 decided that raw `String` is a route-value type and never a body, and that adding it is one slot kind and converter, no overload.
 
 **Why this candidate.** Of SPEC's remaining candidates:
 - `String` route values: every route that names something other than a number (`/users/{name}`, `/tags/{slug}`, `/search?{q}`) is unreachable by a typed handler today, and raw literals declare no placeholder, so it is not reachable by a raw one either. What the `String` holds (raw or decoded text) is a semantic default that cannot change later without silently changing the bytes an unchanged `def(String)` receives, and later route-value items (several values, path and query together, optional values, other value types) build on it.
@@ -2172,3 +2172,100 @@ Status: **decision, open** (M3-018; `src/muntin` and `adapters/` are unchanged i
 - the M2 contract's 400/404/500 boundary (SPEC, "M2 completion contract"); a change to it reopens M2.
 
 **Candidates to measure:** (1) a `String` slot holding the raw text; (2) a `String` slot holding the percent-decoded text, with `+` in query values as the sub-question; (3) a Muntin text wrapper type as the slot; (4) a conversion trait for application route-value types; (D0) deferral.
+
+**Selected: `String` is a route-value kind, beside `Int`, and a `String` route value is the percent-decoded text.** It adds no overload, no public type and no injected kind.
+
+```mojo
+def profile(name: String) -> String:
+    return "profile " + name
+
+def search(q: String) -> String:
+    return "results for " + q
+
+app.get["/users/{name}"](profile)
+# GET /users/alice        -> 200 "profile alice"
+# GET /users/J%C3%B6rg    -> 200 "profile Jörg"
+# GET /users/a+b          -> 200 "profile a+b"     (`+` is literal in a path)
+# GET /users/%zz, /users/%FF -> 400 "Bad Request"  (bad escape; not UTF-8)
+app.get["/search?{q}"](search)
+# GET /search?q=mojo+lang -> 200 "results for mojo lang"
+# GET /search?q=a%2Bb     -> 200 "results for a+b"
+# GET /search, /search?q=, /search?q=1&q=2 -> 400 "Bad Request"
+```
+
+- **Shapes.** A `String` parameter goes wherever an `Int` route value goes, once: `get` `def(String)` and `def(String, Headers)`; `post` `def(String, B)` (`B` a `FromBody`, a `Json[T]` or a `WithHeaders[B2]`); each also after a leading `State[S]`. The route literal declares exactly one `{name}` segment or `{key}` item for it, as for `Int`; binding is positional. Results and errors are unchanged.
+- **The kind** is decided by exact type equality, `A == String`, beside `Int`, `Request` and `Headers` (`String` is origin-free, so `_as[String, A]`, which `_respond` already uses for results, is exact). `StaticString`, `StringSlice` and application types are not route values. M3-014's rule stands: `String` is never a body, and `def(String)` on `post` keeps today's message.
+- **Value, path:** the matched segment, percent-decoded (RFC 3986 section 2.1): each `%` followed by two hex digits (either case) becomes that byte, every other byte is kept, and `+` is literal. Matching runs first on the raw path, so `%2F` decodes to `/` inside one value and never splits a segment. Nothing is normalized (`..` and `%2E` are values like any other).
+- **Value, query:** the value `App.handle` already finds (keys compared byte for byte and undecoded, missing or duplicated 400, unchanged), then `+` becomes a space and the result is percent-decoded, as the WHATWG `application/x-www-form-urlencoded` parser does. `%2B` is a `+`. This is what `URLSearchParams` and HTML forms send for a space.
+- **Failures, all 400 before the handler, like a non-integer `Int`:** an empty value (`?q=` or `?q`; a path segment is never empty, since an empty segment does not match), a `%` not followed by two hex digits, and decoded bytes that are not UTF-8. A decoded value is never empty, so the M2 contract's "missing, duplicated, empty or invalid query value is 400" stays true for every route value. Invalid UTF-8 is 400 rather than U+FFFD because a route value names something: lossy decoding would give `%FE` and `%FF` the same value. Mojo 1.1.0's `String(from_utf8=)` raises on invalid UTF-8 (measured), so this needs no decoder of Muntin's own beyond the escapes.
+- **Order** is the `Int` route value's: 404 → query value missing or duplicated 400 (`App.handle`) → the `String` value's 400 (adapter) → body steps (415, 413, field rebuild 500, body 400) or the `Headers` rebuild → handler → result.
+- **Ownership:** the adapter builds a fresh `String` per request and moves it into the handler, which declares `name: String` or `var name: String`; `mut name: String` selects no overload, as for `Int`. A typed function value spells it `var String` (`def(String) thin raises Never -> String` is the toolchain's `TODO: function type conversions between closures not supported yet`, as for `Int` and `Headers`), and a generic helper forwards a `String` handler through M3-015's edge 4 (measured).
+- **Where the decoding runs:** in the slot (`_slot`'s `String` branch), which needs to know whether the value came from the query, for `+`. The arity adapters take that as a defaulted compile-time flag that the overloads set from the route literal. `App.handle`, `_match`, `_query_value`, `_Route`, `_parse_int` and the stored arguments are unchanged; the value travels raw, as today.
+- **Raw handlers and `Request`:** unchanged and undecoded. `req.path` and `req.query` stay the text received, so an application that must see the encoded form (`%2F` versus `/`) uses a raw handler. `def(String, Request)` is rejected with the raw messages.
+- **`Int`:** unchanged and undecoded: `/users/%34%32` is still 400. Decoding `Int` values too would move inputs from 400 to 200, an M2 status-boundary change.
+
+**Rules and diagnostics** (measured on a scratch copy of production):
+- `_kind`: `A == String` is a new kind, after `Headers`. `_get_rule` and `_post_rule` treat it as a route value; a `String` as a body falls through to the existing `FromBody` messages.
+- New messages, only for shapes with a `String`, where the `Int` text would be false: `handler takes one String parameter; route must declare exactly one path or query parameter`, `handler takes one String parameter and the request body; route must declare exactly one path or query parameter`, and `a get handler takes at most one route value` (two route values with a `String` among them; `def(Int, Int)` keeps `a get handler takes at most one Int route value`).
+- Two messages list what a parameter may be and would become false, so they are reworded, as M3-016 reworded the first: `a get handler's parameter is an Int or String route value, the request Headers or, for a raw handler, the Request` and `a post handler's parameter before the body is an Int or String route value`. They re-pin `registration_api_fail/slot_misuse_names_the_rule` and `get_headers_api_fail/post_headers_before_body{,_with_route_value}`. `storage_fail/string_param_handler` (a `String` parameter on `/greet/{name}`) compiles and is retired; its comment already said "`String` is no slot kind yet".
+- Every other expected text is unchanged (`check.sh` on the scratch copy: the four fixtures above are its only failures).
+
+Probed shapes, built against `main`'s `src` and the scratch copy (`/x` has no placeholder). On `main` each shape in the first seven rows fails with `get`'s no-kind message or `post`'s before-the-body message, as a `String` is no kind there; the last two rows are unchanged:
+
+| Shape | Selected |
+|---|---|
+| `get` `def(String)` on `/x/{a}`; `def(String, Headers)` on `/x?{a}`; `post` `def(String, B)` and `def(State[P], String, B)` on `/x/{a}` | registers |
+| `get` `def(String)` on `/x`, `/x/{a}/{b}`, `/x/{a}?{b}`; `def(String, Headers)` and `def(State[P], String)` on `/x` | `handler takes one String parameter; ...` |
+| `get` `def(String, String)`, `def(Int, String)`, `def(String, Int)`, `def(State[P], String, String)`; `def(String, Int)` on `/x` | `a get handler takes at most one route value` |
+| `get` `def(Headers, String)` on `/x/{s}` | `a get handler takes one Headers, as its last parameter` |
+| `get` `def(StaticString)`; `post` `def(Headers, B)`, `def(StaticString, B)` | the two reworded messages |
+| `post` `def(String, B)` on `/x` and `/x/{a}?{b}`, `def(String, Headers)` on `/x`, `def(State[P], String, B)` on `/x` | `handler takes one String parameter and the request body; ...` |
+| `post` `def(String, String)` on `/x/{a}`; `def(String, Int)`; `def(String, Request) -> Response` | `the handler's last parameter is the request body; ...`; `Int is a route-value type, ...`; `Request is the whole request, not a body; ...` (the `Int` shapes' messages) |
+| unchanged: `get` `def(Int, Int)`, `def(String, Note)`, `def(String, Request) -> Response`, stateful handler without its state; `post` `def(String)` on `/x` and on `/x/{a}`, `def(Int, String)`, `def(Note, String)`, `def(State[P], String)` | the message each had |
+| unchanged: `get` `def(mut String)`, `def(String, String, Headers)`, `def(String) -> Int`; typed `def(String) thin raises Never -> String` value | `no matching method in call to 'get'`; the `TODO` conversion error |
+
+**Candidates:**
+
+| Candidate | Measured | Verdict |
+|---|---|---|
+| 1. `String` slot, raw text (the segment or query value as received) | needs no measurement: the same kind and rules as 2 without the decoder. Over Flare a target carries only `!`..`~`, so every space or non-ASCII character in a name arrives as `%XX` and the handler would receive `J%C3%B6rg`; Muntin has no decoder, so each application would write one. Decoding later would change the bytes an unchanged `def(String)` receives, with no compile error | rejected |
+| 2. `String` slot, percent-decoded, `+` a space in query values | on a scratch copy of production (the edits under the next slice): `check.sh` fails only on the four fixtures above, with unsafe confinement and the boundary check passing and the one `rebind_var` unchanged; `test.sh` passes every existing test plus scratch tests of the behavior above (path and query decoding, each 400, `Int` unchanged, `Headers`, `State`, `post` with an application body, a `Json[T]` body (its 415 and 400 after the route value's 400) and a `WithHeaders[B]` carrier, `ToErrorResponse`, `ToResponse`, `TestClient`, a typed `var String` value, generic forwarding); the probes above | **chosen** |
+| 2′. the same, `+` literal in query values too (RFC 3986 only) | the decoder without the flag; no change to the adapters' parameters | rejected: `URLSearchParams` and forms encode a space as `+`, so `?q=a+b` would reach the handler as `a+b` |
+| 2″. decoding `+` in `App.handle` instead of a flag | not built: `+` and a space are both invalid in an `Int`, so statuses would not change, but it splits one value's decoding between `App.handle` and the slot and changes `App.handle` | rejected |
+| 3. a Muntin text type as the slot (`Segment`, with raw and decoded access) | not built: M3-016's wrapper candidate measured the same pattern for `Headers` (no material gain); it adds a public type and a hop, and M3-014 and DX section 3 already spell the value `String` | rejected |
+| 4. a conversion trait for application route-value types (`UserId` from a segment) | not built: M2-005 names it as the case that breaks disjointness with `FromBody` (a type conforming to both is classified by `_kind`'s order), and M3-016's trait candidate measured the same precedence problem. `String` cannot conform to a Muntin trait, so it is a kind by equality under any later trait | rejected now; additive later, beside the `String` kind |
+| D0. defer | `/users/{name}` stays unreachable by a typed or raw handler | rejected |
+
+**One-off check (decision only): Flare passes the encoded target through.** Decoding in Muntin is correct only if the backend does not decode first. The adapter's documented policy says it copies the target verbatim, and M2-015's loopback case proves it for the query; no loopback case sent `%XX` in a path. A raw-TCP loopback probe against the scratch copy (not retained) sent `/users/a%2Fb%20c`, `/users/%2541`, `/users/J%C3%B6rg`, `/users/a+b`, `/users/%FF`, `/users/%zz`, `/users/..%2F..`, `/q?name=a+b%2Bc%26d`, `/q?name=` and a raw `/raw?x=%41+b`; every status and body equalled `App.handle` (`%2541` reached the handler as `%41`: one decoding).
+
+**Invariants:**
+- `String` is a request slot kind by exact type equality; a route value is an `Int` or a `String`, at most one per handler; `String` is never a body.
+- A `String` route value is decoded exactly once, in its slot, from the raw text `App.handle` passes; `+` is a space only in a query value. `Int` values, query keys, `Request.path` and `Request.query` are never decoded.
+- Every failure of a `String` value is 400 before the handler; no new status.
+- No overload, `App.handle` code, `_Route` field, storage or unsafe change; one `rebind_var`.
+
+**Cost.** `Int` and `String` treat the same text differently (`%34%32` is 400 for `Int`, `42` for `String`), and query keys are matched undecoded while values are decoded. Three route-value messages exist in an `Int` and a `String` form so that every `Int` message stays byte-identical. Two existing messages are reworded and one fixture is retired. Each `String` route value costs one decoded copy per request. The arity adapters take one more compile-time parameter.
+
+**Revisit when:**
+- an application must tell `%2F` from `/` or see the encoded text in a typed handler (a raw handler can today): revisit a raw-text form (candidate 3);
+- applications need lossy decoding, or a `+` kept in a query value: revisit the 400 and the `+` rule;
+- an application-defined route-value type is proposed: revisit candidate 4 with M2-005's disjointness condition;
+- `Int` values are asked to decode: that is an M2 reopen (status boundary);
+- a backend delivers a decoded target: the seam must carry the raw target, or decoding moves;
+- optional or default query values are decided: revisit whether an empty value stays 400;
+- several route values are decided: the `at most one route value` messages and the `Int`/`String` message pairs are replaced by that item's rules.
+
+**Next production slice (M3-019): `String` route values.**
+- `src/muntin/app.mojo` only:
+  - `_kind`: `A == String` returns a new kind `_TEXT`, after `Headers`;
+  - `_get_rule` and `_post_rule`: `_TEXT` as a route value beside `_INT` (the scratch copy's branches), with the three new rule codes; a `String` in the body position reaches the existing `FromBody` codes;
+  - `_check`: the three new messages and the two rewordings above; every other message unchanged;
+  - a private decoder: empty, a bad escape or non-UTF-8 raise; `+` a space only when the value is from the query; `String(from_utf8=)` builds the result;
+  - `_slot`: an `A == String` branch that decodes `args[at]` and returns it through `_as[String, A]`, any raise answered `_Reject(400)`; `_slot` and the arity-1 and arity-2 adapters (`_call_1`, `_call_2`, `_call_state_1`, `_call_state_2`) take a defaulted `query: Bool` parameter, which the overloads pass as `_query_params(path) == 1`;
+  - the docstrings and comments the slice makes false, found by grep for `Int` route value and `route value` in `app.mojo` (the overloads' and `_slot`'s descriptions of a route value; `_as`'s list of origin-free types already names `String`).
+- Unchanged: every overload's signature, their count and the `where` clause (their bodies pass the flag); `App.handle`; `_match`, `_query_value`, `_parse_int`; `_Route`; `_handler_storage.mojo`, the one `rebind_var`, `check_unsafe.sh`; `Request`, `Response`, `Headers`, `WithHeaders`, `State`, `Json`; `testing.mojo`; `adapters/`. Every `Int` route value's behavior and every existing message other than the two rewordings.
+- Tests: `tests/test_string_route_values.mojo` through `App.handle` and `TestClient`: path decoding (`%20`, UTF-8, `%2F` inside a value, `+` literal, `..`), query decoding (`+`, `%2B`, `%26`), each 400 (bad escape, truncated escape, non-UTF-8, empty query value) and the 404 for an empty segment; `Int` unchanged on the same encoded inputs; `Headers`, `State`, a `post` body, `Json[T]` and `WithHeaders[B]` after a `String` with the route value's 400 first; `ToResponse`, `ToErrorResponse`; first registration wins; a typed `var String` value and generic forwarding; DX's new examples.
+- Fixtures, in a new `tests/string_route_api_fail` registered in `check.sh`: the three new messages; `def(String)` on `post` with its `FromBody` message (M3-014's "never a body"); the typed borrowed `String` value (`TODO`). Each is built against `main`'s `src` and the pull request says whether it fails there with the same text. The two rewordings re-pin their three fixtures; `storage_fail/string_param_handler.mojo` is deleted.
+- Verification beyond `docs/DEVELOPMENT.md` section 3, for one named risk: a backend that decodes the target before Muntin would make `String` values decode twice, and no loopback case sends `%XX` in a path. Extend `test_typed_route_over_localhost_matches_test_client` with a `String` path route and a `String` query route and targets that tell one decoding from two (`%2541`, `a%2Fb`, `a+b`, `?q=a+b%2B`), each equal to `TestClient`. The base-wide diagnostic comparison does not apply: no overload's signature, `where` clause or the call chain to `_check` changes, and the adapters are instantiated only inside the guard.
+- Docs: `docs/DX.md` (sections 2, 3 and 4, the registration rules, and every statement that route values are `Int` only or that nothing is decoded, scoped to `Int` values, keys and `Request`); `docs/ARCHITECTURE.md` "Current architecture" (registration surface, request handling, other limits) and a revisit index row for `tests/string_route_api_fail`; `docs/SPEC.md` (the capability moves to shipped); `AGENT_PROGRESS.md`.
+- Not in the slice: several route values, path and query values together, optional or default values, other value types or a conversion trait, decoding `Int` values or query keys, a raw-text type, and any change to raw handlers or `App.handle`.
