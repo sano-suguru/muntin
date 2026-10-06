@@ -119,7 +119,7 @@ from .state import State, _InjectedState
 # Header carriers (M3-012): `WithHeaders[B]` (`headers_body.mojo`) is a body
 # slot without being a `FromBody`: `_kind` accepts `FromBody` or the private
 # marker `_HeaderCarrier`, and the route sets `_Route.headers` for a carrier.
-# For such a route only, `App.handle` appends each request header field's name
+# For such a route, `App.handle` appends each request header field's name
 # and value after the body and the JSON verdict (the R1 transport raw routes
 # use). The body slot then rebuilds the fields into a `Headers`
 # (`_carrier_fields`; a failure, which only the M3-002 `_fields` gap can cause,
@@ -699,10 +699,11 @@ def _as[T: Movable, A: Movable](var value: T) -> A:
     alone also accepts a different type with the same layout
     (tests/registration_known_gaps/rebind_var_layout_twins.mojo). The
     equality asserted here is exact for origin-free types (`Int`,
-    `String`, `Request`, `Headers`); generic `==` ignores which origin a slice has, so
-    for a `StaticString` result exactness comes from the overloads' `where`
-    clause. The confinement step of `scripts/check.sh` requires the
-    `rebind_var` on the line after this assert and nowhere else."""
+    `String`, `Request`, `Headers`); generic `==` ignores which origin a
+    slice has, so for a `StaticString` result exactness comes from the
+    overloads' `where` clause. The confinement step of `scripts/check.sh`
+    requires the `rebind_var` on the line after this assert and nowhere
+    else."""
     comptime assert A == T, "rebind requires generic type equality"
     return rebind_var[A](value^)
 
@@ -970,9 +971,9 @@ struct _Route(Movable):
     """Whether the handler receives the request's header fields: its body
     is a `WithHeaders[B]` carrier (`_HeaderCarrier`, M3-013) or its last
     slot is `Headers` (M3-016). `App.handle` then appends each field's name
-    and value after the body and any verdict, or after the route value on
-    a route without a body, and the adapter rebuilds the fields into the
-    carrier or the `Headers` slot."""
+    and value after the body and any verdict, or, on a `Headers` route,
+    after its route value if it has one, and the adapter rebuilds the
+    fields into the carrier or the `Headers` slot."""
     var raw: Bool
     """Whether the handler receives the whole request (a `Request`
     slot): its raw arguments are the request's method, path, query and
