@@ -1,16 +1,51 @@
 # Muntin
 
-Muntin is an experimental, typed web application framework for Mojo.
+Muntin is a typed application layer for building web services in Mojo. Your handlers depend on Muntin, not on Flare or another networking runtime.
 
-The project is deliberately focused on the layer above networking: application routing, typed extraction, validation, serialization, middleware, errors, observability, testing, and developer experience. Networking implementations live behind a narrow adapter boundary.
+Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and there is no supported way to serve one yet.
 
-Muntin is pre-alpha: the public API is still changing.
+```mojo
+from muntin import App
+from muntin.testing import TestClient
+
+
+def get_user(id: Int) -> String:
+    return "user " + String(id)
+
+
+def main() raises:
+    var app = App()
+    app.get["/users/{id}"](get_user)
+
+    var client = TestClient(app)        # in memory, no socket
+    print(client.get("/users/42").text())   # user 42
+```
+
+## Your handler receives valid values
+
+```text
+GET /users/42   -> 200 "user 42"       get_user receives Int(42)
+GET /users/abc  -> 400 "Bad Request"   get_user is never called
+GET /users      -> 404 "Not Found"
+```
+
+A route that does not fit its handler does not compile:
+
+```mojo
+def hello() -> String:
+    return "hello"
+
+app.get["/users/{id}"](hello)
+# compile error: route declares a path parameter but the handler takes none
+```
+
+Muntin rejects route and handler shape mismatches at compile time. At runtime, typed inputs that do not convert are rejected before your handler runs. Handler errors become 500 responses that do not leak their text, unless their declared type opts in to its own response. Exact rules and messages: [`docs/DX.md`](docs/DX.md).
 
 ## Why Muntin
 
-A muntin is a narrow structural member that divides and supports panes in a window. The name fits the architectural goal: keep application code cleanly separated from replaceable transport/runtime implementations without making that boundary the center of the developer experience.
+Networking stacks evolve: new protocols, new reactors, new TLS and QUIC implementations. Application code should not have to evolve with them.
 
-The durable bet is:
+Muntin owns the application contract: how routes call handlers, how inputs become typed values, and how results and errors become responses. A networking backend adapts to one operation, `App.handle(Request) -> Response`, and never defines that contract. Muntin currently integrates with Flare behind this boundary.
 
 ```text
 application code
@@ -22,57 +57,49 @@ application code
 | routes / handlers        |
 +-------------+------------+
               |
-       narrow backend seam
-          /         \
-         v           v
-  in-memory       Flare
-  reference       adapter
-  backend
+   App.handle(Request) -> Response
+         /             \
+        v               v
+  TestClient        Flare adapter
+  in memory         over HTTP (tests only)
 ```
 
-Flare is a candidate production networking backend. It is not part of Muntin's public application contract.
+Your handlers and routes stay independent of Flare or any other networking runtime, and Muntin adds no executor or async runtime that application code must adopt. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-## Target developer experience
+The name comes from the window: a muntin is the narrow bar that divides and supports the panes. It holds the structure together without being what you look at.
 
-The long-term direction is intentionally small and typed:
+## Kept honest by CI
 
-```mojo
-from muntin import App
+CI enforces the transport boundary, unsafe-code confinement and the documented compile errors, and exercises the Flare adapter over a real loopback connection on Ubuntu and macOS.
 
+## Status
 
-def hello() -> String:
-    return "Hello, Mojo!"
+- **Today:** typed routing, typed request bodies and results (including JSON), application errors, shared application state, headers, and a raw `Request -> Response` escape hatch.
+- **Not yet:** serving an application, and middleware. The Flare integration is test-only today; Flare is a candidate production backend, not a supported deployment path.
 
+Shipped and remaining capabilities: [`docs/SPEC.md`](docs/SPEC.md). Long-term API targets: [`docs/DX.md`](docs/DX.md).
 
-def main():
-    var app = App()
-    app.get["/"](hello)
-    app.run()
+## Try it
+
+Muntin is not published as a package yet. You need [pixi](https://pixi.sh), which installs the pinned Mojo toolchain:
+
+```sh
+git clone https://github.com/sano-suguru/muntin.git
+cd muntin
+pixi install
+pixi run run   # runs main.mojo: an App answering one request through TestClient
 ```
 
-For typed path parameters, the desired direction is:
+To run the example above, save it as `example.mojo` in the repository root and run `pixi run mojo run -I src example.mojo`.
 
-```mojo
-def get_user(id: Int) -> User:
-    return users.get(id)
+## Documentation
 
-app.get["/users/{id}"](get_user)
-```
-
-These examples are design targets, not claims that every syntax form is already supported by the current Mojo toolchain. `docs/DX.md` defines how to handle language limitations: prove the limitation with a minimal reproduction, document it, then choose the closest type-safe syntax.
-
-## What it does
-
-Muntin handles typed routing, request bodies and results (including JSON), application errors, shared application state, headers and a raw `Request -> Response` escape hatch, in memory through `TestClient` and over HTTP through the Flare adapter. There is no public API for serving an application yet. Shipped and remaining capabilities: `docs/SPEC.md`; exact usage and semantics: `docs/DX.md`.
-
-## Repository guide
-
-- `docs/DX.md` — how to write Muntin applications: API, examples, semantics.
-- `docs/ARCHITECTURE.md` — how Muntin works now: boundaries, invariants, current limits.
-- `docs/history/architecture-decisions.md` — why: one record per design decision.
-- `docs/SPEC.md` — product scope and roadmap.
-- `docs/DEVELOPMENT.md` — verification commands, CI, and which document owns what.
-- `docs/REFERENCES.md` — upstream sources and the Flare pin.
+- [`docs/DX.md`](docs/DX.md): how to write Muntin applications: API, examples, semantics.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): how Muntin works now: boundaries, invariants, current limits.
+- [`docs/history/architecture-decisions.md`](docs/history/architecture-decisions.md): why: one record per design decision.
+- [`docs/SPEC.md`](docs/SPEC.md): product scope and roadmap.
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): verification commands, CI, and which document owns what.
+- [`docs/REFERENCES.md`](docs/REFERENCES.md): upstream sources and the Flare pin.
 
 ## Development
 
