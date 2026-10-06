@@ -3,10 +3,10 @@
 from std.collections import Optional
 
 
-# Header validation (docs/ARCHITECTURE.md, "Headers decision (M3-002)"):
-# names are RFC 9110 tokens; values hold no control byte other than HTAB,
-# and do not begin or end with SP or HTAB (RFC 9110 field-value). Bytes 0x80
-# and up are the UTF-8 a `String` holds. No field added through `Headers`
+# Header validation (docs/history/architecture-decisions.md, "Headers decision
+# (M3-002)"): names are RFC 9110 tokens; values hold no control byte other than
+# HTAB, and do not begin or end with SP or HTAB (RFC 9110 field-value). Bytes
+# 0x80 and up are the UTF-8 a `String` holds. No field added through `Headers`
 # can carry CR, LF or NUL.
 
 
@@ -155,7 +155,7 @@ struct Request(Copyable, Movable):
 
     `headers` are the request's header fields as the backend received them
     (empty when built without any); a raw handler reads them, typed
-    handlers do not (docs/ARCHITECTURE.md, "Headers decision (M3-002)").
+    handlers do not (docs/history/architecture-decisions.md, "Headers decision (M3-002)").
     """
 
     var method: String
@@ -236,7 +236,7 @@ struct Response(Copyable, Movable, ToResponse):
 
     `headers` start empty; Muntin adds none by default (no `Content-Type`).
     A backend writes them in order, except the fields it owns or that are
-    connection-specific (docs/ARCHITECTURE.md, "Headers decision (M3-002)").
+    connection-specific (docs/history/architecture-decisions.md, "Headers decision (M3-002)").
     """
 
     var status: Int

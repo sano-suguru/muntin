@@ -4,7 +4,7 @@ Depends inward on Muntin's backend seam, `App.handle(Request) -> Response`,
 and never routes on its own. Builds only in the `flare` pixi environment.
 
 Conversion policy (M1; target handling restated for M2-002; headers M3-005,
-decided in docs/ARCHITECTURE.md "Headers decision (M3-002)"):
+decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
 - method: copied verbatim.
 - request target: Flare's `url` (path plus any query, undecoded) passed
   verbatim to Muntin's `Request`, which splits path from query, exactly as

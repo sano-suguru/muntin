@@ -1,11 +1,11 @@
 # JSON bodies and results in production (M3-009): `muntin.Json`, `FromJson`,
 # `ToJson`, `JsonValue` and `JsonWriter`, and the body adapters' `Content-Type`
-# (415) and size (413) steps. Decision: docs/ARCHITECTURE.md, "JSON codec
-# decision (M3-008)". Successful JSON-body requests go through
+# (415) and size (413) steps. Decision: docs/history/architecture-decisions.md,
+# "JSON codec decision (M3-008)". Successful JSON-body requests go through
 # `App.handle(Request(..., headers^))` with `Content-Type` set; the bare
-# `TestClient.post(target, body)` sends no fields, so its answer on a
-# JSON-body route is pinned as 415, and routes that only return `Json[T]` go
-# through `TestClient`. `TestClient`'s `headers=` (M3-011):
+# `TestClient.post(target, body)` sends no fields, so its answer on a JSON-body
+# route is pinned as 415, and routes that only return `Json[T]` go through
+# `TestClient`. `TestClient`'s `headers=` (M3-011):
 # tests/test_testclient_headers.mojo. DX sections 4 and 5:
 # tests/test_json_dx.mojo. Must-not-compile cases: tests/json_api_fail.
 
@@ -1069,7 +1069,7 @@ def test_float_rounding_gaps_on_mojo_1_1_0() raises:
     # Pinned Mojo 1.1.0 behavior, each 1 ulp from the correctly rounded
     # value (Python's in the comments). `float()` uses `atof`; the writer
     # uses `String(Float64)`. A fix in the toolchain turns these red: revisit
-    # (docs/ARCHITECTURE.md, "JSON codec decision (M3-008)").
+    # (docs/history/architecture-decisions.md, "JSON codec decision (M3-008)").
     # Shortest-repr doubles as JS/Python clients send them: correct
     # 0xc42dddc22f41f7cd and 0x4429c9f9333a6521.
     assert_equal(

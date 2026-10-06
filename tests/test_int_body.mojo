@@ -1,8 +1,9 @@
 # One route value then one request body (M2-009): `app.post` with a handler
-# `def(Int, B)`, `B` an application-defined `FromBody` type, returning
-# `String` or `R: ToResponse`. The route value comes from one path segment or
-# one query item; binding is positional (route value first, body second).
-# Decision: docs/ARCHITECTURE.md, "Argument extraction decision (M2-005)".
+# `def(Int, B)`, `B` an application-defined `FromBody` type, returning `String`
+# or `R: ToResponse`. The route value comes from one path segment or one query
+# item; binding is positional (route value first, body second). Decision:
+# docs/history/architecture-decisions.md, "Argument extraction decision
+# (M2-005)".
 
 from std.os import getenv, setenv, unsetenv
 from std.testing import assert_equal, TestSuite

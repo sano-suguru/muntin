@@ -1,6 +1,6 @@
-# M2-014 raw-Request decision spike, application side. Handlers and their
-# error types live here; the library side (tests/raw_spike.mojo) never
-# names them. Decision and evidence: docs/ARCHITECTURE.md, "Raw Request
+# M2-014 raw-Request decision spike, application side. Handlers and their error
+# types live here; the library side (tests/raw_spike.mojo) never names them.
+# Decision and evidence: docs/history/architecture-decisions.md, "Raw Request
 # decision (M2-014)".
 
 from std.os import getenv, setenv, unsetenv

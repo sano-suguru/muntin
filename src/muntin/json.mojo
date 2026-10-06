@@ -1,6 +1,6 @@
 """JSON request and response bodies (M3-009).
 
-Decision and evidence: docs/ARCHITECTURE.md, "JSON codec decision (M3-008)".
+Decision and evidence: docs/history/architecture-decisions.md, "JSON codec decision (M3-008)".
 `Json[T]` is a request body through the existing `FromBody` when the
 application type `T` conforms to `FromJson`, and a result through the
 existing `ToResponse` when `T` conforms to `ToJson`, so it registers through
@@ -455,7 +455,7 @@ struct JsonValue(Copyable, Movable, Sized):
     def float(self) raises -> Float64:
         """A number literal as a finite `Float64`, through Mojo 1.1.0's
         `atof`: not always correctly rounded, and raising on long literals
-        (docs/ARCHITECTURE.md, "JSON codec decision (M3-008)"). Raises on
+        (docs/history/architecture-decisions.md, "JSON codec decision (M3-008)"). Raises on
         overflow to infinity and for any other kind."""
         if self._kind() != _NUMBER:
             raise Error("JSON value is not a number")

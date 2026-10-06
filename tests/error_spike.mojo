@@ -1,16 +1,15 @@
-# M2-010 application-error decision spike, library side. Not production
-# code: it models what Muntin's library could contain, separately from the
-# application module (tests/test_spike_error.mojo) that defines handlers and
-# their error types, so a typed error crosses a module boundary as it would
-# in a real application and this module never names it. Handlers are stored
-# in the production `_Erased` box, unchanged; route matching, `Int`
-# conversion, query gathering, `FromBody` and `ToResponse` are production's
-# own, and the response policies are local copies of production's as of
-# M3-014 (below the imports). check.sh builds it through that test
-# (--Werror) and, without the application module, through
-# tests/error_lib_only/driver.mojo; test.sh runs it. Decision and evidence:
-# docs/ARCHITECTURE.md, "Application-error decision (M2-010)". Must-not-
-# compile evidence: tests/error_fail.
+# M2-010 application-error decision spike, library side. Not production code: it
+# models what Muntin's library could contain, separately from the application
+# module (tests/test_spike_error.mojo) that defines handlers and their error
+# types, so a typed error crosses a module boundary as it would in a real
+# application and this module never names it. Handlers are stored in the
+# production `_Erased` box, unchanged; route matching, `Int` conversion, query
+# gathering, `FromBody` and `ToResponse` are production's own, and the response
+# policies are local copies of production's as of M3-014 (below the imports).
+# check.sh builds it through that test (--Werror) and, without the application
+# module, through tests/error_lib_only/driver.mojo; test.sh runs it. Decision
+# and evidence: docs/history/architecture-decisions.md, "Application-error
+# decision (M2-010)". Must-not- compile evidence: tests/error_fail.
 #
 # What changes against production, and only that:
 #

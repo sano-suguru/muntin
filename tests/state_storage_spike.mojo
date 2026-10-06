@@ -1,14 +1,14 @@
-# M3-004 state-storage decision spike, library side. Not production code:
-# it models the selected candidate A, a sealed shared box behind the
-# unchanged public `State[S]` API, separately from the application module
-# (tests/test_spike_state_storage.mojo) that defines the state types. The
-# box would live in Muntin's private storage module, where unsafe
-# operations are allowed (scripts/check_unsafe.sh). check.sh builds it
-# through that test (--Werror) and through
-# tests/state_storage_lib_only/driver.mojo; test.sh runs it. Decision and
-# evidence: docs/ARCHITECTURE.md, "State storage decision (M3-004)".
-# Must-not-compile evidence: tests/state_storage_fail. Must-build evidence
-# (rejected candidates and the residual): tests/state_storage_known_gaps.
+# M3-004 state-storage decision spike, library side. Not production code: it
+# models the selected candidate A, a sealed shared box behind the unchanged
+# public `State[S]` API, separately from the application module
+# (tests/test_spike_state_storage.mojo) that defines the state types. The box
+# would live in Muntin's private storage module, where unsafe operations are
+# allowed (scripts/check_unsafe.sh). check.sh builds it through that test
+# (--Werror) and through tests/state_storage_lib_only/driver.mojo; test.sh runs
+# it. Decision and evidence: docs/history/architecture-decisions.md, "State
+# storage decision (M3-004)". Must-not-compile evidence:
+# tests/state_storage_fail. Must-build evidence (rejected candidates and the
+# residual): tests/state_storage_known_gaps.
 #
 # Why a box: `ArcPointer.__getitem__` returns a mutable reference through
 # any handle, borrowed ones included, and Mojo 1.1.0 has no private

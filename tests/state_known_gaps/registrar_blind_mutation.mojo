@@ -1,15 +1,15 @@
-# Must build, and is never run (scripts/check.sh builds it only). Evidence
-# for docs/ARCHITECTURE.md, "Application state decision (M3-001)": why the
-# scoped registrar (A2) is rejected on Mojo 1.1.0.
+# Must build, and is never run (scripts/check.sh builds it only). Evidence for
+# docs/history/architecture-decisions.md, "Application state decision (M3-001)":
+# why the scoped registrar (A2) is rejected on Mojo 1.1.0.
 #
-# A registration through a registrar that was live before an interior
-# reference `r` into the app was taken writes to the app through the
-# registrar's stored `Pointer`, and Mojo 1.1.0 does not treat that write as
-# a mutation of the app: `r` is still accepted afterwards, although the route list may have reallocated
-# (running this reads freed memory). The same registration made directly on
-# the app is rejected (tests/state_fail/
-# scoped_direct_get_invalidates_interior_reference.mojo:
-# `use of invalidated interior reference`).
+# A registration through a registrar that was live before an interior reference
+# `r` into the app was taken writes to the app through the registrar's stored
+# `Pointer`, and Mojo 1.1.0 does not treat that write as a mutation of the app:
+# `r` is still accepted afterwards, although the route list may have reallocated
+# (running this reads freed memory). The same registration made directly on the
+# app is rejected (tests/state_fail/
+# scoped_direct_get_invalidates_interior_reference.mojo: `use of invalidated
+# interior reference`).
 #
 # If this file stops building, Mojo now tracks mutation through stored
 # mutable references: the A2 revisit condition has fired. Re-measure A2

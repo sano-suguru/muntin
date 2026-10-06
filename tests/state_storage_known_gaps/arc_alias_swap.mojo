@@ -1,12 +1,12 @@
 # Known gap (M3-004): must build, never run (scripts/check.sh). Rejected
-# candidate B': PR #26's `State`, an `ArcPointer[OwnedPointer[S]]` field.
-# `ArcPointer.__getitem__` returns a mutable reference through any handle,
-# so a second handle replaces the shared `OwnedPointer` with public std API
-# alone, and `r` reads a dropped value (the review's case). The sealed box
-# rejects the same line (state_storage_fail/alias_payload_swap.mojo). If
-# this stops building, `ArcPointer` no longer hands out mutable references
-# through shared handles: revisit docs/ARCHITECTURE.md "State storage
-# decision (M3-004)".
+# candidate B': a `State` holding an `ArcPointer[OwnedPointer[S]]` field.
+# `ArcPointer.__getitem__` returns a mutable reference through any handle, so a
+# second handle replaces the shared `OwnedPointer` with public std API alone,
+# and `r` reads a dropped value. The sealed box rejects the same line
+# (state_storage_fail/alias_payload_swap.mojo). If this stops building,
+# `ArcPointer` no longer hands out mutable references through shared handles:
+# revisit docs/history/architecture-decisions.md "State storage decision
+# (M3-004)".
 from std.memory import ArcPointer, OwnedPointer
 
 

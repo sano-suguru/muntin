@@ -1,6 +1,6 @@
 """Application state: a shared, read-only handle a handler receives.
 
-Decision and evidence: docs/ARCHITECTURE.md, "Application state decision
+Decision and evidence: docs/history/architecture-decisions.md, "Application state decision
 (M3-001)". A handler takes state exactly when its registration passes one,
 `app.get["/users/{id}"](get_user, users)`; `State[S]` is then the handler's
 first parameter.
@@ -48,6 +48,6 @@ struct State[S: Movable & Deinitable](Copyable, Movable, _InjectedState):
         interior reference`, tests/state_get_fail), and it cannot be
         returned from a function as a reference into the handle. Another
         handle cannot replace or mutate the value on ordinary paths
-        (docs/ARCHITECTURE.md, "State storage decision (M3-004)").
+        (docs/history/architecture-decisions.md, "State storage decision (M3-004)").
         """
         return self._shared.owned()[]

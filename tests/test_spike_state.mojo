@@ -1,7 +1,7 @@
 # M3-001 application-state decision spike, application side. State types,
 # body types, error types and handlers live here; the library side
 # (tests/state_spike.mojo) never names them. Decision and evidence:
-# docs/ARCHITECTURE.md, "Application state decision (M3-001)".
+# docs/history/architecture-decisions.md, "Application state decision (M3-001)".
 
 from std.memory import ArcPointer
 from std.reflection import reflect

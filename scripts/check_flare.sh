@@ -1,21 +1,9 @@
 #!/usr/bin/env bash
-# Flare checks (M1-001 to M1-003, M2-001, M2-002, M2-006, M2-008, M2-009,
-# M2-011, M2-013, M2-015, M3-003, M3-002, M3-005, M3-006, M3-007, M3-009,
-# M3-013).
-# Builds and runs compat/flare, the Flare adapter's contract tests and its real
-# localhost round trips (adapters/flare: GET /hello, typed GET /users/{id} and
-# /items?{limit}, body-only POST /users, ToResponse/Response results, and
-# route-value-then-body POST /accounts/{id}, /accounts?{id}, /profiles/{id},
-# raising handlers GET /orders/{id}, POST /orders answering 500, an opted-in
-# error GET /stock/{id} answering 409, the raw POST /webhook, the stateful
-# GET /staff/{id}, the stateful POST /staff and /staff/{id}, request/response
-# headers over HTTP/1.1 and cleartext HTTP/2, and the stateful raw GET and
-# POST /keyed, the JSON body routes POST /greet and /greet/{id}, and the
-# stateful header carrier route POST /signed-greet)
-# against the Flare release
-# pinned in pixi.toml's `flare` environment, and checks that the default
-# environment (which builds src/muntin) cannot see Flare. Exits nonzero on any
-# failure.
+# Flare checks: builds and runs compat/flare, the Flare adapter's contract
+# tests and its real localhost round trips (adapters/flare) against the Flare
+# release pinned in pixi.toml's `flare` environment, and checks that the
+# default environment (which builds src/muntin) cannot see Flare. Exits nonzero
+# on any failure.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -137,7 +125,7 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/roundtrip.log"; then
 fi
 echo "ok: no server process left behind"
 
-# M3-002 headers evidence (docs/ARCHITECTURE.md "Headers decision (M3-002)"):
+# M3-002 headers evidence (docs/history/architecture-decisions.md "Headers decision (M3-002)"):
 # a self-checking probe of what pinned Flare preserves in request and
 # response headers over loopback, and candidate D's fixture (a Flare
 # HeaderMap cannot be a field of Muntin's Copyable Request).
@@ -182,7 +170,7 @@ if ! grep -qF "$expected_d" "$tmp/log"; then
 fi
 echo "ok: $fixture_d"
 
-# M3-008 JSON evidence (docs/ARCHITECTURE.md "JSON codec decision (M3-008)"):
+# M3-008 JSON evidence (docs/history/architecture-decisions.md "JSON codec decision (M3-008)"):
 # the request and response fields and body bytes the JSON contract relies on,
 # over loopback through the adapter, with the decision spike's Json[T].
 step "Flare JSON loopback probe (M3-008)"

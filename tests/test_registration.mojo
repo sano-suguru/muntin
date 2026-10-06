@@ -7,13 +7,9 @@
 # 4, added by M3-015's amendment of M3-014: helpers generic over the result
 # (`where R == String`, `where R == StaticString`) or over a request parameter
 # (`def(var A)`, `def(State[S], var A)`, `def(var A, var B)`, a raw `Request`
-# slot) forward to `get` and `post`. On `main` the owned route value, the
-# `var` spelling and every edge-4 form were `no matching method` (the generic
-# raw slot on `post` a `Request` rule), and the typed `StaticString` value and
-# helper were `TODO: function type conversions between closures not supported
-# yet`. Decision: docs/ARCHITECTURE.md, "Registration structure decision
-# (M3-014)" and "Registration structure amendment: generic forwarding
-# (M3-015)".
+# slot) forward to `get` and `post`. Decision:
+# docs/history/architecture-decisions.md, "Registration structure decision
+# (M3-014)" and "Registration structure amendment: generic forwarding (M3-015)".
 
 from std.testing import assert_equal, TestSuite
 

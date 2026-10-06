@@ -4,7 +4,7 @@
 # `ToResponse` results. A request-side failure is 400 and a missing route
 # 404, both before the handler; anything the handler raises is a fixed 500
 # whose body never carries the error, and the result conversion runs only
-# after the handler returns. Decision: docs/ARCHITECTURE.md,
+# after the handler returns. Decision: docs/history/architecture-decisions.md,
 # "Application-error decision (M2-010)".
 
 from std.os import getenv, setenv, unsetenv
@@ -96,7 +96,7 @@ struct Name(FromBody):
         return Self(body)
 
 
-# Non-raising handlers, unchanged since M2-009.
+# Non-raising handlers.
 
 
 def hello() -> String:

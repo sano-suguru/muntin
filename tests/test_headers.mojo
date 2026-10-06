@@ -1,7 +1,7 @@
 # Headers in production (M3-005): `muntin.Headers`, `Request.headers` and
 # `Response.headers`, and raw handlers reading and writing fields through
-# `App.handle`. Decision: docs/ARCHITECTURE.md, "Headers decision (M3-002)".
-# Must-not-compile counterparts: tests/headers_api_fail.
+# `App.handle`. Decision: docs/history/architecture-decisions.md, "Headers
+# decision (M3-002)". Must-not-compile counterparts: tests/headers_api_fail.
 
 from std.testing import assert_equal, assert_false, assert_raises
 from std.testing import assert_true, TestSuite

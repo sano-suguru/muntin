@@ -1,9 +1,9 @@
-# M3-001 scoped-registrar spike (candidate A2), application side. State
-# types and handlers live here; the library side
-# (tests/scoped_state_spike.mojo) never names them. Handlers are written
-# exactly as for candidate A1: `State[S]` first, then one M2 shape. Only the
-# registration differs. Decision and evidence: docs/ARCHITECTURE.md,
-# "Application state decision (M3-001)".
+# M3-001 scoped-registrar spike (candidate A2), application side. State types
+# and handlers live here; the library side (tests/scoped_state_spike.mojo) never
+# names them. Handlers are written exactly as for candidate A1: `State[S]`
+# first, then one M2 shape. Only the registration differs. Decision and
+# evidence: docs/history/architecture-decisions.md, "Application state decision
+# (M3-001)".
 
 from std.memory import ArcPointer
 from std.testing import assert_equal, TestSuite

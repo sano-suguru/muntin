@@ -1,6 +1,6 @@
-# Raw `Request -> Response` handlers in production (M2-015): the M2-014
-# decision (docs/ARCHITECTURE.md, "Raw Request decision (M2-014)") on the
-# production `App` and `TestClient`. Handlers and their error types live
+# Raw `Request -> Response` handlers in production (M2-015): the M2-014 decision
+# (docs/history/architecture-decisions.md, "Raw Request decision (M2-014)") on
+# the production `App` and `TestClient`. Handlers and their error types live
 # here, in the application module.
 
 from std.os import getenv, setenv, unsetenv

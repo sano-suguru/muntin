@@ -2,10 +2,10 @@
 # production code, and not a supported Muntin API: production App still
 # accepts exactly def() -> String and def(Int) -> String.
 #
-# `CreateUser` is defined here, as an application's request body would be;
-# the conversion machinery lives in tests/extraction_spike.mojo, which does
-# not import this module. Decision: docs/ARCHITECTURE.md, "Argument
-# extraction decision".
+# `CreateUser` is defined here, as an application's request body would be; the
+# conversion machinery lives in tests/extraction_spike.mojo, which does not
+# import this module. Decision: docs/history/architecture-decisions.md,
+# "Argument extraction decision".
 
 from std.testing import assert_equal, TestSuite
 

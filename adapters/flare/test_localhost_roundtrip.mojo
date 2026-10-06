@@ -756,7 +756,7 @@ def test_headers_over_localhost_match_app_handle() raises:
     try:
         var client = _client()
         var app = headers_app()
-        # Existing responses: only Flare's own fields, as before M3-005.
+        # Existing responses: only Flare's own fields.
         var hello_resp = client.get(base + "/hello")
         assert_equal(hello_resp.text(), "hello")
         assert_equal(hello_resp.headers.len(), 3)

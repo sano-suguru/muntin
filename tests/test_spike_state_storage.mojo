@@ -1,6 +1,6 @@
-# M3-004 state-storage decision spike, application side. State types live
-# here; the library side (tests/state_storage_spike.mojo) never names them.
-# Decision and evidence: docs/ARCHITECTURE.md, "State storage decision
+# M3-004 state-storage decision spike, application side. State types live here;
+# the library side (tests/state_storage_spike.mojo) never names them. Decision
+# and evidence: docs/history/architecture-decisions.md, "State storage decision
 # (M3-004)".
 
 from std.memory import ArcPointer

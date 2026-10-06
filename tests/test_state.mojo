@@ -1,8 +1,8 @@
 # Stateful GET handlers in production (M3-003): `muntin.State[S]` and the
 # `App.get` registrations taking `(handler, state)`, driven through
-# `TestClient`. Decision: docs/ARCHITECTURE.md, "Application state decision
-# (M3-001)". Must-not-compile counterparts: tests/state_get_fail and
-# tests/compile_fail/state_*.
+# `TestClient`. Decision: docs/history/architecture-decisions.md, "Application
+# state decision (M3-001)". Must-not-compile counterparts: tests/state_get_fail
+# and tests/compile_fail/state_*.
 
 from std.memory import ArcPointer
 from std.testing import assert_equal, assert_false, assert_true, TestSuite

@@ -1,18 +1,18 @@
-# M3-001 scoped-registrar spike (candidate A2, measured and rejected on
-# Mojo 1.1.0: writes through the registrar's stored `Pointer` escape
-# interior-reference invalidation), library side. Not production code. Candidate A1 (tests/state_spike.mojo) adds the stateful
-# overloads to `App` itself, `app.get[route](handler, state)`; this models
-# A2, `app.with_state(state).get[route](handler)`, where they live on a
-# separate registrar type and `App` gains only `with_state`. It reuses A1's
-# `State`, `_Bound`, stateful adapters and route type, and A1's local
-# copies of production's typed adapters and response policies as of M3-014,
-# imports production's route checks, matching and `_Erased` unchanged, and
-# copies
+# M3-001 scoped-registrar spike (candidate A2, measured and rejected on Mojo
+# 1.1.0: writes through the registrar's stored `Pointer` escape
+# interior-reference invalidation), library side. Not production code. Candidate
+# A1 (tests/state_spike.mojo) adds the stateful overloads to `App` itself,
+# `app.get[route](handler, state)`; this models A2,
+# `app.with_state(state).get[route](handler)`, where they live on a separate
+# registrar type and `App` gains only `with_state`. It reuses A1's `State`,
+# `_Bound`, stateful adapters and route type, and A1's local copies of
+# production's typed adapters and response policies as of M3-014, imports
+# production's route checks, matching and `_Erased` unchanged, and copies
 # production's ten overloads as of M3-001 (signatures and asserts; the four body
-# overloads gain the `State` guard, worded for A2) so `App`'s overload set
-# and diagnostics are measured as production would have them. The
-# application side is tests/test_spike_scoped_state.mojo; the decision is
-# docs/ARCHITECTURE.md, "Application state decision (M3-001)".
+# overloads gain the `State` guard, worded for A2) so `App`'s overload set and
+# diagnostics are measured as production would have them. The application side
+# is tests/test_spike_scoped_state.mojo; the decision is
+# docs/history/architecture-decisions.md, "Application state decision (M3-001)".
 #
 #   ScopedApp      production `App` plus `with_state(state)`, which returns
 #                  a registrar borrowing the app mutably (a safe

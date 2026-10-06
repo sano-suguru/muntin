@@ -1,12 +1,12 @@
-# Must not compile, and pins that Mojo 1.1.0's ten-note budget is per
-# method name: a failing call to `put`, whose ten overloads sit beside ten
-# `get` overloads, still prints the note of `put`'s tenth candidate
-# ('UInt16'). So a new HTTP method is its own overload set and fits the
-# budget without restructuring, and the selected design's per-method sets
-# are measured separately (docs/ARCHITECTURE.md, "Registration structure
+# Must not compile, and pins that Mojo 1.1.0's ten-note budget is per method
+# name: a failing call to `put`, whose ten overloads sit beside ten `get`
+# overloads, still prints the note of `put`'s tenth candidate ('UInt16'). So a
+# new HTTP method is its own overload set and fits the budget without
+# restructuring, and the selected design's per-method sets are measured
+# separately (docs/history/architecture-decisions.md, "Registration structure
 # decision (M3-014)"). `get`'s overloads take a second parameter so that
-# renaming every `put` to `get` yields twenty distinct overloads in one
-# set: that note is then omitted (`(10 more notes omitted.)`).
+# renaming every `put` to `get` yields twenty distinct overloads in one set:
+# that note is then omitted (`(10 more notes omitted.)`).
 # Expected diagnostic (checked by scripts/check.sh): cannot be converted from 'Other' to 'UInt16'
 
 

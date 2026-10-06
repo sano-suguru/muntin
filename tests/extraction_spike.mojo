@@ -1,13 +1,12 @@
-# M2-005 argument-extraction decision spike, library side. Not production
-# code: it models what Muntin's library could contain, separately from the
-# application module (tests/test_spike_extraction.mojo) that defines the body
-# type, so `CreateUser` crosses a module boundary as it would in a real
-# application and this module never names it. Handlers are stored in the
-# production `_Erased` box, unchanged; route matching and `Int` conversion
-# are production's own helpers. check.sh builds it through that test
-# (--Werror) and test.sh runs it. Decision and evidence: docs/ARCHITECTURE.md,
-# "Argument extraction decision". Must-not-compile evidence:
-# tests/extraction_fail.
+# M2-005 argument-extraction decision spike, library side. Not production code:
+# it models what Muntin's library could contain, separately from the application
+# module (tests/test_spike_extraction.mojo) that defines the body type, so
+# `CreateUser` crosses a module boundary as it would in a real application and
+# this module never names it. Handlers are stored in the production `_Erased`
+# box, unchanged; route matching and `Int` conversion are production's own
+# helpers. check.sh builds it through that test (--Werror) and test.sh runs it.
+# Decision and evidence: docs/history/architecture-decisions.md, "Argument
+# extraction decision". Must-not-compile evidence: tests/extraction_fail.
 #
 # Two separate questions, two separate places in this file:
 #

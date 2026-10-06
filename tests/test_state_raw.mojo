@@ -1,10 +1,10 @@
 # Stateful raw handlers in production (M3-007): the `App.get` and `App.post`
 # overloads taking `(handler, state)` for `def(State[S], var Request) ->
 # Response`, driven through `App.handle` and `TestClient`. Decision:
-# docs/ARCHITECTURE.md, "Application state decision (M3-001)"; raw request
-# semantics: "Raw Request handlers in production (M2-015)" and "Headers in
-# production (M3-005)". Must-not-compile counterparts: tests/state_raw_fail
-# and tests/compile_fail/state_raw_*.
+# docs/history/architecture-decisions.md, "Application state decision (M3-001)";
+# raw request semantics: "Raw Request handlers in production (M2-015)" and
+# "Headers in production (M3-005)". Must-not-compile counterparts:
+# tests/state_raw_fail and tests/compile_fail/state_raw_*.
 
 from std.memory import ArcPointer
 from std.os import getenv, setenv, unsetenv

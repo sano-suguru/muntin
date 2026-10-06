@@ -1,8 +1,8 @@
 # Must not compile: on the M3-016 spike, the `Headers` rule runs after the
-# `State`, `Request`, body and no-kind rules, so a body beside a `Headers`
-# slot keeps production's `get` body message (as it does on production,
-# where `Headers` is no slot kind). Decision: docs/ARCHITECTURE.md, "Typed
-# get header access decision (M3-016)".
+# `State`, `Request`, body and no-kind rules, so a body beside a `Headers` slot
+# keeps production's `get` body message (as it does on production, where
+# `Headers` is no slot kind). Decision: docs/history/architecture-decisions.md,
+# "Typed get header access decision (M3-016)".
 # Expected diagnostic (checked by scripts/check.sh): constraint failed: a get handler takes no request body
 from muntin import App, FromBody, Headers
 

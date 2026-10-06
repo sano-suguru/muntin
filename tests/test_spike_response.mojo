@@ -1,7 +1,7 @@
 # M2-007 typed-response decision spike, application side. The return types
 # live here, in the application module; the library side
 # (tests/response_spike.mojo) never names them. Decision and evidence:
-# docs/ARCHITECTURE.md, "Typed response decision (M2-007)".
+# docs/history/architecture-decisions.md, "Typed response decision (M2-007)".
 
 from std.os import getenv, setenv, unsetenv
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
