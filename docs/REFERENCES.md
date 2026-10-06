@@ -13,7 +13,7 @@ Upstream sources behind assumptions that may change. Re-check them when toolchai
 ## URLs
 
 - Percent-encoding (RFC 3986, section 2.1): https://www.rfc-editor.org/rfc/rfc3986#section-2.1
-- `application/x-www-form-urlencoded` parsing (`+` as a space), WHATWG URL Standard: https://url.spec.whatwg.org/#concept-urlencoded-parser
+- WHATWG URL Standard, `application/x-www-form-urlencoded` parser (Muntin takes only its `+` rule; M3-018 lists the differences): https://url.spec.whatwg.org/#concept-urlencoded-parser
 
 ## Flare
 
