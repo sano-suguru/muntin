@@ -59,7 +59,7 @@ Each M3 area is cut decision-first: a decision item picks the design with pinned
 | request header fields from `TestClient` (`headers=`) | shipped |
 | request header fields in typed `post` handlers (`WithHeaders[B]`) | shipped |
 | registration on generic-arity slots (one `get`/`post` overload per request-slot arity) | shipped |
-| request header fields in typed `get` handlers (a `Headers` parameter, last) | decided; production is M3-017 |
+| request header fields in typed `get` handlers (a `Headers` parameter, last) | shipped |
 
 ### Remaining candidates
 

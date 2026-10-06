@@ -122,6 +122,15 @@ HTTP/1.1 the fields reach the handler, a missing credential is the
 handler's 401 (`Unsigned`), and a missing `Content-Type` is 415 before the
 handler, with 200 when it is sent; each status and body equals
 `App.handle` with the test's fields. The adapter is unchanged.
+
+M3-017 registers the stateful typed `GET /signed/{id}` ->
+`signed_note(gate: State[Gate], id: Int, headers: Headers) raises Unsigned
+-> String` on `headers_app()`. The handler reads the credential and echoes
+the route value and the repeated `X-A`/`x-a` fields, in order and with their
+casing. Over HTTP/1.1 the fields reach the handler (200), a missing
+credential is the handler's 401 (`Unsigned`), and an invalid route value is
+400 before the fields are rebuilt; each status and body equals `App.handle`
+with the test's fields. The adapter is unchanged.
 """
 
 from std.ffi import c_uint, external_call
@@ -412,6 +421,7 @@ def headers_app() -> App:
     var signer = State(Signer("sha256=k"))
     app.get["/keyed"](keyed, signer)
     app.post["/keyed"](keyed, signer)
+    app.get["/signed/{id}"](signed_note, State(Gate("t0k")))
     return app^
 
 
@@ -1088,6 +1098,20 @@ def signed_greet(
     return Json(Greeting(input.body.value.name + seen))
 
 
+def signed_note(
+    gate: State[Gate], id: Int, headers: Headers
+) raises Unsigned -> String:
+    """A stateful typed `get` handler with a `Headers` slot (M3-017)."""
+    var token = headers.get("authorization")
+    if not token or token.value() != gate[].token:
+        raise Unsigned("no credential")
+    var seen = String("note ", id)
+    for i in range(len(headers)):
+        if headers.name(i).lower() == "x-a":
+            seen += " " + headers.name(i) + "=" + headers.value(i)
+    return seen
+
+
 def json_app() -> App:
     var app = App()
     app.post["/greet"](greet)
@@ -1204,6 +1228,44 @@ def test_with_headers_over_localhost_matches_app_handle() raises:
             if c[2] == 200:
                 # The fields in order, with their casing, over the wire.
                 assert_equal(resp.text(), '{"hello":"Ada X-A=1 x-a=2"}')
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+def test_get_headers_over_localhost_match_app_handle() raises:
+    var child = _serve_in_child(headers_app())
+    var base = String("http://127.0.0.1:", child.port)
+    try:
+        var client = _client()
+        var app = headers_app()
+        # (path, credential, status): 200 with the credential, the handler's
+        # 401 without it, the route value's 400 before the fields.
+        var cases = [
+            (String("/signed/7"), String("t0k"), 200),
+            (String("/signed/7"), String(""), 401),
+            (String("/signed/x"), String("t0k"), 400),
+        ]
+        for c in cases:
+            var req = FlareRequest("GET", base + c[0], List[UInt8]())
+            var mh = Headers()
+            req.headers.append("X-A", "1")
+            mh.add("X-A", "1")
+            if c[1].byte_length() > 0:
+                req.headers.append("Authorization", c[1])
+                mh.add("Authorization", c[1])
+            req.headers.append("x-a", "2")
+            mh.add("x-a", "2")
+            var resp = client.send(req)
+            var local = app.handle(Request("GET", c[0], "", mh^))
+            var label = c[0] + " " + c[1]
+            print("observed: GET", label, resp.status, repr(resp.text()))
+            assert_equal(resp.status, c[2], label)
+            assert_equal(resp.status, local.status, label)
+            assert_equal(resp.text(), local.body, label)
+            if c[2] == 200:
+                # The fields in order, with their casing, over the wire.
+                assert_equal(resp.text(), "note 7 X-A=1 x-a=2")
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)

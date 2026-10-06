@@ -22,7 +22,7 @@ from .state import State, _InjectedState
 # generic `var A` (a plain `def` with a borrowed parameter converts to it too),
 # and its kind is decided at compile time from its type alone (`_kind`): an
 # `Int` route value, a body (`FromBody`, or a `WithHeaders` carrier, below), the
-# raw `Request`, a misplaced `State`, or none.
+# raw `Request`, the request `Headers` (below), a misplaced `State`, or none.
 #
 # Mojo 1.1.0 function types spelled without `thin` are traits and cannot be
 # stored, so the overloads take thin function values; ordinary `def`
@@ -59,12 +59,13 @@ from .state import State, _InjectedState
 # converts its slots in order (`_slot`), so a route value is converted
 # before the body; calls the handler alone in a `try`, whose error becomes
 # `_handler_error`; then applies `_respond`. A slot's raw argument index is
-# its position, because the only route value comes before the body.
+# its position, because the only route value comes before the body or the
+# `Headers` slot.
 # `comptime if A == Int` does not refine `A` on Mojo 1.1.0, so a parsed
-# `Int`, a rebuilt `Request` and a text result reach their generic type
-# through the one rebind helper `_as`, which asserts type equality first
-# (the rebind alone accepts a different type of the same layout:
-# tests/registration_known_gaps/rebind_var_layout_twins.mojo), and the
+# `Int`, a rebuilt `Request` or `Headers` and a text result reach their
+# generic type through the one rebind helper `_as`, which asserts type
+# equality first (the rebind alone accepts a different type of the same
+# layout: tests/registration_known_gaps/rebind_var_layout_twins.mojo), and the
 # confinement step of `scripts/check.sh` fails on any other `rebind_var`.
 # The handler and its adapter are stored together in an `_Erased` box
 # (`_handler_storage.mojo`), so dispatch is one call whatever the shape.
@@ -80,7 +81,8 @@ from .state import State, _InjectedState
 # its first four raw arguments, then each header field's name and value (M3-002,
 # R1), and nothing else runs; `_raw_request` rebuilds the `Request`, headers
 # included, and the adapter moves it into the handler. A typed route gets header
-# strings only when its body is a `WithHeaders[B]` carrier (below).
+# strings only when its body is a `WithHeaders[B]` carrier or its last slot is
+# `Headers` (below).
 #
 # Stateful handlers (M3-001): a registration with a second argument, `(handler,
 # state: State[S])`, takes a handler whose first parameter is `State[S]` and
@@ -117,7 +119,7 @@ from .state import State, _InjectedState
 # Header carriers (M3-012): `WithHeaders[B]` (`headers_body.mojo`) is a body
 # slot without being a `FromBody`: `_kind` accepts `FromBody` or the private
 # marker `_HeaderCarrier`, and the route sets `_Route.headers` for a carrier.
-# For such a route only, `App.handle` appends each request header field's name
+# For such a route, `App.handle` appends each request header field's name
 # and value after the body and the JSON verdict (the R1 transport raw routes
 # use). The body slot then rebuilds the fields into a `Headers`
 # (`_carrier_fields`; a failure, which only the M3-002 `_fields` gap can cause,
@@ -129,6 +131,16 @@ from .state import State, _InjectedState
 # no status for the fields the handler reads and gives them no meaning; the
 # `Content-Type` verdict for a `Json[T]` body (415) and the rebuild failure
 # (500) still answer before the handler.
+#
+# Header slots (M3-016): on `get`, `Headers` is a slot kind by exact type
+# equality (no trait, so no application type is one), accepted once, as the
+# last slot, after at most one `Int` route value. The route sets
+# `_Route.headers`, so `App.handle` appends each field's name and value after
+# the route value, and the slot rebuilds them into a fresh `Headers`
+# (`_header_slot`; a failure, again only the `_fields` gap, is the fixed 500)
+# that the handler owns or borrows. `post` takes no `Headers` slot: its fields
+# come through the carrier, and `_post_rule` reports a `Headers` slot as it
+# reports a type of no kind.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -317,6 +329,7 @@ comptime _BODY = 2
 comptime _RAW = 3
 comptime _STATE = 4
 comptime _OTHER = 5
+comptime _HEADERS = 6
 
 
 def _kind[A: AnyType]() -> Int:
@@ -329,6 +342,8 @@ def _kind[A: AnyType]() -> Int:
         return _INT
     elif A == Request:
         return _RAW
+    elif A == Headers:
+        return _HEADERS
     elif conforms_to(A, _InjectedState):
         return _STATE
     elif conforms_to(A, FromBody) or conforms_to(A, _HeaderCarrier):
@@ -363,6 +378,7 @@ comptime _POST_RAW = 21
 comptime _POST_STATE_RAW = 22
 comptime _POST_BODY_LAST = 23
 comptime _POST_SLOT_KIND = 24
+comptime _GET_HEADERS_LAST = 25
 
 
 def _takes_none(paths: Int, queries: Int) -> Int:
@@ -378,9 +394,11 @@ def _get_rule(
     stateful: Bool, k1: Int, k2: Int, response: Bool, paths: Int, queries: Int
 ) -> Int:
     """`get`'s rules for slot kinds `k1`, `k2` (`_ABSENT` when missing):
-    `def()`, `def(Int)` with exactly one placeholder, or the raw
+    `def()` or `def(Headers)` with no placeholder, `def(Int)` or
+    `def(Int, Headers)` with exactly one, or the raw
     `def(Request) -> Response` with none. A `State` slot comes first, then
-    a `Request` anywhere, a body, a parameter of no kind, two route values."""
+    a `Request` anywhere, a body, a parameter of no kind, a misplaced
+    `Headers`, two route values."""
     if k1 == _STATE or k2 == _STATE:
         return _ONE_STATE if stateful else _GET_STATE_ARGUMENT
     if k1 == _RAW or k2 == _RAW:
@@ -391,6 +409,12 @@ def _get_rule(
         return _GET_BODY
     if k1 == _OTHER or k2 == _OTHER:
         return _GET_SLOT_KIND
+    if k1 == _HEADERS:
+        if k2 != _ABSENT:
+            return _GET_HEADERS_LAST
+        return _takes_none(paths, queries)
+    if k2 == _HEADERS:
+        return _OK if paths + queries == 1 else _GET_INT_PLACES
     if k2 == _INT:
         return _GET_TWO_VALUES
     if k1 == _INT:
@@ -426,7 +450,7 @@ def _post_rule(
             return _ONE_STATE if stateful else _POST_STATE_ARGUMENT
         if k1 == _BODY:
             return _POST_BODY_LAST
-        if k1 == _OTHER:
+        if k1 == _OTHER or k1 == _HEADERS:
             return _POST_SLOT_KIND
         if paths + queries != 1:
             return _POST_INT_BODY_PLACES
@@ -514,8 +538,8 @@ def _check[
     )
     comptime assert rule != _GET_BODY, "a get handler takes no request body"
     comptime assert rule != _GET_SLOT_KIND, (
-        "a get handler's parameter is an Int route value or, for a raw"
-        " handler, the Request"
+        "a get handler's parameter is an Int route value, the request"
+        " Headers or, for a raw handler, the Request"
     )
     comptime assert (
         rule != _GET_TWO_VALUES
@@ -572,6 +596,9 @@ def _check[
     comptime assert (
         rule != _POST_SLOT_KIND
     ), "a post handler's parameter before the body is an Int route value"
+    comptime assert (
+        rule != _GET_HEADERS_LAST
+    ), "a get handler takes one Headers, as its last parameter"
     comptime assert rule == _OK, "internal: a registration rule has no message"
 
 
@@ -649,6 +676,19 @@ def _raw_request(args: List[String]) raises -> Request:
     return Request(args[0], target, args[3], headers^)
 
 
+def _header_slot(args: List[String], at: Int) raises -> Headers:
+    """Rebuilds a `Headers` slot's fields from the name and value pairs
+    from `args[at]` on, in order (only a route value precedes them).
+    `Headers.add` validates each field again, so only the M3-002 `_fields`
+    gap can make this raise, and `_slot` answers that with the fixed 500."""
+    var headers = Headers()
+    var i = at
+    while i + 1 < len(args):
+        headers.add(args[i], args[i + 1])
+        i += 2
+    return headers^
+
+
 def _as[T: Movable, A: Movable](var value: T) -> A:
     """`value` as `A`, which must equal `T`: the one `rebind_var` in
     `src/muntin`.
@@ -659,10 +699,11 @@ def _as[T: Movable, A: Movable](var value: T) -> A:
     alone also accepts a different type with the same layout
     (tests/registration_known_gaps/rebind_var_layout_twins.mojo). The
     equality asserted here is exact for origin-free types (`Int`,
-    `String`, `Request`); generic `==` ignores which origin a slice has, so
-    for a `StaticString` result exactness comes from the overloads' `where`
-    clause. The confinement step of `scripts/check.sh` requires the
-    `rebind_var` on the line after this assert and nowhere else."""
+    `String`, `Request`, `Headers`); generic `==` ignores which origin a
+    slice has, so for a `StaticString` result exactness comes from the
+    overloads' `where` clause. The confinement step of `scripts/check.sh`
+    requires the `rebind_var` on the line after this assert and nowhere
+    else."""
     comptime assert A == T, "rebind requires generic type equality"
     return rebind_var[A](value^)
 
@@ -690,7 +731,9 @@ def _slot[
     """Converts the request slot of type `A` whose raw argument is
     `args[at]`. An `Int` route value is parsed (`_parse_int`; 400 if
     invalid). A raw `Request` is rebuilt from all the arguments
-    (`_raw_request`; a failure is the fixed 500). A body is converted with
+    (`_raw_request`; a failure is the fixed 500). A `Headers` slot is
+    rebuilt from the field pairs from `args[at]` on (`_header_slot`; a
+    failure is the fixed 500). A body is converted with
     `A.from_body` (400 if it raises); for a JSON body (`_JsonBody`) the 415
     and 413 steps run first (`_json_status`); a `WithHeaders` carrier has
     its header fields rebuilt (the fixed 500 on failure) and is built
@@ -710,6 +753,11 @@ def _slot[
             return _as[Request, A](_raw_request(args))
         except:
             raise _Reject(500)
+    elif A == Headers:
+        try:
+            return _as[Headers, A](_header_slot(args, at))
+        except:
+            raise _Reject(500)  # only the `_fields` gap gets here
     else:
         comptime assert conforms_to(A, FromBody) or conforms_to(
             A, _HeaderCarrier
@@ -893,14 +941,15 @@ def _route[
 ](method: String, path: StaticString, var handler: _Erased) -> _Route:
     """The route for a handler whose last request slot has type `Last`
     (`_NoSlot` for none): a body route, JSON or carrier when `Last` is such
-    a body, raw when it is the `Request`."""
+    a body, raw when it is the `Request`, and a route that receives the
+    header fields for a carrier or a `Headers` slot."""
     return _Route(
         method,
         path,
         handler^,
         body=_kind[Last]() == _BODY,
         json=conforms_to(Last, _JsonBody),
-        headers=conforms_to(Last, _HeaderCarrier),
+        headers=conforms_to(Last, _HeaderCarrier) or _kind[Last]() == _HEADERS,
         raw=_kind[Last]() == _RAW,
     )
 
@@ -919,10 +968,12 @@ struct _Route(Movable):
     appends the request's `Content-Type` verdict after the body, and the
     adapter answers 415 and 413 before `from_body` (M3-009)."""
     var headers: Bool
-    """Whether that body is a `WithHeaders[B]` carrier (`_HeaderCarrier`):
-    `App.handle` then appends each request header field's name and value
-    after the body and any verdict, and the adapter rebuilds the fields
-    into the carrier (M3-013)."""
+    """Whether the handler receives the request's header fields: its body
+    is a `WithHeaders[B]` carrier (`_HeaderCarrier`, M3-013) or its last
+    slot is `Headers` (M3-016). `App.handle` then appends each field's name
+    and value after the body and any verdict, or, on a `Headers` route,
+    after its route value if it has one, and the adapter rebuilds the
+    fields into the carrier or the `Headers` slot."""
     var raw: Bool
     """Whether the handler receives the whole request (a `Request`
     slot): its raw arguments are the request's method, path, query and
@@ -1010,7 +1061,12 @@ struct App(Movable):
         item (`/items?{limit}`), whose value is converted to `Int` and
         passed by position (names are not checked against the handler); a
         missing, duplicated or non-integer value yields 400 without calling
-        `handler`. A `Request` parameter makes a raw handler, which returns
+        `handler`. A `Headers` parameter receives the request's header
+        fields (`path` declares no parameter): a fresh `Headers` with every
+        field in order, rebuilt from the request's; Muntin chooses no status
+        for a field, and only a field held invalidly in memory (the M3-002
+        `_fields` gap) is answered before `handler`, with the fixed 500. A
+        `Request` parameter makes a raw handler, which returns
         `Response`: `path` declares no parameter, the handler receives the
         whole request (method, path, query, body and header fields as
         received), Muntin runs no typed extraction, so it answers no 400
@@ -1040,9 +1096,13 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """The two-parameter `get` shape. No such handler is accepted
-        today (a `get` handler takes at most one `Int` route value and no
-        request body); a registration reports the rule it breaks."""
+        """Registers `handler` for `GET path` with an `Int` route value and
+        then the request's `Headers`, where `path` declares exactly one
+        route value, as for `get` on `def(var A)`. The route value is
+        converted first, so an invalid one is 400 before the fields are
+        rebuilt. Every other two-parameter shape is rejected (a `get`
+        handler takes at most one `Int` route value, no request body, and
+        one `Headers`, last); a registration reports the rule it breaks."""
         _check["GET", False, path, R, A, B]()
         comptime if _admits["GET", False, path, R, A, B]():
             self._routes.append(
@@ -1095,8 +1155,9 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
-        `def(var A)` after the state: an `Int` route value, or the raw
-        `Request` returning `Response`. The state is passed as for `get` on
+        `def(var A)` after the state: an `Int` route value, the request's
+        `Headers`, or the raw `Request` returning `Response`. The state is
+        passed as for `get` on
         `def(State[S])`; a leading `State[S]` keeps its spelling in a typed
         function value."""
         _check["GET", True, path, R, A, _NoSlot]()
@@ -1126,8 +1187,10 @@ struct App(Movable):
         handler: def(State[S], var A, var B) thin raises E -> R,
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
-        """The stateful two-parameter `get` shape. No such handler is
-        accepted today; a registration reports the rule it breaks."""
+        """Registers the stateful `handler` for `GET path`, as `get` on
+        `def(var A, var B)` after the state: an `Int` route value, then the
+        request's `Headers`. The state is passed as for `get` on
+        `def(State[S])`."""
         _check["GET", True, path, R, A, B]()
         comptime if _admits["GET", True, path, R, A, B]():
             self._routes.append(
@@ -1332,14 +1395,16 @@ struct App(Movable):
         runs (no query gathering, no conversion); the adapter's `Request`
         slot rebuilds the `Request` (`_raw_request`). A typed
         route receives no headers unless its body is a `WithHeaders[B]`
-        carrier (`_Route.headers`). A body route receives
+        carrier or its last slot is `Headers` (`_Route.headers`). A body
+        route receives
         `request.body` as its last raw argument, after its route value if it
         has one; its adapter's body slot (`_slot`) converts it and answers
         400 itself if that fails. A JSON body route (`_Route.json`) also
         receives the request's `Content-Type` verdict after the body, for
         the body slot's 415 step. A carrier route then
         receives each header field's name and value, in order, after the
-        body and any verdict.
+        body and any verdict; a `Headers` route, after its route value if
+        it has one.
 
         No matching route is 404. A missing or duplicated query value is 400
         here; the adapter answers its own 400s and turns a handler error
