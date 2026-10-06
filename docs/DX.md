@@ -196,15 +196,90 @@ Semantics:
 - Order: no matching method and path is 404 with nothing converted. Otherwise the route value is gathered, decoded and converted first: an invalid path value, or a missing, duplicated, empty or invalid query value, is 400 and `from_body` is not called (a missing path segment does not match the path, so it is 404). Then the body: a `from_body` raise is 400 and the handler is not called. Then the handler runs once, and its result is converted once: `String` (or `String`-compatible, such as `StaticString`) to a 200 text response, `R: ToResponse` (an application type or `Response`) by `to_response()`. A matched route that answers 400 never falls through to a later route.
 - Compile-time errors at `app.post`, on both result policies: no route value, two path values, or a path and a query value (`constraint failed: handler takes one Int parameter and the request body; route must declare exactly one path or query parameter`, or `... one String parameter and ...` for a `String`); `(Int, Int)` (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a second parameter that does not conform (`constraint failed: the handler's last parameter is the request body; its type must conform to FromBody`). The body before the route value `(B, Int)` is `constraint failed: a post handler takes one request body, as its last parameter`. Three parameters, such as two bodies after the route value, match no overload (`no matching method in call to 'post'`, with a note per candidate such as `cannot be converted from '<handler type>' to 'def(var A, var B) raises Never thin -> String'`), and so does a result that is neither `String`, `StaticString` nor `ToResponse` (the candidate's note is `violated constraint`, then the `where` clause, which contains `identical(R, StringSpan[ImmStaticOrigin])`).
 
-Current argument shapes are exactly `def()`, `def(V)`, `def(Headers)` and `def(V, Headers)` for `app.get` (section 9), and `def(B)` and `def(V, B)` with `B: FromBody` (or a `WithHeaders[B]` around one, section 4) for `app.post`, where `V` is an `Int` or `String` route value, plus, on both, the raw `def(req: Request) -> Response` (section 9). Each may be non-raising or declare `raises` or `raises T` (section 6), and returns `String`, `StaticString` (or a string literal) or a type conforming to `ToResponse`, including `Response` (section 5). With a state as the registration's second argument, each shape also takes a leading `State[S]` (section 8). `Json[T]` (sections 4 and 5) is a body or a result type on these shapes, not a new shape.
+PUT, PATCH and DELETE, proven by `tests/test_methods.mojo` (which runs this example as written), `tests/methods_api_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. `app.put` and `app.patch` take exactly `app.post`'s shapes, `app.delete` exactly `app.get`'s:
 
-Registration rules, proven by `tests/test_registration.mojo`, `tests/registration_api_fail/` and every test and fixture above. `app.get` and `app.post` each have one overload per number of request parameters (0, 1 or 2), stateless and stateful; the kind of each parameter (`Int` or `String` route value, body, `Request`, `Headers`) is decided from its type, and the result type through a `where` clause on each overload.
+```mojo
+from muntin import App, FromJson, Headers, Json, JsonValue, Request, Response, State
+
+
+@fieldwise_init
+struct Rename(FromJson):
+    var name: String
+
+    @staticmethod
+    def from_json(value: JsonValue) raises -> Self:
+        return Self(value["name"].string())
+
+
+@fieldwise_init
+struct Directory(Movable):
+    var domain: String
+
+
+def replace_user(id: Int, body: UserForm) -> String:  # `post`'s shapes; UserForm as CreateUser above
+    return String("replaced ", id, " ", body.name)
+
+
+def rename_user(
+    users: State[Directory], id: Int, body: Json[Rename]
+) -> Json[User]:                                          # User as in section 4
+    return Json(User(id, body.value.name + "@" + users[].domain))
+
+
+def remove_user(id: Int, headers: Headers) raises Unauthorized -> String:
+    if not headers.get("authorization"):  # `get`'s shapes; Unauthorized as in section 9
+        raise Unauthorized()
+    return String("removed ", id)
+
+
+def purge(req: Request) -> Response:  # raw: reads a DELETE body
+    return Response.text("purged " + req.path + " [" + req.body + "]")
+
+
+var app = App()                       # its own App: the ones above register POST /users/{id}
+app.put["/users/{id}"](replace_user)
+app.patch["/users/{id}"](rename_user, State(Directory("example.com")))
+app.delete["/users/{id}"](remove_user)
+app.delete["/cache"](purge)
+# PUT /users/7  "name=Ada"                  -> 200 "replaced 7 Ada"
+# PUT /users/7  "Ada" or ""                 -> 400 "Bad Request"  (from_body raised; replace_user not called)
+# PATCH /users/7  Content-Type: application/json  {"name":"bo"}
+#   -> 200, Content-Type: application/json, {"id":7,"name":"bo@example.com"}
+# PATCH /users/7  (no Content-Type)         -> 415 "Unsupported Media Type"
+# DELETE /users/7  Authorization: t1        -> 200 "removed 7"
+# DELETE /users/7  (no Authorization)       -> 401 "Unauthorized"
+# DELETE /users/abc                         -> 400 "Bad Request"  (remove_user not called)
+# DELETE /cache  "all"                      -> 200 "purged /cache [all]"
+# POST /users/7, HEAD /users/7, OPTIONS /users/7, GET /cache, delete /users/7 -> 404 "Not Found"
+
+var client = TestClient(app)
+_ = client.put("/users/7", "name=Ada")
+var h = Headers()
+h.add("Content-Type", "application/json")
+_ = client.patch("/users/7", '{"name":"bo"}', headers=h^)
+_ = client.delete("/users/7")                       # 401: no field sent
+_ = app.handle(Request("DELETE", "/cache", "all"))  # a DELETE body: build the Request
+```
+
+Semantics:
+
+- Shape families: `put` and `patch` accept every shape `post` accepts and no other (a required body last: a `FromBody`, a `Json[T]` or a `WithHeaders[B]`; at most one `Int` or `String` route value before it; the raw handler; each after a leading `State[S]`). `delete` accepts every shape `get` accepts and no other (no body; at most one route value; a `Headers` parameter last; the raw handler; each after a leading `State[S]`). Route values, their decoding and 400s, the body steps (400, and 415 then 413 for `Json[T]`), result policies and errors are those of the family, in the same order. Everything this document says about `post`'s shapes holds for `put` and `patch`, and about `get`'s for `delete`.
+- A typed `put` or `patch` handler takes a body; one without a body is a compile error (`a put handler takes the request body as its last parameter`). A request with an empty body is not a bodyless handler: the body rules apply to `""` (415 first for a `Json[T]` body without its `Content-Type`, then 400 if `from_body("")` raises).
+- A typed `delete` handler takes no body: a body parameter is `constraint failed: a delete handler takes no request body`, and a body sent to a typed `delete` route is not read. A raw `delete` handler receives the whole request, `req.body` included.
+- Matching is unchanged: a route matches only a request whose method is its own (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`) byte for byte, routes are tried in registration order across methods, and the first whose method and path match handles the request and never falls through. A path that only routes of other methods match is 404, the same as no match: Muntin does not answer 405 or send `Allow`, which departs from RFC 9110's recommended 405 ([HTTP methods decision (M3-020)](history/architecture-decisions.md#http-methods-decision-m3-020)). `HEAD`, `OPTIONS` and every other method are 404.
+- Diagnostics name the method: each message that names `get` or `post` above names `delete`, `put` or `patch` on those methods (`a stateful raw delete handler takes State first, then only the Request, and returns Response`, `State is injected application state, not the request body; a stateful put handler takes State first and the body last, and the state is the registration's second argument`, `a patch handler takes one request body, as its last parameter`); messages that name no method are the same. A call no overload takes is `no matching method in call to 'put'` (or `'patch'`, `'delete'`), with that method's six candidate notes.
+- `TestClient.put(target, body)`, `.patch(target, body)` and `.delete(target)` send `PUT`, `PATCH` and `DELETE` through `App.handle` (section 10); `delete` sends an empty body.
+- Through Flare, a method with a lowercase letter (`delete`) is 400 from Flare before `App.handle`, which would answer 404 (`docs/ARCHITECTURE.md`, "Other current limits").
+
+Current argument shapes are exactly `def()`, `def(V)`, `def(Headers)` and `def(V, Headers)` for `app.get` (section 9), and `def(B)` and `def(V, B)` with `B: FromBody` (or a `WithHeaders[B]` around one, section 4) for `app.post`, where `V` is an `Int` or `String` route value, plus, on both, the raw `def(req: Request) -> Response` (section 9); `app.delete` takes `app.get`'s shapes and `app.put` and `app.patch` take `app.post`'s (above). Each may be non-raising or declare `raises` or `raises T` (section 6), and returns `String`, `StaticString` (or a string literal) or a type conforming to `ToResponse`, including `Response` (section 5). With a state as the registration's second argument, each shape also takes a leading `State[S]` (section 8). `Json[T]` (sections 4 and 5) is a body or a result type on these shapes, not a new shape.
+
+Registration rules, proven by `tests/test_registration.mojo`, `tests/registration_api_fail/` and every test and fixture above. `app.get`, `app.post`, `app.put`, `app.patch` and `app.delete` each have one overload per number of request parameters (0, 1 or 2), stateless and stateful; the kind of each parameter (`Int` or `String` route value, body, `Request`, `Headers`) is decided from its type, and the result type through a `where` clause on each overload.
 
 - An owned route value registers: `def get_user(var id: Int)` on `get`, `def update(var id: Int, body: Note)` on `post`.
 - A rejected shape that has an accepted parameter count reports the rule it breaks: `constraint failed: <rule>`, after `function instantiation failed` at the enclosing function and the registration call in the next note. Besides the messages above: `a get handler takes no request body`, `a get handler takes at most one Int route value`, `a get handler's parameter is an Int or String route value, the request Headers or, for a raw handler, the Request` (a `Float64` or `StaticString` parameter, for example), `a get handler takes one Headers, as its last parameter`, `a raw get handler takes only the Request and returns Response`, `a post handler takes the request body as its last parameter`, `a post handler takes one request body, as its last parameter`, `a raw post handler takes only the Request and returns Response`, and the stateful and `State` variants in section 8.
-- A call that no overload takes gets `no matching method in call to 'get'` (or `'post'`) with one note per candidate, six candidates per method: more parameters than two (after a leading `State`), a `State` parameter that is `var`, `mut`, a plain value or not first, and a result that is not `String`, `StaticString` or a `ToResponse` (`candidate not viable: violated constraint`, then the `where` clause, e.g. `... Bool(identical(R, StringSpan[ImmStaticOrigin])) or conforms_to(R, ToResponse)`). When the call does not let the compiler decide the clause, the error is `invalid call to '<method>': lacking evidence to prove correctness` instead: for a result with a local's immutable origin (`origin_text[ImmOrigin(origin_of(s))]`), and for a forwarding helper's generic result whose own `where` is neither one branch of the clause nor the whole clause (no `where`, or a partial disjunction such as `where (R == String or R == StaticString)`). Candidate notes name the generic slots: `cannot be converted from 'def f(id: Int, a: Note, b: Note) thin -> String' to 'def(var A, var B) raises Never thin -> String'`.
+- A call that no overload takes gets `no matching method in call to 'get'` (or `'post'`, `'put'`, `'patch'`, `'delete'`) with one note per candidate, six candidates per method: more parameters than two (after a leading `State`), a `State` parameter that is `var`, `mut`, a plain value or not first, and a result that is not `String`, `StaticString` or a `ToResponse` (`candidate not viable: violated constraint`, then the `where` clause, e.g. `... Bool(identical(R, StringSpan[ImmStaticOrigin])) or conforms_to(R, ToResponse)`). When the call does not let the compiler decide the clause, the error is `invalid call to '<method>': lacking evidence to prove correctness` instead: for a result with a local's immutable origin (`origin_text[ImmOrigin(origin_of(s))]`), and for a forwarding helper's generic result whose own `where` is neither one branch of the clause nor the whole clause (no `where`, or a partial disjunction such as `where (R == String or R == StaticString)`). Candidate notes name the generic slots: `cannot be converted from 'def f(id: Int, a: Note, b: Note) thin -> String' to 'def(var A, var B) raises Never thin -> String'`.
 - An explicitly typed function value or helper parameter spells each request parameter `var`: `def(var Int) thin raises Never -> String` registers, and `def(Int) thin raises Never -> String` fails with `TODO: function type conversions between closures not supported yet`. A leading `State[S]` keeps its spelling; bodies, `Headers` and `Request`s are `var` too. Plain `def` handlers are unaffected. A typed `def() thin raises Never -> StaticString` value, and a generic helper parameter `h: def() thin raises E -> StaticString` forwarded to `app.get`, register as text.
-- Generic forwarding: a helper generic over a request parameter (for example `h: def(var A) thin raises Never -> String`, `def(State[S], var A, var B)`, or `def(var A) -> Response` filled by `Request`) or over the handler's result forwards to `app.get`/`app.post` and registers as the plain handler would. A generic result needs its own `where` clause that is one branch of the registration's (`where R == String`, `where R == StaticString`, `where conforms_to(R, ToResponse)`) or the whole clause (also with its branches reordered); with none, or with a partial disjunction, the call is `invalid call ...: lacking evidence to prove correctness` even for an accepted type. The rules apply to the instantiated types as usual.
+- Generic forwarding: a helper generic over a request parameter (for example `h: def(var A) thin raises Never -> String`, `def(State[S], var A, var B)`, or `def(var A) -> Response` filled by `Request`) or over the handler's result forwards to `app.get`/`app.post` (and `app.put`, `app.patch`, `app.delete`) and registers as the plain handler would. A generic result needs its own `where` clause that is one branch of the registration's (`where R == String`, `where R == StaticString`, `where conforms_to(R, ToResponse)`) or the whole clause (also with its branches reordered); with none, or with a partial disjunction, the call is `invalid call ...: lacking evidence to prove correctness` even for an accepted type. The rules apply to the instantiated types as usual.
 
 Sections below mark what is still a target; the list of shipped and remaining capabilities is `docs/SPEC.md`. Default response fields are decided, not a target: `String` results and `Response.text` add none, and only `Json[T]` results add `Content-Type: application/json`.
 
@@ -742,13 +817,13 @@ app.post["/webhook"](webhook)
 - `muntin.Headers` is the header fields in order. Each keeps its name's casing, and a repeated name (`Set-Cookie`) is several fields. `get(name)` returns the first value as `Optional[String]` (an absent field and an empty value differ), `get_all(name)` every value, and `len`, `name(i)`, `value(i)` walk them. Names compare ASCII case-insensitively.
 - `add(name, value)` appends; `set(name, value)` removes every field with that name, then appends. Both raise on a name that is not an RFC 9110 token, or on a value with a control byte (other than HTAB) or SP/HTAB at either end. In a raising handler that error is the fixed 500, or its `ToErrorResponse`. Code that must not raise, such as `to_response`, wraps `add` in `try`.
 - `Request` has `headers` (as the backend received them); `Request(method, target, body, headers^)` builds one, and existing calls without headers are unchanged. `Response` has `headers`, empty from `Response(status, body)` and `Response.text`: Muntin adds no `Content-Type` or other default field.
-- Raw handlers read `req.headers` (a `var req` handler owns a copy it may change) and set fields on the `Response` they return. Typed `post` handlers read them through a `WithHeaders[B]` body (section 4), typed `get` handlers through a `Headers` parameter (below). A typed result sets fields through the `Response` its `to_response` builds. `String` results set none.
-- `TestClient.get` and `.post` send the fields passed as `headers=` and none otherwise (section 10); a test may also build `Request(..., headers^)` and call `app.handle`, the same seam.
+- Raw handlers read `req.headers` (a `var req` handler owns a copy it may change) and set fields on the `Response` they return. Typed `post`, `put` and `patch` handlers read them through a `WithHeaders[B]` body (section 4), typed `get` and `delete` handlers through a `Headers` parameter (below). A typed result sets fields through the `Response` its `to_response` builds. `String` results set none.
+- `TestClient.get`, `.post`, `.put`, `.patch` and `.delete` send the fields passed as `headers=` and none otherwise (section 10); a test may also build `Request(..., headers^)` and call `app.handle`, the same seam.
 - Through Flare, a request field Muntin cannot represent is answered 400 before the handler: over HTTP/2 Flare admits a `:` inside a name or a control byte in a value. Fields the backend owns or that are connection-specific (`Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`, `TE`, `Trailer`), and any field a `Connection` value names, are not written to the wire; they stay in the in-memory `Response`. Over HTTP/2, names go out lowercase. Header values are text: Flare answers 400 to an HTTP/1.1 header byte ≥ 0x80 itself.
 
 Semantics:
 
-- Same registration syntax on `app.get` and `app.post`: `Request` is a kind of request parameter, so a raw handler registers through the one-parameter overload like any one-parameter handler, and the raw rule requires `Response` as the result.
+- Same registration syntax on `app.get`, `app.post`, `app.put`, `app.patch` and `app.delete`: `Request` is a kind of request parameter, so a raw handler registers through the one-parameter overload like any one-parameter handler, and the raw rule requires `Response` as the result.
 - The handler may declare `req: Request` (canonical) or `var req: Request` (it owns a fresh copy of the request and can move `req.body` out). It returns `Response` only.
 - It may be non-raising, `raises` or `raises T`, under the error model of section 6: a `T` declaring `ToErrorResponse` answers its own response, anything else is the fixed 500 without the error text.
 - The route is selected by method and path as usual (404 otherwise, without calling the handler; first registration wins across raw and typed routes, and a typed route's 400 does not fall through to a later one). The route literal declares no path or query parameter (`def()`'s rule and messages: `route declares a path parameter but the handler takes none`, `... query parameter ...`, `malformed route literal`).
@@ -802,7 +877,7 @@ app.get["/private/{id}"](private_note, users)
 - `headers` holds the request's fields with the semantics above: every field in order, with its casing, repeated names as separate fields and empty values as values. It is a fresh value rebuilt for the handler, which may borrow it (`headers: Headers`) or own it (`var headers: Headers`); changing an owned one changes no `Request`. `mut headers: Headers` matches no overload. Muntin chooses no status for a field and gives it no meaning: a missing field is `None`, and the handler answers it through its error type, as with `input.headers` (section 4).
 - Shapes: `def(Headers)` on a route with no placeholder and `def(Int, Headers)` or `def(String, Headers)` on a route with exactly one, each also with `State[S]` first (section 8), either result policy, non-raising or raising. `Headers` is the last parameter, once: `def(Headers, Int)` and two `Headers` are `constraint failed: a get handler takes one Headers, as its last parameter`. The other rules keep their messages: a body beside it is `a get handler takes no request body`, a `Request` beside it `a raw get handler takes only the Request and returns Response`, and a placeholder count that does not fit is the `def()`, `def(Int)` or `def(String)` message (`route declares a path parameter but the handler takes none`, `handler takes one Int parameter; route must declare exactly one path or query parameter`, `handler takes one String parameter; ...`).
 - Order: 404; query value 400; route value 400; the field rebuild, whose only failure is a field an in-memory `Headers` holds invalidly (the fixed 500); then the handler. There is no new 400, 413 or 415.
-- `post` takes no `Headers` parameter: its last position is the body, so a `post` handler reads fields through `WithHeaders[B]` (section 4). `Headers` shapes on `post` keep the messages they had: `def(Headers)` is `the handler's parameter is the request body; its type must conform to FromBody`, `def(Headers, B)` is `a post handler's parameter before the body is an Int or String route value`, `def(B, Headers)` is `a post handler takes one request body, as its last parameter`, and `def(Int, Headers)` is `the handler's last parameter is the request body; its type must conform to FromBody`.
+- `post` takes no `Headers` parameter: its last position is the body, so a `post` handler reads fields through `WithHeaders[B]` (section 4). The same holds for `put` and `patch`, and `delete` takes `Headers` as `get` does ("PUT, PATCH and DELETE" in "Proven vs. target status"). `Headers` shapes on `post` keep the messages they had: `def(Headers)` is `the handler's parameter is the request body; its type must conform to FromBody`, `def(Headers, B)` is `a post handler's parameter before the body is an Int or String route value`, `def(B, Headers)` is `a post handler takes one request body, as its last parameter`, and `def(Int, Headers)` is `the handler's last parameter is the request body; its type must conform to FromBody`.
 - An explicitly typed function value spells the parameter `var Headers` (`def(var Headers) thin raises Never -> String`); `def(Headers) thin raises Never -> String` fails with `TODO: function type conversions between closures not supported yet`, as for `Int` (section 6). A generic helper (`h: def(var A) thin raises Never -> String`, `def(var A, var B)`, `def(State[S], var A)`) forwards a `Headers` handler to `app.get` and registers as the plain handler would.
 - Cost: a `Headers` route copies each field name and value twice per request and validates each field again, as carrier and raw routes do; every other route is unchanged.
 
@@ -826,7 +901,7 @@ def test_hello():
 
 The in-memory path must execute the same Muntin application dispatch seam used by real transports. This is an architecture proof, not merely test convenience.
 
-Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)` and `TestClient.post(target, body)` build a Muntin `Request` and call `App.handle`, the same entry point network adapters use. Both take the request's header fields as a keyword-only, defaulted argument, moved into the `Request` as `Request`'s initializer takes them (proven by `tests/test_testclient_headers.mojo` and `tests/testclient_headers_api_fail/`, via `./scripts/check.sh`):
+Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)`, `TestClient.post(target, body)`, `TestClient.put(target, body)`, `TestClient.patch(target, body)` and `TestClient.delete(target)` build a Muntin `Request` and call `App.handle`, the same entry point network adapters use (`delete` with an empty body; a test that sends a `DELETE` body builds the `Request` and calls `app.handle`). Each takes the request's header fields as a keyword-only, defaulted argument, moved into the `Request` as `Request`'s initializer takes them (proven by `tests/test_testclient_headers.mojo`, `tests/test_methods.mojo`, `tests/testclient_headers_api_fail/` and `tests/methods_api_fail/`, via `./scripts/check.sh`):
 
 ```mojo
 var headers = Headers()
@@ -837,7 +912,7 @@ _ = client.get("/echo")                             # no fields
 ```
 
 - The client builds `Request(method, target, body, headers^)` and nothing else: it adds, removes, inspects or merges no field, so its answer equals `app.handle(Request(...))` built from the same method, target and body and a `Headers` value with the same fields. Fields keep their order, casing and repeats, and an empty value is sent as a value.
-- `headers=` is keyword-only: a positional `Headers` after the target or the body is `invalid call to 'get'` / `'post'`: `unexpected argument`. A plain variable is `cannot be implicitly copied` (pass `headers^` or `headers.copy()`), and using it after `^` is `use of uninitialized value`. Each call without `headers=` sends none; the client keeps no per-client fields.
+- `headers=` is keyword-only: a positional `Headers` after the target or the body is `invalid call to 'get'` (or `'post'`, `'put'`, `'patch'`, `'delete'`): `unexpected argument`. A plain variable is `cannot be implicitly copied` (pass `headers^` or `headers.copy()`), and using it after `^` is `use of uninitialized value`. Each call without `headers=` sends none; the client keeps no per-client fields.
 - Building `Headers` raises (`add` validates), so a test that sends fields runs in a raising context.
 
 ## 11. Transport independence
@@ -922,7 +997,7 @@ but handler "get_user" has no compatible input for it
 
 over an opaque generic type-mismatch message when Muntin can provide context.
 
-Status: a handler whose parameter count `get` or `post` accepts but whose shape breaks a registration rule gets that rule as `constraint failed: <rule>` (under `function instantiation failed` at the enclosing function, with the registration call in the next note) instead of up to ten candidate notes (section 3, "Registration rules"). A call no overload takes (a wrong number of parameters, a misdeclared `State`, an unaccepted result type) still gets the compiler's candidate notes. Names are not compared: the route literal and the handler bind by position.
+Status: a handler whose parameter count its registration method (`get`, `post`, `put`, `patch` or `delete`) accepts but whose shape breaks a registration rule gets that rule as `constraint failed: <rule>` (under `function instantiation failed` at the enclosing function, with the registration call in the next note) instead of up to ten candidate notes (section 3, "Registration rules"). A call no overload takes (a wrong number of parameters, a misdeclared `State`, an unaccepted result type) still gets the compiler's candidate notes. Names are not compared: the route literal and the handler bind by position.
 
 ## 17. Boilerplate budget
 
