@@ -39,13 +39,13 @@ app.get["/users/{id}"](hello)
 # compile error: route declares a path parameter but the handler takes none
 ```
 
-Muntin rejects route and handler shape mismatches at compile time. At runtime, typed inputs that do not convert are rejected before your handler runs, and an error your handler raises becomes a 500 that does not leak its text unless its type opts in to its own response. Exact rules and messages: [`docs/DX.md`](docs/DX.md).
+Muntin rejects route and handler shape mismatches at compile time. At runtime, typed inputs that do not convert are rejected before your handler runs. Handler errors become 500 responses that do not leak their text, unless their declared type opts in to its own response. Exact rules and messages: [`docs/DX.md`](docs/DX.md).
 
 ## Why Muntin
 
 Networking stacks evolve: new protocols, new reactors, new TLS and QUIC implementations. Application code should not have to evolve with them.
 
-Muntin owns the application contract: how routes call handlers, how inputs become typed values, and how results and errors become responses. A networking backend adapts to one operation, `App.handle(Request) -> Response`, and never defines that contract. Muntin currently integrates with Flare behind this boundary, in tests only.
+Muntin owns the application contract: how routes call handlers, how inputs become typed values, and how results and errors become responses. A networking backend adapts to one operation, `App.handle(Request) -> Response`, and never defines that contract. Muntin currently integrates with Flare behind this boundary.
 
 ```text
 application code
@@ -75,9 +75,22 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON), application errors, shared application state, headers, and a raw `Request -> Response` escape hatch.
-- **Not yet:** serving an application (serving through Flare is test code only, and Flare is a candidate production backend, not a supported deployment path) and middleware.
+- **Not yet:** serving an application, and middleware. The Flare integration is test-only today; Flare is a candidate production backend, not a supported deployment path.
 
 Shipped and remaining capabilities: [`docs/SPEC.md`](docs/SPEC.md). Long-term API targets: [`docs/DX.md`](docs/DX.md).
+
+## Try it
+
+Muntin is not published as a package yet. You need [pixi](https://pixi.sh), which installs the pinned Mojo toolchain:
+
+```sh
+git clone https://github.com/sano-suguru/muntin.git
+cd muntin
+pixi install
+pixi run run   # runs main.mojo: an App answering one request through TestClient
+```
+
+To run the example above, save it as `example.mojo` in the repository root and run `pixi run mojo run -I src example.mojo`.
 
 ## Documentation
 
