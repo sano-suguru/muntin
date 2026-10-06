@@ -7,10 +7,9 @@ Build Muntin: a small, Mojo-native, typed web application framework whose public
 - `AGENT_PROGRESS.md`: what to do next. Read it first.
 - `docs/DX.md`: the user-facing API and its semantics; its examples are design constraints.
 - `docs/ARCHITECTURE.md`: how Muntin works now, its invariants and the revisit index.
-- `docs/history/architecture-decisions.md`: why, per decision; the next production slice of a decided item.
+- `docs/history/architecture-decisions.md`: why, per decision; the contract of the next production item (its "Next production slice").
 - `docs/SPEC.md`: product scope and remaining capabilities.
 - `docs/DEVELOPMENT.md`: verification commands, CI, and which document owns which fact.
-- `feature_list.json`: completion state per item.
 
 If these disagree, do not silently pick one. Preserve established architecture and safety invariants, identify the inconsistency, and fix the owning document in the same verified change.
 
@@ -20,7 +19,7 @@ If these disagree, do not silently pick one. Preserve established architecture a
 - Keep Muntin's public API free of Flare-specific types, imports, routers, middleware contracts, lifecycle types, and reactor/runtime concepts. Flare is an optional backend, not Muntin's constitution.
 - Do not build a custom socket, TLS, HTTP/2, HTTP/3, QUIC, reactor, executor, or async runtime unless an accepted milestone explicitly requires it.
 - Do not weaken, delete, or rewrite acceptance criteria or tests merely to make them pass.
-- Never mark an item passing until a real executable check exercises it successfully and CI passes on its pull request. Syntax-only checks, commands that failed to start, and inspection alone are not passing evidence.
+- Never report an item done until a real executable check exercises it successfully. Syntax-only checks, commands that failed to start, and inspection alone are not passing evidence. An item is complete when its pull request merges; `main` requires CI to pass first.
 - When CI fails, first classify the cause (Muntin bug, toolchain bug, packaging, runner/image). Do not change Muntin core to work around a non-Muntin cause.
 - When current Mojo or dependency behavior matters, verify it with the installed toolchain or authoritative upstream documentation instead of guessing. If a `docs/DX.md` example cannot be expressed, prove the limitation with a minimal reproduction and implement the closest type-safe alternative.
 - For architecture, ownership/lifetime, backend-seam, or public-API changes, use a fresh-context skeptical review when practical.

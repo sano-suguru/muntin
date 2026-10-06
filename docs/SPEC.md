@@ -26,7 +26,7 @@ The project intentionally starts smaller than a production web framework. The fi
 | M2 | shipped | typed application API: routes, `Int` path/query values, typed bodies and results, application errors, raw `Request -> Response` handlers ("M2 completion contract" below) |
 | M3 | active | composition and production ergonomics (below) |
 
-Completion state per item: `feature_list.json`. Rationale per decision: `docs/history/architecture-decisions.md`.
+A capability is shipped when the pull request implementing it merges into `main`. Decisions and the production slices they name: `docs/history/architecture-decisions.md`.
 
 ## Product boundaries
 

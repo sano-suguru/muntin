@@ -6,9 +6,18 @@ Read `AGENT_PROGRESS.md`, check `git status` and recent commits, and run the che
 
 ## 2. Pick one increment
 
-Take the next item that advances the active milestone and can be verified on its own: one observable outcome, a bounded file set, a real executable check, and no unrelated future work.
+Take the next item that advances the active milestone and can be verified on its own: one observable outcome, a bounded file set, a real executable check, and no unrelated future work. For an uncertain Mojo feature, make a small compilation experiment before designing around it.
 
-Uncertain areas are cut decision-first: a decision item compares candidates with pinned-compiler evidence (spikes and fixtures under `tests/`, `src/muntin` unchanged), records the choice and names one exact production slice, which becomes the next item; that slice is the production item's acceptance. A decision item states its question and what would settle it at the top of its record before measuring. For an uncertain Mojo feature, make a small compilation experiment before designing around it.
+Where an item's contract is written depends on its kind, and nowhere else:
+
+| Item | Its contract | Written when |
+|---|---|---|
+| decision (a design question, measured with spikes and fixtures under `tests/`, `src/muntin` unchanged) | its new record in `docs/history/architecture-decisions.md`: the question and what would settle it at the top, then the choice and exactly one "Next production slice" | at the start of the decision item |
+| production (implements a decided slice) | the decision record's "Next production slice", as written | already, by the decision item |
+| production that cannot follow its slice as written | an amendment record saying what changed and why | before the change merges |
+| fix, tooling or docs with no design question | the pull request | with the pull request |
+
+An item ID (`M3-017`) is assigned where the item is first named: a decision record's title or its "Next production slice". `docs/SPEC.md` and `AGENT_PROGRESS.md` refer to it; nothing else tracks it.
 
 ## 3. Verify with the strongest available oracle
 
@@ -28,9 +37,9 @@ CI runs on pull requests only. `verify` (`check.sh` with `git diff --check`, and
 
 For public API, architecture, ownership/lifetime, backend seam, unsafe code or dependency changes, use a fresh-context review when practical. It should look for backend details leaking into Muntin APIs, inverted dependencies, acceptance weakened by tests, tests that bypass real dispatch, lifetime assumptions that hold for one backend only, speculative abstractions, and application verbosity added for internal convenience. Review counts as evidence only when the reviewer inspected the diff and the verification results.
 
-## 6. Record the result
+## 6. Finish an item
 
-After verification, and after CI passes on the pull request, set the item's `passes` to `true` in `feature_list.json`. Then update only the owners the change affected (section 7), rewrite `AGENT_PROGRESS.md` for the next session, and commit. Test counts, mutation lists, review findings and CI runs go in the pull request description, not in the repository.
+An item's pull request also updates, in the same diff: the affected subsection of `docs/ARCHITECTURE.md` "Current architecture" (the new state, without history; a revisit index row when it pins fixtures), `docs/DX.md` when user-visible behavior changed, the capability row in `docs/SPEC.md` (and `README.md`'s list when a user-visible capability ships), and `AGENT_PROGRESS.md` for the next session. The item is complete when the pull request merges; `main` requires CI to pass first, so nothing is recorded after CI. Test counts, mutation lists, review findings and CI runs go in the pull request description; a new decision record names its pull request.
 
 ## 7. Where information lives
 
@@ -40,14 +49,12 @@ Each fact has one owner. Other documents link to it instead of restating it.
 |---|---|
 | how to use Muntin: API, examples, user-visible semantics and diagnostics | `docs/DX.md` |
 | how Muntin works now: invariants, registration, request handling, storage, backend seam, current limits, revisit index | `docs/ARCHITECTURE.md` |
-| why: the decision, candidates, costs, measured premises, revisit conditions, the next production slice | `docs/history/architecture-decisions.md`, one record per decision or production slice |
+| why: the decision, candidates, costs, measured premises, revisit conditions; the next production item's contract | `docs/history/architecture-decisions.md`, one record per decision or amendment |
 | product scope: milestones, shipped and remaining capabilities, product boundaries, the M2 contract | `docs/SPEC.md` |
-| item completion state | `feature_list.json` (`id`, `passes`) |
+| evidence that an item was verified | its pull request |
 | what to do next | `AGENT_PROGRESS.md` |
 | behavior and invariants | tests, fixtures, `scripts/` and CI |
 | upstream sources and the Flare pin | `docs/REFERENCES.md`, `pixi.lock` |
-
-A new decision adds its record and, when it pins fixtures, a revisit index row. A production slice updates the affected subsection of "Current architecture" to state the new result, without history.
 
 ## 8. Stop at the requested boundary
 

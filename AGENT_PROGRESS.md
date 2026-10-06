@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-M3 is active. Next item: M3-017, typed header access on `get` in production, exactly the "Next production slice (M3-017)" in [Typed get header access decision (M3-016)](docs/history/architecture-decisions.md#typed-get-header-access-decision-m3-016). Blockers: none.
+Next item: M3-017, typed header access on `get` in production, exactly the "Next production slice (M3-017)" in [Typed get header access decision (M3-016)](docs/history/architecture-decisions.md#typed-get-header-access-decision-m3-016). Blockers: none.
 
 ## Easy to miss
 
