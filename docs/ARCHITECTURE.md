@@ -2,7 +2,7 @@
 
 Muntin owns the application model. Transports adapt to `App.handle(Request) -> Response`; they do not define application semantics.
 
-This file is the current state: the thesis, the invariants, the [current architecture](#current-architecture) and a [revisit index](#revisit-index). Why each part is as it is (reasons, rejected candidates, measurements, revisit conditions) is in the [decision records](history/architecture-decisions.md), one record per decision; the milestone tags below, such as (M3-015), name the record. Public API and user-visible semantics: `docs/DX.md`. Product scope: `docs/SPEC.md`.
+This file is the current state: the thesis, the invariants, the [current architecture](#current-architecture) and a [revisit index](#revisit-index). Why each part is as it is (reasons, rejected candidates, measurements, revisit conditions) is in the [decision records](history/architecture-decisions.md), one record per decision. Milestone tags below, such as (M3-015), name the item; the links name a specific record. Public API and user-visible semantics: `docs/DX.md`. Product scope: `docs/SPEC.md`.
 
 ## Architectural thesis
 

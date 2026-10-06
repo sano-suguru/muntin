@@ -61,18 +61,9 @@ app.get["/users/{id}"](get_user)
 
 These examples are design targets, not claims that every syntax form is already supported by the current Mojo toolchain. `docs/DX.md` defines how to handle language limitations: prove the limitation with a minimal reproduction, document it, then choose the closest type-safe syntax.
 
-## What works today
+## What it does
 
-On Mojo 1.1.0, in memory through `TestClient` and over HTTP through the Flare adapter:
-
-- `get` and `post` routes with compile-time route literals and `Int` path or query values;
-- typed request bodies (`FromBody`) and typed results (`ToResponse`), including JSON (`Json[T]`);
-- raising handlers, with application-chosen error responses (`ToErrorResponse`);
-- application state shared with handlers (`State[S]`);
-- request and response headers, read in raw handlers and, through `WithHeaders[B]`, in typed `post` handlers;
-- a raw `Request -> Response` escape hatch.
-
-Not yet: typed header access on `get`, `app.run()`, middleware, other HTTP methods, non-`Int` route values, schema/OpenAPI, streaming. Serving over a network today means test-fixture code around the Flare adapter. The roadmap is `docs/SPEC.md`.
+Muntin handles typed routing, request bodies and results (including JSON), application errors, shared application state, headers and a raw `Request -> Response` escape hatch, in memory through `TestClient` and over HTTP through the Flare adapter. There is no public API for serving an application yet. Shipped and remaining capabilities: `docs/SPEC.md`; exact usage and semantics: `docs/DX.md`.
 
 ## Repository guide
 

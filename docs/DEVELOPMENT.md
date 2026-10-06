@@ -12,9 +12,9 @@ Where an item's contract is written depends on its kind, and nowhere else:
 
 | Item | Its contract | Written when |
 |---|---|---|
-| decision (a design question, measured with spikes and fixtures under `tests/`, `src/muntin` unchanged) | its new record in `docs/history/architecture-decisions.md`: the question and what would settle it at the top, then the choice and exactly one "Next production slice" | at the start of the decision item |
+| decision (a design question, measured with spikes and fixtures under `tests/`, `src/muntin` unchanged) | its new record in `docs/history/architecture-decisions.md`: the question and what would settle it, then the choice and exactly one "Next production slice" | the question and settling condition before any measurement; the choice and slice after the evidence |
 | production (implements a decided slice) | the decision record's "Next production slice", as written | already, by the decision item |
-| production that cannot follow its slice as written | an amendment record saying what changed and why | before the change merges |
+| production that cannot follow its slice as written | an amendment record: the delta to the slice, why, and the invariant or compatibility boundary it affects | before the change merges; a new design question is a new decision item, not an amendment |
 | fix, tooling or docs with no design question | the pull request | with the pull request |
 
 An item ID (`M3-017`) is assigned where the item is first named: a decision record's title or its "Next production slice". `docs/SPEC.md` and `AGENT_PROGRESS.md` refer to it; nothing else tracks it.
@@ -39,7 +39,7 @@ For public API, architecture, ownership/lifetime, backend seam, unsafe code or d
 
 ## 6. Finish an item
 
-An item's pull request also updates, in the same diff: the affected subsection of `docs/ARCHITECTURE.md` "Current architecture" (the new state, without history; a revisit index row when it pins fixtures), `docs/DX.md` when user-visible behavior changed, the capability row in `docs/SPEC.md` (and `README.md`'s list when a user-visible capability ships), and `AGENT_PROGRESS.md` for the next session. The item is complete when the pull request merges; `main` requires CI to pass first, so nothing is recorded after CI. Test counts, mutation lists, review findings and CI runs go in the pull request description; a new decision record names its pull request.
+An item's pull request updates only the owners whose facts changed (section 7), in the same diff: `docs/ARCHITECTURE.md` when the current architecture changes (a revisit index row when the item pins fixtures), `docs/DX.md` when user-visible semantics change, `docs/SPEC.md` when a capability's status or the product scope changes, and `AGENT_PROGRESS.md` when the next action or an easy-to-miss current constraint changes. A typo, script or test-speed fix usually touches none of them. The item is complete when the pull request merges; `main` requires CI to pass first, so nothing is recorded after CI. Test counts, mutation lists, review findings and CI runs go in the pull request description; a new decision or amendment record names its pull request.
 
 ## 7. Where information lives
 

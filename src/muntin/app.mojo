@@ -10,8 +10,8 @@ from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
 from .state import State, _InjectedState
 
-# Tags such as (M3-014) name the decision record in
-# docs/history/architecture-decisions.md that explains the code they mark.
+# Tags such as (M3-014) name the item whose decision, in
+# docs/history/architecture-decisions.md, explains the code they mark.
 #
 # Registration (M3-014): `get` and `post` each have one overload per
 # request-slot arity, 0 to 2, in a stateless and a stateful family. A request
