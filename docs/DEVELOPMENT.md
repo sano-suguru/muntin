@@ -17,7 +17,7 @@ Where an item's contract is written depends on its kind, and nowhere else:
 | production that cannot follow its slice as written | an amendment record: the delta to the slice, why, and the invariant or compatibility boundary it affects | before the change merges; a new design question is a new decision item, not an amendment |
 | fix, tooling or docs with no design question | the pull request | with the pull request |
 
-An item ID (`M3-017`) is assigned where the item is first named: a decision record's title or its "Next production slice". `docs/SPEC.md` and `AGENT_PROGRESS.md` refer to it; nothing else tracks it.
+A product item, decision or production, gets a milestone ID (`M3-017`) where it is first named: a decision record's title or its "Next production slice". A process or tooling decision gets none unless `docs/SPEC.md` tracks it as milestone work. `docs/SPEC.md` and `AGENT_PROGRESS.md` refer to it; nothing else tracks it.
 
 ## 3. Verify with the strongest available oracle
 
