@@ -895,12 +895,12 @@ def test_typed_route_over_localhost_matches_test_client() raises:
                 local = in_memory.put(path, body)
             elif method == "PATCH":
                 local = in_memory.patch(path, body)
+            elif method == "POST":
+                local = in_memory.post(path, body)
             elif body:
                 local = app.handle(Request(method, path, body))
-            elif method == "DELETE":
-                local = in_memory.delete(path)
             else:
-                local = in_memory.post(path, body)
+                local = in_memory.delete(path)
             assert_equal(response.status, local.status, at)
             assert_equal(response.text(), local.body, at)
 
