@@ -152,8 +152,8 @@ from .state import State, _InjectedState
 # exact type equality, so no application type is one) or an `Optional` of
 # either (below), at most two per handler (M3-022), never the body. They
 # bind by position: the path captures left to right, then the query values
-# in the literal's order; names are
-# never compared with the handler's parameters. `App.handle` decodes each raw
+# in the literal's order; names are never compared with the handler's
+# parameters. `App.handle` decodes each raw
 # capture once (`_decode_value`), after matching on the raw path, before any
 # conversion: path captures in place, then each query value as `_query_value`
 # finds it; an empty value, a bad escape or decoded bytes that are not UTF-8
