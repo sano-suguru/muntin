@@ -21,7 +21,9 @@ compat/flare/headers/flare_header_probe.mojo; the client is Flare's raw
   be dropped. A target under `/declared/` is answered with the body
   removed and a `Content-Length` field of its length added after the
   adapter's conversion, the one place a length could travel beside an
-  empty body.
+  empty body. `/nm` is a raw route answering 304 with a 3-byte body: a
+  Muntin 304 body is not defined as the 200 representation, so the probe
+  measures what goes out when its body is removed and no length declared.
 
 Byte notation as in the header probe: CR, LF are `\\r`, `\\n`; the varying
 `Date` value is `<date>`. The h2c cases send one HEADERS frame on stream 1
@@ -84,10 +86,15 @@ def length_field(var req: Request) -> Response:
     return r^
 
 
+def not_modified(var req: Request) -> Response:
+    return Response(304, "abc")
+
+
 def probe_app() -> App:
     var app = App()
     app.get["/hello"](hello)
     app.get["/cl"](length_field)
+    app.get["/nm"](not_modified)
     return app^
 
 
@@ -422,6 +429,18 @@ def run_h1(mut c: Checks, muntin: UInt16, head_as_get: UInt16) raises:
         ),
     )
     c.eq(
+        (
+            "5c. a 304 with a body, removed, no length declared: Flare frames"
+            " Content-Length 0 itself over HTTP/1.1"
+        ),
+        exchange(head_as_get, req("HEAD", "/empty/nm")),
+        (
+            "HTTP/1.1 304 Not Modified\\r\\nX-Flare-Method: HEAD\\r\\n"
+            "Content-Length: 0\\r\\nDate: <date>\\r\\nConnection:"
+            " close\\r\\n\\r\\n"
+        ),
+    )
+    c.eq(
         "6. keep-alive: HEAD then GET on one connection, two whole responses",
         exchange(
             head_as_get,
@@ -462,6 +481,14 @@ def run_h2c(mut c: Checks, muntin: UInt16, head_as_get: UInt16) raises:
         ),
         h2_exchange(head_as_get, "HEAD", "/declared/hello"),
         "HEADERS{:status: 200; content-length: 5; x-flare-method: HEAD}/END",
+    )
+    c.eq(
+        (
+            "h2. a 304 with a body, removed, no length declared: no"
+            " content-length, no DATA"
+        ),
+        h2_exchange(head_as_get, "HEAD", "/empty/nm"),
+        "HEADERS{:status: 304; x-flare-method: HEAD}/END",
     )
     c.eq(
         (
