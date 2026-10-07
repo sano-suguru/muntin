@@ -2618,7 +2618,10 @@ struct App(Movable):
         This is the backend seam: every transport (the in-memory TestClient,
         network adapters) delivers requests through this method. The first
         registered route whose method and path match handles the request,
-        raw or typed; the query takes no part in selecting it. A raw route
+        raw or typed; the query takes no part in selecting it. Methods match
+        byte for byte, except that a `HEAD` request also matches a `GET`
+        route, which answers it exactly as the `GET`, body included: keeping
+        the content off the wire is the backend's (M3-026). A raw route
         receives `request.method`, `path`, `query` and `body`, then each
         header field's name and value, as its raw arguments, and nothing else
         runs (no query gathering, no conversion); the adapter's `Request`
@@ -2656,9 +2659,11 @@ struct App(Movable):
         # because each owns its handler box.
         for i in range(len(self._routes)):
             ref route = self._routes[i]
-            if route.method != request.method or not _match(
-                route.path, request.path, args
-            ):
+            # `HEAD` is answered by `GET` routes, as the `GET` (M3-026).
+            var method_matches = route.method == request.method or (
+                request.method == "HEAD" and route.method == "GET"
+            )
+            if not method_matches or not _match(route.path, request.path, args):
                 continue
             if route.raw:
                 args.append(request.method)

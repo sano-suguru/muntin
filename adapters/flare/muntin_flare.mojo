@@ -29,6 +29,19 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   Flare filters a different subset on each protocol, so the adapter applies
   one rule for both. Each field is re-checked with `Headers.add` before it
   is handed to Flare; a failure answers 500.
+- `HEAD` (M3-027, decided in docs/history/architecture-decisions.md "HEAD
+  decision (M3-026)"): `App.handle` answers a `HEAD` request as the `GET`,
+  body included; the backend keeps the content off the wire. For a request
+  whose method is `HEAD`, `MuntinHandler.serve` takes the response it would
+  send at every exit (`App.handle`'s answer, `to_flare_response`'s fixed
+  500, its own 400) and sends its status and fields with no body, declaring
+  a `Content-Length` equal to the body's byte length, except for a status
+  that never carries content (1xx, 204, 205, 304), where it declares none.
+  Flare v0.11.0 would send the content over cleartext HTTP/2, and over
+  HTTP/1.1 frames an empty body as `Content-Length: 0`, so both steps are
+  the adapter's; over HTTP/1.1 Flare still frames a 205 or 304 with
+  `Content-Length: 0` itself. A handler's own `Content-Length` is still
+  dropped. Every other method is unchanged.
 """
 
 from flare.http import (
@@ -157,6 +170,21 @@ def to_flare_response(response: Response) -> FlareResponse:
     return out^
 
 
+def _without_content(var response: FlareResponse) -> FlareResponse:
+    """`response` as the answer to a `HEAD` request: its status and fields,
+    no body, and a `Content-Length` equal to the body's byte length unless
+    the status never carries content (1xx, 204, 205, 304)."""
+    var length = len(response.body)
+    response.body = List[UInt8]()
+    var status = response.status
+    if status >= 200 and status != 204 and status != 205 and status != 304:
+        try:
+            response.headers.append("Content-Length", String(length))
+        except:
+            pass  # `append` rejects only CR and LF, which neither part has.
+    return response^
+
+
 struct MuntinHandler(Handler):
     """Serves a Muntin `App` as a Flare handler."""
 
@@ -166,6 +194,11 @@ struct MuntinHandler(Handler):
         self.app = app^
 
     def serve(self, request: FlareRequest) -> FlareResponse:
+        if request.method == "HEAD":
+            return _without_content(self._answer(request))
+        return self._answer(request)
+
+    def _answer(self, request: FlareRequest) -> FlareResponse:
         var muntin_request: Request
         try:
             muntin_request = to_muntin_request(request)

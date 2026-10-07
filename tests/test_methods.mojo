@@ -1,7 +1,8 @@
 # `put`, `patch` and `delete` in production (M3-021): `put` and `patch` take
 # exactly `post`'s shapes and `delete` exactly `get`'s, with the same rules,
-# results and errors; method matching stays byte for byte, a method with no
-# route on a matching path is 404, and `TestClient.put`, `.patch` and
+# results and errors; method matching stays byte for byte (except `HEAD`,
+# which `get` routes answer since M3-027: tests/test_head.mojo), a method with
+# no route on a matching path is 404, and `TestClient.put`, `.patch` and
 # `.delete` equal `App.handle` for the same request. Decision:
 # docs/history/architecture-decisions.md, "HTTP methods decision (M3-020)".
 # DX's example runs as written in `test_dx_example`. Must-not-compile cases:
@@ -487,13 +488,15 @@ def test_each_method_reaches_its_own_route() raises:
         ("PUT", "PUT 7 x"),
         ("PATCH", "PATCH 7 x"),
         ("DELETE", "DELETE 7"),
+        # `HEAD` is answered by the `get` route, as the `GET` (M3-026).
+        ("HEAD", "GET 7"),
     ]
     for w in want:
         var r = app.handle(Request(w[0], "/r/7", "x"))
         assert_equal(r.status, 200, w[0])
         assert_equal(r.text(), w[1], w[0])
     # No route of that method, or a method that matches none byte for byte.
-    for method in ["HEAD", "OPTIONS", "TRACE", "delete", "Put", "PATCH "]:
+    for method in ["OPTIONS", "TRACE", "delete", "Put", "PATCH ", "head"]:
         var r = app.handle(Request(method, "/r/7", "x"))
         assert_equal(r.status, 404, method)
         assert_equal(r.text(), "Not Found", method)
