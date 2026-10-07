@@ -122,7 +122,7 @@ def counted_fields(calls: State[Calls], id: Int, headers: Headers) -> String:
     return String("counted ", id, " ", len(headers))
 
 
-def report(var req: Request) -> Response:
+def echo_method(var req: Request) -> Response:
     var r = Response.text(req.method + " " + req.path + "?" + req.query)
     try:
         r.headers.add("X-Seen", req.method)
@@ -161,7 +161,7 @@ def _app(calls: State[Calls]) -> App:
     app.get["/fail/{id}"](failing)
     app.get["/count/{id}"](counted, calls)
     app.get["/count-h/{id}"](counted_fields, calls)
-    app.get["/report"](report)
+    app.get["/report"](echo_method)
     app.get["/keyed"](keyed, calls)
     app.post["/only-post"](posted)
     app.put["/only-put"](posted)
@@ -317,6 +317,44 @@ def test_first_registration_wins_and_never_falls_through() raises:
     _same_as_get(app, "/b/2", 200, "first 2")
     _same_as_get(app, "/c/x", 400, "Bad Request")
     assert_equal(app.handle(Request("DELETE", "/b/2")).body, "removed 2")
+
+
+# docs/DX.md, "`HEAD`" in "Proven vs. target status", as written there.
+
+
+def show_user(id: Int) -> String:
+    return String("user ", id)
+
+
+def report(req: Request) -> Response:  # raw: req.method is "GET" or "HEAD"
+    return Response.text("report")  # the GET body for both
+
+
+def drop(id: Int) -> String:
+    return String("dropped ", id)
+
+
+def test_dx_example() raises:
+    var app = App()  # its own App
+    app.get["/users/{id}"](show_user)
+    app.get["/report"](report)
+    app.delete["/cache/{id}"](drop)
+    _same_as_get(app, "/users/7", 200, "user 7")
+    _same_as_get(app, "/users/abc", 400, "Bad Request")
+    _same_as_get(app, "/report", 200, "report")
+    for r in [
+        app.handle(Request("HEAD", "/cache/1")),
+        app.handle(Request("HEAD", "/missing")),
+        app.handle(Request("head", "/users/7")),
+        app.handle(Request("OPTIONS", "/users/7")),
+    ]:
+        assert_equal(r.status, 404)
+        assert_equal(r.body, "Not Found")
+    assert_equal(app.handle(Request("DELETE", "/cache/1")).body, "dropped 1")
+
+    var head = app.handle(Request("HEAD", "/users/7"))  # no TestClient.head
+    assert_equal(head.status, 200)
+    assert_equal(head.text(), "user 7")
 
 
 def main() raises:

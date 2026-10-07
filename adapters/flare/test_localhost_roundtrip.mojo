@@ -153,7 +153,7 @@ M3-027 sends `HEAD` to `headers_app()`, which gains the raw `GET /nm`
 (the raw client takes the method), a typed route, the raw `GET /keyed`
 (which sees `HEAD`), a route-value 400 and the adapter's own 400 (a field
 named `x-user:admin`) go out with their status, a `content-length` equal to
-`App.handle`'s body and no DATA frame; the 304 and 205 with no
+`App.handle`'s body and no DATA frame, as does a 404; the 304 and 205 with no
 `content-length` and no DATA frame. Over HTTP/1.1 the same routes give
 their status and `Content-Length` (Flare's client reads no content for
 `HEAD`, so its empty body is no evidence; `compat/flare/head/head_probe.mojo`
@@ -1296,6 +1296,7 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
             (String("/keyed?k"), signed^, 202, String("")),
             (String("/signed/x"), authorized^, 400, String("11")),
             (String("/hello"), forged_name^, 400, String("11")),
+            (String("/missing"), none.copy(), 404, String("9")),
             (String("/nm"), none.copy(), 304, String("")),
             (String("/rc"), none.copy(), 205, String("")),
         ]
@@ -1359,6 +1360,15 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
             )
             assert_equal(resp.status, c[2], c[0])
             assert_equal(resp.headers.get("content-length"), c[3], c[0])
+        # Only the exact token maps: Flare answers `head` and `Head` 400
+        # before `App.handle`, which would answer them 404.
+        for method in ["head", "Head"]:
+            var other = client.send(
+                FlareRequest(method, base + "/hello", List[UInt8]())
+            )
+            print("observed:", method, "/hello", other.status)
+            assert_equal(other.status, 400, method)
+            assert_equal(app.handle(Request(method, "/hello")).status, 404)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
