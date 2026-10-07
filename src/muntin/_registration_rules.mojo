@@ -1,14 +1,20 @@
-"""Registration rules: the compile-time checks of a handler's shape and
-route literal, read by `App`'s registration overloads (`app.mojo`).
+"""Registration rules: the checks of a handler's shape and route literal
+that `App`'s registration overloads (`app.mojo`) run, and the route-literal
+helpers they share with routing.
 
 `_kind` classifies a request slot from its type alone; `_rule` returns the
 first registration rule a shape breaks; `_check` states each rule as a
 compile-time assert with Muntin's message, and `_admits`, the same rules as
 one Bool, guards the adapter's instantiation. The route-literal parsers
 (`_is_param`, `_path_params`, `_query_params`, `_distinct_query_keys`) are
-here because the rules read them; `_is_param` is also the segment
-classification `App.handle` matches with, so registration and dispatch
-agree on how many values a route captures. Nothing here runs per request.
+here because the rules read them.
+
+When each part runs: `_check`, `_admits` and `_rule` at compile time;
+`_kind`, `_is_optional` and `_path_params` also once per registration, when
+`_route` in `app.mojo` builds the route. Only `_is_param` runs per request:
+`_match` in `app.mojo` classifies each route segment with it, so
+registration and dispatch share one segment classification and agree on
+how many values a route captures.
 """
 
 from .body import FromBody
@@ -20,9 +26,10 @@ from .state import _InjectedState
 def _is_param(segment: StringSlice) -> Bool:
     """Whether a route segment is a `{name}` path parameter.
 
-    The single classification used both by the compile-time route checks in
-    `App.get` and by runtime matching, so the two always agree on how many
-    values a route captures.
+    The single classification used both by the route-literal checks the
+    registration rules run (`_path_params`, `_query_params`) and by `_match`
+    for every request, so the two always agree on how many values a route
+    captures.
     """
     var b = segment.as_bytes()
     return (
