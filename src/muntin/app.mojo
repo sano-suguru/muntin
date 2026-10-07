@@ -24,9 +24,9 @@ from .state import State, _InjectedState
 # families and no two overloads of a method accept the same handler. Every
 # slot is a generic `var A` (a plain `def` with a borrowed parameter converts
 # to it too), and its kind is decided at compile time from its type alone
-# (`_kind`): an `Int` or `String` route value (below), a body (`FromBody`, or
-# a `WithHeaders` carrier, below), the raw `Request`, the request `Headers`
-# (below), a misplaced `State`, or none.
+# (`_kind`): a route value (`Int`, `String` or an `Optional` of either,
+# below), a body (`FromBody`, or a `WithHeaders` carrier, below), the raw
+# `Request`, the request `Headers` (below), a misplaced `State`, or none.
 #
 # Mojo 1.1.0 function types spelled without `thin` are traits and cannot be
 # stored, so the overloads take thin function values; ordinary `def`
@@ -149,16 +149,25 @@ from .state import State, _InjectedState
 # reports a `Headers` slot as it reports a type of no kind.
 #
 # Route values (M3-018): a route value is an `Int` or a `String` (`_TEXT`, by
-# exact type equality, so no application type is one), at most two per
-# handler (M3-022), never the body. They bind by position: the path captures
-# left to right, then the query values in the literal's order; names are
-# never compared with the handler's parameters. `App.handle` decodes each raw
+# exact type equality, so no application type is one) or an `Optional` of
+# either (below), at most two per handler (M3-022), never the body. They
+# bind by position: the path captures left to right, then the query values
+# in the literal's order; names are never compared with the handler's
+# parameters. `App.handle` decodes each raw
 # capture once (`_decode_value`), after matching on the raw path, before any
 # conversion: path captures in place, then each query value as `_query_value`
 # finds it; an empty value, a bad escape or decoded bytes that are not UTF-8
 # are 400 there. The `String` slot takes the decoded text and the `Int` slot
 # parses it. Query keys, `Request.path`, `Request.query` and raw routes stay
 # undecoded.
+#
+# Optional values (M3-024): an `Optional[Int]` or `Optional[String]` slot is
+# an optional route value, by exact type equality; it binds a query
+# placeholder only (a path segment is never absent). `_route` marks the query
+# keys whose values bind one (`_Route.query_optional`); for such a key,
+# `App.handle` passes an absent key or an empty value on as `""`, which no
+# decoded value is, and the slot gives `None` for it. A present value is
+# decoded and converted as a required one, a repeated key is 400 for both.
 
 
 def _is_param(segment: StringSlice) -> Bool:
@@ -285,29 +294,24 @@ def _parse_int(segment: String) raises -> Int:
     return Int(segment)
 
 
-def _query_value(query: String, key: String) raises -> String:
-    """The value of `key` in a raw query string. Raises if `key` is absent or
-    appears more than once.
+def _query_value(query: String, key: String) raises -> Optional[String]:
+    """The value of `key` in a raw query string, or `None` if `key` is
+    absent. Raises if `key` appears more than once.
 
     Pairs are separated by `&`; a pair's key and value split at its first
     `=`, and a pair without `=` has an empty value. Keys compare byte for
     byte. Nothing is percent-decoded and `+` is not a space.
     """
-    var value = String()
-    var found = False
+    var value = Optional[String]()
     for pair in query.split("&"):
         var eq = pair.find("=")
         var name = pair[byte=:eq] if eq >= 0 else pair[byte=:]
         if name != key:
             continue
-        if found:
+        if value:
             raise Error("duplicate query key")
-        found = True
-        if eq >= 0:
-            value = String(pair[byte = eq + 1 :])
-    if not found:
-        raise Error("missing query key")
-    return value
+        value = String(pair[byte = eq + 1 :]) if eq >= 0 else String()
+    return value^
 
 
 def _hex_digit(b: Byte) -> Int:
@@ -412,6 +416,8 @@ comptime _STATE = 4
 comptime _OTHER = 5
 comptime _HEADERS = 6
 comptime _TEXT = 7
+comptime _OPT_INT = 8
+comptime _OPT_TEXT = 9
 
 
 def _kind[A: AnyType]() -> Int:
@@ -428,6 +434,10 @@ def _kind[A: AnyType]() -> Int:
         return _HEADERS
     elif A == String:
         return _TEXT
+    elif A == Optional[Int]:
+        return _OPT_INT
+    elif A == Optional[String]:
+        return _OPT_TEXT
     elif conforms_to(A, _InjectedState):
         return _STATE
     elif conforms_to(A, FromBody) or conforms_to(A, _HeaderCarrier):
@@ -468,6 +478,9 @@ comptime _GET_TWO_PLACES = 29
 comptime _POST_TWO_PLACES = 30
 comptime _GET_THREE_VALUES = 31
 comptime _QUERY_TWICE = 32
+comptime _GET_OPTIONAL_PLACES = 33
+comptime _POST_OPTIONAL_BODY_PLACES = 34
+comptime _OPTIONAL_AT_PATH = 35
 
 
 def _takes_none(paths: Int, queries: Int) -> Int:
@@ -480,8 +493,20 @@ def _takes_none(paths: Int, queries: Int) -> Int:
 
 
 def _is_value(k: Int) -> Bool:
-    """Whether slot kind `k` is a route value (`Int` or `String`)."""
-    return k == _INT or k == _TEXT
+    """Whether slot kind `k` is a route value (`Int`, `String` or an
+    `Optional` of either)."""
+    return k == _INT or k == _TEXT or _is_optional(k)
+
+
+def _is_optional(k: Int) -> Bool:
+    """Whether slot kind `k` is an optional route value (M3-024)."""
+    return k == _OPT_INT or k == _OPT_TEXT
+
+
+def _optional_at_path(k1: Int, k2: Int, paths: Int) -> Bool:
+    """Whether an optional value among two (`k1`, `k2`) would bind a path
+    placeholder: the value at position `j` binds one when `j < paths`."""
+    return (_is_optional(k1) and paths > 0) or (_is_optional(k2) and paths > 1)
 
 
 def _get_rule(
@@ -496,12 +521,14 @@ def _get_rule(
     """`get`'s rules for slot kinds `k1`, `k2`, `k3` (`_ABSENT` when
     missing): `def()` or `def(Headers)` with no placeholder, `def(V)` or
     `def(V, Headers)` with exactly one, `def(V, V)` or `def(V, V, Headers)`
-    with exactly two (M3-022), `V` an `Int` or `String` route value, or the
-    raw `def(Request) -> Response` with none. A `State` slot comes first,
-    then a `Request` anywhere, a body, a parameter of no kind, a misplaced
-    `Headers`, three route values, then the placeholder count: for one
-    value with the `Int` or `String` message, for two with one message
-    whatever their types."""
+    with exactly two (M3-022), `V` an `Int` or `String` route value or an
+    `Optional` of either (M3-024), or the raw `def(Request) -> Response`
+    with none. A `State` slot comes first, then a `Request` anywhere, a
+    body, a parameter of no kind, a misplaced `Headers`, three route values,
+    then the placeholder count: for one value with the `Int`, `String` or
+    `Optional` message (an optional value needs exactly one query
+    placeholder and no path one), for two with one message whatever their
+    types, then an optional value at a path position."""
     if k1 == _STATE or k2 == _STATE or k3 == _STATE:
         return _ONE_STATE if stateful else _GET_STATE_ARGUMENT
     if k1 == _RAW or k2 == _RAW or k3 == _RAW:
@@ -518,10 +545,16 @@ def _get_rule(
     if _is_value(k3):
         return _GET_THREE_VALUES
     if _is_value(k2):  # two values, alone or before `Headers`
-        if paths + queries == 2:
-            return _OK
-        return _GET_TWO_PLACES
+        if paths + queries != 2:
+            return _GET_TWO_PLACES
+        if _optional_at_path(k1, k2, paths):
+            return _OPTIONAL_AT_PATH
+        return _OK
     if _is_value(k1):  # one value, alone or before `Headers`
+        if _is_optional(k1):
+            if paths == 0 and queries == 1:
+                return _OK
+            return _GET_OPTIONAL_PLACES
         if paths + queries == 1:
             return _OK
         return _GET_INT_PLACES if k1 == _INT else _GET_TEXT_PLACES
@@ -540,15 +573,17 @@ def _post_rule(
     """`post`'s rules for slot kinds `k1`, `k2`, `k3` (`_ABSENT` when
     missing): `def(B)` with no placeholder, `def(V, B)` with exactly one,
     `def(V, V, B)` with exactly two (M3-022), `V` an `Int` or `String` route
-    value, or the raw `def(Request) -> Response` with none. The order
+    value or an `Optional` of either (M3-024), or the raw
+    `def(Request) -> Response` with none. The order
     decides which message a shape that breaks several rules gets: a raw
     handler returning `Response` gets the raw placeholder messages; for any
     other `def(X)` (a `Request` or a `String` included), the placeholders
     and then `X`. With more slots, each rule is checked over every slot
     before the last before the next rule: a `Request`, a `State`, a body, a
-    slot of no kind or a `Headers`; then the placeholders, with the `Int`
-    or `String` message for one value and one message for two; then the
-    last slot `X`, which is the body position."""
+    slot of no kind or a `Headers`; then the placeholders, with the `Int`,
+    `String` or `Optional` message for one value, and for two one message,
+    then an optional value at a path position; then the last slot `X`,
+    which is the body position."""
     if k1 == _ABSENT:
         return _POST_NO_BODY
     if k1 == _RAW and k2 == _ABSENT:
@@ -572,8 +607,13 @@ def _post_rule(
     if b != _ABSENT:  # two route values
         if paths + queries != 2:
             return _POST_TWO_PLACES
+        if _optional_at_path(a, b, paths):
+            return _OPTIONAL_AT_PATH
     elif a != _ABSENT:  # one route value
-        if paths + queries != 1:
+        if _is_optional(a):
+            if paths != 0 or queries != 1:
+                return _POST_OPTIONAL_BODY_PLACES
+        elif paths + queries != 1:
             return (
                 _POST_INT_BODY_PLACES if k1 == _INT else _POST_TEXT_BODY_PLACES
             )
@@ -682,8 +722,8 @@ def _check[
     comptime assert rule != _GET_SLOT_KIND, (
         "a "
         + name
-        + " handler's parameter is an Int or String route value, the request"
-        " Headers or, for a raw handler, the Request"
+        + " handler's parameter is an Int or String route value, an Optional"
+        " of one, the request Headers or, for a raw handler, the Request"
     )
     comptime assert rule != _POST_NO_BODY, (
         "a " + name + " handler takes the request body as its last parameter"
@@ -740,7 +780,8 @@ def _check[
     comptime assert rule != _POST_SLOT_KIND, (
         "a "
         + name
-        + " handler's parameter before the body is an Int or String route value"
+        + " handler's parameter before the body is a route value: an Int, a"
+        " String or an Optional of either"
     )
     comptime assert rule != _GET_HEADERS_LAST, (
         "a " + name + " handler takes one Headers, as its last parameter"
@@ -767,6 +808,18 @@ def _check[
     comptime assert (
         rule != _QUERY_TWICE
     ), "route declares a query parameter twice"
+    comptime assert rule != _GET_OPTIONAL_PLACES, (
+        "handler takes one Optional route value; route must declare exactly"
+        " one query parameter and no path parameter"
+    )
+    comptime assert rule != _POST_OPTIONAL_BODY_PLACES, (
+        "handler takes one Optional route value and the request body; route"
+        " must declare exactly one query parameter and no path parameter"
+    )
+    comptime assert rule != _OPTIONAL_AT_PATH, (
+        "an Optional route value binds a query parameter; route values bind"
+        " the path parameters first, then the query parameters"
+    )
     comptime assert rule == _OK, "internal: a registration rule has no message"
 
 
@@ -867,11 +920,11 @@ def _as[T: Movable, A: Movable](var value: T) -> A:
     alone also accepts a different type with the same layout
     (tests/registration_known_gaps/rebind_var_layout_twins.mojo). The
     equality asserted here is exact for origin-free types (`Int`,
-    `String`, `Request`, `Headers`); generic `==` ignores which origin a
-    slice has, so for a `StaticString` result exactness comes from the
-    overloads' `where` clause. The confinement step of `scripts/check.sh`
-    requires the `rebind_var` on the line after this assert and nowhere
-    else."""
+    `String`, their `Optional`s, `Request`, `Headers`); generic `==`
+    ignores which origin a slice has, so for a `StaticString` result
+    exactness comes from the overloads' `where` clause. The confinement
+    step of `scripts/check.sh` requires the `rebind_var` on the line after
+    this assert and nowhere else."""
     comptime assert A == T, "rebind requires generic type equality"
     return rebind_var[A](value^)
 
@@ -899,7 +952,10 @@ def _slot[
     """Converts the request slot of type `A` whose raw argument is
     `args[at]`, already decoded if it is a route value (`App.handle`). An
     `Int` route value is parsed (`_parse_int`; 400 if invalid); a `String`
-    route value is a copy of the decoded text. A raw `Request` is rebuilt
+    route value is a copy of the decoded text. An `Optional[Int]` or
+    `Optional[String]` is `None` for `""`, which `App.handle` passes for an
+    absent or empty optional value (M3-025), and otherwise converts as the
+    required slot of its type. A raw `Request` is rebuilt
     from all the arguments (`_raw_request`; a failure is the fixed 500). A
     `Headers` slot is rebuilt from the field pairs from `args[at]` on
     (`_header_slot`; a failure is the fixed 500). A body is converted with
@@ -919,6 +975,17 @@ def _slot[
             raise _Reject(400)
     elif A == String:
         return _as[String, A](args[at].copy())
+    elif A == Optional[Int]:
+        if args[at].byte_length() == 0:
+            return _as[Optional[Int], A](None)
+        try:
+            return _as[Optional[Int], A](_parse_int(args[at]))
+        except:
+            raise _Reject(400)
+    elif A == Optional[String]:
+        if args[at].byte_length() == 0:
+            return _as[Optional[String], A](None)
+        return _as[Optional[String], A](args[at].copy())
     elif A == Request:
         try:
             return _as[Request, A](_raw_request(args))
@@ -1166,21 +1233,38 @@ def _call_state_3[
 
 
 def _route[
-    Last: AnyType
+    A: AnyType, B: AnyType, C: AnyType
 ](method: String, path: StaticString, var handler: _Erased) -> _Route:
-    """The route for a handler whose last request slot has type `Last`
-    (`_NoSlot` for none): a body route, JSON or carrier when `Last` is such
-    a body, raw when it is the `Request`, and a route that receives the
-    header fields for a carrier or a `Headers` slot."""
-    return _Route(
+    """The route for an accepted handler whose request slots have types `A`,
+    `B` and `C` (`_NoSlot` where there is none): a body route, JSON or
+    carrier when its body is such a body, raw when its slot is the
+    `Request`, and a route that receives the header fields for a carrier or
+    a `Headers` slot. A body, a `Headers` or a `Request` slot is always the
+    last one, so the flags read every slot. Each query key whose value binds
+    an `Optional` slot is marked optional (M3-025): route values come first,
+    so the value at position `j` binds query key `j - paths`."""
+    var route = _Route(
         method,
         path,
         handler^,
-        body=_kind[Last]() == _BODY,
-        json=conforms_to(Last, _JsonBody),
-        headers=conforms_to(Last, _HeaderCarrier) or _kind[Last]() == _HEADERS,
-        raw=_kind[Last]() == _RAW,
+        body=_kind[A]() == _BODY or _kind[B]() == _BODY or _kind[C]() == _BODY,
+        json=conforms_to(A, _JsonBody)
+        or conforms_to(B, _JsonBody)
+        or conforms_to(C, _JsonBody),
+        headers=conforms_to(A, _HeaderCarrier)
+        or conforms_to(B, _HeaderCarrier)
+        or conforms_to(C, _HeaderCarrier)
+        or _kind[A]() == _HEADERS
+        or _kind[B]() == _HEADERS
+        or _kind[C]() == _HEADERS,
+        raw=_kind[A]() == _RAW,
     )
+    var paths = _path_params(path)
+    var kinds = [_kind[A](), _kind[B](), _kind[C]()]
+    for j in range(len(kinds)):
+        if _is_optional(kinds[j]):
+            route.query_optional[j - paths] = True
+    return route^
 
 
 struct _Route(Movable):
@@ -1191,6 +1275,10 @@ struct _Route(Movable):
     var query_keys: List[String]
     """Keys of the route's `{key}` query parameters, in the literal's order
     (none if it has no query part)."""
+    var query_optional: List[Bool]
+    """For each of `query_keys`, whether its value binds an `Optional` slot
+    (M3-025): `App.handle` then passes an absent key or an empty value on
+    as `""` instead of answering 400. All `False` until `_route` sets them."""
     var body: Bool
     """Whether the handler's last argument is the request body."""
     var json: Bool
@@ -1238,6 +1326,9 @@ struct _Route(Movable):
                 self.query_keys.append(
                     String(item[byte = 1 : item.byte_length() - 1])
                 )
+        self.query_optional = List[Bool](
+            length=len(self.query_keys), fill=False
+        )
         self.handler = handler^
 
 
@@ -1269,7 +1360,7 @@ struct App(Movable):
         _check["GET", False, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["GET", False, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "GET", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
             )
@@ -1289,30 +1380,33 @@ struct App(Movable):
         `GET path`.
 
         An `Int` or `String` parameter is a route value: `path` declares
-        exactly one parameter, a `{name}` segment (`/users/{id}`) or a
-        `{key}` query item (`/items?{limit}`), whose value is
-        percent-decoded once (`+` is a space in a query value only), then
-        converted to `Int` or passed as the decoded `String`, by position
-        (names are not checked against the handler); a missing, duplicated
-        or empty value, a bad escape, text that is not UTF-8, or, for an
-        `Int`, a non-integer yields 400 without calling `handler`. A
-        `Headers` parameter receives the request's header fields (`path`
-        declares no parameter): a fresh `Headers` with every field in
-        order, rebuilt from the request's; Muntin chooses no status
-        for a field, and only a field held invalidly in memory (the M3-002
-        `_fields` gap) is answered before `handler`, with the fixed 500. A
-        `Request` parameter makes a raw handler, which returns
+        exactly one parameter, a `{name}` segment (`/users/{id}`) or a `{key}`
+        query item (`/items?{limit}`), whose value is percent-decoded once (`+`
+        is a space in a query value only), then converted to `Int` or passed as
+        the decoded `String`, by position (names are not checked against the
+        handler); a missing, duplicated or empty value, a bad escape, text that
+        is not UTF-8, or, for an `Int`, a non-integer yields 400 without
+        calling `handler`. An `Optional[Int]` or `Optional[String]` parameter
+        is an optional route value (M3-025): `path` declares exactly one
+        `{key}` query item and no path parameter, and an absent key, an empty
+        value or a pair without `=` gives `None`; a present value follows the
+        rules above, so a duplicated key is still 400. A `Headers` parameter
+        receives the request's header fields (`path` declares no parameter): a
+        fresh `Headers` with every field in order, rebuilt from the request's;
+        Muntin chooses no status for a field, and only a field held invalidly
+        in memory (the M3-002 `_fields` gap) is answered before `handler`, with
+        the fixed 500. A `Request` parameter makes a raw handler, which returns
         `Response`: `path` declares no parameter, the handler receives the
         whole request (method, path, query, body and header fields as
-        received), Muntin runs no typed extraction, so it answers no 400
-        before `handler`, and the `Response` is the answer. The parameter
-        may be borrowed or `var`; an explicitly typed function value spells
-        it `var` (`def(var Int) thin raises Never -> String`). Results and
-        raises are handled as for `get` on `def()`."""
+        received), Muntin runs no typed extraction, so it answers no 400 before
+        `handler`, and the `Response` is the answer. The parameter may be
+        borrowed or `var`; an explicitly typed function value spells it `var`
+        (`def(var Int) thin raises Never -> String`). Results and raises are
+        handled as for `get` on `def()`."""
         _check["GET", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["GET", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -1331,24 +1425,24 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """Registers `handler` for `GET path` with an `Int` or `String`
-        route value and then the request's `Headers`, where `path` declares
-        exactly one route value, as for `get` on `def(var A)`; or with two
-        `Int` or `String` route values (M3-022), where `path` declares
-        exactly two: two `{name}` segments, two `{key}` query items, or one
-        of each (`/users/{uid}/posts/{pid}`, `/users/{id}?{fields}`).
-        Binding is positional: the path values left to right, then the query
-        values in the literal's order, fill the parameters in order; names
-        are never compared, so two values of one type declared in the other
-        order receive each other's values. The values are converted first,
-        in order, so an invalid one is 400 before the next one or the fields
-        are converted. Every other two-parameter shape is rejected (a `get`
-        handler takes no request body and one `Headers`, last); a
-        registration reports the rule it breaks."""
+        """Registers `handler` for `GET path` with a route value and then the
+        request's `Headers`, where `path` declares exactly one route value, as
+        for `get` on `def(var A)`; or with two route values (M3-022), where
+        `path` declares exactly two: two `{name}` segments, two `{key}` query
+        items, or one of each (`/users/{uid}/posts/{pid}`,
+        `/users/{id}?{fields}`). Binding is positional: the path values left to
+        right, then the query values in the literal's order, fill the
+        parameters in order; names are never compared, so two values of one
+        type declared in the other order receive each other's values. An
+        optional value binds a `{key}` item: one at a path position is
+        rejected. The values are converted first, in order, so an invalid one
+        is 400 before the next one or the fields are converted. Every other
+        two-parameter shape is rejected (a `get` handler takes no request body
+        and one `Headers`, last); a registration reports the rule it breaks."""
         _check["GET", False, path, R, A, B, _NoSlot]()
         comptime if _admits["GET", False, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -1368,18 +1462,17 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B, var C) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """Registers `handler` for `GET path` with two `Int` or `String`
-        route values and then the request's `Headers` (M3-022), where `path`
-        declares exactly two route values, as for `get` on
-        `def(var A, var B)`. Both values are converted first, in order, so
-        an invalid one is 400 before the fields are rebuilt. Every other
-        three-parameter shape is rejected (a `get` handler takes at most two
-        route values, no request body, and one `Headers`, last); a
-        registration reports the rule it breaks."""
+        """Registers `handler` for `GET path` with two route values and then
+        the request's `Headers` (M3-022), where `path` declares exactly two
+        route values, as for `get` on `def(var A, var B)`. Both values are
+        converted first, in order, so an invalid one is 400 before the fields
+        are rebuilt. Every other three-parameter shape is rejected (a `get`
+        handler takes at most two route values, no request body, and one
+        `Headers`, last); a registration reports the rule it breaks."""
         _check["GET", False, path, R, A, B, C]()
         comptime if _admits["GET", False, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -1404,7 +1497,7 @@ struct App(Movable):
         _check["GET", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["GET", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -1428,14 +1521,14 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
-        `def(var A)` after the state: an `Int` or `String` route value, the
-        request's `Headers`, or the raw `Request` returning `Response`. The
-        state is passed as for `get` on `def(State[S])`; a leading
-        `State[S]` keeps its spelling in a typed function value."""
+        `def(var A)` after the state: a route value, the request's `Headers`,
+        or the raw `Request` returning `Response`. The state is passed as for
+        `get` on `def(State[S])`; a leading `State[S]` keeps its spelling in a
+        typed function value."""
         _check["GET", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["GET", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -1460,13 +1553,13 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
-        `def(var A, var B)` after the state: an `Int` or `String` route
-        value, then the request's `Headers`, or two route values. The state
-        is passed as for `get` on `def(State[S])`."""
+        `def(var A, var B)` after the state: a route value, then the request's
+        `Headers`, or two route values. The state is passed as for `get` on
+        `def(State[S])`."""
         _check["GET", True, path, R, A, B, _NoSlot]()
         comptime if _admits["GET", True, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -1492,13 +1585,13 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
-        `def(var A, var B, var C)` after the state: two `Int` or `String`
-        route values, then the request's `Headers`. The state is passed as
-        for `get` on `def(State[S])`."""
+        `def(var A, var B, var C)` after the state: two route values, then the
+        request's `Headers`. The state is passed as for `get` on
+        `def(State[S])`."""
         _check["GET", True, path, R, A, B, C]()
         comptime if _admits["GET", True, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -1522,7 +1615,7 @@ struct App(Movable):
             "POST", False, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "POST", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
             )
@@ -1559,7 +1652,7 @@ struct App(Movable):
         _check["POST", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["POST", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -1578,23 +1671,24 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """Registers `handler` for `POST path` with an `Int` or `String`
-        route value and then the request body, where `path` declares exactly
-        one route value, a `{name}` segment (`/users/{id}`) or a `{key}`
-        query item (`/users?{id}`). Binding is positional: the route value
-        is the first parameter, decoded and converted as for `get`, and the
-        body the second, as for `post` on `def(var A)`; a `String` is never
-        the body. An invalid matched path value, or a missing, duplicated,
-        empty or invalid query value, yields 400 before the body is
-        converted (a missing path segment does not match the route: 404);
-        the body's own steps follow; neither calls `handler`. The route
+        """Registers `handler` for `POST path` with a route value and then the
+        request body, where `path` declares exactly one route value, a `{name}`
+        segment (`/users/{id}`) or a `{key}` query item (`/users?{id}`; for an
+        optional value, a `{key}` item only). Binding is positional: the route
+        value is the first parameter, decoded and converted as for `get`, and
+        the body the second, as for `post` on `def(var A)`; a `String` is never
+        the body. An invalid matched path value, or a query value that `get`
+        answers 400 for (a missing, duplicated, empty or invalid one; for an
+        optional value, a duplicated or invalid one), yields 400 before the
+        body is converted (a missing path segment does not match the route:
+        404); the body's own steps follow; neither calls `handler`. The route
         value may be borrowed or `var`; an explicitly typed function value
         spells both parameters `var`. Results and raises as for `get` on
         `def()`."""
         _check["POST", False, path, R, A, B, _NoSlot]()
         comptime if _admits["POST", False, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -1614,21 +1708,21 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B, var C) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """Registers `handler` for `POST path` with two `Int` or `String`
-        route values and then the request body (M3-022), where `path`
-        declares exactly two route values: two `{name}` segments, two `{key}`
-        query items, or one of each (`/users/{uid}/posts/{pid}`,
-        `/users/{id}?{fields}`). Binding is positional: the path values
-        left to right, then the query values in the literal's order, fill
-        the first two parameters, each decoded and converted as for `get`;
-        the body is the third, as for `post` on `def(var A)`. An invalid value
-        yields 400 before the next value or the body is converted; the
-        body's own steps follow; neither calls `handler`. Results and raises
-        as for `get` on `def()`."""
+        """Registers `handler` for `POST path` with two route values and then
+        the request body (M3-022), where `path` declares exactly two route
+        values: two `{name}` segments, two `{key}` query items, or one of each
+        (`/users/{uid}/posts/{pid}`, `/users/{id}?{fields}`). Binding is
+        positional: the path values left to right, then the query values in the
+        literal's order, fill the first two parameters, each decoded and
+        converted as for `get`; the body is the third, as for `post` on
+        `def(var A)`. An optional value binds a `{key}` item: one at a path
+        position is rejected. An invalid value yields 400 before the next value
+        or the body is converted; the body's own steps follow; neither calls
+        `handler`. Results and raises as for `get` on `def()`."""
         _check["POST", False, path, R, A, B, C]()
         comptime if _admits["POST", False, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -1651,7 +1745,7 @@ struct App(Movable):
         _check["POST", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["POST", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -1682,7 +1776,7 @@ struct App(Movable):
         _check["POST", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["POST", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -1707,13 +1801,12 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `POST path`, as `post` on
-        `def(var A, var B)` after the state: an `Int` or `String` route
-        value, then the request body. The state is passed as for `post` on
-        `def(State[S], var A)`."""
+        `def(var A, var B)` after the state: a route value, then the request
+        body. The state is passed as for `post` on `def(State[S], var A)`."""
         _check["POST", True, path, R, A, B, _NoSlot]()
         comptime if _admits["POST", True, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -1739,13 +1832,13 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `POST path`, as `post` on
-        `def(var A, var B, var C)` after the state: two `Int` or `String`
-        route values, then the request body. The state is passed as for
-        `post` on `def(State[S], var A)`."""
+        `def(var A, var B, var C)` after the state: two route values, then the
+        request body. The state is passed as for `post` on
+        `def(State[S], var A)`."""
         _check["POST", True, path, R, A, B, C]()
         comptime if _admits["POST", True, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -1767,7 +1860,7 @@ struct App(Movable):
         _check["PUT", False, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", False, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "PUT", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
             )
@@ -1804,7 +1897,7 @@ struct App(Movable):
         _check["PUT", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -1823,23 +1916,24 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """Registers `handler` for `PUT path` with an `Int` or `String`
-        route value and then the request body, where `path` declares exactly
-        one route value, a `{name}` segment (`/users/{id}`) or a `{key}`
-        query item (`/users?{id}`). Binding is positional: the route value
-        is the first parameter, decoded and converted as for `get`, and the
-        body the second, as for `put` on `def(var A)`; a `String` is never
-        the body. An invalid matched path value, or a missing, duplicated,
-        empty or invalid query value, yields 400 before the body is
-        converted (a missing path segment does not match the route: 404);
-        the body's own steps follow; neither calls `handler`. The route
+        """Registers `handler` for `PUT path` with a route value and then the
+        request body, where `path` declares exactly one route value, a `{name}`
+        segment (`/users/{id}`) or a `{key}` query item (`/users?{id}`; for an
+        optional value, a `{key}` item only). Binding is positional: the route
+        value is the first parameter, decoded and converted as for `get`, and
+        the body the second, as for `put` on `def(var A)`; a `String` is never
+        the body. An invalid matched path value, or a query value that `get`
+        answers 400 for (a missing, duplicated, empty or invalid one; for an
+        optional value, a duplicated or invalid one), yields 400 before the
+        body is converted (a missing path segment does not match the route:
+        404); the body's own steps follow; neither calls `handler`. The route
         value may be borrowed or `var`; an explicitly typed function value
         spells both parameters `var`. Results and raises as for `get` on
         `def()`."""
         _check["PUT", False, path, R, A, B, _NoSlot]()
         comptime if _admits["PUT", False, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -1859,21 +1953,21 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B, var C) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """Registers `handler` for `PUT path` with two `Int` or `String`
-        route values and then the request body (M3-022), where `path`
-        declares exactly two route values: two `{name}` segments, two `{key}`
-        query items, or one of each (`/users/{uid}/posts/{pid}`,
-        `/users/{id}?{fields}`). Binding is positional: the path values
-        left to right, then the query values in the literal's order, fill
-        the first two parameters, each decoded and converted as for `get`;
-        the body is the third, as for `put` on `def(var A)`. An invalid value
-        yields 400 before the next value or the body is converted; the
-        body's own steps follow; neither calls `handler`. Results and raises
-        as for `get` on `def()`."""
+        """Registers `handler` for `PUT path` with two route values and then
+        the request body (M3-022), where `path` declares exactly two route
+        values: two `{name}` segments, two `{key}` query items, or one of each
+        (`/users/{uid}/posts/{pid}`, `/users/{id}?{fields}`). Binding is
+        positional: the path values left to right, then the query values in the
+        literal's order, fill the first two parameters, each decoded and
+        converted as for `get`; the body is the third, as for `put` on
+        `def(var A)`. An optional value binds a `{key}` item: one at a path
+        position is rejected. An invalid value yields 400 before the next value
+        or the body is converted; the body's own steps follow; neither calls
+        `handler`. Results and raises as for `get` on `def()`."""
         _check["PUT", False, path, R, A, B, C]()
         comptime if _admits["PUT", False, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -1896,7 +1990,7 @@ struct App(Movable):
         _check["PUT", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -1927,7 +2021,7 @@ struct App(Movable):
         _check["PUT", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -1952,13 +2046,12 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PUT path`, as `put` on
-        `def(var A, var B)` after the state: an `Int` or `String` route
-        value, then the request body. The state is passed as for `put` on
-        `def(State[S], var A)`."""
+        `def(var A, var B)` after the state: a route value, then the request
+        body. The state is passed as for `put` on `def(State[S], var A)`."""
         _check["PUT", True, path, R, A, B, _NoSlot]()
         comptime if _admits["PUT", True, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -1984,13 +2077,13 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PUT path`, as `put` on
-        `def(var A, var B, var C)` after the state: two `Int` or `String`
-        route values, then the request body. The state is passed as for
-        `put` on `def(State[S], var A)`."""
+        `def(var A, var B, var C)` after the state: two route values, then the
+        request body. The state is passed as for `put` on
+        `def(State[S], var A)`."""
         _check["PUT", True, path, R, A, B, C]()
         comptime if _admits["PUT", True, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -2014,7 +2107,7 @@ struct App(Movable):
             "PATCH", False, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "PATCH", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
             )
@@ -2051,7 +2144,7 @@ struct App(Movable):
         _check["PATCH", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PATCH", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -2070,23 +2163,24 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """Registers `handler` for `PATCH path` with an `Int` or `String`
-        route value and then the request body, where `path` declares exactly
-        one route value, a `{name}` segment (`/users/{id}`) or a `{key}`
-        query item (`/users?{id}`). Binding is positional: the route value
-        is the first parameter, decoded and converted as for `get`, and the
-        body the second, as for `patch` on `def(var A)`; a `String` is never
-        the body. An invalid matched path value, or a missing, duplicated,
-        empty or invalid query value, yields 400 before the body is
-        converted (a missing path segment does not match the route: 404);
-        the body's own steps follow; neither calls `handler`. The route
+        """Registers `handler` for `PATCH path` with a route value and then the
+        request body, where `path` declares exactly one route value, a `{name}`
+        segment (`/users/{id}`) or a `{key}` query item (`/users?{id}`; for an
+        optional value, a `{key}` item only). Binding is positional: the route
+        value is the first parameter, decoded and converted as for `get`, and
+        the body the second, as for `patch` on `def(var A)`; a `String` is
+        never the body. An invalid matched path value, or a query value that
+        `get` answers 400 for (a missing, duplicated, empty or invalid one; for
+        an optional value, a duplicated or invalid one), yields 400 before the
+        body is converted (a missing path segment does not match the route:
+        404); the body's own steps follow; neither calls `handler`. The route
         value may be borrowed or `var`; an explicitly typed function value
         spells both parameters `var`. Results and raises as for `get` on
         `def()`."""
         _check["PATCH", False, path, R, A, B, _NoSlot]()
         comptime if _admits["PATCH", False, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -2106,21 +2200,21 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B, var C) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """Registers `handler` for `PATCH path` with two `Int` or `String`
-        route values and then the request body (M3-022), where `path`
-        declares exactly two route values: two `{name}` segments, two `{key}`
-        query items, or one of each (`/users/{uid}/posts/{pid}`,
-        `/users/{id}?{fields}`). Binding is positional: the path values
-        left to right, then the query values in the literal's order, fill
-        the first two parameters, each decoded and converted as for `get`;
-        the body is the third, as for `patch` on `def(var A)`. An invalid value
-        yields 400 before the next value or the body is converted; the
-        body's own steps follow; neither calls `handler`. Results and raises
-        as for `get` on `def()`."""
+        """Registers `handler` for `PATCH path` with two route values and then
+        the request body (M3-022), where `path` declares exactly two route
+        values: two `{name}` segments, two `{key}` query items, or one of each
+        (`/users/{uid}/posts/{pid}`, `/users/{id}?{fields}`). Binding is
+        positional: the path values left to right, then the query values in the
+        literal's order, fill the first two parameters, each decoded and
+        converted as for `get`; the body is the third, as for `patch` on
+        `def(var A)`. An optional value binds a `{key}` item: one at a path
+        position is rejected. An invalid value yields 400 before the next value
+        or the body is converted; the body's own steps follow; neither calls
+        `handler`. Results and raises as for `get` on `def()`."""
         _check["PATCH", False, path, R, A, B, C]()
         comptime if _admits["PATCH", False, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -2145,7 +2239,7 @@ struct App(Movable):
             "PATCH", True, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -2176,7 +2270,7 @@ struct App(Movable):
         _check["PATCH", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PATCH", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -2201,13 +2295,12 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PATCH path`, as `patch` on
-        `def(var A, var B)` after the state: an `Int` or `String` route
-        value, then the request body. The state is passed as for `patch` on
-        `def(State[S], var A)`."""
+        `def(var A, var B)` after the state: a route value, then the request
+        body. The state is passed as for `patch` on `def(State[S], var A)`."""
         _check["PATCH", True, path, R, A, B, _NoSlot]()
         comptime if _admits["PATCH", True, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -2233,13 +2326,13 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PATCH path`, as `patch` on
-        `def(var A, var B, var C)` after the state: two `Int` or `String`
-        route values, then the request body. The state is passed as for
-        `patch` on `def(State[S], var A)`."""
+        `def(var A, var B, var C)` after the state: two route values, then the
+        request body. The state is passed as for `patch` on
+        `def(State[S], var A)`."""
         _check["PATCH", True, path, R, A, B, C]()
         comptime if _admits["PATCH", True, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -2272,7 +2365,7 @@ struct App(Movable):
             "DELETE", False, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_0[E, R]](handler),
@@ -2294,30 +2387,33 @@ struct App(Movable):
         `DELETE path`.
 
         An `Int` or `String` parameter is a route value: `path` declares
-        exactly one parameter, a `{name}` segment (`/users/{id}`) or a
-        `{key}` query item (`/items?{limit}`), whose value is
-        percent-decoded once (`+` is a space in a query value only), then
-        converted to `Int` or passed as the decoded `String`, by position
-        (names are not checked against the handler); a missing, duplicated
-        or empty value, a bad escape, text that is not UTF-8, or, for an
-        `Int`, a non-integer yields 400 without calling `handler`. A
-        `Headers` parameter receives the request's header fields (`path`
-        declares no parameter): a fresh `Headers` with every field in
-        order, rebuilt from the request's; Muntin chooses no status
-        for a field, and only a field held invalidly in memory (the M3-002
-        `_fields` gap) is answered before `handler`, with the fixed 500. A
-        `Request` parameter makes a raw handler, which returns
+        exactly one parameter, a `{name}` segment (`/users/{id}`) or a `{key}`
+        query item (`/items?{limit}`), whose value is percent-decoded once (`+`
+        is a space in a query value only), then converted to `Int` or passed as
+        the decoded `String`, by position (names are not checked against the
+        handler); a missing, duplicated or empty value, a bad escape, text that
+        is not UTF-8, or, for an `Int`, a non-integer yields 400 without
+        calling `handler`. An `Optional[Int]` or `Optional[String]` parameter
+        is an optional route value (M3-025): `path` declares exactly one
+        `{key}` query item and no path parameter, and an absent key, an empty
+        value or a pair without `=` gives `None`; a present value follows the
+        rules above, so a duplicated key is still 400. A `Headers` parameter
+        receives the request's header fields (`path` declares no parameter): a
+        fresh `Headers` with every field in order, rebuilt from the request's;
+        Muntin chooses no status for a field, and only a field held invalidly
+        in memory (the M3-002 `_fields` gap) is answered before `handler`, with
+        the fixed 500. A `Request` parameter makes a raw handler, which returns
         `Response`: `path` declares no parameter, the handler receives the
         whole request (method, path, query, body and header fields as
-        received), Muntin runs no typed extraction, so it answers no 400
-        before `handler`, and the `Response` is the answer. The parameter
-        may be borrowed or `var`; an explicitly typed function value spells
-        it `var` (`def(var Int) thin raises Never -> String`). Results and
-        raises are handled as for `delete` on `def()`."""
+        received), Muntin runs no typed extraction, so it answers no 400 before
+        `handler`, and the `Response` is the answer. The parameter may be
+        borrowed or `var`; an explicitly typed function value spells it `var`
+        (`def(var Int) thin raises Never -> String`). Results and raises are
+        handled as for `delete` on `def()`."""
         _check["DELETE", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["DELETE", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -2336,24 +2432,25 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """Registers `handler` for `DELETE path` with an `Int` or `String`
-        route value and then the request's `Headers`, where `path` declares
-        exactly one route value, as for `delete` on `def(var A)`; or with two
-        `Int` or `String` route values (M3-022), where `path` declares
-        exactly two: two `{name}` segments, two `{key}` query items, or one
-        of each (`/users/{uid}/posts/{pid}`, `/users/{id}?{fields}`).
-        Binding is positional: the path values left to right, then the query
-        values in the literal's order, fill the parameters in order; names
-        are never compared, so two values of one type declared in the other
-        order receive each other's values. The values are converted first,
-        in order, so an invalid one is 400 before the next one or the fields
-        are converted. Every other two-parameter shape is rejected (a `delete`
-        handler takes no request body and one `Headers`, last); a
-        registration reports the rule it breaks."""
+        """Registers `handler` for `DELETE path` with a route value and then
+        the request's `Headers`, where `path` declares exactly one route value,
+        as for `delete` on `def(var A)`; or with two route values (M3-022),
+        where `path` declares exactly two: two `{name}` segments, two `{key}`
+        query items, or one of each (`/users/{uid}/posts/{pid}`,
+        `/users/{id}?{fields}`). Binding is positional: the path values left to
+        right, then the query values in the literal's order, fill the
+        parameters in order; names are never compared, so two values of one
+        type declared in the other order receive each other's values. An
+        optional value binds a `{key}` item: one at a path position is
+        rejected. The values are converted first, in order, so an invalid one
+        is 400 before the next one or the fields are converted. Every other
+        two-parameter shape is rejected (a `delete` handler takes no request
+        body and one `Headers`, last); a registration reports the rule it
+        breaks."""
         _check["DELETE", False, path, R, A, B, _NoSlot]()
         comptime if _admits["DELETE", False, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -2373,18 +2470,17 @@ struct App(Movable):
     ](mut self, handler: def(var A, var B, var C) thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """Registers `handler` for `DELETE path` with two `Int` or `String`
-        route values and then the request's `Headers` (M3-022), where `path`
-        declares exactly two route values, as for `delete` on
-        `def(var A, var B)`. Both values are converted first, in order, so
-        an invalid one is 400 before the fields are rebuilt. Every other
-        three-parameter shape is rejected (a `delete` handler takes at most two
-        route values, no request body, and one `Headers`, last); a
-        registration reports the rule it breaks."""
+        """Registers `handler` for `DELETE path` with two route values and then
+        the request's `Headers` (M3-022), where `path` declares exactly two
+        route values, as for `delete` on `def(var A, var B)`. Both values are
+        converted first, in order, so an invalid one is 400 before the fields
+        are rebuilt. Every other three-parameter shape is rejected (a `delete`
+        handler takes at most two route values, no request body, and one
+        `Headers`, last); a registration reports the rule it breaks."""
         _check["DELETE", False, path, R, A, B, C]()
         comptime if _admits["DELETE", False, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -2411,7 +2507,7 @@ struct App(Movable):
             "DELETE", True, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -2435,14 +2531,14 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `DELETE path`, as `delete` on
-        `def(var A)` after the state: an `Int` or `String` route value, the
-        request's `Headers`, or the raw `Request` returning `Response`. The
-        state is passed as for `delete` on `def(State[S])`; a leading
-        `State[S]` keeps its spelling in a typed function value."""
+        `def(var A)` after the state: a route value, the request's `Headers`,
+        or the raw `Request` returning `Response`. The state is passed as for
+        `delete` on `def(State[S])`; a leading `State[S]` keeps its spelling in
+        a typed function value."""
         _check["DELETE", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["DELETE", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -2467,13 +2563,13 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `DELETE path`, as `delete` on
-        `def(var A, var B)` after the state: an `Int` or `String` route
-        value, then the request's `Headers`, or two route values. The state
-        is passed as for `delete` on `def(State[S])`."""
+        `def(var A, var B)` after the state: a route value, then the request's
+        `Headers`, or two route values. The state is passed as for `delete` on
+        `def(State[S])`."""
         _check["DELETE", True, path, R, A, B, _NoSlot]()
         comptime if _admits["DELETE", True, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -2499,13 +2595,13 @@ struct App(Movable):
         state: State[S],
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `DELETE path`, as `delete` on
-        `def(var A, var B, var C)` after the state: two `Int` or `String`
-        route values, then the request's `Headers`. The state is passed as
-        for `delete` on `def(State[S])`."""
+        `def(var A, var B, var C)` after the state: two route values, then the
+        request's `Headers`. The state is passed as for `delete` on
+        `def(State[S])`."""
         _check["DELETE", True, path, R, A, B, C]()
         comptime if _admits["DELETE", True, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -2542,12 +2638,14 @@ struct App(Movable):
         A typed route's route values are percent-decoded once here, after
         matching on the raw path and before any conversion (`_decode_value`):
         the path captures in place, left to right, then each query value
-        after `_query_value` finds it, in the literal's order (M3-022). Query
-        keys, `request.path`, `request.query` and raw routes are never
-        decoded.
+        after `_query_value` finds it, in the literal's order (M3-022). For
+        a key whose value binds an `Optional` slot (`_Route.query_optional`,
+        M3-025), an absent key or an empty value is passed on as `""`
+        instead. Query keys, `request.path`, `request.query` and raw routes
+        are never decoded.
 
-        No matching route is 404. A missing or duplicated query value, an
-        empty value, a bad escape or decoded text that is not UTF-8 is 400
+        No matching route is 404. A duplicated query key, a missing or empty
+        required value, a bad escape or decoded text that is not UTF-8 is 400
         here; the adapter answers its own 400s and turns a handler error
         into a response (`_handler_error`). A raise out of `invoke` is 500,
         never 400.
@@ -2573,19 +2671,24 @@ struct App(Movable):
             else:
                 # The route values, decoded once here at capture (M3-018):
                 # the path captures in place, then each query value as
-                # gathered, in the literal's order (M3-022).
+                # gathered, in the literal's order (M3-022). An optional
+                # value's absent key or empty value is passed on as `""`,
+                # which no decoded value is (M3-025).
                 try:
                     for j in range(len(args)):
                         args[j] = _decode_value(args[j], query=False)
                     for k in range(len(route.query_keys)):
-                        args.append(
-                            _decode_value(
-                                _query_value(
-                                    request.query, route.query_keys[k]
-                                ),
-                                query=True,
-                            )
+                        var raw = _query_value(
+                            request.query, route.query_keys[k]
                         )
+                        if route.query_optional[k] and (
+                            not raw or raw.value().byte_length() == 0
+                        ):
+                            args.append("")
+                        elif not raw:
+                            raise Error("missing query key")
+                        else:
+                            args.append(_decode_value(raw.value(), query=True))
                 except:
                     return _bad_request()
                 if route.body:

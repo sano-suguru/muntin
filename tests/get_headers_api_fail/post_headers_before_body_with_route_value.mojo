@@ -5,7 +5,7 @@
 # registers and binds the route value as a field name and the body as its value.
 # Decision: docs/history/architecture-decisions.md, "Typed get header access
 # decision (M3-016)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler's parameter before the body is an Int or String route value
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler's parameter before the body is a route value: an Int, a String or an Optional of either
 from muntin import App, FromBody, Headers
 
 
