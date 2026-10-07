@@ -121,8 +121,9 @@ src/muntin/app.mojo               App: route table, the get/post/put/patch/delet
                                   private route matching (_match), slot extraction, adapters and the one rebind helper
 src/muntin/_registration_rules.mojo
                                   private registration rules: slot kinds (_kind), route-literal parsing, _rule, _check, _admits;
-                                  compile time, plus _kind, _is_optional and _path_params (with the _is_param it calls) once per
-                                  registration (_route); the one per-request part is the shared _is_param segment predicate (_match);
+                                  the rules are evaluated at compile time (_check, _admits); _route also uses _kind, _is_optional
+                                  and _path_params (with the _is_param it calls) to build route metadata at registration; the one
+                                  per-request part is the shared _is_param segment predicate (_match);
                                   imported by app.mojo; imports only the types it classifies (.http, .body, .headers_body, .state)
 src/muntin/state.mojo             State[S]; private marker _InjectedState
 src/muntin/json.mojo              Json[T], FromJson, ToJson, JsonValue, JsonWriter; private parser, limits, _JsonBody

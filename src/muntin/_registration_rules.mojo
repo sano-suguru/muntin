@@ -9,12 +9,14 @@ one Bool, guards the adapter's instantiation. The route-literal parsers
 (`_is_param`, `_path_params`, `_query_params`, `_distinct_query_keys`) are
 here because the rules read them.
 
-When each part runs: everything here runs at compile time, through
-`_check` and `_admits`. `_route` in `app.mojo` also calls `_kind`,
-`_is_optional` and `_path_params` (and through it `_is_param`) once per
-registration. Only `_is_param` runs per request: `_match` in `app.mojo`
-classifies each route segment with it, so registration and dispatch share
-one segment classification and agree on how many values a route captures.
+When each part runs: the rules are evaluated at compile time, through
+`_check` and `_admits`. Some of the same classification and parsing
+helpers (`_kind`, `_is_optional`, `_path_params` and, through it,
+`_is_param`) are also used while `_route` in `app.mojo` builds a route's
+metadata at registration. Only `_is_param` runs per request: `_match` in
+`app.mojo` classifies each route segment with it, so registration and
+dispatch share one segment classification and agree on how many values a
+route captures.
 """
 
 from .body import FromBody
