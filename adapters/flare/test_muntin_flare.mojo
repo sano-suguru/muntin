@@ -1,4 +1,5 @@
-"""Socket-free contract tests for the Flare adapter (M1-002; headers M3-005).
+"""Socket-free contract tests for the Flare adapter (M1-002; headers M3-005;
+`HEAD` M3-027).
 
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). Every
 dispatch goes through `MuntinHandler.serve`, the entry point Flare's server
@@ -292,6 +293,164 @@ def test_internal_name_write_is_a_500() raises:
 def test_responses_without_headers_add_none() raises:
     var out = to_flare_response(Response.text("hello"))
     assert_equal(out.headers.len(), 0)
+
+
+# `HEAD` (M3-027): every exit of `MuntinHandler.serve` sends the `GET`
+# answer's status and fields, no body, and the body's length.
+
+
+def length_field(var req: Request) -> Response:
+    var r = Response.text("abc", status=202)
+    try:
+        r.headers.add("X-Request-Id", "7")
+        r.headers.add("Content-Length", "99")
+    except:
+        pass
+    return r^
+
+
+def internal_write(var req: Request) -> Response:
+    var bad = Response.text("never")
+    try:
+        bad.headers.add("X-Ok", "1")
+    except:
+        pass
+    bad.headers._fields[0].value = String("a") + chr(0) + String("b")
+    return bad^
+
+
+def continue_(var req: Request) -> Response:
+    return Response(100, "abc")
+
+
+def early_hints(var req: Request) -> Response:
+    return Response(103, "abc")
+
+
+def no_content(var req: Request) -> Response:
+    return Response(204, "abc")
+
+
+def reset_content(var req: Request) -> Response:
+    return Response(205, "abc")
+
+
+def not_modified(var req: Request) -> Response:
+    var r = Response(304, "abc")
+    try:
+        r.headers.add("ETag", '"v1"')
+    except:
+        pass
+    return r^
+
+
+def out_of_range(var req: Request) -> Response:
+    return Response(99, "abc")
+
+
+def head_app() -> App:
+    var app = app_with_routes()
+    app.get["/cl"](length_field)
+    app.get["/bad-field"](internal_write)
+    app.get["/100"](continue_)
+    app.get["/103"](early_hints)
+    app.get["/204"](no_content)
+    app.get["/205"](reset_content)
+    app.get["/304"](not_modified)
+    app.get["/99"](out_of_range)
+    return app^
+
+
+def _wire(response: FlareResponse) -> String:
+    var wire = List[UInt8]()
+    response.headers.encode_to(wire)
+    return String(from_utf8_lossy=Span(wire))
+
+
+def test_head_sends_get_fields_and_length_without_body() raises:
+    var handler = MuntinHandler(head_app())
+    # (target, status): `App.handle`'s answers, its 400 and 404 included,
+    # and `to_flare_response`'s fixed 500.
+    for want in [
+        ("/hello", 200),
+        ("/items?limit=010", 200),
+        ("/items?limit=abc", 400),
+        ("/missing", 404),
+        ("/users", 404),
+        ("/cl", 202),
+        ("/bad-field", 500),
+        # Below 100 is not 1xx: the rule declares its length.
+        ("/99", 99),
+    ]:
+        var target = String(want[0])
+        var get = handler.serve(FlareRequest("GET", target))
+        var head = handler.serve(FlareRequest("HEAD", target))
+        assert_equal(get.status, want[1], target)
+        assert_true(len(get.body) > 0, target)
+        assert_equal(head.status, get.status, target)
+        assert_equal(len(head.body), 0, target)
+        # The GET's fields, then the length of the GET's body, nothing else;
+        # the handler's own `Content-Length: 99` stays dropped.
+        assert_equal(
+            _wire(head),
+            _wire(get) + "Content-Length: " + String(len(get.body)) + "\r\n",
+            target,
+        )
+    var cl = handler.serve(FlareRequest("HEAD", "/cl"))
+    assert_equal(_wire(cl), "X-Request-Id: 7\r\nContent-Length: 3\r\n")
+    var bad = handler.serve(FlareRequest("HEAD", "/bad-field"))
+    assert_equal(_wire(bad), "Content-Length: 21\r\n")
+
+
+def test_head_declares_no_length_for_statuses_without_content() raises:
+    var handler = MuntinHandler(head_app())
+    for want in [
+        ("/100", 100),
+        ("/103", 103),
+        ("/204", 204),
+        ("/205", 205),
+        ("/304", 304),
+    ]:
+        var target = String(want[0])
+        var get = handler.serve(FlareRequest("GET", target))
+        var head = handler.serve(FlareRequest("HEAD", target))
+        # A non-empty body that the length would otherwise come from.
+        assert_equal(get.text(), "abc", target)
+        assert_equal(head.status, want[1], target)
+        assert_equal(len(head.body), 0, target)
+        assert_equal(_wire(head), _wire(get), target)
+        assert_false(head.headers.contains("content-length"), target)
+    assert_equal(
+        _wire(handler.serve(FlareRequest("HEAD", "/304"))), 'ETag: "v1"\r\n'
+    )
+
+
+def test_head_rule_covers_the_adapters_own_400() raises:
+    var req = FlareRequest("HEAD", "/hello")
+    req.headers.append("x-user:admin", "zzz")
+    var head = MuntinHandler(head_app()).serve(req)
+    assert_equal(head.status, 400)
+    assert_equal(len(head.body), 0)
+    assert_equal(_wire(head), "Content-Length: 11\r\n")
+
+
+def test_other_methods_keep_their_body() raises:
+    var handler = MuntinHandler(head_app())
+    var get = handler.serve(FlareRequest("GET", "/cl"))
+    assert_equal(get.text(), "abc")
+    assert_equal(_wire(get), "X-Request-Id: 7\r\n")
+    # Only the exact token `HEAD` is the rule's: `head` is 404 in `App.handle`
+    # and goes out with its body.
+    for method in ["head", "Head", "OPTIONS"]:
+        var r = handler.serve(FlareRequest(method, "/hello"))
+        assert_equal(r.status, 404, method)
+        assert_equal(r.text(), "Not Found", method)
+        assert_equal(_wire(r), "", method)
+    var post = handler.serve(
+        FlareRequest("POST", "/users", body=List("name=Ada".as_bytes()))
+    )
+    assert_equal(post.text(), "created Ada")
+    assert_equal(_wire(post), "")
 
 
 def main() raises:

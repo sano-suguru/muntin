@@ -250,7 +250,7 @@ app.delete["/cache"](purge)
 # DELETE /users/7  (no Authorization)       -> 401 "Unauthorized"
 # DELETE /users/abc                         -> 400 "Bad Request"  (remove_user not called)
 # DELETE /cache  "all"                      -> 200 "purged /cache [all]"
-# POST /users/7, HEAD /users/7, OPTIONS /users/7, GET /cache, delete /users/7 -> 404 "Not Found"
+# POST /users/7, HEAD /users/7 (no get route here), OPTIONS /users/7, GET /cache, delete /users/7 -> 404 "Not Found"
 
 var client = TestClient(app)
 _ = client.put("/users/7", "name=Ada")
@@ -266,10 +266,47 @@ Semantics:
 - Shape families: `put` and `patch` accept every shape `post` accepts and no other (a required body last: a `FromBody`, a `Json[T]` or a `WithHeaders[B]`; at most two route values (`Int`, `String` or an `Optional` of either) before it; the raw handler; each after a leading `State[S]`). `delete` accepts every shape `get` accepts and no other (no body; at most two route values; a `Headers` parameter last; the raw handler; each after a leading `State[S]`). Route values, their decoding and 400s, the body steps (400, and 415 then 413 for `Json[T]`), result policies and errors are those of the family, in the same order. Everything this document says about `post`'s shapes holds for `put` and `patch`, and about `get`'s for `delete`.
 - A typed `put` or `patch` handler takes a body; one without a body is a compile error (`a put handler takes the request body as its last parameter`). A request with an empty body is not a bodyless handler: the body rules apply to `""` (415 first for a `Json[T]` body without its `Content-Type`, then 400 if `from_body("")` raises).
 - A typed `delete` handler takes no body: a body parameter is `constraint failed: a delete handler takes no request body`, and a body sent to a typed `delete` route is not read. A raw `delete` handler receives the whole request, `req.body` included.
-- Matching is unchanged: a route matches only a request whose method is its own (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`) byte for byte, routes are tried in registration order across methods, and the first whose method and path match handles the request and never falls through. A path that only routes of other methods match is 404, the same as no match: Muntin does not answer 405 or send `Allow` (why: [HTTP methods decision (M3-020)](history/architecture-decisions.md#http-methods-decision-m3-020)). `HEAD`, `OPTIONS` and every other method are 404.
+- Matching: a route matches a request whose method is its own (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`) byte for byte, and a `get` route also matches `HEAD` (below). Routes are tried in registration order across methods, and the first whose method and path match handles the request and never falls through. A path that only routes of other methods match is 404, the same as no match: Muntin does not answer 405 or send `Allow` (why: [HTTP methods decision (M3-020)](history/architecture-decisions.md#http-methods-decision-m3-020)). `HEAD` on a path no `get` route matches, `OPTIONS` and every other method are 404.
 - Diagnostics name the method: each message that names `get` or `post` above names `delete`, `put` or `patch` on those methods (`a stateful raw delete handler takes State first, then only the Request, and returns Response`, `State is injected application state, not the request body; a stateful put handler takes State first and the body last, and the state is the registration's second argument`, `a patch handler takes one request body, as its last parameter`); messages that name no method are the same. A call no overload takes is `no matching method in call to 'put'` (or `'patch'`, `'delete'`), with that method's eight candidate notes.
 - `TestClient.put(target, body)`, `.patch(target, body)` and `.delete(target)` send `PUT`, `PATCH` and `DELETE` through `App.handle` (section 10); `delete` sends an empty body.
 - Through Flare, a method with a lowercase letter (`delete`) is 400 from Flare before `App.handle`, which would answer 404 (`docs/ARCHITECTURE.md`, "Other current limits").
+
+`HEAD`, proven by `tests/test_head.mojo` (which runs this example as written), `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo` and `compat/flare/head/head_probe.mojo` (via `./scripts/check_flare.sh`). A `get` route answers `HEAD`; there is no `app.head`:
+
+```mojo
+from muntin import App, Request, Response
+
+
+def show_user(id: Int) -> String:
+    return String("user ", id)
+
+
+def report(req: Request) -> Response:  # raw: req.method is "GET" or "HEAD"
+    return Response.text("report")     # the GET body for both
+
+
+def drop(id: Int) -> String:
+    return String("dropped ", id)
+
+
+var app = App()                        # its own App
+app.get["/users/{id}"](show_user)
+app.get["/report"](report)
+app.delete["/cache/{id}"](drop)
+# HEAD /users/7   -> 200 "user 7" from App.handle, as GET /users/7; through Flare: 200, Content-Length: 6, no content
+# HEAD /users/abc -> 400 "Bad Request" (show_user not called); through Flare: 400, Content-Length: 11, no content
+# HEAD /report    -> report receives req.method == "HEAD": 200 "report"; through Flare: Content-Length: 6, no content
+# HEAD /cache/1, HEAD /missing, head /users/7, OPTIONS /users/7 -> 404 "Not Found"
+
+var head = app.handle(Request("HEAD", "/users/7"))  # no TestClient.head
+# head.status == 200, head.text() == "user 7": the in-memory response keeps the body
+```
+
+- A `HEAD` request is answered by the first route, in registration order, whose method is `GET` and whose path matches: route values, the `Headers` parameter, `State`, the handler, the result or error conversion and the 400/404/500 order all run as for `GET`. A typed handler gets the `GET`'s arguments, so `App.handle` returns the `GET`'s status, fields and body; a raw handler receives the `HEAD` request (below). A route of another method on the path is skipped, as for any method. Only the exact token `HEAD` maps: `head` and `Head` are 404 (through Flare they are 400 before `App.handle`, as `delete` is). `HEAD` on a path no `get` route matches is 404, with no 405 or `Allow`.
+- The backend keeps the content off the wire. A network backend sends the response's status and fields with no content and declares a `Content-Length` equal to the byte length of the body it would send for the `GET` (the one `App.handle` returned, or the backend's own answer), or none for a status that never carries content (1xx, 204, 205, 304). The Flare adapter applies this to every answer it sends for `HEAD`, its own 400 and 500 included, over HTTP/1.1 and cleartext HTTP/2; over HTTP/1.1 Flare itself still frames a 205 or 304 with `Content-Length: 0`. A handler's own `Content-Length` is dropped, as for every method. Why: [HEAD decision (M3-026)](history/architecture-decisions.md#head-decision-m3-026).
+- A typed handler cannot tell `HEAD` from `GET`: it receives the same arguments. A raw `get` handler receives the request as sent, `req.method == "HEAD"`, and must answer it with the body it would give `GET`: the backend declares the length of the body the handler returned, so a shorter body for `HEAD` (to skip work) sends a wrong `Content-Length`. Muntin cannot check this.
+- Testing: `TestClient` has no `head`; a test builds `Request("HEAD", target)` and calls `app.handle`, and the response has the body a network backend does not send.
+- Cost: every `HEAD` computes and converts the whole `GET` body for the backend to drop.
 
 Two route values, proven by `tests/test_route_values.mojo` (which runs this example as written), `tests/route_values_api_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. A handler takes up to two route values, on every method:
 
@@ -954,7 +991,7 @@ Semantics:
 - The handler may declare `req: Request` (canonical) or `var req: Request` (it owns a fresh copy of the request and can move `req.body` out). It returns `Response` only.
 - It may be non-raising, `raises` or `raises T`, under the error model of section 6: a `T` declaring `ToErrorResponse` answers its own response, anything else is the fixed 500 without the error text.
 - The route is selected by method and path as usual (404 otherwise, without calling the handler; first registration wins across raw and typed routes, and a typed route's 400 does not fall through to a later one). The route literal declares no path or query parameter (`def()`'s rule and messages: `route declares a path parameter but the handler takes none`, `... query parameter ...`, `malformed route literal`).
-- The handler reads `req.method`, `req.path`, `req.query` and `req.body` exactly as the backend built them (the query undecoded, an empty body included). Muntin runs no typed extraction on a raw route, so it generates no 400 before the handler; the handler's `Response` (or its error's `to_error_response()`) may use any status, 400 included.
+- The handler reads `req.method`, `req.path`, `req.query` and `req.body` exactly as the backend built them (the query undecoded, an empty body included). A raw `get` handler also answers `HEAD`, with `req.method == "HEAD"`, and returns the body it would return for `GET` ("`HEAD`" in "Proven vs. target status"). Muntin runs no typed extraction on a raw route, so it generates no 400 before the handler; the handler's `Response` (or its error's `to_error_response()`) may use any status, 400 included.
 - A raw-shaped handler that breaks the raw rule on `post` (`def(req: Request) -> String` or `-> User`, `def(id: Int, req: Request)`) reports `constraint failed: Request is the whole request, not a body; a raw handler takes only the Request and returns Response` instead of the `FromBody` message, and one with an extra parameter after the `Request` `constraint failed: a raw post handler takes only the Request and returns Response`. On `get` each is `constraint failed: a raw get handler takes only the Request and returns Response`.
 - An explicitly typed function value must be spelled `def(var Request) thin raises Never -> Response` on Mojo 1.1.0; `def(Request) thin raises Never -> Response` or a type without `raises` fails with `TODO: function type conversions between closures not supported yet` (as for typed values, section 6).
 
@@ -1041,6 +1078,7 @@ _ = client.get("/echo")                             # no fields
 - The client builds `Request(method, target, body, headers^)` and nothing else: it adds, removes, inspects or merges no field, so its answer equals `app.handle(Request(...))` built from the same method, target and body and a `Headers` value with the same fields. Fields keep their order, casing and repeats, and an empty value is sent as a value.
 - `headers=` is keyword-only: a positional `Headers` after the target or the body is `invalid call to 'get'` (or `'post'`, `'put'`, `'patch'`, `'delete'`): `unexpected argument`. A plain variable is `cannot be implicitly copied` (pass `headers^` or `headers.copy()`), and using it after `^` is `use of uninitialized value`. Each call without `headers=` sends none; the client keeps no per-client fields.
 - Building `Headers` raises (`add` validates), so a test that sends fields runs in a raising context.
+- `HEAD` has no `TestClient` method: a test builds `Request("HEAD", target)` and calls `app.handle`. The response is the `GET`'s, body included; a network backend sends no content ("`HEAD`" in "Proven vs. target status").
 
 ## 11. Transport independence
 

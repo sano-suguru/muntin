@@ -193,10 +193,10 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/json_probe.log"; then
     exit 1
 fi
 
-# M3-026 HEAD evidence (docs/history/architecture-decisions.md "HEAD decision (M3-026)"):
+# M3-026 HEAD evidence, re-pinned by M3-027 (docs/history/architecture-decisions.md "HEAD decision (M3-026)"):
 # what pinned Flare and the adapter send for a HEAD response over HTTP/1.1
 # and h2c, by where the content is dropped.
-step "Flare HEAD probe (M3-026)"
+step "Flare HEAD probe (M3-026, re-pinned by M3-027)"
 head_status=0
 ./build/head_probe >"$tmp/head_probe.log" 2>&1 || head_status=$?
 cat "$tmp/head_probe.log"
@@ -207,7 +207,7 @@ if pgrep -f "$leftover_head"; then
     exit 1
 fi
 if ((head_status != 0)); then
-    echo "error: Flare HEAD behavior differs from the recorded M3-026 evidence" >&2
+    echo "error: Flare HEAD behavior differs from the recorded M3-026/M3-027 evidence" >&2
     exit 1
 fi
 

@@ -51,11 +51,17 @@ M3-023 amended the contract (decided by M3-022): a typed handler takes up to two
 
 M3-025 amended the contract (decided by M3-024): an `Optional[Int]` or `Optional[String]` parameter is an optional route value. It binds a query placeholder only, is `None` when its key is absent, its value is empty or its pair has no `=`, and the handler supplies any default (`limit.or_else(20)`); a repeated key or an invalid present value is 400 as for a required value, and an application cannot tell `?q=` from no `q`. M2 is not reopened: the contract's "missing/duplicated/empty/invalid query value is 400 before the handler" still holds for every required value, and no route registered before had an optional one. By kind: the accepted set only grows (handlers with an optional value register; no handler that registered is rejected or registers differently); the overload set is unchanged; specific rejected-call diagnostics change (the two messages that list what a parameter may be name `Optional`, and a call with an `Optional[Int]` or `Optional[String]` parameter that got one of them now registers, gets one of three new messages, or gets the existing message of the next rule it breaks); and the runtime of every previously valid route is unchanged ([Optional query values decision (M3-024)](history/architecture-decisions.md#optional-query-values-decision-m3-024)).
 
-Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it. What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
+M3-027 reopened the contract (decided by M3-026): a `get` route also answers `HEAD` on a path it matches, which M2 answered 404. That changes what an existing registration answers, so it is an M2 reopen under M2-016 ("a different 400/404/500 boundary"). By kind:
+- `App.handle`: a `HEAD` request whose path a `get` route matches runs that route instead of getting 404: a typed handler gets the `GET`'s arguments and its answer, body included, is the `GET`'s; a raw handler receives the `HEAD` request (next bullet). "No route match is 404" still holds for every other request, `HEAD` on a path no `get` route matches included; `head`, `Head` and `OPTIONS` are still 404;
+- the wire: every `HEAD` response through Flare carries no content, the 404s included (over cleartext HTTP/2 they carried `Not Found` before), and the adapter declares a `Content-Length` equal to the byte length of the body it would send for the `GET` (`App.handle`'s, or the adapter's own 400 or 500), and none for 1xx, 204, 205 or 304 (over HTTP/1.1, Flare still frames a 205 or 304 with `Content-Length: 0`). This is the Flare adapter's change, not `App.handle`'s;
+- the raw escape hatch: a raw `get` handler can now receive `req.method == "HEAD"`; it still receives the whole `Request`;
+- the accepted set, the overload set and every diagnostic are unchanged.
+
+Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it, except one: the contract's opening sentence holds for `HEAD`'s answer but not for its content. The in-memory response to `HEAD` keeps the body, and keeping it off the wire, with the length, is each network backend's obligation ([HEAD decision (M3-026)](history/architecture-decisions.md#head-decision-m3-026)). What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
 
 ## M3 — composition and production ergonomics
 
-Each M3 area is cut decision-first: a decision item picks the design with pinned-compiler evidence and names one exact production slice, which is the next item.
+An M3 area with an open design question is cut decision-first: a decision item picks the design with pinned-compiler evidence and names one exact production slice, which is the next item. Which kind an item is: `docs/DEVELOPMENT.md` section 2.
 
 | Capability | Status |
 |---|---|
@@ -70,16 +76,17 @@ Each M3 area is cut decision-first: a decision item picks the design with pinned
 | `PUT`, `PATCH` and `DELETE` (`app.put`/`app.patch` with `post`'s shapes, `app.delete` with `get`'s; `TestClient.put`, `.patch`, `.delete`) | shipped |
 | two route values (path, query or one of each, bound in the literal's order) on every method | shipped |
 | optional query values (`Optional[Int]`, `Optional[String]`; `None` when absent or empty) | shipped |
+| `HEAD` through `get` routes (the `GET` route's steps; the backend sends no content and the body's length) | shipped |
 
 ### Remaining candidates
 
-Each becomes its own decision-first item.
+Each becomes its own item, a decision item first where it opens a design question.
 
 - **OpenAPI/schema output**: needs a type-to-format mapping; codecs are hand-mapped today, so a schema source waits for a derived codec;
 - **JSON follow-ups**: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;
 - **compile-time header names, a `FromHeaders` converter**: a converter makes Muntin choose a status for header values; `Headers` can conform to it without changing the `get` shapes;
 - **more route values**: three or more values, a default written in the literal (`?{limit=20}`), other value types, a named carrier that checks placeholder names. A value type is a slot kind; a third value beside a body or `Headers` needs slot arity 4 ([M3-022](history/architecture-decisions.md#several-route-values-decision-m3-022));
-- **more HTTP methods** (bodyless typed `post`, `put` and `patch` handlers, `HEAD`, `OPTIONS`, 405 with `Allow`, a typed `DELETE` body, methods outside `GET`, `POST`, `PUT`, `PATCH`, `DELETE` or a generic entrypoint): each has a revisit condition in [M3-020](history/architecture-decisions.md#http-methods-decision-m3-020). A bodyless shape is a rule change on `post`'s family, and 405 changes the M2 contract's 404;
+- **more HTTP methods** (bodyless typed `post`, `put` and `patch` handlers, `OPTIONS`, 405 with `Allow`, a typed `DELETE` body, methods outside `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` or a generic entrypoint, a registered `HEAD`, `TestClient.head`): each has a revisit condition in [M3-020](history/architecture-decisions.md#http-methods-decision-m3-020) or, for the two `HEAD` items, [M3-026](history/architecture-decisions.md#head-decision-m3-026). A bodyless shape is a rule change on `post`'s family, and 405 changes the M2 contract's 404;
 - **more body shapes**: a Muntin text type conforming to `FromBody` (raw `String` is a route-value type, never a body), optional, multiple, streaming and binary bodies (binary needs a non-`String` body representation);
 - **fallible conversions and parameter-name checking**: a raising `to_response`/`to_error_response` needs its own error answer; name checking needs function-parameter reflection, which Mojo 1.1.0 lacks;
 - **broader raw handlers**: raw route values, `String`/`ToResponse` raw results (each a rule change on the arity overloads);
