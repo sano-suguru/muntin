@@ -147,6 +147,17 @@ M3-025 registers `GET /pages?{size}` -> `page_of(size: Optional[Int])` on
 `None`, so the backend must pass the query as received, a bare key and a
 trailing `=` included; each status and body equals `TestClient`'s. The
 adapter is unchanged.
+
+M3-027 sends `HEAD` to `headers_app()`, which gains the raw `GET /nm`
+(304) and `GET /rc` (205), each answering with a 3-byte body. Over h2c
+(the raw client takes the method), a typed route, the raw `GET /keyed`
+(which sees `HEAD`), a route-value 400 and the adapter's own 400 (a field
+named `x-user:admin`) go out with their status, a `content-length` equal to
+`App.handle`'s body and no DATA frame; the 304 and 205 with no
+`content-length` and no DATA frame. Over HTTP/1.1 the same routes give
+their status and `Content-Length` (Flare's client reads no content for
+`HEAD`, so its empty body is no evidence; `compat/flare/head/head_probe.mojo`
+reads the raw bytes).
 """
 
 from std.ffi import c_uint, external_call
@@ -468,6 +479,16 @@ def purge(req: Request) -> Response:
     )
 
 
+def not_modified(var req: Request) -> Response:
+    """A raw 304 with a body Muntin does not define as the representation."""
+    return Response(304, "abc")
+
+
+def reset_content(var req: Request) -> Response:
+    """A raw 205 with a body, which a 205 never carries."""
+    return Response(205, "abc")
+
+
 def headers_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -478,6 +499,8 @@ def headers_app() -> App:
     app.get["/keyed"](keyed, signer)
     app.post["/keyed"](keyed, signer)
     app.get["/signed/{id}"](signed_note, State(Gate("t0k")))
+    app.get["/nm"](not_modified)
+    app.get["/rc"](reset_content)
     return app^
 
 
@@ -1144,13 +1167,17 @@ def _h2_frame(
     return encode_frame(f)
 
 
-def h2_get(
-    port: Int, path: String, fields: List[Tuple[String, String]]
-) raises -> Tuple[List[HpackHeader], String]:
-    """One GET over cleartext HTTP/2 (prior knowledge) on stream 1: the
-    response's decoded header fields (`:status` first) and its body."""
+def h2_request(
+    port: Int,
+    method: String,
+    path: String,
+    fields: List[Tuple[String, String]],
+) raises -> Tuple[List[HpackHeader], String, Int]:
+    """One request over cleartext HTTP/2 (prior knowledge) on stream 1: the
+    response's decoded header fields (`:status` first), its body and the
+    number of DATA frames it came in (an empty DATA frame counts)."""
     var hdrs = List[HpackHeader]()
-    hdrs.append(HpackHeader(":method", "GET"))
+    hdrs.append(HpackHeader(":method", method))
     hdrs.append(HpackHeader(":scheme", "http"))
     hdrs.append(HpackHeader(":path", path))
     hdrs.append(HpackHeader(":authority", "localhost"))
@@ -1179,6 +1206,7 @@ def h2_get(
     var pos = 0
     var fields_out = List[HpackHeader]()
     var body = List[UInt8]()
+    var data_frames = 0
     while True:
         var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
         if not maybe:
@@ -1198,11 +1226,12 @@ def h2_get(
             fields_out = decoder.decode(Span[UInt8, _](f.payload))
         elif f.header.type.value == FrameType.DATA().value:
             body.extend(Span[UInt8, _](f.payload))
+            data_frames += 1
         elif f.header.type.value == FrameType.RST_STREAM().value:
             raise Error("RST_STREAM")
         if f.header.flags.has(FrameFlags.END_STREAM()):
             break
-    return (fields_out^, String(from_utf8_lossy=Span(body)))
+    return (fields_out^, String(from_utf8_lossy=Span(body)), data_frames)
 
 
 def _h2_fields(fields: List[HpackHeader]) -> String:
@@ -1217,8 +1246,9 @@ def _h2_fields(fields: List[HpackHeader]) -> String:
 def test_headers_over_h2c_follow_the_same_rules() raises:
     var child = _serve_in_child(headers_app())
     try:
-        var ok = h2_get(
+        var ok = h2_request(
             child.port,
+            "GET",
             "/signed",
             [
                 (String("x-signature"), String("sha256=abc")),
@@ -1233,8 +1263,9 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
         )
         assert_equal(ok[1], "sha256=abc|2")
         # HTTP/2 admits `:` inside a name; Muntin cannot represent it.
-        var forged = h2_get(
+        var forged = h2_request(
             child.port,
+            "GET",
             "/signed",
             [
                 (String("x-signature"), String("sha256=abc")),
@@ -1244,6 +1275,90 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
         print("observed h2c forged:", _h2_fields(forged[0]), forged[1])
         assert_equal(forged[0][0].value, "400")
         assert_equal(forged[1], "Bad Request")
+
+        # M3-027: HEAD at every exit of `MuntinHandler.serve`. (target,
+        # fields, status, content-length or "" for none); each goes out
+        # with no DATA frame.
+        var app = headers_app()
+        var sig = (String("x-signature"), String("sha256=k"))
+        var auth = (String("authorization"), String("t0k"))
+        var admin = (String("x-user:admin"), String("zzz"))
+        var none = List[Tuple[String, String]]()
+        var signed = none.copy()
+        signed.append(sig)
+        var authorized = none.copy()
+        authorized.append(auth)
+        var forged_name = none.copy()
+        forged_name.append(admin)
+        var cases = [
+            (String("/hello"), none.copy(), 200, String("5")),
+            # The raw handler sees HEAD: its own answer's length goes out.
+            (String("/keyed?k"), signed^, 202, String("")),
+            (String("/signed/x"), authorized^, 400, String("11")),
+            (String("/hello"), forged_name^, 400, String("11")),
+            (String("/nm"), none.copy(), 304, String("")),
+            (String("/rc"), none.copy(), 205, String("")),
+        ]
+        for c in cases:
+            var target = c[0]
+            var head = h2_request(child.port, "HEAD", target, c[1])
+            var label = String(target, " ", len(c[1]))
+            print(
+                "observed h2c HEAD",
+                label,
+                _h2_fields(head[0]),
+                "DATA frames:",
+                head[2],
+            )
+            assert_equal(head[0][0].value, String(c[2]), label)
+            assert_equal(head[1], "", label)
+            assert_equal(head[2], 0, label)
+            var length = c[3]
+            if target == "/keyed?k":
+                var h = Headers()
+                h.add("x-signature", "sha256=k")
+                var local = app.handle(Request("HEAD", target, "", h^))
+                assert_equal(local.body, "sha256=k|HEAD|/keyed|k||0")
+                length = String(local.body.byte_length())
+            var got = String("")
+            for f in head[0]:
+                if f.name == "content-length":
+                    got = f.value
+            assert_equal(got, length, label)
+        # Status and fields are the GET's: the content-length is added last.
+        var get = h2_request(child.port, "GET", "/hello", none)
+        var head = h2_request(child.port, "HEAD", "/hello", none)
+        assert_equal(get[1], "hello")
+        assert_equal(
+            _h2_fields(head[0]), _h2_fields(get[0]) + "content-length=5;"
+        )
+        var nm_get = h2_request(child.port, "GET", "/nm", none)
+        assert_equal(nm_get[1], "abc")
+
+        # Over HTTP/1.1, Flare's client reads no content for HEAD whatever
+        # is sent, so only status and Content-Length are evidence here; the
+        # no-content evidence is compat/flare/head/head_probe.mojo's raw
+        # bytes.
+        var base = String("http://127.0.0.1:", child.port)
+        var client = _client()
+        var h1_cases = [
+            (String("/hello"), String(""), 200, String("5")),
+            (String("/keyed?k"), String("sha256=k"), 202, String("25")),
+            (String("/signed/x"), String(""), 400, String("11")),
+        ]
+        for c in h1_cases:
+            var req = FlareRequest("HEAD", base + c[0], List[UInt8]())
+            if c[1].byte_length() > 0:
+                req.headers.append("X-Signature", c[1])
+            var resp = client.send(req)
+            print(
+                "observed HTTP/1.1 HEAD",
+                c[0],
+                resp.status,
+                repr(resp.headers.get("content-length")),
+            )
+            assert_equal(resp.status, c[2], c[0])
+            assert_equal(resp.headers.get("content-length"), c[3], c[0])
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)

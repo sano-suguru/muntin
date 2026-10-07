@@ -1,4 +1,5 @@
-"""Flare v0.11.0 `HEAD` probe (M3-026 evidence). Not Muntin.
+"""Flare v0.11.0 `HEAD` probe (M3-026 evidence; re-pinned by M3-027). Not
+Muntin.
 
 Runs only in the `flare` pixi environment (scripts/check_flare.sh). It
 measures what the pinned Flare backend and the unchanged adapter send for a
@@ -11,8 +12,9 @@ Two servers, each in a forked child (lifecycle and raw client as in
 compat/flare/headers/flare_header_probe.mojo; the client is Flare's raw
 `TcpStream`, so the response bytes come back unparsed):
 
-- `MuntinHandler` over an unchanged `App` (`get /hello`), where `HEAD` is
-  404 today;
+- `MuntinHandler` over the same `App` (`get /hello`, `/cl`, `/nm`, `/rc`):
+  since M3-027, `App.handle` answers `HEAD` as the `GET` and the adapter
+  sends no content (M3-026's rule);
 - `HeadAsGet`, a probe handler that answers a `HEAD` request with the
   response `App.handle` gives the same request as `GET`, converted by the
   adapter's own `to_muntin_request`/`to_flare_response`. It reports the
@@ -32,9 +34,11 @@ after the preface (cleartext HTTP/2 with prior knowledge, which the default
 `ServerConfig()` server accepts on the same port) and render the frames the
 server sends back on it.
 
-Observation 1 and the h2c case through `MuntinHandler` record today's
-answers (`HEAD` is 404); the production slice of the decision (M3-027)
-re-pins them to its answers.
+Observation 1 and the h2c cases through `MuntinHandler` recorded the answers
+before M3-027 (`HEAD` was 404, with `Not Found` in DATA over h2c); M3-027
+re-pinned them to its answers and added `HEAD /nm` and `HEAD /rc` through
+`MuntinHandler`, which match the 304 and 205 observations through
+`HeadAsGet` without the probe's `X-Flare-Method`.
 
 Build and run (from the repository root):
 
@@ -373,12 +377,34 @@ struct Checks:
 def run_h1(mut c: Checks, muntin: UInt16, head_as_get: UInt16) raises:
     c.eq(
         (
-            "1. HEAD on a get route through MuntinHandler today: 404, the"
-            " length of App.handle's body, no content"
+            "1. HEAD on a get route through MuntinHandler: the GET's 200 and"
+            " Content-Length 5, no content"
         ),
         exchange(muntin, req("HEAD", "/hello")),
         (
-            "HTTP/1.1 404 Not Found\\r\\nContent-Length: 9\\r\\nDate:"
+            "HTTP/1.1 200 OK\\r\\nContent-Length: 5\\r\\nDate:"
+            " <date>\\r\\nConnection: close\\r\\n\\r\\n"
+        ),
+    )
+    c.eq(
+        (
+            "1b. HEAD on a raw 304 with a body through MuntinHandler: Flare"
+            " frames Content-Length 0 itself, no content"
+        ),
+        exchange(muntin, req("HEAD", "/nm")),
+        (
+            "HTTP/1.1 304 Not Modified\\r\\nContent-Length: 0\\r\\nDate:"
+            " <date>\\r\\nConnection: close\\r\\n\\r\\n"
+        ),
+    )
+    c.eq(
+        (
+            "1c. HEAD on a raw 205 with a body through MuntinHandler:"
+            " Content-Length 0, no content"
+        ),
+        exchange(muntin, req("HEAD", "/rc")),
+        (
+            "HTTP/1.1 205 Unknown\\r\\nContent-Length: 0\\r\\nDate:"
             " <date>\\r\\nConnection: close\\r\\n\\r\\n"
         ),
     )
@@ -518,11 +544,27 @@ def run_h2c(mut c: Checks, muntin: UInt16, head_as_get: UInt16) raises:
     )
     c.eq(
         (
-            "h2. HEAD on a get route through MuntinHandler today: 404 with its"
-            " content in DATA"
+            "h2. HEAD on a get route through MuntinHandler: the GET's"
+            " content-length, no DATA"
         ),
         h2_exchange(muntin, "HEAD", "/hello"),
-        "HEADERS{:status: 404} DATA{Not Found}/END",
+        "HEADERS{:status: 200; content-length: 5}/END",
+    )
+    c.eq(
+        (
+            "h2. HEAD on a raw 304 with a body through MuntinHandler: no"
+            " content-length, no DATA"
+        ),
+        h2_exchange(muntin, "HEAD", "/nm"),
+        "HEADERS{:status: 304}/END",
+    )
+    c.eq(
+        (
+            "h2. HEAD on a raw 205 with a body through MuntinHandler: no"
+            " content-length, no DATA"
+        ),
+        h2_exchange(muntin, "HEAD", "/rc"),
+        "HEADERS{:status: 205}/END",
     )
 
 
