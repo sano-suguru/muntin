@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-Next item: a new M3 decision item, chosen from `docs/SPEC.md`'s remaining candidates with a comparison in the form of M3-022's "Why this candidate". Optional or default query values now build on two route values (M3-022 revisit condition). Blockers: none.
+Next item: M3-025, optional query values, the "Next production slice" of [Optional query values decision (M3-024)](docs/history/architecture-decisions.md#optional-query-values-decision-m3-024). Blockers: none.
 
 ## Easy to miss
 
