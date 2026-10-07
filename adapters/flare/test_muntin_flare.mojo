@@ -240,7 +240,7 @@ def test_unrepresentable_request_headers_answer_400() raises:
     assert_equal(beside.status, 400)
     var ctl = _served([(String("x-ctl"), String("a") + chr(1) + String("b"))])
     assert_equal(ctl.status, 400)
-    # Invalid UTF-8, as a lenient HTTP/1.1 configuration would store it.
+    # Invalid UTF-8, as Flare v0.12.0 delivers it over HTTP/2.
     var bad = List[UInt8]()
     bad.append(0x61)
     bad.append(0xFF)

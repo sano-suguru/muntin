@@ -62,7 +62,7 @@ build_bg() { # OUT ARGS...: mojo build ARGS -o build/OUT, in the background
     outs+=("$out")
 }
 own_warnings() { # LOG: prints the warnings LOG reports outside Flare's sources
-    grep -E '^[^ ]+:[0-9]+:[0-9]+: warning:' "$1" | grep -vF "$flare_src" || true
+    grep -E ':[0-9]+:[0-9]+: warning:' "$1" | grep -vF "$flare_src" || true
 }
 step "build fixture, adapter tests and probes (in parallel)"
 build_bg flare_smoke "$fixture"
