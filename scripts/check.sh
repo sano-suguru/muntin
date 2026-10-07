@@ -8,6 +8,20 @@ MOJO=(pixi run --frozen mojo)
 
 step() { printf '\n== %s\n' "$*"; }
 
+# CHECK_SHARD=I/N builds only the fixtures below whose position modulo N is
+# I-1, so N runs with I = 1..N build each fixture exactly once. CI sets it;
+# the default 1/1 builds all of them. Every other step runs in each shard on
+# purpose, so a shard is an ordinary check.sh run; if those steps ever cost
+# as much as a shard's fixtures, give the fixtures a job of their own.
+shard="${CHECK_SHARD:-1/1}"
+if [[ ! "$shard" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] ||
+    (( BASH_REMATCH[1] > BASH_REMATCH[2] )); then
+    echo "error: CHECK_SHARD must be I/N with 1 <= I <= N, got: $shard" >&2
+    exit 1
+fi
+shard_i="${BASH_REMATCH[1]}"
+shard_n="${BASH_REMATCH[2]}"
+
 step "toolchain"
 version="$("${MOJO[@]}" --version)"
 echo "$version"
@@ -123,8 +137,21 @@ done
 # (warnings allowed: the deprecated `memmove` warns) and is never run.
 for t in tests/toolchain_soundness_gaps/*.mojo; do fixtures+=(toolchain_gap "$t"); done
 
+total=$(( ${#fixtures[@]} / 2 ))
+mine=()
+for (( k = 0; k < total; k++ )); do
+    if (( k % shard_n == shard_i - 1 )); then
+        mine+=("${fixtures[2 * k]}" "${fixtures[2 * k + 1]}")
+    fi
+done
+if (( ${#mine[@]} == 0 )); then
+    echo "error: shard $shard_i/$shard_n of $total fixtures is empty" >&2
+    exit 1
+fi
+fixtures=("${mine[@]}")
+
 jobs="$(getconf _NPROCESSORS_ONLN)"
-step "fixtures: must not build / must build ($(( ${#fixtures[@]} / 2 )) files, $jobs jobs)"
+step "fixtures: must not build / must build ($(( ${#fixtures[@]} / 2 )) of $total files, shard $shard_i/$shard_n, $jobs jobs)"
 mkdir -p "$tmp/fixtures"
 status=0
 printf '%s\0' "${fixtures[@]}" | xargs -0 -n 2 -P "$jobs" ./scripts/build_one.sh "$tmp/fixtures" || status=1

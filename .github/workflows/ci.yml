@@ -35,12 +35,19 @@ jobs:
   verify:
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    name: verify (${{ matrix.os }}, ${{ matrix.task.label }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         # check.sh and test.sh share nothing, so they run as separate jobs.
-        script: [check, test]
+        # The fixture builds are most of check.sh: each check job builds one
+        # shard of them (CHECK_SHARD in scripts/check.sh). label only names
+        # the job.
+        task:
+          - { label: check 1/2, script: check, shard: 1/2 }
+          - { label: check 2/2, script: check, shard: 2/2 }
+          - { label: test, script: test, shard: "" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -48,8 +55,10 @@ jobs:
         with:
           pixi-version: v0.81.0
           locked: true
-      - run: ./scripts/${{ matrix.script }}.sh
-      - if: matrix.script == 'check'
+      - env:
+          CHECK_SHARD: ${{ matrix.task.shard }}
+        run: ./scripts/${{ matrix.task.script }}.sh
+      - if: matrix.task.script == 'check'
         run: git diff --check
       # Muntin's own checks must not need Flare: only the default
       # environment was installed above.
