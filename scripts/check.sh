@@ -10,7 +10,9 @@ step() { printf '\n== %s\n' "$*"; }
 
 # CHECK_SHARD=I/N builds only the fixtures below whose position modulo N is
 # I-1, so N runs with I = 1..N build each fixture exactly once. CI sets it;
-# the default 1/1 builds all of them. Every other step runs in each shard.
+# the default 1/1 builds all of them. Every other step runs in each shard on
+# purpose, so a shard is an ordinary check.sh run; if those steps ever cost
+# as much as a shard's fixtures, give the fixtures a job of their own.
 shard="${CHECK_SHARD:-1/1}"
 if [[ ! "$shard" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] ||
     (( BASH_REMATCH[1] > BASH_REMATCH[2] )); then
