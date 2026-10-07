@@ -2689,3 +2689,77 @@ Status: **decision** (M3-026, PR #58; `src/muntin`, `adapters/` and `tests/` are
 - what the handler sees: `Request.method` `"HEAD"` or `"GET"` for a raw handler;
 - `TestClient`: a `head` method, or none (`App.handle(Request("HEAD", ...))`);
 - deferral, with the RFC gap kept as an explicit limit.
+
+**Selected: a `get` route answers `HEAD` automatically. `App.handle` matches a `HEAD` request against `GET` routes and answers it exactly as it would answer the same `GET`, body included; the backend keeps the content off the wire. The Flare adapter sends a `HEAD` response with no body and a `Content-Length` equal to the byte length of the body `App.handle` returned.** No overload, public type, slot kind or `TestClient` method is added. It reopens M2 (below).
+
+```mojo
+def get_user(id: Int) -> String:
+    return String("user ", id)
+def report(var req: Request) -> Response: ...       # raw
+
+app.get["/users/{id}"](get_user)
+app.get["/report"](report)
+app.delete["/cache"](purge)
+# HEAD /users/7   -> App.handle: what GET /users/7 answers (200 "user 7"); on the wire: 200, Content-Length: 6, no content
+# HEAD /users/abc -> App.handle: 400 "Bad Request" (get_user not called); on the wire: 400, Content-Length: 11, no content
+# HEAD /report    -> report receives req.method == "HEAD"
+# HEAD /cache, HEAD /missing, head /users/7, OPTIONS /users/7 -> 404 "Not Found"
+```
+
+- **Matching.** A route matches a request when its method equals the request's byte for byte, or when the request's method is `HEAD` and the route's is `GET`. Everything else about the scan is unchanged: routes are tried in registration order, the first match handles the request and never falls through, and a path matched only by routes of other methods is 404 (`HEAD` on a path only a `delete`, `post`, `put` or `patch` route serves included). Only the exact token `HEAD` maps: `head` and `Head` stay 404 in memory (Flare answers them 400 before `App.handle`, M3-020).
+- **The answer.** Every step of a `GET` runs for `HEAD`: route values, the `Headers` slot, `State`, the handler, the result or error conversion, the 400/404/500 boundary. `App.handle` returns the response the `GET` would have returned, body included. That body is what the backend derives the framing from (RFC 9110 section 8.6: a `Content-Length` sent for `HEAD` equals the length a `GET` would have sent), so `App.handle` does not remove it. Removing it is wire framing, a protocol mechanic (A5), and it is the backend's.
+- **What a handler sees.** A typed handler cannot tell `HEAD` from `GET`: the method is not a slot, and it gets the same arguments. A raw `get` handler receives the whole `Request` as received, `req.method == "HEAD"` included (M2-014's raw escape hatch). It answers `HEAD` with the response it would give `GET`: the backend sends the length of the body the handler returned, so a raw handler that returns a shorter body for `HEAD` (to skip work) makes the backend send a wrong `Content-Length`. Muntin cannot check that, so DX states it as the raw handler's rule.
+- **The backend.** The Flare adapter, for a request whose method is `HEAD`, sends the response's status and fields, a `Content-Length` field equal to the body's byte length, and no body; for every other method it is unchanged. It is adapter-local conversion code ("Adapter translation policy"), not a change to M3-005's header policy: a handler's own `Content-Length` is still dropped. Measured (below), it is correct over HTTP/1.1 and cleartext HTTP/2, where leaving the body in place is not: Flare v0.11.0 sends a `HEAD` response's content in DATA frames over h2c today, Muntin's current 404 included, and the adapter change ends that too. The in-memory backend has no wire: `App.handle(Request("HEAD", ...))` shows the response with its body.
+- **`TestClient`.** No `head` method. A test sends `HEAD` through `App.handle(Request("HEAD", target))`, as M3-020's candidate E left any other request; `TestClient.head` would follow M3-010's pattern and is additive later.
+- **405 and `OPTIONS`.** Mapping `HEAD` to `GET` is decided per route and needs no resource-level method set, so M3-020's candidate F stays deferred: a method mismatch is 404, `OPTIONS` is 404. When `Allow` is decided, it lists `HEAD` wherever it lists `GET`.
+
+**Measured premises.** `compat/flare/head/head_probe.mojo` (run by `scripts/check_flare.sh`) serves an unchanged `App` (`get /hello`) through the unchanged `MuntinHandler`, and through a probe handler that answers `HEAD` with `App.handle`'s answer to the same `GET` and converts it with the adapter's own `to_muntin_request`/`to_flare_response`. It reads raw response bytes over HTTP/1.1 (`Connection: close`, and keep-alive) and frames over h2c (prior knowledge, one stream). TLS and ALPN-negotiated HTTP/2 are not measured.
+- Flare delivers a `HEAD` request to the handler with the method `HEAD`.
+- HTTP/1.1, the `GET` response passed through: `200`, `Content-Length: 5`, no content. Flare suppresses the content itself and frames the length from the body. On a keep-alive connection, `HEAD` then `GET` gives two whole responses.
+- HTTP/1.1, the body removed before the adapter: `Content-Length: 0`, not the `GET`'s 5, which RFC 9110 section 8.6 forbids. So `App.handle` must not remove the body while the backend frames from it.
+- HTTP/1.1, a handler's own `Content-Length: 99` beside a 3-byte body: the adapter drops it and `Content-Length: 3` goes out (M3-005's policy).
+- h2c, the `GET` response passed through: `HEADERS{:status: 200}` then `DATA{hello}`: content on a `HEAD` stream, which RFC 9110 section 6.4.1 says a `HEAD` response does not have. Through the unchanged `MuntinHandler`, today's 404 goes out the same way (`DATA{Not Found}`).
+- The body removed and a `Content-Length` of its length added after the adapter's conversion: HTTP/1.1 `Content-Length: 5`, no content; h2c `HEADERS{:status: 200; content-length: 5}` with END_STREAM and no DATA (RFC 9113 section 8.1.1 allows a nonzero `content-length` on a response defined to have no content). This is the one measured form that is correct on both protocols. With the body removed and no length added, h2c sends no `content-length`, which section 8.6 also allows, but HTTP/1.1 sends 0.
+- Today's answers (observation 1, and h2c through `MuntinHandler`) are recorded as "before" values; the production slice re-pins them.
+
+**Candidates.**
+
+| Candidate | Verdict |
+|---|---|
+| A. automatic: a `get` route answers `HEAD`; `App.handle` returns the `GET` answer with its body; the backend drops the content and frames the length | **chosen** |
+| A′. automatic, with `App.handle` removing the body | rejected: measured, Flare then sends `Content-Length: 0` over HTTP/1.1, which section 8.6 forbids. Carrying the length beside an empty body needs a field the adapter would have to trust from the handler side, against M3-005's rule that `Content-Length` is the backend's. And the in-memory answer would no longer be the response the backend frames |
+| B. registered: `app.head[route](handler)` with `get`'s shapes, `HEAD` 404 where none is registered | rejected: eight more overloads on a sixth method name, every `get` route registered twice to meet section 9.1's MUST, and the MUST still unmet wherever an application forgets one. The content and framing question is the same as A's. It is additive beside A (a registered `HEAD` route would come first in the scan), so it is a revisit condition |
+| C. both now | rejected: B's cost for no current requirement (A7); C is A plus the revisit condition |
+| D. raw handlers receive `GET` for a `HEAD` request | rejected: every raw answer would equal the `GET` answer, so the length would always be right, but a raw handler is promised the whole request as received (M2-014), and it could no longer tell `HEAD` from `GET` (to skip work, or to log). The risk it removes is stated as the raw handler's rule instead |
+| E. `TestClient.head` | not now: `App.handle(Request("HEAD", ...))` covers it (M3-020, candidate E); additive later |
+| F. 405 with `Allow`, `OPTIONS` | not decided here (above); M3-020's candidate F stays deferred |
+| defer | rejected: section 9.1's MUST stays unmet, no handler can answer `HEAD`, and over h2c every `HEAD` today gets content on the wire |
+
+**M2 contract: reopened.** A `get` registration now also answers a request M2 answers 404: `HEAD` on a path the route matches. That changes the semantics of an existing registration rather than adding one, so it is an M2 reopen under [M2-016](#m2-closure-m2-016) ("a different 400/404/500 boundary"), as M3-018 was. By kind:
+- runtime behavior changes for one request class only: a `HEAD` request whose path a `get` route matches gets that route's `GET` answer from `App.handle` instead of 404, and over Flare that answer's status, fields and length with no content. The contract's "No route match is 404" stays true for every other request, `HEAD` on a path no `get` route matches included;
+- a raw `get` handler can now receive `req.method == "HEAD"`; before, it received only `GET`. The raw escape hatch's statement (the whole `Request`, `method` included) is unchanged;
+- the accepted set, the overload set and every diagnostic are unchanged: nothing registers or fails to register differently;
+- the Flare adapter's answer to a `HEAD` request carries no content and the body's length, on both protocols, where today it carries the 404's content over h2c.
+
+**Invariants:**
+- `HEAD` is answered only through `GET` routes, as the `GET` would be answered; `App.handle` never removes a body.
+- A backend sends no content for `HEAD`, and a `Content-Length`, if it sends one, equal to the byte length of the body `App.handle` returned.
+- Method matching is byte for byte except the one `HEAD`-to-`GET` mapping; a method mismatch is 404.
+
+**Cost.** Every `HEAD` computes and converts the whole `GET` body only for the backend to drop it. A raw `get` handler that branches on `HEAD` must still return the `GET` body. Applications cannot answer `HEAD` differently from `GET` (no registered `HEAD`). The in-memory response to `HEAD` has a body that a network backend never sends. One existing test case changes (the slice names it).
+
+**Revisit when:**
+- an application needs a `HEAD` answer cheaper than computing the `GET` body, or different from it: revisit B, a registered `HEAD` ahead of the automatic mapping (additive);
+- tests need `HEAD` through `TestClient`: add `TestClient.head(target, *, headers=)` (candidate E, M3-010's pattern);
+- 405 with `Allow`, `OPTIONS` or CORS preflight is decided: list `HEAD` wherever `GET` is listed (M3-020, candidate F);
+- a Flare upgrade, or another backend, changes how it frames a `HEAD` response (it suppresses content over HTTP/2, or stops honoring a declared `Content-Length` with an empty body): re-run `compat/flare/head/head_probe.mojo` and re-derive the adapter rule;
+- streaming responses are decided: a streamed `GET` answer has no length to declare, and the `HEAD` rule has to say what is sent then.
+
+**Next production slice (M3-027): `HEAD` through `get` routes.**
+- Behavior: `App.handle` matches a `HEAD` request against `GET` routes and answers it as the `GET` (decisions above); a raw `get` handler receives `req.method == "HEAD"`. The Flare adapter answers a `HEAD` request with the status and fields, `Content-Length` equal to the body's byte length, and no body, over HTTP/1.1 and h2c; every other method is unchanged.
+- Code: `App.handle`'s method comparison (`src/muntin/app.mojo`), and `MuntinHandler.serve` or `to_flare_response` with its module docstring (`adapters/flare/muntin_flare.mojo`). No overload, rule, message, public type or `TestClient` method changes.
+- Tests: through `App.handle` with `Request("HEAD", ...)`: `HEAD` on every `get` shape answers what `GET` answers (status, body, fields), stateless and stateful, with `Headers`, route values (two, `Optional`), a `Json[T]` result, a `ToErrorResponse` error and the fixed 500; its 400 calls no handler; first registration wins across a `get` route and a route of another method on one path; `HEAD` on paths served only by `post`, `put`, `patch` or `delete` routes, and on no route, is 404; `head`, `Head` and `OPTIONS` stay 404; a raw `get` handler sees `HEAD`. The existing assertions that change: `tests/test_methods.mojo` `test_each_method_reaches_its_own_route` (its `HEAD` on `/r/7`, served by the typed `get` route `got`, becomes 200 `GET 7`). The other `HEAD` assertions found by grep keep 404 because no `get` route serves their path: `test_body_routes_answer_their_own_method_only` (`put_app`), `test_dx_example` and DX section 4's example (`put`, `patch` and `delete` routes on `/users/7`). Adapter contract tests in `adapters/flare/test_muntin_flare.mojo` for the `HEAD` conversion (no body, the length field, a handler's `Content-Length` still dropped, other methods unchanged).
+- Loopback: `adapters/flare/test_localhost_roundtrip.mojo` sends `HEAD` (Flare's `HttpClient.head`, which reads no content for `HEAD`) to a typed and a raw `get` route and a 400 and asserts status, `Content-Length` equal to the `GET` body's length, and an empty body; `compat/flare/head/head_probe.mojo`'s two "today" observations through `MuntinHandler` are re-pinned to the new answers (HTTP/1.1 `200`, `Content-Length: 5`, no content; h2c `HEADERS{:status: 200; content-length: 5}` with no DATA), which is the h2c coverage, since the round trip has no HTTP/2 client.
+- Verification: `docs/DEVELOPMENT.md` section 3's wire trigger (how `App.handle` reads the request, and the adapter): a local `check_flare.sh` run before pushing. No overload, signature, `where` clause or call chain to `_check` changes, so the base-wide diagnostic comparison does not apply.
+- Docs: `docs/DX.md` (section 4's matching statement and the `HEAD` line of its example's comment, which stays 404 there; a `HEAD` paragraph with the example above: `get` routes answer it, the backend sends no content, the raw handler's rule, testing through `App.handle`; section 9's raw handlers receiving `HEAD`); `docs/ARCHITECTURE.md` (request handling's method match, the Flare adapter's policy, "Other current limits": `HEAD` leaves the not-implemented list, `OPTIONS` and 405 stay, and the h2c content fact moves to the adapter rule that answers it) and its revisit index row for `compat/flare/head/head_probe.mojo`, linking this record; `docs/SPEC.md` (the M3 table gains `HEAD` as shipped, a paragraph after the M2 contract, "M3-027 reopened the contract (decided by M3-026)", stating the four kinds above, and the "more HTTP methods" candidate without `HEAD`); `AGENT_PROGRESS.md`.
+- Not in the slice: a registered `HEAD`, `TestClient.head`, `OPTIONS`, 405 with `Allow`, other methods, streaming.

@@ -64,6 +64,7 @@ build_bg test_localhost_roundtrip -I src -I "$adapter" "$roundtrip"
 build_bg flare_header_probe -I src -I "$adapter" compat/flare/headers/flare_header_probe.mojo
 build_bg inbound_rebuild -I src -I tests -I "$adapter" compat/flare/headers/inbound_rebuild.mojo
 build_bg json_loopback_probe -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo
+build_bg head_probe -I src -I "$adapter" compat/flare/head/head_probe.mojo
 built=0
 for i in "${!pids[@]}"; do
     if wait "${pids[i]}"; then
@@ -192,8 +193,26 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/json_probe.log"; then
     exit 1
 fi
 
+# M3-026 HEAD evidence (docs/history/architecture-decisions.md "HEAD decision (M3-026)"):
+# what pinned Flare and the adapter send for a HEAD response over HTTP/1.1
+# and h2c, by where the content is dropped.
+step "Flare HEAD probe (M3-026)"
+head_status=0
+./build/head_probe >"$tmp/head_probe.log" 2>&1 || head_status=$?
+cat "$tmp/head_probe.log"
+leftover_head='^\./build/head_probe$'
+if pgrep -f "$leftover_head"; then
+    pkill -KILL -f "$leftover_head" || true
+    echo "error: the HEAD probe left a server process behind" >&2
+    exit 1
+fi
+if ((head_status != 0)); then
+    echo "error: Flare HEAD behavior differs from the recorded M3-026 evidence" >&2
+    exit 1
+fi
+
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1
