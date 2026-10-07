@@ -50,11 +50,12 @@ mkdir -p build
 pids=()
 outs=()
 known=()
-# Every build is --Werror except those that reach Flare's HttpClient: Flare
-# v0.12.0 (8c6e1400) warns in its own source there, on exactly this line. Those
-# builds fail on any other warning line, and also when this line is gone, which
-# means a Flare release has fixed it: build them with --Werror again.
-flare_src="$PWD/.pixi/envs/flare/lib/mojo/"
+# Every build in this step is --Werror except those that reach Flare's
+# HttpClient: Flare v0.12.0 (8c6e1400) warns in its own source there, on
+# exactly this line. Those builds fail on any other warning line, and also when
+# this line is gone, which means a Flare release has fixed it: build them with
+# --Werror again.
+flare_src="$(pwd -P)/.pixi/envs/flare/lib/mojo/" # mojo prints resolved paths
 KNOWN_WARNING="${flare_src}flare/http/_client/parse.mojo:867:18: warning: assignment to 'http11' was never used; assign to '_' instead?"
 build_bg() { # OUT ARGS...: mojo build --Werror ARGS -o build/OUT, in the background
     local out="$1"
