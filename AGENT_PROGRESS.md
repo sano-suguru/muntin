@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-Next item: a new decision item, chosen from `docs/SPEC.md`'s remaining candidates. Blockers: none.
+Next item: M3-027, `HEAD` through `get` routes, the "Next production slice" of [HEAD decision (M3-026)](docs/history/architecture-decisions.md#head-decision-m3-026). Blockers: none.
 
 ## Easy to miss
 
