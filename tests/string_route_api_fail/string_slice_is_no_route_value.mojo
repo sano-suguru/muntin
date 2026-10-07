@@ -3,7 +3,7 @@
 # (static_string_is_no_route_value.mojo pins the static origin). Decision:
 # docs/history/architecture-decisions.md, "Route-value decoding and String
 # route values decision (M3-018)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: a get handler's parameter is an Int or String route value, the request Headers or, for a raw handler, the Request
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a get handler's parameter is an Int or String route value, an Optional of one, the request Headers or, for a raw handler, the Request
 from muntin import App
 
 

@@ -285,29 +285,24 @@ def _parse_int(segment: String) raises -> Int:
     return Int(segment)
 
 
-def _query_value(query: String, key: String) raises -> String:
-    """The value of `key` in a raw query string. Raises if `key` is absent or
-    appears more than once.
+def _query_value(query: String, key: String) raises -> Optional[String]:
+    """The value of `key` in a raw query string, or `None` if `key` is
+    absent. Raises if `key` appears more than once.
 
     Pairs are separated by `&`; a pair's key and value split at its first
     `=`, and a pair without `=` has an empty value. Keys compare byte for
     byte. Nothing is percent-decoded and `+` is not a space.
     """
-    var value = String()
-    var found = False
+    var value = Optional[String]()
     for pair in query.split("&"):
         var eq = pair.find("=")
         var name = pair[byte=:eq] if eq >= 0 else pair[byte=:]
         if name != key:
             continue
-        if found:
+        if value:
             raise Error("duplicate query key")
-        found = True
-        if eq >= 0:
-            value = String(pair[byte = eq + 1 :])
-    if not found:
-        raise Error("missing query key")
-    return value
+        value = String(pair[byte = eq + 1 :]) if eq >= 0 else String()
+    return value^
 
 
 def _hex_digit(b: Byte) -> Int:
@@ -412,6 +407,8 @@ comptime _STATE = 4
 comptime _OTHER = 5
 comptime _HEADERS = 6
 comptime _TEXT = 7
+comptime _OPT_INT = 8
+comptime _OPT_TEXT = 9
 
 
 def _kind[A: AnyType]() -> Int:
@@ -428,6 +425,10 @@ def _kind[A: AnyType]() -> Int:
         return _HEADERS
     elif A == String:
         return _TEXT
+    elif A == Optional[Int]:
+        return _OPT_INT
+    elif A == Optional[String]:
+        return _OPT_TEXT
     elif conforms_to(A, _InjectedState):
         return _STATE
     elif conforms_to(A, FromBody) or conforms_to(A, _HeaderCarrier):
@@ -468,6 +469,9 @@ comptime _GET_TWO_PLACES = 29
 comptime _POST_TWO_PLACES = 30
 comptime _GET_THREE_VALUES = 31
 comptime _QUERY_TWICE = 32
+comptime _GET_OPTIONAL_PLACES = 33
+comptime _POST_OPTIONAL_BODY_PLACES = 34
+comptime _OPTIONAL_AT_PATH = 35
 
 
 def _takes_none(paths: Int, queries: Int) -> Int:
@@ -480,8 +484,20 @@ def _takes_none(paths: Int, queries: Int) -> Int:
 
 
 def _is_value(k: Int) -> Bool:
-    """Whether slot kind `k` is a route value (`Int` or `String`)."""
-    return k == _INT or k == _TEXT
+    """Whether slot kind `k` is a route value (`Int`, `String` or an
+    `Optional` of either)."""
+    return k == _INT or k == _TEXT or _is_optional(k)
+
+
+def _is_optional(k: Int) -> Bool:
+    """Whether slot kind `k` is an optional route value (M3-024)."""
+    return k == _OPT_INT or k == _OPT_TEXT
+
+
+def _optional_at_path(k1: Int, k2: Int, paths: Int) -> Bool:
+    """Whether an optional value among two (`k1`, `k2`) would bind a path
+    placeholder: the value at position `j` binds one when `j < paths`."""
+    return (_is_optional(k1) and paths > 0) or (_is_optional(k2) and paths > 1)
 
 
 def _get_rule(
@@ -518,10 +534,16 @@ def _get_rule(
     if _is_value(k3):
         return _GET_THREE_VALUES
     if _is_value(k2):  # two values, alone or before `Headers`
-        if paths + queries == 2:
-            return _OK
-        return _GET_TWO_PLACES
+        if paths + queries != 2:
+            return _GET_TWO_PLACES
+        if _optional_at_path(k1, k2, paths):
+            return _OPTIONAL_AT_PATH
+        return _OK
     if _is_value(k1):  # one value, alone or before `Headers`
+        if _is_optional(k1):
+            if paths == 0 and queries == 1:
+                return _OK
+            return _GET_OPTIONAL_PLACES
         if paths + queries == 1:
             return _OK
         return _GET_INT_PLACES if k1 == _INT else _GET_TEXT_PLACES
@@ -572,8 +594,13 @@ def _post_rule(
     if b != _ABSENT:  # two route values
         if paths + queries != 2:
             return _POST_TWO_PLACES
+        if _optional_at_path(a, b, paths):
+            return _OPTIONAL_AT_PATH
     elif a != _ABSENT:  # one route value
-        if paths + queries != 1:
+        if _is_optional(a):
+            if paths != 0 or queries != 1:
+                return _POST_OPTIONAL_BODY_PLACES
+        elif paths + queries != 1:
             return (
                 _POST_INT_BODY_PLACES if k1 == _INT else _POST_TEXT_BODY_PLACES
             )
@@ -682,8 +709,8 @@ def _check[
     comptime assert rule != _GET_SLOT_KIND, (
         "a "
         + name
-        + " handler's parameter is an Int or String route value, the request"
-        " Headers or, for a raw handler, the Request"
+        + " handler's parameter is an Int or String route value, an Optional"
+        " of one, the request Headers or, for a raw handler, the Request"
     )
     comptime assert rule != _POST_NO_BODY, (
         "a " + name + " handler takes the request body as its last parameter"
@@ -740,7 +767,8 @@ def _check[
     comptime assert rule != _POST_SLOT_KIND, (
         "a "
         + name
-        + " handler's parameter before the body is an Int or String route value"
+        + " handler's parameter before the body is a route value: an Int, a"
+        " String or an Optional of either"
     )
     comptime assert rule != _GET_HEADERS_LAST, (
         "a " + name + " handler takes one Headers, as its last parameter"
@@ -767,6 +795,18 @@ def _check[
     comptime assert (
         rule != _QUERY_TWICE
     ), "route declares a query parameter twice"
+    comptime assert rule != _GET_OPTIONAL_PLACES, (
+        "handler takes one Optional route value; route must declare exactly"
+        " one query parameter and no path parameter"
+    )
+    comptime assert rule != _POST_OPTIONAL_BODY_PLACES, (
+        "handler takes one Optional route value and the request body; route"
+        " must declare exactly one query parameter and no path parameter"
+    )
+    comptime assert rule != _OPTIONAL_AT_PATH, (
+        "an Optional route value binds a query parameter; route values bind"
+        " the path parameters first, then the query parameters"
+    )
     comptime assert rule == _OK, "internal: a registration rule has no message"
 
 
@@ -919,6 +959,17 @@ def _slot[
             raise _Reject(400)
     elif A == String:
         return _as[String, A](args[at].copy())
+    elif A == Optional[Int]:
+        if args[at].byte_length() == 0:
+            return _as[Optional[Int], A](None)
+        try:
+            return _as[Optional[Int], A](_parse_int(args[at]))
+        except:
+            raise _Reject(400)
+    elif A == Optional[String]:
+        if args[at].byte_length() == 0:
+            return _as[Optional[String], A](None)
+        return _as[Optional[String], A](args[at].copy())
     elif A == Request:
         try:
             return _as[Request, A](_raw_request(args))
@@ -1166,21 +1217,38 @@ def _call_state_3[
 
 
 def _route[
-    Last: AnyType
+    A: AnyType, B: AnyType, C: AnyType
 ](method: String, path: StaticString, var handler: _Erased) -> _Route:
-    """The route for a handler whose last request slot has type `Last`
-    (`_NoSlot` for none): a body route, JSON or carrier when `Last` is such
-    a body, raw when it is the `Request`, and a route that receives the
-    header fields for a carrier or a `Headers` slot."""
-    return _Route(
+    """The route for an accepted handler whose request slots have types `A`,
+    `B` and `C` (`_NoSlot` where there is none): a body route, JSON or
+    carrier when its body is such a body, raw when its slot is the
+    `Request`, and a route that receives the header fields for a carrier or
+    a `Headers` slot. A body, a `Headers` or a `Request` slot is always the
+    last one, so the flags read every slot. Each query key whose value binds
+    an `Optional` slot is marked optional (M3-025): route values come first,
+    so the value at position `j` binds query key `j - paths`."""
+    var route = _Route(
         method,
         path,
         handler^,
-        body=_kind[Last]() == _BODY,
-        json=conforms_to(Last, _JsonBody),
-        headers=conforms_to(Last, _HeaderCarrier) or _kind[Last]() == _HEADERS,
-        raw=_kind[Last]() == _RAW,
+        body=_kind[A]() == _BODY or _kind[B]() == _BODY or _kind[C]() == _BODY,
+        json=conforms_to(A, _JsonBody)
+        or conforms_to(B, _JsonBody)
+        or conforms_to(C, _JsonBody),
+        headers=conforms_to(A, _HeaderCarrier)
+        or conforms_to(B, _HeaderCarrier)
+        or conforms_to(C, _HeaderCarrier)
+        or _kind[A]() == _HEADERS
+        or _kind[B]() == _HEADERS
+        or _kind[C]() == _HEADERS,
+        raw=_kind[A]() == _RAW,
     )
+    var paths = _path_params(path)
+    var kinds = [_kind[A](), _kind[B](), _kind[C]()]
+    for j in range(len(kinds)):
+        if _is_optional(kinds[j]):
+            route.query_optional[j - paths] = True
+    return route^
 
 
 struct _Route(Movable):
@@ -1191,6 +1259,10 @@ struct _Route(Movable):
     var query_keys: List[String]
     """Keys of the route's `{key}` query parameters, in the literal's order
     (none if it has no query part)."""
+    var query_optional: List[Bool]
+    """For each of `query_keys`, whether its value binds an `Optional` slot
+    (M3-025): `App.handle` then passes an absent key or an empty value on
+    as `""` instead of answering 400. All `False` until `_route` sets them."""
     var body: Bool
     """Whether the handler's last argument is the request body."""
     var json: Bool
@@ -1238,6 +1310,9 @@ struct _Route(Movable):
                 self.query_keys.append(
                     String(item[byte = 1 : item.byte_length() - 1])
                 )
+        self.query_optional = List[Bool](
+            length=len(self.query_keys), fill=False
+        )
         self.handler = handler^
 
 
@@ -1269,7 +1344,7 @@ struct App(Movable):
         _check["GET", False, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["GET", False, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "GET", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
             )
@@ -1312,7 +1387,7 @@ struct App(Movable):
         _check["GET", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["GET", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -1348,7 +1423,7 @@ struct App(Movable):
         _check["GET", False, path, R, A, B, _NoSlot]()
         comptime if _admits["GET", False, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -1379,7 +1454,7 @@ struct App(Movable):
         _check["GET", False, path, R, A, B, C]()
         comptime if _admits["GET", False, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -1404,7 +1479,7 @@ struct App(Movable):
         _check["GET", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["GET", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -1435,7 +1510,7 @@ struct App(Movable):
         _check["GET", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["GET", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -1466,7 +1541,7 @@ struct App(Movable):
         _check["GET", True, path, R, A, B, _NoSlot]()
         comptime if _admits["GET", True, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -1498,7 +1573,7 @@ struct App(Movable):
         _check["GET", True, path, R, A, B, C]()
         comptime if _admits["GET", True, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "GET",
                     path,
                     _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -1522,7 +1597,7 @@ struct App(Movable):
             "POST", False, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "POST", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
             )
@@ -1559,7 +1634,7 @@ struct App(Movable):
         _check["POST", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["POST", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -1594,7 +1669,7 @@ struct App(Movable):
         _check["POST", False, path, R, A, B, _NoSlot]()
         comptime if _admits["POST", False, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -1628,7 +1703,7 @@ struct App(Movable):
         _check["POST", False, path, R, A, B, C]()
         comptime if _admits["POST", False, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -1651,7 +1726,7 @@ struct App(Movable):
         _check["POST", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["POST", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -1682,7 +1757,7 @@ struct App(Movable):
         _check["POST", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["POST", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -1713,7 +1788,7 @@ struct App(Movable):
         _check["POST", True, path, R, A, B, _NoSlot]()
         comptime if _admits["POST", True, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -1745,7 +1820,7 @@ struct App(Movable):
         _check["POST", True, path, R, A, B, C]()
         comptime if _admits["POST", True, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "POST",
                     path,
                     _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -1767,7 +1842,7 @@ struct App(Movable):
         _check["PUT", False, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", False, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "PUT", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
             )
@@ -1804,7 +1879,7 @@ struct App(Movable):
         _check["PUT", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -1839,7 +1914,7 @@ struct App(Movable):
         _check["PUT", False, path, R, A, B, _NoSlot]()
         comptime if _admits["PUT", False, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -1873,7 +1948,7 @@ struct App(Movable):
         _check["PUT", False, path, R, A, B, C]()
         comptime if _admits["PUT", False, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -1896,7 +1971,7 @@ struct App(Movable):
         _check["PUT", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -1927,7 +2002,7 @@ struct App(Movable):
         _check["PUT", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -1958,7 +2033,7 @@ struct App(Movable):
         _check["PUT", True, path, R, A, B, _NoSlot]()
         comptime if _admits["PUT", True, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -1990,7 +2065,7 @@ struct App(Movable):
         _check["PUT", True, path, R, A, B, C]()
         comptime if _admits["PUT", True, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "PUT",
                     path,
                     _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -2014,7 +2089,7 @@ struct App(Movable):
             "PATCH", False, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "PATCH", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
             )
@@ -2051,7 +2126,7 @@ struct App(Movable):
         _check["PATCH", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PATCH", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -2086,7 +2161,7 @@ struct App(Movable):
         _check["PATCH", False, path, R, A, B, _NoSlot]()
         comptime if _admits["PATCH", False, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -2120,7 +2195,7 @@ struct App(Movable):
         _check["PATCH", False, path, R, A, B, C]()
         comptime if _admits["PATCH", False, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -2145,7 +2220,7 @@ struct App(Movable):
             "PATCH", True, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -2176,7 +2251,7 @@ struct App(Movable):
         _check["PATCH", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PATCH", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -2207,7 +2282,7 @@ struct App(Movable):
         _check["PATCH", True, path, R, A, B, _NoSlot]()
         comptime if _admits["PATCH", True, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -2239,7 +2314,7 @@ struct App(Movable):
         _check["PATCH", True, path, R, A, B, C]()
         comptime if _admits["PATCH", True, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "PATCH",
                     path,
                     _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -2272,7 +2347,7 @@ struct App(Movable):
             "DELETE", False, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_0[E, R]](handler),
@@ -2317,7 +2392,7 @@ struct App(Movable):
         _check["DELETE", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["DELETE", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -2353,7 +2428,7 @@ struct App(Movable):
         _check["DELETE", False, path, R, A, B, _NoSlot]()
         comptime if _admits["DELETE", False, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -2384,7 +2459,7 @@ struct App(Movable):
         _check["DELETE", False, path, R, A, B, C]()
         comptime if _admits["DELETE", False, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -2411,7 +2486,7 @@ struct App(Movable):
             "DELETE", True, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
             self._routes.append(
-                _route[_NoSlot](
+                _route[_NoSlot, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -2442,7 +2517,7 @@ struct App(Movable):
         _check["DELETE", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["DELETE", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
-                _route[A](
+                _route[A, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -2473,7 +2548,7 @@ struct App(Movable):
         _check["DELETE", True, path, R, A, B, _NoSlot]()
         comptime if _admits["DELETE", True, path, R, A, B, _NoSlot]():
             self._routes.append(
-                _route[B](
+                _route[A, B, _NoSlot](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -2505,7 +2580,7 @@ struct App(Movable):
         _check["DELETE", True, path, R, A, B, C]()
         comptime if _admits["DELETE", True, path, R, A, B, C]():
             self._routes.append(
-                _route[C](
+                _route[A, B, C](
                     "DELETE",
                     path,
                     _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -2573,19 +2648,24 @@ struct App(Movable):
             else:
                 # The route values, decoded once here at capture (M3-018):
                 # the path captures in place, then each query value as
-                # gathered, in the literal's order (M3-022).
+                # gathered, in the literal's order (M3-022). An optional
+                # value's absent key or empty value is passed on as `""`,
+                # which no decoded value is (M3-025).
                 try:
                     for j in range(len(args)):
                         args[j] = _decode_value(args[j], query=False)
                     for k in range(len(route.query_keys)):
-                        args.append(
-                            _decode_value(
-                                _query_value(
-                                    request.query, route.query_keys[k]
-                                ),
-                                query=True,
-                            )
+                        var raw = _query_value(
+                            request.query, route.query_keys[k]
                         )
+                        if route.query_optional[k] and (
+                            not raw or raw.value().byte_length() == 0
+                        ):
+                            args.append("")
+                        elif not raw:
+                            raise Error("missing query key")
+                        else:
+                            args.append(_decode_value(raw.value(), query=True))
                 except:
                     return _bad_request()
                 if route.body:

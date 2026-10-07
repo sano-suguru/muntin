@@ -1,9 +1,8 @@
-# Must not compile: production `post` takes no `Headers` slot before its body.
-# The message is production's existing rule for a first slot other than a route
-# value, which M3-016 keeps. Decision: docs/history/architecture-decisions.md,
-# "Typed get header access decision (M3-016)".
+# Must not compile: `Optional[Float64]` before the body on `post` is a type of
+# no kind. Decision: docs/history/architecture-decisions.md, "Optional query
+# values decision (M3-024)".
 # Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler's parameter before the body is a route value: an Int, a String or an Optional of either
-from muntin import App, FromBody, Headers
+from muntin import App, FromBody
 
 
 struct Note(FromBody, Movable):
@@ -17,10 +16,10 @@ struct Note(FromBody, Movable):
         return Self(body)
 
 
-def h(headers: Headers, body: Note) -> String:
-    return "x"
+def h(a: Optional[Float64], body: Note) -> String:
+    return body.text
 
 
 def main():
     var app = App()
-    app.post["/x"](h)
+    app.post["/x?{a}"](h)

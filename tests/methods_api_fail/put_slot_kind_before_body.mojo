@@ -1,7 +1,7 @@
 # Must not compile: A parameter of no kind (`Float64`) before the body on
 # `put`; the message names the method. Decision:
 # docs/history/architecture-decisions.md, "HTTP methods decision (M3-020)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: a put handler's parameter before the body is an Int or String route value
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a put handler's parameter before the body is a route value: an Int, a String or an Optional of either
 from muntin import App, FromBody
 
 

@@ -349,7 +349,11 @@ struct ErrorApp(Movable):
                 continue
             if route.query_key:
                 try:
-                    args.append(_query_value(request.query, route.query_key))
+                    # An absent key is `None` since M3-025; a repeat still raises.
+                    var value = _query_value(request.query, route.query_key)
+                    if not value:
+                        raise Error("missing query key")
+                    args.append(value.value())
                 except:
                     return _bad_request()
             if route.body:
