@@ -375,8 +375,10 @@ def test_dx_examples() raises:
     _expect(app, "/users/1/posts", 200, "user 1: 20 posts")
     _expect(app, "/users/1/posts?limit=5", 200, "user 1: 5 posts")
     var r = client.post("/users", "name=Ada")
+    assert_equal(r.status, 200)
     assert_equal(r.text(), "created Ada tagged none")
     r = client.post("/users?tag=a+b", "name=Ada")
+    assert_equal(r.status, 200)
     assert_equal(r.text(), "created Ada tagged a b")
 
 

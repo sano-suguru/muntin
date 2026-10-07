@@ -25,9 +25,8 @@ from .state import State, _InjectedState
 # slot is a generic `var A` (a plain `def` with a borrowed parameter converts
 # to it too), and its kind is decided at compile time from its type alone
 # (`_kind`): a route value (`Int`, `String` or an `Optional` of either,
-# below), a body (`FromBody`, or
-# a `WithHeaders` carrier, below), the raw `Request`, the request `Headers`
-# (below), a misplaced `State`, or none.
+# below), a body (`FromBody`, or a `WithHeaders` carrier, below), the raw
+# `Request`, the request `Headers` (below), a misplaced `State`, or none.
 #
 # Mojo 1.1.0 function types spelled without `thin` are traits and cannot be
 # stored, so the overloads take thin function values; ordinary `def`
@@ -151,8 +150,9 @@ from .state import State, _InjectedState
 #
 # Route values (M3-018): a route value is an `Int` or a `String` (`_TEXT`, by
 # exact type equality, so no application type is one) or an `Optional` of
-# either (below), at most two per handler (M3-022), never the body. They bind by position: the path captures
-# left to right, then the query values in the literal's order; names are
+# either (below), at most two per handler (M3-022), never the body. They
+# bind by position: the path captures left to right, then the query values
+# in the literal's order; names are
 # never compared with the handler's parameters. `App.handle` decodes each raw
 # capture once (`_decode_value`), after matching on the raw path, before any
 # conversion: path captures in place, then each query value as `_query_value`
@@ -920,11 +920,11 @@ def _as[T: Movable, A: Movable](var value: T) -> A:
     alone also accepts a different type with the same layout
     (tests/registration_known_gaps/rebind_var_layout_twins.mojo). The
     equality asserted here is exact for origin-free types (`Int`,
-    `String`, their `Optional`s, `Request`, `Headers`); generic `==` ignores which origin a
-    slice has, so for a `StaticString` result exactness comes from the
-    overloads' `where` clause. The confinement step of `scripts/check.sh`
-    requires the `rebind_var` on the line after this assert and nowhere
-    else."""
+    `String`, their `Optional`s, `Request`, `Headers`); generic `==`
+    ignores which origin a slice has, so for a `StaticString` result
+    exactness comes from the overloads' `where` clause. The confinement
+    step of `scripts/check.sh` requires the `rebind_var` on the line after
+    this assert and nowhere else."""
     comptime assert A == T, "rebind requires generic type equality"
     return rebind_var[A](value^)
 
