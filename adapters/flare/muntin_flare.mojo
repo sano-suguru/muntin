@@ -30,8 +30,8 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   one rule for both. Each field is re-checked with `Headers.add` before it
   is handed to Flare; a failure answers 500.
 - `HEAD` (M3-027, decided in docs/history/architecture-decisions.md "HEAD
-  decision (M3-026)"): `App.handle` answers a `HEAD` request as the `GET`,
-  body included; the backend keeps the content off the wire. For a request
+  decision (M3-026)"): `App.handle` answers a `HEAD` request through `GET`
+  routes, body included; the backend keeps the content off the wire. For a request
   whose method is `HEAD`, `MuntinHandler.serve` takes the response it would
   send at every exit (`App.handle`'s answer, `to_flare_response`'s fixed
   500, its own 400) and sends its status and fields with no body, declaring

@@ -13,7 +13,7 @@ compat/flare/headers/flare_header_probe.mojo; the client is Flare's raw
 `TcpStream`, so the response bytes come back unparsed):
 
 - `MuntinHandler` over the same `App` (`get /hello`, `/cl`, `/nm`, `/rc`):
-  since M3-027, `App.handle` answers `HEAD` as the `GET` and the adapter
+  since M3-027, `App.handle` answers `HEAD` through `GET` routes and the adapter
   sends no content (M3-026's rule);
 - `HeadAsGet`, a probe handler that answers a `HEAD` request with the
   response `App.handle` gives the same request as `GET`, converted by the

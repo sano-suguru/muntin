@@ -148,11 +148,12 @@ M3-025 registers `GET /pages?{size}` -> `page_of(size: Optional[Int])` on
 trailing `=` included; each status and body equals `TestClient`'s. The
 adapter is unchanged.
 
-M3-027 sends `HEAD` to `headers_app()`, which gains the raw `GET /nm`
-(304) and `GET /rc` (205), each answering with a 3-byte body. Over h2c
-(the raw client takes the method), a typed route, the raw `GET /keyed`
-(which sees `HEAD`), a route-value 400 and the adapter's own 400 (a field
-named `x-user:admin`) go out with their status, a `content-length` equal to
+M3-027 sends `HEAD` to `headers_app()`, which gains the raw `GET /report`
+(the same body and fields for `GET` and `HEAD`, as DX's raw rule asks), and
+the raw `GET /nm` (304) and `GET /rc` (205), each answering with a 3-byte
+body. Over h2c (the raw client takes the method), a typed route, the raw
+`/report`, a route-value 400 and the adapter's own 400 (a field named
+`x-user:admin`) go out with their status, a `content-length` equal to
 `App.handle`'s body and no DATA frame, as does a 404; the 304 and 205 with no
 `content-length` and no DATA frame. Over HTTP/1.1 the same routes give
 their status and `Content-Length` (Flare's client reads no content for
@@ -479,6 +480,14 @@ def purge(req: Request) -> Response:
     )
 
 
+def report(req: Request) raises -> Response:
+    """A raw `get` handler that follows DX's raw rule: the `GET` body and
+    fields for `HEAD` too."""
+    var resp = Response.text("report")
+    resp.headers.add("X-Report", "1")
+    return resp^
+
+
 def not_modified(var req: Request) -> Response:
     """A raw 304 with a body Muntin does not define as the representation."""
     return Response(304, "abc")
@@ -499,6 +508,7 @@ def headers_app() -> App:
     app.get["/keyed"](keyed, signer)
     app.post["/keyed"](keyed, signer)
     app.get["/signed/{id}"](signed_note, State(Gate("t0k")))
+    app.get["/report"](report)
     app.get["/nm"](not_modified)
     app.get["/rc"](reset_content)
     return app^
@@ -1280,20 +1290,17 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
         # fields, status, content-length or "" for none); each goes out
         # with no DATA frame.
         var app = headers_app()
-        var sig = (String("x-signature"), String("sha256=k"))
+        assert_equal(app.handle(Request("HEAD", "/report")).text(), "report")
         var auth = (String("authorization"), String("t0k"))
         var admin = (String("x-user:admin"), String("zzz"))
         var none = List[Tuple[String, String]]()
-        var signed = none.copy()
-        signed.append(sig)
         var authorized = none.copy()
         authorized.append(auth)
         var forged_name = none.copy()
         forged_name.append(admin)
         var cases = [
             (String("/hello"), none.copy(), 200, String("5")),
-            # The raw handler sees HEAD: its own answer's length goes out.
-            (String("/keyed?k"), signed^, 202, String("")),
+            (String("/report"), none.copy(), 200, String("6")),
             (String("/signed/x"), authorized^, 400, String("11")),
             (String("/hello"), forged_name^, 400, String("11")),
             (String("/missing"), none.copy(), 404, String("9")),
@@ -1314,25 +1321,28 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
             assert_equal(head[0][0].value, String(c[2]), label)
             assert_equal(head[1], "", label)
             assert_equal(head[2], 0, label)
-            var length = c[3]
-            if target == "/keyed?k":
-                var h = Headers()
-                h.add("x-signature", "sha256=k")
-                var local = app.handle(Request("HEAD", target, "", h^))
-                assert_equal(local.body, "sha256=k|HEAD|/keyed|k||0")
-                length = String(local.body.byte_length())
             var got = String("")
             for f in head[0]:
                 if f.name == "content-length":
                     got = f.value
-            assert_equal(got, length, label)
-        # Status and fields are the GET's: the content-length is added last.
-        var get = h2_request(child.port, "GET", "/hello", none)
-        var head = h2_request(child.port, "HEAD", "/hello", none)
-        assert_equal(get[1], "hello")
-        assert_equal(
-            _h2_fields(head[0]), _h2_fields(get[0]) + "content-length=5;"
-        )
+            assert_equal(got, c[3], label)
+        # Status and fields are the GET's, typed and raw: the content-length
+        # is added last.
+        for want in [
+            (String("/hello"), String("hello")),
+            (String("/report"), String("report")),
+        ]:
+            var get = h2_request(child.port, "GET", want[0], none)
+            var head = h2_request(child.port, "HEAD", want[0], none)
+            assert_equal(get[1], want[1])
+            assert_equal(
+                _h2_fields(head[0]),
+                _h2_fields(get[0])
+                + "content-length="
+                + String(want[1].byte_length())
+                + ";",
+                want[0],
+            )
         var nm_get = h2_request(child.port, "GET", "/nm", none)
         assert_equal(nm_get[1], "abc")
 
@@ -1343,23 +1353,20 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
         var base = String("http://127.0.0.1:", child.port)
         var client = _client()
         var h1_cases = [
-            (String("/hello"), String(""), 200, String("5")),
-            (String("/keyed?k"), String("sha256=k"), 202, String("25")),
-            (String("/signed/x"), String(""), 400, String("11")),
+            (String("/hello"), 200, String("5")),
+            (String("/report"), 200, String("6")),
+            (String("/signed/x"), 400, String("11")),
         ]
         for c in h1_cases:
-            var req = FlareRequest("HEAD", base + c[0], List[UInt8]())
-            if c[1].byte_length() > 0:
-                req.headers.append("X-Signature", c[1])
-            var resp = client.send(req)
+            var resp = client.head(base + c[0])
             print(
                 "observed HTTP/1.1 HEAD",
                 c[0],
                 resp.status,
                 repr(resp.headers.get("content-length")),
             )
-            assert_equal(resp.status, c[2], c[0])
-            assert_equal(resp.headers.get("content-length"), c[3], c[0])
+            assert_equal(resp.status, c[1], c[0])
+            assert_equal(resp.headers.get("content-length"), c[2], c[0])
         # Only the exact token maps: Flare answers `head` and `Head` 400
         # before `App.handle`, which would answer them 404.
         for method in ["head", "Head"]:

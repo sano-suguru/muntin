@@ -1,8 +1,10 @@
 # `HEAD` through `get` routes (M3-027): through `App.handle`, a `HEAD` request
-# is matched against `GET` routes only, the exact token `HEAD` only, and
-# answered exactly as the same `GET` (status, body and header fields): every
-# step runs, the body is kept (keeping it off the wire is the backend's), and a
-# raw `get` handler sees `req.method == "HEAD"`. Every other request keeps its
+# is matched against `GET` routes only, the exact token `HEAD` only, and runs
+# the `GET` route's steps: a typed handler gets the `GET`'s arguments, so the
+# answer equals the `GET`'s (status, body and header fields), the body kept
+# (keeping it off the wire is the backend's); a raw `get` handler sees
+# `req.method == "HEAD"`, and one that follows DX's raw rule answers as for
+# the `GET`. Every other request keeps its
 # answer, 404 included. Decision: docs/history/architecture-decisions.md,
 # "HEAD decision (M3-026)". The Flare adapter's side: adapters/flare.
 
@@ -28,12 +30,14 @@ from muntin import (
 
 struct Calls(Movable):
     """Counts handler calls; the counter is the oracle for "handler not
-    called"."""
+    called". `methods` logs the method each raw call received."""
 
     var n: ArcPointer[Int]
+    var methods: ArcPointer[String]
 
     def __init__(out self):
         self.n = ArcPointer(0)
+        self.methods = ArcPointer(String())
 
 
 @fieldwise_init
@@ -122,10 +126,14 @@ def counted_fields(calls: State[Calls], id: Int, headers: Headers) -> String:
     return String("counted ", id, " ", len(headers))
 
 
-def echo_method(var req: Request) -> Response:
-    var r = Response.text(req.method + " " + req.path + "?" + req.query)
+# Raw handlers follow DX's raw rule: the `GET` answer for `HEAD` too. The
+# stateful one records the method it received in its state.
+
+
+def page(var req: Request) -> Response:
+    var r = Response.text("page " + req.path + "?" + req.query)
     try:
-        r.headers.add("X-Seen", req.method)
+        r.headers.add("X-Page", req.path)
     except:
         pass
     return r^
@@ -133,7 +141,8 @@ def echo_method(var req: Request) -> Response:
 
 def keyed(calls: State[Calls], var req: Request) -> Response:
     calls[].n[] += 1
-    return Response.text("keyed " + req.method)
+    calls[].methods[] += req.method + ";"
+    return Response.text("keyed")
 
 
 def posted(body: Note) -> String:
@@ -161,7 +170,7 @@ def _app(calls: State[Calls]) -> App:
     app.get["/fail/{id}"](failing)
     app.get["/count/{id}"](counted, calls)
     app.get["/count-h/{id}"](counted_fields, calls)
-    app.get["/report"](echo_method)
+    app.get["/report"](page)
     app.get["/keyed"](keyed, calls)
     app.post["/only-post"](posted)
     app.put["/only-put"](posted)
@@ -257,14 +266,14 @@ def test_head_bad_request_calls_no_handler() raises:
 def test_raw_get_handler_sees_head() raises:
     var calls = State(Calls())
     var app = _app(calls)
+    # A raw handler that gives `HEAD` its `GET` answer is answered the same.
+    _same_as_get(app, "/report?a=1", 200, "page /report?a=1")
     var head = app.handle(Request("HEAD", "/report?a=1"))
-    assert_equal(head.status, 200)
-    assert_equal(head.body, "HEAD /report?a=1")
-    assert_equal(_dump(head.headers), "X-Seen=HEAD;")
-    var get = app.handle(Request("GET", "/report?a=1"))
-    assert_equal(get.body, "GET /report?a=1")
-    assert_equal(app.handle(Request("HEAD", "/keyed")).body, "keyed HEAD")
-    assert_equal(calls[].n[], 1)
+    assert_equal(_dump(head.headers), "X-Page=/report;")
+    # It receives the request as sent: `_same_as_get` sends GET, then HEAD.
+    _same_as_get(app, "/keyed", 200, "keyed")
+    assert_equal(calls[].methods[], "GET;HEAD;")
+    assert_equal(calls[].n[], 2)
 
 
 def test_head_only_reaches_get_routes() raises:

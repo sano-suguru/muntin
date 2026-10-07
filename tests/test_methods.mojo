@@ -488,7 +488,7 @@ def test_each_method_reaches_its_own_route() raises:
         ("PUT", "PUT 7 x"),
         ("PATCH", "PATCH 7 x"),
         ("DELETE", "DELETE 7"),
-        # `HEAD` is answered by the `get` route, as the `GET` (M3-026).
+        # `HEAD` reaches the typed `get` route, which answers as for `GET`.
         ("HEAD", "GET 7"),
     ]
     for w in want:
