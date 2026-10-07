@@ -2,7 +2,7 @@
 Muntin.
 
 Runs only in the `flare` pixi environment (scripts/check_flare.sh). It
-measures what the pinned Flare backend and the unchanged adapter send for a
+measures what the pinned Flare backend and the adapter send for a
 `HEAD` request, so the decision can say which part of the system keeps a
 `HEAD` response's content off the wire. It is self-checking: every
 observation is compared with the bytes recorded here, and the probe exits

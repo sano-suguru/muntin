@@ -344,6 +344,10 @@ def not_modified(var req: Request) -> Response:
     return r^
 
 
+def out_of_range(var req: Request) -> Response:
+    return Response(99, "abc")
+
+
 def head_app() -> App:
     var app = app_with_routes()
     app.get["/cl"](length_field)
@@ -353,6 +357,7 @@ def head_app() -> App:
     app.get["/204"](no_content)
     app.get["/205"](reset_content)
     app.get["/304"](not_modified)
+    app.get["/99"](out_of_range)
     return app^
 
 
@@ -374,6 +379,8 @@ def test_head_sends_get_fields_and_length_without_body() raises:
         ("/users", 404),
         ("/cl", 202),
         ("/bad-field", 500),
+        # Below 100 is not 1xx: the rule declares its length.
+        ("/99", 99),
     ]:
         var target = String(want[0])
         var get = handler.serve(FlareRequest("GET", target))

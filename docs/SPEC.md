@@ -53,13 +53,11 @@ M3-025 amended the contract (decided by M3-024): an `Optional[Int]` or `Optional
 
 M3-027 reopened the contract (decided by M3-026): a `get` route also answers `HEAD` on a path it matches, which M2 answered 404. That changes what an existing registration answers, so it is an M2 reopen under M2-016 ("a different 400/404/500 boundary"). By kind:
 - `App.handle`: a `HEAD` request whose path a `get` route matches gets that route's `GET` answer, body included, instead of 404. "No route match is 404" still holds for every other request, `HEAD` on a path no `get` route matches included; `head`, `Head` and `OPTIONS` are still 404;
-- the wire: every `HEAD` response through Flare carries no content, the 404s included (over cleartext HTTP/2 they carried `Not Found` before), and a `Content-Length` equal to the `GET` body's byte length, none for 1xx, 204, 205 or 304 (over HTTP/1.1, Flare still frames a 205 or 304 with `Content-Length: 0`). This is the Flare adapter's change, not `App.handle`'s;
+- the wire: every `HEAD` response through Flare carries no content, the 404s included (over cleartext HTTP/2 they carried `Not Found` before), and the adapter declares a `Content-Length` equal to the byte length of the body it would send for the `GET` (`App.handle`'s, or the adapter's own 400 or 500), and none for 1xx, 204, 205 or 304 (over HTTP/1.1, Flare still frames a 205 or 304 with `Content-Length: 0`). This is the Flare adapter's change, not `App.handle`'s;
 - the raw escape hatch: a raw `get` handler can now receive `req.method == "HEAD"`; it still receives the whole `Request`;
 - the accepted set, the overload set and every diagnostic are unchanged.
 
-The contract's opening sentence and the next one hold for `HEAD`'s answer but not for its content: the in-memory response to `HEAD` keeps the body, and keeping it off the wire, with the length, is each network backend's obligation ([HEAD decision (M3-026)](history/architecture-decisions.md#head-decision-m3-026)).
-
-Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it, except that a `HEAD` response's content and length on the wire are each network backend's (above). What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
+Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it, except one: the contract's opening sentence holds for `HEAD`'s answer but not for its content. The in-memory response to `HEAD` keeps the body, and keeping it off the wire, with the length, is each network backend's obligation ([HEAD decision (M3-026)](history/architecture-decisions.md#head-decision-m3-026)). What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
 
 ## M3 — composition and production ergonomics
 

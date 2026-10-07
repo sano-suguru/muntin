@@ -177,7 +177,8 @@ def _without_content(var response: FlareResponse) -> FlareResponse:
     var length = len(response.body)
     response.body = List[UInt8]()
     var status = response.status
-    if status >= 200 and status != 204 and status != 205 and status != 304:
+    var informational = status >= 100 and status <= 199
+    if not informational and status != 204 and status != 205 and status != 304:
         try:
             response.headers.append("Content-Length", String(length))
         except:
