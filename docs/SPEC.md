@@ -61,7 +61,7 @@ Every guarantee is decided in `App.handle` and the registration overloads, so bo
 
 ## M3 — composition and production ergonomics
 
-Each M3 area is cut decision-first: a decision item picks the design with pinned-compiler evidence and names one exact production slice, which is the next item.
+An M3 area with an open design question is cut decision-first: a decision item picks the design with pinned-compiler evidence and names one exact production slice, which is the next item. Which kind an item is: `docs/DEVELOPMENT.md` section 2.
 
 | Capability | Status |
 |---|---|
@@ -80,7 +80,7 @@ Each M3 area is cut decision-first: a decision item picks the design with pinned
 
 ### Remaining candidates
 
-Each becomes its own decision-first item.
+Each becomes its own item, a decision item first where it opens a design question.
 
 - **OpenAPI/schema output**: needs a type-to-format mapping; codecs are hand-mapped today, so a schema source waits for a derived codec;
 - **JSON follow-ups**: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;

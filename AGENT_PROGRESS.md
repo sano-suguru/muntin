@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-No item is named next. M3-027 (`HEAD` through `get` routes) implemented the last "Next production slice" on record; what M3 has left is `docs/SPEC.md`, "Remaining candidates", each cut decision-first there. Blockers: none.
+No item is named next. Choose one coherent item from `docs/SPEC.md`, "Remaining candidates"; make it a decision item only if it opens a new design question (`docs/DEVELOPMENT.md` section 2). Blockers: none.
 
 ## Easy to miss
 
