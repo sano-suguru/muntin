@@ -49,38 +49,57 @@ echo "ok"
 mkdir -p build
 pids=()
 outs=()
-# Not --Werror: Flare v0.12.0's own sources warn (an unused assignment in
-# flare/http/_client/parse.mojo, reached through HttpClient). A warning in a
-# file of this repository still fails the build, checked after it finishes.
-# Return to --Werror once a pinned Flare release builds without warnings.
+known=()
+# Every build is --Werror except those that reach Flare's HttpClient: Flare
+# v0.12.0 (8c6e1400) warns in its own source there, on exactly this line. Those
+# builds fail on any other warning line, and also when this line is gone, which
+# means a Flare release has fixed it: build them with --Werror again.
 flare_src="$PWD/.pixi/envs/flare/lib/mojo/"
-build_bg() { # OUT ARGS...: mojo build ARGS -o build/OUT, in the background
+KNOWN_WARNING="${flare_src}flare/http/_client/parse.mojo:867:18: warning: assignment to 'http11' was never used; assign to '_' instead?"
+build_bg() { # OUT ARGS...: mojo build --Werror ARGS -o build/OUT, in the background
+    local out="$1"
+    shift
+    "${FLARE[@]}" build --Werror "$@" -o "build/$out" >"$tmp/build_$out.log" 2>&1 &
+    pids+=($!)
+    outs+=("$out")
+    known+=(0)
+}
+build_bg_known() { # OUT ARGS...: as build_bg, without --Werror; checked for KNOWN_WARNING only
     local out="$1"
     shift
     "${FLARE[@]}" build "$@" -o "build/$out" >"$tmp/build_$out.log" 2>&1 &
     pids+=($!)
     outs+=("$out")
-}
-own_warnings() { # LOG: prints the warnings LOG reports outside Flare's sources
-    grep -E ':[0-9]+:[0-9]+: warning:' "$1" | grep -vF "$flare_src" || true
+    known+=(1)
 }
 step "build fixture, adapter tests and probes (in parallel)"
 build_bg flare_smoke "$fixture"
 build_bg test_muntin_flare -I src -I "$adapter" "$adapter_tests"
 build_bg serve_probe -I src -I "$adapter" "$serve_probe"
-build_bg test_localhost_roundtrip -I src -I "$adapter" "$roundtrip"
+build_bg_known test_localhost_roundtrip -I src -I "$adapter" "$roundtrip"
 build_bg flare_header_probe -I src -I "$adapter" compat/flare/headers/flare_header_probe.mojo
 build_bg inbound_rebuild -I src -I tests -I "$adapter" compat/flare/headers/inbound_rebuild.mojo
-build_bg json_loopback_probe -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo
+build_bg_known json_loopback_probe -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo
 build_bg head_probe -I src -I "$adapter" compat/flare/head/head_probe.mojo
 built=0
 for i in "${!pids[@]}"; do
     log="$tmp/build_${outs[i]}.log"
-    if wait "${pids[i]}" && [[ -z "$(own_warnings "$log")" ]]; then
+    problem=""
+    if ! wait "${pids[i]}"; then
+        problem="build of build/${outs[i]} failed"
+    elif ((known[i])); then
+        others="$(grep -F 'warning:' "$log" | grep -vxF "$KNOWN_WARNING" || true)"
+        if [[ -n "$others" ]]; then
+            problem="build of build/${outs[i]} has a warning other than Flare's known one"
+        elif ! grep -qxF "$KNOWN_WARNING" "$log"; then
+            problem="Flare's known warning is gone: build build/${outs[i]} with --Werror and remove the exception"
+        fi
+    fi
+    if [[ -z "$problem" ]]; then
         echo "ok: build/${outs[i]}"
     else
         cat "$log"
-        echo "error: build of build/${outs[i]} failed" >&2
+        echo "error: $problem" >&2
         built=1
     fi
 done
