@@ -254,6 +254,10 @@ def defaulted(limit: Int = 20) -> String:
     return String("defaulted ", limit)
 
 
+def search_defaulted(query: String, limit: Int = 20) -> String:
+    return String(limit, " results for ", query)
+
+
 def required(limit: Int) -> String:
     return String("required ", limit)
 
@@ -325,6 +329,7 @@ def _app() -> App:
     app.put["/st/{a}?{b}"](stateful_two_body, prefix)
     # A defaulted parameter registers as a required value.
     app.get["/d?{limit}"](defaulted)
+    app.get["/sd?{query}&{limit}"](search_defaulted)
     # First registration wins, either way round; a 400 never falls through.
     app.get["/first?{limit}"](opt_int)
     app.get["/first?{limit}"](required)  # never reached
@@ -361,6 +366,7 @@ def test_dx_examples() raises:
         _expect(app, target, 200, "items 20")
     _expect(app, "/items?limit=5", 200, "items 5")
     _expect(app, "/items?limit=%35", 200, "items 5")
+    _expect(app, "/items?%6Cimit=5", 200, "items 20")  # keys are undecoded
     _bad(app, "/items?limit=x")
     _bad(app, "/items?limit=1&limit=2")
     _expect(app, "/search?q=mojo", 200, "results for mojo by relevance")
@@ -578,6 +584,8 @@ def test_defaulted_int_parameter_stays_required() raises:
     _expect(app, "/d?limit=5", 200, "defaulted 5")
     _bad(app, "/d")
     _bad(app, "/d?limit=")
+    _expect(app, "/sd?query=a&limit=5", 200, "5 results for a")
+    _bad(app, "/sd?query=a")
 
 
 def test_first_registration_wins() raises:
