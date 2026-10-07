@@ -1,6 +1,6 @@
 """Registration rules: the checks of a handler's shape and route literal
-that `App`'s registration overloads (`app.mojo`) run, and the route-literal
-helpers they share with routing.
+that `App`'s registration overloads (`app.mojo`) run, and the segment
+classification (`_is_param`) they share with request matching.
 
 `_kind` classifies a request slot from its type alone; `_rule` returns the
 first registration rule a shape breaks; `_check` states each rule as a
@@ -9,12 +9,12 @@ one Bool, guards the adapter's instantiation. The route-literal parsers
 (`_is_param`, `_path_params`, `_query_params`, `_distinct_query_keys`) are
 here because the rules read them.
 
-When each part runs: `_check`, `_admits` and `_rule` at compile time;
-`_kind`, `_is_optional` and `_path_params` also once per registration, when
-`_route` in `app.mojo` builds the route. Only `_is_param` runs per request:
-`_match` in `app.mojo` classifies each route segment with it, so
-registration and dispatch share one segment classification and agree on
-how many values a route captures.
+When each part runs: everything here runs at compile time, through
+`_check` and `_admits`. `_route` in `app.mojo` also calls `_kind`,
+`_is_optional` and `_path_params` (and through it `_is_param`) once per
+registration. Only `_is_param` runs per request: `_match` in `app.mojo`
+classifies each route segment with it, so registration and dispatch share
+one segment classification and agree on how many values a route captures.
 """
 
 from .body import FromBody
