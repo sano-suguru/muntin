@@ -90,7 +90,9 @@ HTTP/1.1 (Flare's client) status, body and the kept fields equal
 header from a handler is 500. Over cleartext HTTP/2 (a raw client using
 Flare's public HPACK encoder and decoder) the same route keeps the fields
 in order (lowercased by the protocol) without the omitted ones, and a
-request field named `x-user:admin`, which HTTP/2 admits, is answered 400.
+request field named `x-user/admin`, which Flare admits over HTTP/2 and
+Muntin's `Headers` cannot represent (not a token), is answered 400, as is a
+value that is not UTF-8, which Flare passes through byte for byte.
 
 M3-007 registers the stateful raw `GET /keyed` and `POST /keyed` ->
 `keyed(signer: State[Signer], req: Request) raises Unsigned -> Response` on
@@ -140,7 +142,8 @@ body unchanged: `PUT` and `PATCH` with a body, `DELETE` without one and, to
 the raw route, with one. Each status and body equals `TestClient`'s new
 method, or `App.handle` for the `DELETE` with a body. A lowercase `delete` is
 400 from Flare's parser before `App.handle`, which would answer it 404: a
-current backend limit, not Muntin's matching. The adapter is unchanged.
+current backend limit, not Muntin's matching; an unknown uppercase method
+(`FOO`) reaches `App.handle` and is 404. The adapter is unchanged.
 
 M3-025 registers `GET /pages?{size}` -> `page_of(size: Optional[Int])` on
 `users_app()`. Muntin reads an absent key, `size=` and `size` (no `=`) as
@@ -153,7 +156,7 @@ M3-027 sends `HEAD` to `headers_app()`, which gains the raw `GET /report`
 the raw `GET /nm` (304) and `GET /rc` (205), each answering with a 3-byte
 body. Over h2c (the raw client takes the method), a typed route, the raw
 `/report`, a route-value 400 and the adapter's own 400 (a field named
-`x-user:admin`) go out with their status, a `content-length` equal to
+`x-user/admin`) go out with their status, a `content-length` equal to
 `App.handle`'s body and no DATA frame, as does a 404; the 304 and 205 with no
 `content-length` and no DATA frame. Over HTTP/1.1 the same routes give
 their status and `Content-Length` (Flare's client reads no content for
@@ -166,6 +169,7 @@ from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from flare.http import HttpClient, HttpServer
 from flare.http import Request as FlareRequest
+from flare.http.proto import ascii_unchecked_string
 from flare.http2 import (
     Frame,
     FrameFlags,
@@ -988,6 +992,16 @@ def test_typed_route_over_localhost_matches_test_client() raises:
         print("observed: delete /notes/7", lowercase.status)
         assert_equal(lowercase.status, 400)
         assert_equal(app.handle(Request("delete", "/notes/7")).status, 404)
+        # An unknown uppercase method reaches `App.handle`, which answers it
+        # 404 as it does in memory.
+        var unknown = client.send(
+            FlareRequest("FOO", base + "/notes/7", List[UInt8]())
+        )
+        print("observed: FOO /notes/7", unknown.status, repr(unknown.text()))
+        var local_unknown = app.handle(Request("FOO", "/notes/7"))
+        assert_equal(local_unknown.status, 404)
+        assert_equal(unknown.status, local_unknown.status)
+        assert_equal(unknown.text(), local_unknown.body)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
@@ -1272,19 +1286,38 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
             ":status=202;x-request-id=42;set-cookie=a=1;set-cookie=b=2;x-empty=;",
         )
         assert_equal(ok[1], "sha256=abc|2")
-        # HTTP/2 admits `:` inside a name; Muntin cannot represent it.
-        var forged = h2_request(
+        # Flare admits a name that is not a token over HTTP/2; Muntin cannot
+        # represent it.
+        var invalid = h2_request(
             child.port,
             "GET",
             "/signed",
             [
                 (String("x-signature"), String("sha256=abc")),
-                (String("x-user:admin"), String("zzz")),
+                (String("x-user/admin"), String("zzz")),
             ],
         )
-        print("observed h2c forged:", _h2_fields(forged[0]), forged[1])
-        assert_equal(forged[0][0].value, "400")
-        assert_equal(forged[1], "Bad Request")
+        print("observed h2c invalid:", _h2_fields(invalid[0]), invalid[1])
+        assert_equal(invalid[0][0].value, "400")
+        assert_equal(invalid[1], "Bad Request")
+        # Flare passes a value's bytes through unchanged over HTTP/2; one that
+        # is not UTF-8 is not text, so Muntin cannot represent it either.
+        var not_utf8 = [UInt8(ord("a")), UInt8(0xFF), UInt8(ord("b"))]
+        var binary = h2_request(
+            child.port,
+            "GET",
+            "/signed",
+            [
+                (String("x-signature"), String("sha256=abc")),
+                (
+                    String("x-bin"),
+                    ascii_unchecked_string(Span[UInt8, _](not_utf8)),
+                ),
+            ],
+        )
+        print("observed h2c not UTF-8:", _h2_fields(binary[0]), binary[1])
+        assert_equal(binary[0][0].value, "400")
+        assert_equal(binary[1], "Bad Request")
 
         # M3-027: HEAD at every exit of `MuntinHandler.serve`. (target,
         # fields, status, content-length or "" for none); each goes out
@@ -1292,17 +1325,17 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
         var app = headers_app()
         assert_equal(app.handle(Request("HEAD", "/report")).text(), "report")
         var auth = (String("authorization"), String("t0k"))
-        var admin = (String("x-user:admin"), String("zzz"))
+        var admin = (String("x-user/admin"), String("zzz"))
         var none = List[Tuple[String, String]]()
         var authorized = none.copy()
         authorized.append(auth)
-        var forged_name = none.copy()
-        forged_name.append(admin)
+        var invalid_name = none.copy()
+        invalid_name.append(admin)
         var cases = [
             (String("/hello"), none.copy(), 200, String("5")),
             (String("/report"), none.copy(), 200, String("6")),
             (String("/signed/x"), authorized^, 400, String("11")),
-            (String("/hello"), forged_name^, 400, String("11")),
+            (String("/hello"), invalid_name^, 400, String("11")),
             (String("/missing"), none.copy(), 404, String("9")),
             (String("/nm"), none.copy(), 304, String("")),
             (String("/rc"), none.copy(), 205, String("")),

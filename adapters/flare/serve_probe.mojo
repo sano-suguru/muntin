@@ -1,6 +1,6 @@
 """Compile-only probe: Flare's server accepts `MuntinHandler` (M1-002).
 
-Built by scripts/check_flare.sh with `--Werror`, and run without arguments,
+Built by scripts/check_flare.sh and run without arguments,
 which exits before binding. It type-checks handing an owned Muntin `App`
 to `HttpServer.serve` and opens no socket. Serving for real is M1-003.
 """

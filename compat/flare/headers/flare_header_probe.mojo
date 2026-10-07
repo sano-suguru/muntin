@@ -1,4 +1,4 @@
-"""Flare v0.11.0 HTTP header behaviour probe (M3-002 evidence). Not Muntin.
+"""Flare HTTP header behaviour probe (M3-002 evidence). Not Muntin.
 
 Runs only in the `flare` pixi environment. It measures what the pinned Flare
 backend preserves and changes in request and response headers, so a future
@@ -22,6 +22,12 @@ SETTINGS and one HEADERS frame encoded with Flare's public `HpackEncoder`
 (literal fields, no validation, so any bytes can be sent). Response HEADERS
 are decoded with `HpackDecoder` and rendered as `HEADERS{name: value; ...}`;
 SETTINGS, WINDOW_UPDATE and PING frames are left out of the rendering.
+
+Re-pinned for Flare v0.12.0, which changed three observations: the
+obs-text-lenient HTTP/1.1 server answers 400 to a value that is not UTF-8
+(it stored the bytes raw); over h2c a name with `:` or a byte >= 0x80 is
+refused (both reached the handler), and a value that is not UTF-8 reaches
+it byte for byte (it arrived with U+FFFD).
 
 The echo path reads request headers only through `HeaderMap.encode_to`,
 the one public whole-map accessor (besides `write_to`); `len`, `get`,
@@ -522,12 +528,9 @@ def run_inbound(mut c: Checks, port: UInt16, lenient: UInt16) raises:
         ),
     )
     c.eq(
-        "2. lenient obs-text: FF stored raw (String not valid UTF-8)",
+        "2. lenient obs-text: FF rejected (not valid UTF-8)",
         exchange(lenient, get("/echo", "X-H: a\\xFFb\r\n")),
-        echo_ok(
-            "len=3 get(x-a)= get_all(x-a)=0\nHost: probe\r\nX-H: a\\xFFb\r\n"
-            "Connection: close\r\n"
-        ),
+        BAD,
     )
     c.eq(
         "2. lenient obs-text: high byte in a NAME still rejected",
@@ -804,15 +807,13 @@ comptime H2_REFUSED = "RST_STREAM(1)"
 def run_h2c(mut c: Checks, port: UInt16) raises:
     c.eq(
         (
-            "h2. what reaches the handler: ':' in a name, controls, DEL, high"
-            " bytes (invalid UTF-8 replaced), empty value, order, cookie merge"
+            "h2. what reaches the handler: controls, DEL, high bytes (invalid"
+            " UTF-8 kept raw), empty value, order, cookie merge"
         ),
         h2_exchange(
             port,
             "/h2echo",
             [
-                "x-user:admin",
-                "zzz",
                 "x-r",
                 "1",
                 "x-ctl",
@@ -831,17 +832,24 @@ def run_h2c(mut c: Checks, port: UInt16) raises:
                 "2",
                 "cookie",
                 "d=2",
-                "x-\\xC3\\xA9",
-                "high-name",
             ],
         ),
         h2_echo(
-            "version=HTTP/2 len=11 get_all(x-r)=2\nHost: probe\r\n"
-            "x-user:admin: zzz\r\nx-r: 1\r\nx-ctl: a\\x01b\\x1Fc\td\r\n"
+            "version=HTTP/2 len=9 get_all(x-r)=2\nHost: probe\r\n"
+            "x-r: 1\r\nx-ctl: a\\x01b\\x1Fc\td\r\n"
             "x-del: a\\x7Fb\r\nx-utf8: \\xC3\\xA9\r\n"
-            "x-bad: a\\xEF\\xBF\\xBDb\r\nx-e: \r\nx-r: 2\r\n"
-            "x-\\xC3\\xA9: high-name\r\ncookie: c=1; d=2\r\n"
+            "x-bad: a\\xFFb\r\nx-e: \r\nx-r: 2\r\ncookie: c=1; d=2\r\n"
         ),
+    )
+    c.eq(
+        "h2. ':' inside a name refused",
+        h2_exchange(port, "/h2echo", ["x-user:admin", "zzz"]),
+        H2_REFUSED,
+    )
+    c.eq(
+        "h2. high byte in a name refused",
+        h2_exchange(port, "/h2echo", ["x-\\xC3\\xA9", "high-name"]),
+        H2_REFUSED,
     )
     c.eq(
         "h2. uppercase name refused",

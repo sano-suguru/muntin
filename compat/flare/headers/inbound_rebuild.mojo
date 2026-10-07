@@ -4,10 +4,11 @@ evidence; runs only in the `flare` environment, from scripts/check_flare.sh).
 Flare's `HeaderMap` has no public iterator, so an adapter rebuilds fields
 from its public `encode_to` (`name: value\\r\\n` per field). Over HTTP/1.1
 that parses back exactly: Flare's strict parser admits only token names.
-Its HTTP/2 path (h2c, accepted by the default server) admits a name with
-`:` after the first byte and control bytes in values, so a parse that
-splits at the first colon could forge a field the client never sent
-(`x-user:admin: zzz` read as `x-user` = `admin: zzz`). The rule therefore
+Its HTTP/2 path (h2c, accepted by the default server) admits control bytes
+in values, and in v0.11.0 admitted a name with `:` after the first byte
+(v0.12.0 refuses it), so a parse that splits at the first colon could forge
+a field the client never sent (`x-user:admin: zzz` read as `x-user` =
+`admin: zzz`). The rule therefore
 verifies the parse against Flare's own by-name view: the parsed count is
 `len()`, and per name the parsed values equal `get_all(name)` position by
 position; then every field must pass Muntin's `Headers.add`. Any failure
@@ -96,8 +97,9 @@ def test_http1_fields_rebuild_exactly() raises:
 
 
 def test_forged_name_is_rejected() raises:
-    # h2 lets `x-user:admin` through; a first-colon parse would read it
-    # as `x-user`. Alone, or beside a real `x-user` with the same value.
+    # v0.11.0's h2 let `x-user:admin` through; a first-colon parse would
+    # read it as `x-user`. Alone, or beside a real `x-user` with the same
+    # value.
     assert_false(
         Bool(rebuild(_request([(String("x-user:admin"), String("zzz"))])))
     )

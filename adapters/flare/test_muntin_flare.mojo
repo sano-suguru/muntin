@@ -185,8 +185,9 @@ def test_adapter_post_body_matches_in_memory_backend() raises:
 
 def _flare_request(fields: List[Tuple[String, String]]) raises -> FlareRequest:
     """A Flare request carrying `fields` as Flare's parser would store
-    them; `append` checks only CR/LF, so HTTP/2-only shapes (a `:` inside a
-    name, control bytes) can be reproduced in process."""
+    them; `append` checks only CR/LF, so HTTP/2-only shapes (control bytes,
+    and a `:` inside a name, which Flare v0.11.0 admitted over HTTP/2) can be
+    reproduced in process."""
     var req = FlareRequest("POST", "/hook?x=1", List("b".as_bytes()))
     for f in fields:
         req.headers.append(f[0], f[1])
@@ -225,8 +226,9 @@ def _served(fields: List[Tuple[String, String]]) raises -> FlareResponse:
 
 
 def test_unrepresentable_request_headers_answer_400() raises:
-    # A name with `:` (HTTP/2 admits it) would be misread by a first-colon
-    # parse; a control byte cannot be a Muntin value. Neither reaches App.
+    # A name with `:` (Flare v0.11.0 admitted it over HTTP/2) would be
+    # misread by a first-colon parse; a control byte cannot be a Muntin
+    # value. Neither reaches App.
     var forged = _served([(String("x-user:admin"), String("zzz"))])
     assert_equal(forged.status, 400)
     assert_equal(String(from_utf8_lossy=Span(forged.body)), "Bad Request")
@@ -239,7 +241,7 @@ def test_unrepresentable_request_headers_answer_400() raises:
     assert_equal(beside.status, 400)
     var ctl = _served([(String("x-ctl"), String("a") + chr(1) + String("b"))])
     assert_equal(ctl.status, 400)
-    # Invalid UTF-8, as a lenient HTTP/1.1 configuration would store it.
+    # Invalid UTF-8, as Flare v0.12.0 delivers it over HTTP/2.
     var bad = List[UInt8]()
     bad.append(0x61)
     bad.append(0xFF)

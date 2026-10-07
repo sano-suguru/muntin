@@ -16,10 +16,13 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   public `HeaderMap.encode_to` (Flare has no public field iterator) and
   verified against Flare's by-name view: the parsed count is `len()`, and
   per name the parsed values equal `get_all(name)` position by position.
-  Over HTTP/1.1 the parse is exact; over cleartext HTTP/2 Flare admits a
-  name with `:` inside, which a first-colon parse would misread as another
-  field. A field that fails the check or `Headers.add` (a control byte, a
-  non-token name) cannot be represented: the answer is 400.
+  Over HTTP/1.1 the parse is exact. Over cleartext HTTP/2, Flare v0.11.0
+  admitted a name with `:` inside, which a first-colon parse would misread
+  as another field; v0.12.0 refuses it, and the check does not rely on
+  that. Over HTTP/2 Flare v0.12.0 passes a value's bytes through unchanged,
+  so a value that is not UTF-8 fails the check. A field that fails the
+  check or `Headers.add` (a control byte, a non-token name, a value that
+  is not UTF-8) cannot be represented: the answer is 400.
 - version and peer: dropped.
 - response: status, body bytes and header fields copied; reason left unset,
   so Flare's default applies. Header fields go out in order, except those
@@ -37,7 +40,7 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   500, its own 400) and sends its status and fields with no body, declaring
   a `Content-Length` equal to the body's byte length, except for a status
   that never carries content (1xx, 204, 205, 304), where it declares none.
-  Flare v0.11.0 would send the content over cleartext HTTP/2, and over
+  Flare v0.12.0 would send the content over cleartext HTTP/2, and over
   HTTP/1.1 frames an empty body as `Content-Length: 0`, so both steps are
   the adapter's; over HTTP/1.1 Flare still frames a 205 or 304 with
   `Content-Length: 0` itself. A handler's own `Content-Length` is still
