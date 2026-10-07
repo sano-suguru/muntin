@@ -141,6 +141,12 @@ the raw route, with one. Each status and body equals `TestClient`'s new
 method, or `App.handle` for the `DELETE` with a body. A lowercase `delete` is
 400 from Flare's parser before `App.handle`, which would answer it 404: a
 current backend limit, not Muntin's matching. The adapter is unchanged.
+
+M3-025 registers `GET /pages?{size}` -> `page_of(size: Optional[Int])` on
+`users_app()`. Muntin reads an absent key, `size=` and `size` (no `=`) as
+`None`, so the backend must pass the query as received, a bare key and a
+trailing `=` included; each status and body equals `TestClient`'s. The
+adapter is unchanged.
 """
 
 from std.ffi import c_uint, external_call
@@ -211,6 +217,10 @@ def pair_of(a: Int, b: String) -> String:
 
 def field_of(id: Int, field: String) -> String:
     return String("field ", id, " ", field)
+
+
+def page_of(size: Optional[Int]) -> String:
+    return "page size " + String(size.or_else(20))
 
 
 struct CreateUser(FromBody):
@@ -486,6 +496,7 @@ def users_app() -> App:
     app.get["/search?{q}"](search)
     app.get["/pairs/{a}/{b}"](pair_of)
     app.get["/fields/{id}?{field}"](field_of)
+    app.get["/pages?{size}"](page_of)
     app.post["/users"](create_user)
     app.post["/echo"](echo)
     app.get["/people/{id}"](get_person)
@@ -653,6 +664,13 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             ),
             (String("/fields/7?field=%FF"), 400, String("Bad Request")),
             (String("/fields/7"), 400, String("Bad Request")),
+            # M3-025: an optional value is `None` for an absent key, `size=`
+            # and a bare `size`, so "page size 20" for each; "page size 5"
+            # only if the present value reached the handler.
+            (String("/pages"), 200, String("page size 20")),
+            (String("/pages?size="), 200, String("page size 20")),
+            (String("/pages?size"), 200, String("page size 20")),
+            (String("/pages?size=5"), 200, String("page size 5")),
         ]
         for want in expected:
             var path = want[0]
