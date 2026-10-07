@@ -1,8 +1,8 @@
-# Must not compile: three request slots, no `State` and no state argument match
-# none of `delete`'s six overloads, so the compiler's own diagnostic names the
-# method, as for `get` and `post`. Decision:
-# docs/history/architecture-decisions.md, "HTTP methods decision (M3-020)".
-# Expected diagnostic (checked by scripts/check.sh): no matching method in call to 'delete'
+# Must not compile: two route values and `Headers` on `delete` with one
+# placeholder select `delete`'s slot-arity-3 overload, which reports the
+# placeholder count. Decisions: docs/history/architecture-decisions.md, "HTTP
+# methods decision (M3-020)" and "Several route values decision (M3-022)".
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: handler takes two route values; route must declare exactly two path or query parameters
 from muntin import App, Headers
 
 

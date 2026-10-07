@@ -1,8 +1,7 @@
 # Must not compile: a route value and two bodies; a handler takes at most one
-# body. Three request parameters select no overload (the largest slot arity is
-# 2), so the call is a 'no matching method'; expected text is the note for
-# post's two-slot candidate (M3-015).
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'handler' cannot be converted from 'def h(id: Int, a: UpdateUser, b: UpdateUser) thin -> String' to 'def(var A, var B) raises Never thin -> String'
+# body. Three request parameters select `post`'s slot-arity-3 overload, which
+# reports the rule (M3-022; before it, no overload matched).
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler takes one request body, as its last parameter
 
 from muntin import App, FromBody
 

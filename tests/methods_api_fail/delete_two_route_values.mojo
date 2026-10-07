@@ -1,7 +1,8 @@
-# Must not compile: An `Int` then a `String` route value on `delete`; the
-# message names the method. Decision: docs/history/architecture-decisions.md,
-# "HTTP methods decision (M3-020)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: a delete handler takes at most one route value
+# Must not compile: an `Int` then a `String` route value on `delete` with one
+# placeholder; two values need exactly two. Decisions:
+# docs/history/architecture-decisions.md, "HTTP methods decision (M3-020)" and
+# "Several route values decision (M3-022)".
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: handler takes two route values; route must declare exactly two path or query parameters
 from muntin import App
 
 

@@ -1,12 +1,12 @@
 # Must not compile: a handler whose result is an immutable-origin `StringSlice`
 # other than `StaticString` (here `ImmutAnyOrigin`), registered through
-# `App.get`'s stateless slot-arity-2 overload with two `Int` route values, which
-# `get` rejects for any result: without the clause the rule check would report
-# the shape instead. Generic `==` cannot tell such a result from `StaticString`,
-# so every overload accepts its result only through the `where` clause, which
-# the compiler checks by identity at the call site
-# (docs/history/architecture-decisions.md, "Registration structure decision
-# (M3-014)").
+# `App.get`'s stateless slot-arity-2 overload with two `Int` route values on a
+# route with one placeholder, which `get` rejects for any result: without the
+# clause the rule check would report the placeholder count instead. Generic `==`
+# cannot tell such a result from `StaticString`, so every overload accepts its
+# result only through the `where` clause, which the compiler checks by identity
+# at the call site (docs/history/architecture-decisions.md, "Registration
+# structure decision (M3-014)").
 # Expected diagnostic (checked by scripts/check.sh): identical(R, StringSpan[ImmStaticOrigin])
 from muntin import App
 
