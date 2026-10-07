@@ -185,8 +185,9 @@ def test_adapter_post_body_matches_in_memory_backend() raises:
 
 def _flare_request(fields: List[Tuple[String, String]]) raises -> FlareRequest:
     """A Flare request carrying `fields` as Flare's parser would store
-    them; `append` checks only CR/LF, so HTTP/2-only shapes (a `:` inside a
-    name, control bytes) can be reproduced in process."""
+    them; `append` checks only CR/LF, so HTTP/2-only shapes (control bytes,
+    and a `:` inside a name, which Flare v0.11.0 admitted over HTTP/2) can be
+    reproduced in process."""
     var req = FlareRequest("POST", "/hook?x=1", List("b".as_bytes()))
     for f in fields:
         req.headers.append(f[0], f[1])
