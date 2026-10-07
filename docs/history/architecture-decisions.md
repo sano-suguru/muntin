@@ -2745,7 +2745,7 @@ app.delete["/cache"](purge)
 - on the wire, every `HEAD` response changes: through Flare it carries no content, the 404 for a path no `get` route matches included (over h2c it carries `Not Found` in DATA today), and the length the adapter's rule gives;
 - a raw `get` handler can now receive `req.method == "HEAD"`; before, it received only `GET`. The raw escape hatch's statement (the whole `Request`, `method` included) is unchanged;
 - the accepted set, the overload set and every diagnostic are unchanged: nothing registers or fails to register differently;
-- the Flare adapter's answer to a `HEAD` request carries no content and the body's length, on both protocols, where today it carries the 404's content over h2c;
+- the Flare adapter's answer to a `HEAD` request carries no content, on both protocols, and the length the backend rule above gives: the `GET` body's byte length for a status that can carry content, and no adapter-declared length for 1xx, 204, 205 and 304. Today it carries the 404's content over h2c;
 - one guarantee is no longer decided in `App.handle` alone: SPEC's "Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it" holds for the answer, but keeping a `HEAD` response's content off the wire and its length is each network backend's obligation, and for `HEAD` the in-memory response (with its body) and the loopback response (without) differ, where the contract's opening sentence holds the same guarantees through both. Every future backend inherits that obligation (A3).
 
 **Invariants:**
