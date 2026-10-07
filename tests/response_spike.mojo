@@ -22,7 +22,8 @@
 
 from muntin import FromBody, Request, Response
 from muntin._handler_storage import _Erased
-from muntin.app import _match, _parse_int, _path_params, _query_params
+from muntin._registration_rules import _path_params, _query_params
+from muntin.app import _match, _parse_int
 from muntin.app import _query_value
 
 

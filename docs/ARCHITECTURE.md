@@ -118,7 +118,10 @@ src/muntin/http.mojo              Request (method, path, query, body, headers), 
 src/muntin/body.mojo              FromBody
 src/muntin/headers_body.mojo      WithHeaders[B] (post/put/patch body carrier with the request's fields); private marker _HeaderCarrier
 src/muntin/app.mojo               App: route table, the get/post/put/patch/delete overloads (one per request-slot arity), App.handle;
-                                  private registration rules, slot extraction, adapters and the one rebind helper
+                                  private route matching, slot extraction, adapters and the one rebind helper
+src/muntin/_registration_rules.mojo
+                                  private registration rules: slot kinds (_kind), route-literal parsing, _rule, _check, _admits;
+                                  imported by app.mojo; imports only the types it classifies (.http, .body, .headers_body, .state)
 src/muntin/state.mojo             State[S]; private marker _InjectedState
 src/muntin/json.mojo              Json[T], FromJson, ToJson, JsonValue, JsonWriter; private parser, limits, _JsonBody
 src/muntin/_handler_storage.mojo  private _Erased (handler box) and _Shared (State/JSON box); the only module with unsafe operations

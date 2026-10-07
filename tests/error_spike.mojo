@@ -29,7 +29,8 @@
 from muntin import FromBody, Request, Response, ToResponse
 from muntin._handler_storage import _Erased
 from muntin.app import _bad_request
-from muntin.app import _match, _parse_int, _path_params, _query_params
+from muntin._registration_rules import _path_params, _query_params
+from muntin.app import _match, _parse_int
 from muntin.app import _query_value
 
 # Local copies of production's response policies as of M3-014
