@@ -225,8 +225,9 @@ def _served(fields: List[Tuple[String, String]]) raises -> FlareResponse:
 
 
 def test_unrepresentable_request_headers_answer_400() raises:
-    # A name with `:` (HTTP/2 admits it) would be misread by a first-colon
-    # parse; a control byte cannot be a Muntin value. Neither reaches App.
+    # A name with `:` (Flare v0.11.0 admitted it over HTTP/2) would be
+    # misread by a first-colon parse; a control byte cannot be a Muntin
+    # value. Neither reaches App.
     var forged = _served([(String("x-user:admin"), String("zzz"))])
     assert_equal(forged.status, 400)
     assert_equal(String(from_utf8_lossy=Span(forged.body)), "Bad Request")

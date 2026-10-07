@@ -25,11 +25,11 @@ if [[ "$version" != "$EXPECTED_MOJO "* ]]; then
     echo "error: expected $EXPECTED_MOJO, found: $version" >&2
     exit 1
 fi
-FLARE_COMMIT="59bda50f46853f7351eef12f1737f7fb2287de71" # tag v0.11.0
+FLARE_COMMIT="8c6e1400a6214fc1c763f8ae5e7adfcc0156661e" # tag v0.12.0
 listing="$(pixi list --frozen -e flare '^flare$')"
 echo "$listing"
-if ! grep -q "tag=v0.11.0#$FLARE_COMMIT" <<<"$listing"; then
-    echo "error: flare env is not at v0.11.0 ($FLARE_COMMIT)" >&2
+if ! grep -q "tag=v0.12.0#$FLARE_COMMIT" <<<"$listing"; then
+    echo "error: flare env is not at v0.12.0 ($FLARE_COMMIT)" >&2
     exit 1
 fi
 
@@ -49,12 +49,20 @@ echo "ok"
 mkdir -p build
 pids=()
 outs=()
-build_bg() { # OUT ARGS...: mojo build --Werror ARGS -o build/OUT, in the background
+# Not --Werror: Flare v0.12.0's own sources warn (an unused assignment in
+# flare/http/_client/parse.mojo, reached through HttpClient). A warning in a
+# file of this repository still fails the build, checked after it finishes.
+# Return to --Werror once a pinned Flare release builds without warnings.
+flare_src="$PWD/.pixi/envs/flare/lib/mojo/"
+build_bg() { # OUT ARGS...: mojo build ARGS -o build/OUT, in the background
     local out="$1"
     shift
-    "${FLARE[@]}" build --Werror "$@" -o "build/$out" >"$tmp/build_$out.log" 2>&1 &
+    "${FLARE[@]}" build "$@" -o "build/$out" >"$tmp/build_$out.log" 2>&1 &
     pids+=($!)
     outs+=("$out")
+}
+own_warnings() { # LOG: prints the warnings LOG reports outside Flare's sources
+    grep -E '^[^ ]+:[0-9]+:[0-9]+: warning:' "$1" | grep -vF "$flare_src" || true
 }
 step "build fixture, adapter tests and probes (in parallel)"
 build_bg flare_smoke "$fixture"
@@ -67,10 +75,11 @@ build_bg json_loopback_probe -I src -I tests -I "$adapter" compat/flare/json/jso
 build_bg head_probe -I src -I "$adapter" compat/flare/head/head_probe.mojo
 built=0
 for i in "${!pids[@]}"; do
-    if wait "${pids[i]}"; then
+    log="$tmp/build_${outs[i]}.log"
+    if wait "${pids[i]}" && [[ -z "$(own_warnings "$log")" ]]; then
         echo "ok: build/${outs[i]}"
     else
-        cat "$tmp/build_${outs[i]}.log"
+        cat "$log"
         echo "error: build of build/${outs[i]} failed" >&2
         built=1
     fi

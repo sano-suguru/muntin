@@ -1,4 +1,4 @@
-"""Flare v0.11.0 loopback probe for the JSON decision (M3-008 evidence).
+"""Flare loopback probe for the JSON decision (M3-008 evidence).
 
 Runs only in the `flare` pixi environment (scripts/check_flare.sh). A
 production `App` with the decision spike's `Json[T]` routes

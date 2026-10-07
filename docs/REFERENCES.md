@@ -23,6 +23,6 @@ Upstream sources behind assumptions that may change. Re-check them when toolchai
 ## Flare
 
 - Repository: https://github.com/ehsanmok/flare
-- Pinned release: `v0.11.0` (commit `59bda50f46853f7351eef12f1737f7fb2287de71`), MIT license, declaring `mojo >=1.1.0,<2.0.0`; release notes: https://github.com/ehsanmok/flare/releases/tag/v0.11.0
+- Pinned release: `v0.12.0` (commit `8c6e1400a6214fc1c763f8ae5e7adfcc0156661e`), MIT license, declaring `mojo >=1.1.0,<2.0.0`; release notes: https://github.com/ehsanmok/flare/releases/tag/v0.12.0
 
 Flare is installed as a pixi-build git source dependency. The GitHub release is not marked immutable, so the commit in `pixi.lock` is the reproducible reference. Flare's build backend (`pixi-build-rattler-build`) is resolved at install time and is not recorded in `pixi.lock`. Before upgrading, re-check the license, the supported Mojo range and the adapter-relevant API.

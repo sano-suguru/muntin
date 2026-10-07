@@ -1,4 +1,4 @@
-"""Flare v0.11.0 `HEAD` probe (M3-026 evidence; re-pinned by M3-027). Not
+"""Flare `HEAD` probe (M3-026 evidence; re-pinned by M3-027). Not
 Muntin.
 
 Runs only in the `flare` pixi environment (scripts/check_flare.sh). It
