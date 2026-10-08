@@ -265,7 +265,11 @@ def test_dx_section_9_example() raises:
     var query = client.post("/webhook?id=abc", "forged")
     assert_equal(query.status, 401)
     assert_equal(query.body, "unsigned")
-    assert_equal(client.get("/webhook").status, 404)
+    var get = client.get("/webhook")
+    assert_equal(get.status, 405)
+    assert_equal(get.body, "Method Not Allowed")
+    assert_equal(len(get.headers.get_all("Allow")), 1)
+    assert_equal(get.headers.get_all("Allow")[0], "POST")
     assert_equal(client.post("/webhook/x", "signed").status, 404)
 
 
@@ -354,11 +358,20 @@ def test_raw_handler_chooses_any_status() raises:
 def test_raw_routes_run_only_after_route_selection() raises:
     _reset()
     var app = _app()
+    # Another method on a raw route's path: 405 with that path's `Allow`.
+    for row in [
+        (Request("GET", "/webhook"), "POST"),
+        (Request("PUT", "/webhook", "x"), "POST"),
+        (Request("post", "/webhook", "x"), "POST"),
+        (Request("POST", "/raw"), "GET, HEAD"),
+    ]:
+        var r = app.handle(row[0])
+        var label = row[0].method + " " + row[0].path
+        assert_equal(r.status, 405, label)
+        assert_equal(r.body, "Method Not Allowed", label)
+        assert_equal(len(r.headers.get_all("Allow")), 1, label)
+        assert_equal(r.headers.get_all("Allow")[0], row[1], label)
     for req in [
-        Request("GET", "/webhook"),
-        Request("PUT", "/webhook", "x"),
-        Request("post", "/webhook", "x"),
-        Request("POST", "/raw"),
         Request("POST", "/webhook/x"),
         Request("POST", "/webhook/"),
         Request("POST", "/Webhook"),

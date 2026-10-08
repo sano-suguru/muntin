@@ -406,11 +406,20 @@ def test_routes_run_only_after_route_selection() raises:
     var app = App()
     app.post["/hook"](echo, keys)
     app.get["/view"](echo, keys)
+    # Another method on a route's path: 405 with that path's `Allow`.
+    for row in [
+        (Request("GET", "/hook"), "POST"),
+        (Request("PUT", "/hook", "x"), "POST"),
+        (Request("post", "/hook", "x"), "POST"),
+        (Request("POST", "/view"), "GET, HEAD"),
+    ]:
+        var r = app.handle(row[0])
+        var label = row[0].method + " " + row[0].path
+        assert_equal(r.status, 405, label)
+        assert_equal(r.body, "Method Not Allowed", label)
+        assert_equal(len(r.headers.get_all("Allow")), 1, label)
+        assert_equal(r.headers.get_all("Allow")[0], row[1], label)
     for req in [
-        Request("GET", "/hook"),
-        Request("PUT", "/hook", "x"),
-        Request("post", "/hook", "x"),
-        Request("POST", "/view"),
         Request("POST", "/hook/x"),
         Request("POST", "/hook/"),
         Request("POST", "/Hook"),
@@ -615,7 +624,10 @@ def test_dx_section_8_stateful_raw_example() raises:
     var unsigned = TestClient(app).post("/webhook", "")
     assert_equal(unsigned.status, 401)
     assert_equal(unsigned.body, "unsigned")
-    assert_equal(TestClient(app).get("/webhook").status, 404)
+    var get = TestClient(app).get("/webhook")
+    assert_equal(get.status, 405)
+    assert_equal(get.body, "Method Not Allowed")
+    assert_equal(_header_list(get.headers), "Allow=POST;")
 
 
 def main() raises:

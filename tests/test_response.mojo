@@ -242,8 +242,16 @@ def test_rejected_requests_run_neither_handler_nor_conversion() raises:
     assert_equal(empty.status, 400)
     assert_equal(empty.body, "Bad Request")
     _expect(app, "GET", "/missing", 404, "Not Found")
-    _expect(app, "POST", "/first", 404, "Not Found")
-    _expect(app, "GET", "/teams", 404, "Not Found")
+    _expect(app, "POST", "/first", 405, "Method Not Allowed")
+    _expect(app, "GET", "/teams", 405, "Method Not Allowed")
+    var allow_first = (
+        TestClient(app).post("/first", "Ada").headers.get_all("Allow")
+    )
+    assert_equal(len(allow_first), 1)
+    assert_equal(allow_first[0], "GET, HEAD")
+    var allow_teams = TestClient(app).get("/teams").headers.get_all("Allow")
+    assert_equal(len(allow_teams), 1)
+    assert_equal(allow_teams[0], "POST")
     assert_equal(_count(HANDLER_CALLS), 0)
     assert_equal(_count(CONVERSIONS), 0)
 

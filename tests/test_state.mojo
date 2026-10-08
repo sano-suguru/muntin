@@ -226,7 +226,11 @@ def test_request_failures_do_not_call_the_handler() raises:
         var got = client.get(target)
         assert_equal(got.status, 404, target)
         assert_equal(got.body, "Not Found", target)
-    assert_equal(client.post("/count", "").status, 404)
+    var post = client.post("/count", "")
+    assert_equal(post.status, 405)
+    assert_equal(post.body, "Method Not Allowed")
+    assert_equal(len(post.headers.get_all("Allow")), 1)
+    assert_equal(post.headers.get_all("Allow")[0], "GET, HEAD")
     assert_equal(_calls(users), 0)
 
 

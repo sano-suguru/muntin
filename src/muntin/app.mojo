@@ -135,8 +135,9 @@ from .state import State
 # body only, answers 415 unless the arguments end with the verdict `"1"` at the
 # expected position (an exact arity check, so a body can never stand in for a
 # missing verdict), then 413 when the body is over 1 MiB, after the route value
-# and before `from_body`. Order on a JSON body route: 404, query or capture 400
-# (`App.handle`), `Int` 400, 415, 413, JSON 400 (`from_body`), handler.
+# and before `from_body`. Order on a JSON body route: 404 or 405, query or
+# capture 400 (`App.handle`), `Int` 400, 415, 413, JSON 400 (`from_body`),
+# handler.
 #
 # Header carriers (M3-012): `WithHeaders[B]` (`headers_body.mojo`) is a body
 # slot without being a `FromBody`: `_kind` accepts `FromBody` or the private
@@ -207,6 +208,23 @@ def _match(route: String, path: String, mut args: List[String]) -> Bool:
         elif want[i] != got[i]:
             return False
     return True
+
+
+def _allowed(routes: List[_Route], path: String) -> List[String]:
+    """The methods of the routes whose path `_match`es `path`, each once, in
+    the order their first such route was registered, with `HEAD` right after
+    `GET` (M3-030): `App.handle`'s `Allow` when it selects no route. Empty
+    when no route matches the path. Nothing is decoded or converted."""
+    var methods = List[String]()
+    var scratch = List[String]()
+    for i in range(len(routes)):
+        ref route = routes[i]
+        if route.method in methods or not _match(route.path, path, scratch):
+            continue
+        methods.append(route.method)
+        if route.method == "GET":
+            methods.append("HEAD")
+    return methods^
 
 
 def _parse_int(segment: String) raises -> Int:
@@ -2154,11 +2172,16 @@ struct App(Movable):
         instead. Query keys, `request.path`, `request.query` and raw routes
         are never decoded.
 
-        No matching route is 404. A duplicated query key, a missing or empty
-        required value, a bad escape or decoded text that is not UTF-8 is 400
-        here; the adapter answers its own 400s and turns a handler error
-        into a response (`_handler_error`). A raise out of `invoke` is 500,
-        never 400.
+        When no route matches the method and path, the answer is 405
+        `Method Not Allowed` if some route matches the path (`_match`), with
+        one `Allow` field listing those routes' methods once, in the order
+        their first such route was registered, `HEAD` right after `GET`
+        (`_allowed`, M3-030); otherwise it is 404 `Not Found`. Neither
+        decodes, converts or runs a handler. A duplicated query key, a
+        missing or empty required value, a bad escape or decoded text that
+        is not UTF-8 is 400 here; the adapter answers its own 400s and turns
+        a handler error into a response (`_handler_error`). A raise out of
+        `invoke` is 500, never 400.
         """
         var args = List[String]()
         # Indexed, not `for route in self._routes`: on Mojo 1.1.0 List
@@ -2220,4 +2243,13 @@ struct App(Movable):
                 return route.handler.invoke(args)
             except:
                 return _internal_error()
-        return Response.text("Not Found", status=404)
+        # No route selected: 405 when some route matches the path (M3-030).
+        var allowed = _allowed(self._routes, request.path)
+        if len(allowed) == 0:
+            return Response.text("Not Found", status=404)
+        var response = Response.text("Method Not Allowed", status=405)
+        try:
+            response.headers.add("Allow", ", ".join(allowed))
+        except:
+            return _internal_error()
+        return response^

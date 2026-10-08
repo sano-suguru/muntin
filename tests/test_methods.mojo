@@ -2,7 +2,8 @@
 # exactly `post`'s shapes and `delete` exactly `get`'s, with the same rules,
 # results and errors; method matching stays byte for byte (except `HEAD`,
 # which `get` routes answer since M3-027: tests/test_head.mojo), a method with
-# no route on a matching path is 404, and `TestClient.put`, `.patch` and
+# no route on a matching path is 405 with `Allow` (M3-031:
+# tests/test_method_not_allowed.mojo), and `TestClient.put`, `.patch` and
 # `.delete` equal `App.handle` for the same request. Decision:
 # docs/history/architecture-decisions.md, "HTTP methods decision (M3-020)".
 # DX's example runs as written in `test_dx_example`. Must-not-compile cases:
@@ -228,6 +229,14 @@ def _send(app: App, method: String, c: Case) raises -> Response:
     return app.handle(Request(method, c.target, c.body, _fields(c.fields)))
 
 
+def _expect_405(r: Response, allow: String, label: String) raises:
+    """405, the fixed body and exactly one `Allow` field, `allow`."""
+    assert_equal(r.status, 405, label)
+    assert_equal(r.text(), "Method Not Allowed", label)
+    assert_equal(len(r.headers.get_all("Allow")), 1, label)
+    assert_equal(r.headers.get_all("Allow")[0], allow, label)
+
+
 def _body_cases(method: String) -> List[Case]:
     """One table for `put` and `patch`: each of `post`'s shapes and its
     400, 413, 415 and 500 answers, before or after the handler."""
@@ -300,10 +309,9 @@ def test_body_routes_answer_their_own_method_only() raises:
     for method in ["GET", "POST", "PATCH", "DELETE", "HEAD", "put"]:
         for target in ["/b", "/i/1", "/raw", "/st"]:
             var r = put.handle(Request(method, target, "hi"))
-            assert_equal(r.status, 404, String(method, " ", target))
-            assert_equal(r.text(), "Not Found")
+            _expect_405(r, "PUT", String(method, " ", target))
     for method in ["GET", "POST", "PUT", "DELETE", "patch"]:
-        assert_equal(patch.handle(Request(method, "/b", "hi")).status, 404)
+        _expect_405(patch.handle(Request(method, "/b", "hi")), "PATCH", method)
 
 
 # `delete` handlers: `get`'s shapes.
@@ -436,8 +444,7 @@ def test_delete_takes_gets_shapes() raises:
     for method in ["GET", "POST", "PUT", "PATCH", "delete", "Delete"]:
         for target in ["/d", "/d/1", "/draw", "/dst"]:
             var r = app.handle(Request(method, target))
-            assert_equal(r.status, 404, String(method, " ", target))
-            assert_equal(r.text(), "Not Found")
+            _expect_405(r, "DELETE", String(method, " ", target))
 
 
 # Matching across methods.
@@ -498,21 +505,21 @@ def test_each_method_reaches_its_own_route() raises:
     # No route of that method, or a method that matches none byte for byte.
     for method in ["OPTIONS", "TRACE", "delete", "Put", "PATCH ", "head"]:
         var r = app.handle(Request(method, "/r/7", "x"))
-        assert_equal(r.status, 404, method)
-        assert_equal(r.text(), "Not Found", method)
+        _expect_405(r, "GET, HEAD, POST, PUT, PATCH, DELETE", method)
 
 
-def test_method_without_a_route_on_a_matching_path_is_404() raises:
+def test_method_without_a_route_on_a_matching_path_is_405() raises:
     var app = App()
     app.put["/only"](body_only)
     for method in ["GET", "POST", "PATCH", "DELETE"]:
-        assert_equal(app.handle(Request(method, "/only", "x")).status, 404)
+        _expect_405(app.handle(Request(method, "/only", "x")), "PUT", method)
     assert_equal(app.handle(Request("PUT", "/only", "x")).text(), "b x")
     var deletes = App()
     deletes.delete["/gone/{id}"](removed_id)
-    for method in ["GET", "POST", "PUT", "PATCH"]:
-        assert_equal(deletes.handle(Request(method, "/gone/1")).status, 404)
-    assert_equal(deletes.handle(Request("delete", "/gone/1")).status, 404)
+    for method in ["GET", "POST", "PUT", "PATCH", "delete"]:
+        _expect_405(
+            deletes.handle(Request(method, "/gone/1")), "DELETE", method
+        )
     assert_equal(deletes.handle(Request("DELETE", "/gone/1")).status, 200)
 
 
@@ -696,11 +703,14 @@ def test_dx_example() raises:
     assert_equal(purged.text(), "purged /cache [all]")
 
     for method in ["POST", "HEAD", "OPTIONS"]:
-        var r404 = app.handle(Request(method, "/users/7", "name=Ada"))
-        assert_equal(r404.status, 404, method)
-        assert_equal(r404.text(), "Not Found", method)
-    assert_equal(client.get("/cache").status, 404)
-    assert_equal(app.handle(Request("delete", "/users/7")).status, 404)
+        var r405 = app.handle(Request(method, "/users/7", "name=Ada"))
+        _expect_405(r405, "PUT, PATCH, DELETE", method)
+    _expect_405(client.get("/cache"), "DELETE", "GET /cache")
+    _expect_405(
+        app.handle(Request("delete", "/users/7")),
+        "PUT, PATCH, DELETE",
+        "delete /users/7",
+    )
 
 
 def main() raises:

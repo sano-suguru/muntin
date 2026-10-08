@@ -4,7 +4,7 @@
 # raises, on every argument shape and with `String` and `ToResponse` results.
 # Every other error type, bare `raises` (`Error`) and a raised `ToResponse`-only
 # value stay the fixed 500. The error converts once and the result conversion
-# does not run; 400 and 404 run neither. Decision:
+# does not run; 400, 404 and 405 run neither. Decision:
 # docs/history/architecture-decisions.md, "Error-response decision (M2-012)".
 
 from std.os import getenv, setenv, unsetenv
@@ -594,7 +594,7 @@ def test_returned_and_raised_values_use_their_own_channel() raises:
 
 
 def test_request_failures_convert_nothing() raises:
-    # 400 and 404 on opted-in routes, whether or not the handler would
+    # 400, 404 and 405 on opted-in routes, whether or not the handler would
     # raise: neither the handler, the error conversion nor the result
     # conversion runs.
     var app = error_response_app()
@@ -614,12 +614,14 @@ def test_request_failures_convert_nothing() raises:
     var bad_body = ["/body", "/body_user", "/ib/1", "/ib_user?id=1", "/save/1"]
     var missing = [
         ("GET", "/int/", ""),
-        ("POST", "/none", ""),
-        ("GET", "/body", "Ada"),
         ("POST", "/ib/", "Ada"),
-        ("PUT", "/ib_user/1", "Ada"),
         ("GET", "/stale/1/2", ""),
         ("GET", "/nowhere", ""),
+    ]
+    var mismatched = [
+        ("POST", "/none", "", "GET, HEAD"),
+        ("GET", "/body", "Ada", "POST"),
+        ("PUT", "/ib_user/1", "Ada", "POST"),
     ]
     for fail in [False, True]:
         for r in bad:
@@ -645,6 +647,20 @@ def test_request_failures_convert_nothing() raises:
             if fail:
                 _ = setenv(FAIL, "1")
             _expect(app, r[0], r[1], r[2], 404, "Not Found")
+            assert_equal(_count(FROM_BODY), 0, r[1])
+            assert_equal(_count(HANDLER), 0, r[1])
+            assert_equal(_count(ERROR_CONVERSIONS), 0, r[1])
+            assert_equal(_count(CONVERSIONS), 0, r[1])
+        for r in mismatched:
+            _reset()
+            if fail:
+                _ = setenv(FAIL, "1")
+            _expect(app, r[0], r[1], r[2], 405, "Method Not Allowed")
+            var allow = app.handle(Request(r[0], r[1], r[2])).headers.get_all(
+                "Allow"
+            )
+            assert_equal(len(allow), 1, r[1])
+            assert_equal(allow[0], r[3], r[1])
             assert_equal(_count(FROM_BODY), 0, r[1])
             assert_equal(_count(HANDLER), 0, r[1])
             assert_equal(_count(ERROR_CONVERSIONS), 0, r[1])

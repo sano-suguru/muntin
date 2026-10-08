@@ -2,7 +2,7 @@
 # a non-raising handler, a `raises` handler (error type `Error`) and a
 # `raises T` handler (an application-defined `T`), with `String` and
 # `ToResponse` results. A request-side failure is 400 and a missing route
-# 404, both before the handler; anything the handler raises is a fixed 500
+# 404 or 405, all before the handler; anything the handler raises is a fixed 500
 # whose body never carries the error, and the result conversion runs only
 # after the handler returns. Decision: docs/history/architecture-decisions.md,
 # "Application-error decision (M2-010)".
@@ -440,7 +440,7 @@ def test_body_failures_are_400_before_a_raising_handler() raises:
             assert_equal(_count(CONVERSIONS), 0, target)
 
 
-def test_unmatched_routes_are_404_before_a_raising_handler() raises:
+def test_unmatched_routes_are_404_or_405_before_a_raising_handler() raises:
     var app = error_app()
     _reset()
     _ = setenv(FAIL, "1")
@@ -448,14 +448,23 @@ def test_unmatched_routes_are_404_before_a_raising_handler() raises:
         Case("GET", "/int/", "", 0, "", False, False),  # missing segment
         Case("GET", "/int_user", "", 0, "", False, False),
         Case("GET", "/t/int/1/2", "", 0, "", False, False),
-        Case("POST", "/none", "", 0, "", False, False),
-        Case("GET", "/body", "Ada", 0, "", False, False),
         Case("POST", "/ib/", "Ada", 0, "", False, False),  # missing segment
-        Case("PUT", "/ib/1", "Ada", 0, "", False, False),
         Case("GET", "/missing", "", 0, "", False, False),
     ]
     for c in cases:
         _ = _expect(app, c, 404, "Not Found")
+    # A path some route matches, by another method.
+    var mismatched = [
+        (Case("POST", "/none", "", 0, "", False, False), "GET, HEAD"),
+        (Case("GET", "/body", "Ada", 0, "", False, False), "POST"),
+        (Case("PUT", "/ib/1", "Ada", 0, "", False, False), "POST"),
+    ]
+    for m in mismatched:
+        var allow = _expect(
+            app, m[0], 405, "Method Not Allowed"
+        ).headers.get_all("Allow")
+        assert_equal(len(allow), 1, m[0].target)
+        assert_equal(allow[0], m[1], m[0].target)
     assert_equal(_count(FROM_BODY), 0)
     assert_equal(_count(HANDLER), 0)
     assert_equal(_count(CONVERSIONS), 0)

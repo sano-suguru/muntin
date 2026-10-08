@@ -635,11 +635,15 @@ def test_invalid_in_memory_fields_are_the_fixed_500() raises:
     assert_equal(_post(app, "/plain", "hi", h^).body, "plain hi")
 
 
-def test_unmatched_is_404() raises:
+def test_unmatched_path_is_404_and_unmatched_method_405() raises:
     var prefix = State(Prefix("p:"))
     var app = _app(prefix)
     assert_equal(_post(app, "/nope", "hi", _h("X-A", "1")).status, 404)
-    assert_equal(app.handle(Request("GET", "/s")).status, 404)
+    var get = app.handle(Request("GET", "/s"))
+    assert_equal(get.status, 405)
+    assert_equal(get.body, "Method Not Allowed")
+    assert_equal(len(get.headers.get_all("Allow")), 1)
+    assert_equal(get.headers.get_all("Allow")[0], "POST")
 
 
 def test_a_carrier_built_by_hand_takes_explicit_headers() raises:

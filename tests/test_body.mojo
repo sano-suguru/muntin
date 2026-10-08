@@ -155,16 +155,25 @@ def test_body_reaches_from_body_byte_for_byte() raises:
     assert_equal(client.post("/echo?x=1", "y").text(), "[y]")
 
 
-def test_unmatched_method_or_path_is_404_without_conversion() raises:
+def test_method_mismatch_is_405_and_unmatched_path_404_without_conversion() raises:
     var app = body_app()
     var client = TestClient(app)
     for method in ["PUT", "PATCH", "DELETE"]:
         _reset()
         var response = app.handle(Request(method, "/users", "name=Ada"))
-        assert_equal(response.status, 404, method)
-        assert_equal(response.text(), "Not Found", method)
+        assert_equal(response.status, 405, method)
+        assert_equal(response.text(), "Method Not Allowed", method)
+        assert_equal(len(response.headers.get_all("Allow")), 1, method)
+        assert_equal(response.headers.get_all("Allow")[0], "GET, HEAD, POST")
         assert_false(_called(FROM_BODY_CALLED), method)
-    for target in ["/missing", "/users/7", "/users/", "/user"]:
+    _reset()
+    var post = client.post("/users/7", "name=Ada")
+    assert_equal(post.status, 405)
+    assert_equal(post.text(), "Method Not Allowed")
+    assert_equal(len(post.headers.get_all("Allow")), 1)
+    assert_equal(post.headers.get_all("Allow")[0], "GET, HEAD")
+    assert_false(_called(FROM_BODY_CALLED))
+    for target in ["/missing", "/users/", "/user"]:
         _reset()
         var response = client.post(target, "name=Ada")
         assert_equal(response.status, 404, target)

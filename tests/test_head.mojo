@@ -4,9 +4,11 @@
 # answer equals the `GET`'s (status, body and header fields), the body kept
 # (keeping it off the wire is the backend's); a raw `get` handler sees
 # `req.method == "HEAD"`, and one that follows DX's raw rule answers as for
-# the `GET`. Every other request keeps its
-# answer, 404 included. Decision: docs/history/architecture-decisions.md,
-# "HEAD decision (M3-026)". The Flare adapter's side: adapters/flare.
+# the `GET`. Every other request keeps its answer, except that on a path
+# only routes of other methods match, `HEAD` is 405 with `Allow` like any
+# method (M3-031), and on a path no route matches 404.
+# Decision: docs/history/architecture-decisions.md, "HEAD decision
+# (M3-026)". The Flare adapter's side: adapters/flare.
 
 from std.memory import ArcPointer
 from std.testing import assert_equal, TestSuite
@@ -278,15 +280,20 @@ def test_raw_get_handler_sees_head() raises:
 
 def test_head_only_reaches_get_routes() raises:
     var app = _app(State(Calls()))
-    # Paths served only by routes of other methods, and no route at all.
-    for target in [
-        "/only-post",
-        "/only-put",
-        "/only-patch",
-        "/only-delete/1",
-        "/missing",
-        "/users",
+    # Paths served only by routes of other methods: 405 with their `Allow`.
+    for row in [
+        ("/only-post", "POST"),
+        ("/only-put", "PUT"),
+        ("/only-patch", "PATCH"),
+        ("/only-delete/1", "DELETE"),
     ]:
+        var r = app.handle(Request("HEAD", row[0], "x"))
+        assert_equal(r.status, 405, row[0])
+        assert_equal(r.body, "Method Not Allowed", row[0])
+        assert_equal(len(r.headers.get_all("Allow")), 1, row[0])
+        assert_equal(r.headers.get_all("Allow")[0], row[1], row[0])
+    # No route at all.
+    for target in ["/missing", "/users"]:
         var r = app.handle(Request("HEAD", target, "x"))
         assert_equal(r.status, 404, target)
         assert_equal(r.body, "Not Found", target)
@@ -294,8 +301,10 @@ def test_head_only_reaches_get_routes() raises:
     for method in ["head", "Head", "HEAD ", "OPTIONS"]:
         for target in ["/hello", "/users/7", "/report"]:
             var r = app.handle(Request(method, target))
-            assert_equal(r.status, 404, String(method, " ", target))
-            assert_equal(r.body, "Not Found", String(method, " ", target))
+            assert_equal(r.status, 405, String(method, " ", target))
+            assert_equal(r.body, "Method Not Allowed")
+            assert_equal(len(r.headers.get_all("Allow")), 1)
+            assert_equal(r.headers.get_all("Allow")[0], "GET, HEAD")
 
 
 def first(id: Int) -> String:
@@ -351,14 +360,18 @@ def test_dx_example() raises:
     _same_as_get(app, "/users/7", 200, "user 7")
     _same_as_get(app, "/users/abc", 400, "Bad Request")
     _same_as_get(app, "/report", 200, "report")
-    for r in [
-        app.handle(Request("HEAD", "/cache/1")),
-        app.handle(Request("HEAD", "/missing")),
-        app.handle(Request("head", "/users/7")),
-        app.handle(Request("OPTIONS", "/users/7")),
+    var missing = app.handle(Request("HEAD", "/missing"))
+    assert_equal(missing.status, 404)
+    assert_equal(missing.body, "Not Found")
+    for row in [
+        (app.handle(Request("HEAD", "/cache/1")), "DELETE"),
+        (app.handle(Request("head", "/users/7")), "GET, HEAD"),
+        (app.handle(Request("OPTIONS", "/users/7")), "GET, HEAD"),
     ]:
-        assert_equal(r.status, 404)
-        assert_equal(r.body, "Not Found")
+        assert_equal(row[0].status, 405)
+        assert_equal(row[0].body, "Method Not Allowed")
+        assert_equal(len(row[0].headers.get_all("Allow")), 1)
+        assert_equal(row[0].headers.get_all("Allow")[0], row[1])
     assert_equal(app.handle(Request("DELETE", "/cache/1")).body, "dropped 1")
 
     var head = app.handle(Request("HEAD", "/users/7"))  # no TestClient.head
