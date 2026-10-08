@@ -14,7 +14,10 @@ from ._registration_rules import (
     _is_optional,
     _is_param,
     _kind,
+    _param_name,
     _path_params,
+    _path_part,
+    _query_items,
 )
 from .body import FromBody
 from .headers_body import _HeaderCarrier
@@ -816,24 +819,18 @@ struct _Route(Movable):
         headers: Bool = False,
         raw: Bool = False,
     ):
-        """Splits `route` like `Request` splits a target: at its first `?`."""
+        """Splits `route` into its path part and query keys with the
+        route-literal grammar's primitives (`_registration_rules.mojo`); the
+        literal is well formed (checked at registration)."""
         self.method = method
         self.body = body
         self.json = json
         self.headers = headers
         self.raw = raw
-        var mark = route.find("?")
+        self.path = String(_path_part(route))
         self.query_keys = List[String]()
-        if mark < 0:
-            self.path = String(route)
-        else:
-            self.path = String(route[byte=:mark])
-            # The query part is `{key}` items joined by `&` (checked at
-            # registration).
-            for item in route[byte = mark + 1 :].split("&"):
-                self.query_keys.append(
-                    String(item[byte = 1 : item.byte_length() - 1])
-                )
+        for item in _query_items(route):
+            self.query_keys.append(String(_param_name(item)))
         self.query_optional = List[Bool](
             length=len(self.query_keys), fill=False
         )

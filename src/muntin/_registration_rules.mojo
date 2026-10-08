@@ -1,22 +1,22 @@
 """Registration rules: the checks of a handler's shape and route literal
-that `App`'s registration overloads (`app.mojo`) run, and the segment
-classification (`_is_param`) they share with request matching.
+that `App`'s registration overloads (`app.mojo`) run, and the route-literal
+grammar they share with route construction and request matching.
 
 `_kind` classifies a request slot from its type alone; `_rule` returns the
 first registration rule a shape breaks; `_check` states each rule as a
 compile-time assert with Muntin's message, and `_admits`, the same rules as
-one Bool, guards the adapter's instantiation. The route-literal parsers
-(`_is_param`, `_path_params`, `_query_params`, `_distinct_query_keys`) are
-here because the rules read them.
+one Bool, guards the adapter's instantiation.
 
-When each part runs: the rules are evaluated at compile time, through
-`_check` and `_admits`. Some of the same classification and parsing
-helpers (`_kind`, `_is_optional`, `_path_params` and, through it,
-`_is_param`) are also used while `_route` in `app.mojo` builds a route's
-metadata at registration. Only `_is_param` runs per request: `_match` in
-`app.mojo` classifies each route segment with it, so registration and
-dispatch share one segment classification and agree on how many values a
-route captures.
+The route-literal grammar is the primitives `_path_part` (the text
+before the first `?`), `_query_items` (the text after it, split at `&`),
+`_is_param` (a `{name}` segment or `{key}` item) and `_param_name` (the text
+between its braces). The rules' parsers (`_path_params`, `_query_params`,
+`_distinct_query_keys`) validate and count through them at compile time;
+`_Route.__init__` in `app.mojo` splits a literal into its matched path and
+query keys through `_path_part`, `_query_items` and `_param_name` at
+registration; and `_match` in `app.mojo` classifies each route segment with
+`_is_param` per request. The `/` segment separator is written both in
+`_path_params` and in `_match`, which splits the request path with it too.
 """
 
 from .body import FromBody
@@ -25,8 +25,26 @@ from .http import Headers, Request, Response
 from .state import _InjectedState
 
 
+def _path_part(route: StaticString) -> StaticString:
+    """The path part of a route literal: the text before its first `?`, or
+    the whole literal without one. Requests are matched against it."""
+    var mark = route.find("?")
+    return route[byte=:mark] if mark >= 0 else route
+
+
+def _query_items(route: StaticString) -> List[StaticString]:
+    """The query items of a route literal: the text after its first `?`,
+    split at `&`, in the literal's order. None without a `?`; a `?` with
+    nothing after it gives one empty item."""
+    var mark = route.find("?")
+    if mark < 0:
+        return List[StaticString]()
+    return route[byte = mark + 1 :].split("&")
+
+
 def _is_param(segment: StringSlice) -> Bool:
-    """Whether a route segment is a `{name}` path parameter.
+    """Whether a path segment or query item is a placeholder: `{`, a
+    non-empty name, `}`.
 
     The single classification used both by the route-literal checks the
     registration rules run (`_path_params`, `_query_params`) and by `_match`
@@ -39,6 +57,12 @@ def _is_param(segment: StringSlice) -> Bool:
     )
 
 
+def _param_name(item: StaticString) -> StaticString:
+    """The name of a placeholder (`_is_param` holds): the text between its
+    braces."""
+    return item[byte = 1 : item.byte_length() - 1]
+
+
 def _path_params(route: StaticString) -> Int:
     """Number of `{name}` segments in the path part of a route literal (the
     text before any `?`), or -1 if malformed.
@@ -46,8 +70,7 @@ def _path_params(route: StaticString) -> Int:
     The path starts with `/`; a segment containing `{` or `}` must be exactly
     `{name}` with a non-empty name.
     """
-    var mark = route.find("?")
-    var path = route[byte=:mark] if mark >= 0 else route[byte=:]
+    var path = _path_part(route)
     if not path.startswith("/"):
         return -1
     var n = 0
@@ -73,17 +96,11 @@ def _query_params(route: StaticString) -> Int:
     to keep keys plain (a request key could contain them, since only the
     first `?` splits the target and `#` is not special).
     """
-    var mark = route.find("?")
-    if mark < 0:
-        return 0
-    var query = route[byte = mark + 1 :]
-    if query.byte_length() == 0:
-        return -1
     var n = 0
-    for item in query.split("&"):
+    for item in _query_items(route):
         if not _is_param(item):
             return -1
-        var key = item[byte = 1 : item.byte_length() - 1]
+        var key = _param_name(item)
         for b in key.as_bytes():
             if Int(b) < ord("!") or Int(b) > ord("~"):
                 return -1
@@ -98,10 +115,7 @@ def _distinct_query_keys(route: StaticString) -> Bool:
     """Whether the `{key}` items of a well-formed route literal's query part
     all differ (M3-022). Keys compare byte for byte, undecoded, as requests'
     keys do; path names are not compared."""
-    var mark = route.find("?")
-    if mark < 0:
-        return True
-    var keys = route[byte = mark + 1 :].split("&")
+    var keys = _query_items(route)
     for i in range(len(keys)):
         for j in range(i):
             if keys[i] == keys[j]:
