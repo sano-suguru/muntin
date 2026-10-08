@@ -411,6 +411,27 @@ def refusing_created() -> Json[Refusing]:
     return Json(Refusing(), status=201)
 
 
+def explicit_address(id: Int) -> Json[Address]:
+    return Json[Address](Address("Paris", id))
+
+
+def unvalidated_address(id: Int) -> Json[Address]:
+    # Not a valid HTTP status: Muntin passes it on, as for `Response`.
+    return Json(Address("Paris", id), status=999)
+
+
+def status_set_after_failure() raises -> Response:
+    # DX section 5: an edit after `to_response()` applies to the fixed 500.
+    var r = Json(Measurement(Float64(0) / Float64(0))).to_response()
+    r.status = 201
+    return r^
+
+
+def return_body(var body: Json[Token]) -> Json[Token]:
+    # The body `from_body` built is returned as it is: the default status.
+    return body^
+
+
 def create_token(var body: Json[Token]) -> Json[Token]:
     _bump(HANDLER)
     return Json(body^.take(), status=201)
@@ -462,6 +483,10 @@ def json_app() raises -> App:
     app.get["/teapot-addresses/{id}"](teapot_address)
     app.get["/measure-created/{id}"](measure_created)
     app.get["/refusing-created"](refusing_created)
+    app.get["/explicit-addresses/{id}"](explicit_address)
+    app.get["/unvalidated-addresses/{id}"](unvalidated_address)
+    app.get["/status-after-failure"](status_set_after_failure)
+    app.post["/return-body"](return_body)
     app.post["/tokens-created"](create_token)
     app.post["/staff-tokens"](staff_token, dir)
     app.get["/hello"](hello)
@@ -1054,6 +1079,8 @@ def test_json_result_status() raises:
     _assert_json(plain, 200, '{"city":"Paris","zip":7}')
     _assert_json(client.get("/created-addresses/7"), 201, plain.body)
     _assert_json(client.get("/teapot-addresses/7"), 418, plain.body)
+    _assert_json(client.get("/unvalidated-addresses/7"), 999, plain.body)
+    _assert_json(client.get("/explicit-addresses/7"), 200, plain.body)
     _assert_json(client.get("/measure-created/2"), 201, '{"value":1.5}')
     # `Json[T].to_response()` called directly applies it too.
     _assert_json(Json(Address("Paris", 7)).to_response(), 200, plain.body)
@@ -1074,6 +1101,9 @@ def test_json_result_status_on_json_body_routes() raises:
         _post(app, "/staff-tokens", '{"secret":"t"}'), 202, '{"secret":"t"}'
     )
     assert_equal(_count(HANDLER), 2)
+    _assert_json(
+        _post(app, "/return-body", '{"secret":"u"}'), 200, '{"secret":"u"}'
+    )
     _reset()
     _assert_fixed(
         _post(app, "/tokens-created", '{"secret":"s"}', ""),
@@ -1093,6 +1123,10 @@ def test_serialization_failure_ignores_the_chosen_status() raises:
         client.get("/measure-created/0"), 500, "Internal Server Error"
     )
     _assert_fixed(client.get("/refusing-created"), 500, "Internal Server Error")
+    # A status set after the conversion overwrites the 500 (DX section 5).
+    _assert_fixed(
+        client.get("/status-after-failure"), 201, "Internal Server Error"
+    )
 
 
 def test_head_on_a_json_result_with_a_status() raises:
