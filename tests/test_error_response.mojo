@@ -4,7 +4,7 @@
 # raises, on every argument shape and with `String` and `ToResponse` results.
 # Every other error type, bare `raises` (`Error`) and a raised `ToResponse`-only
 # value stay the fixed 500. The error converts once and the result conversion
-# does not run; 400 and 404 run neither. Decision:
+# does not run; 400, 404 and 405 run neither. Decision:
 # docs/history/architecture-decisions.md, "Error-response decision (M2-012)".
 
 from std.os import getenv, setenv, unsetenv

@@ -356,5 +356,27 @@ def test_test_client_equals_app_handle() raises:
     )
 
 
+# docs/DX.md, "405 `Method Not Allowed`" in "Proven vs. target status", as
+# written there.
+
+
+def test_dx_example() raises:
+    var app = App()  # its own App
+    app.get["/users/me"](me)
+    app.delete["/users/{id}"](delete_user)
+    app.get["/users/{id}"](get_user)
+    app.put["/users/{id}"](update_user)
+    app.post["/hooks"](hook)
+    for method in ["POST", "OPTIONS", "FOO"]:
+        _expect_405(app, method, "/users/7", "DELETE, GET, HEAD, PUT")
+    _expect_405(app, "POST", "/users/me", "GET, HEAD, DELETE, PUT")
+    _expect_405(app, "POST", "/users/abc", "DELETE, GET, HEAD, PUT")
+    _expect(app, "PUT", "/users/me", 400, "Bad Request")
+    _expect_405(app, "GET", "/hooks", "POST")
+    _expect_405(app, "HEAD", "/hooks", "POST")
+    _expect_404(app, "POST", "/users/7/x")
+    _expect_404(app, "POST", "/missing")
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
