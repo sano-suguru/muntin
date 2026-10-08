@@ -87,11 +87,12 @@ def _stop(pid: Int):
 
 def _wait_status(pid: Int) -> Int:
     """Reaps `pid` and returns `waitpid`'s raw status (Flare's `waitpid`
-    discards it), or -1 if `waitpid` failed."""
+    discards it), or -1 if `waitpid` failed. The status address is passed as
+    an `Int`, as Flare declares `waitpid` (one module, one signature)."""
     var status = List[c_int]()
     status.append(0)
     var reaped = external_call["waitpid", c_int](
-        c_int(pid), status.unsafe_ptr(), c_int(0)
+        c_int(pid), Int(status.unsafe_ptr()), c_int(0)
     )
     if Int(reaped) != pid:
         return -1
