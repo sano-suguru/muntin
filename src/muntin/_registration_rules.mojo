@@ -11,7 +11,8 @@ The route-literal grammar is the primitives `_path_part` (the text
 before the first `?`), `_query_items` (the text after it, split at `&`),
 `_is_param` (a `{name}` segment or `{key}` item) and `_param_name` (the text
 between its braces). The rules' parsers (`_path_params`, `_query_params`,
-`_distinct_query_keys`) validate and count through them at compile time;
+`_distinct_query_keys`) validate and count through them at compile time,
+and `_route` in `app.mojo` also calls `_path_params` at registration;
 `_Route.__init__` in `app.mojo` splits a literal into its matched path and
 query keys through `_path_part`, `_query_items` and `_param_name` at
 registration; and `_match` in `app.mojo` classifies each route segment with
@@ -34,7 +35,7 @@ def _path_part(route: StaticString) -> StaticString:
 
 def _query_items(route: StaticString) -> List[StaticString]:
     """The query items of a route literal: the text after its first `?`,
-    split at `&`, in the literal's order. None without a `?`; a `?` with
+    split at `&`, in the literal's order. Empty without a `?`; a `?` with
     nothing after it gives one empty item."""
     var mark = route.find("?")
     if mark < 0:
@@ -46,10 +47,9 @@ def _is_param(segment: StringSlice) -> Bool:
     """Whether a path segment or query item is a placeholder: `{`, a
     non-empty name, `}`.
 
-    The single classification used both by the route-literal checks the
-    registration rules run (`_path_params`, `_query_params`) and by `_match`
-    for every request, so the two always agree on how many values a route
-    captures.
+    The classification the registration rules' parsers (`_path_params`,
+    `_query_params`) and `_match` (for every request) share, so registration
+    and dispatch agree on how many values a route captures.
     """
     var b = segment.as_bytes()
     return (

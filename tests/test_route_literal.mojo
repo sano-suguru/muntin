@@ -1,9 +1,10 @@
 # Route-literal grammar: the registration rules' parsers (`_path_params`,
 # `_query_params`, `_distinct_query_keys`), the route `_Route.__init__`
-# builds from the literal, and `_match` agree on every literal, through the
-# primitives in src/muntin/_registration_rules.mojo. The rules' messages
-# for malformed literals: tests/registration_fail and the other *_fail
-# fixtures that expect `malformed route literal`.
+# builds from the literal, and `_match` agree on a table of literals; all
+# three read the literal through the primitives in
+# src/muntin/_registration_rules.mojo. The rules' message for malformed
+# literals: the must-not-build fixtures that expect `malformed route
+# literal`.
 
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
@@ -74,40 +75,45 @@ def test_static_and_empty_segments_do_not_match() raises:
     assert_false(_match(route.path, "/users/7/x", args))
 
 
-def _malformed[literal: StaticString]() raises:
+def _malformed_path[literal: StaticString]() raises:
+    comptime paths = _path_params(literal)
+    assert_true(paths < 0, String(literal))
+
+
+def _malformed_query[literal: StaticString]() raises:
     comptime paths = _path_params(literal)
     comptime queries = _query_params(literal)
-    assert_true(paths < 0 or queries < 0, String(literal))
+    assert_true(paths >= 0 and queries < 0, String(literal))
 
 
 def test_malformed_literals() raises:
     # Path part (docs/DX.md, "malformed route literal").
-    _malformed["hello"]()
-    _malformed[""]()
-    _malformed["?{q}"]()
-    _malformed["/{}"]()
-    _malformed["/{a}b"]()
-    _malformed["/a{b}"]()
-    _malformed["/{a"]()
-    _malformed["/a}"]()
-    _malformed["/{{a}}"]()
-    _malformed["/{a}}"]()
+    _malformed_path["hello"]()
+    _malformed_path[""]()
+    _malformed_path["?{q}"]()
+    _malformed_path["/{}"]()
+    _malformed_path["/{a}b"]()
+    _malformed_path["/a{b}"]()
+    _malformed_path["/{a"]()
+    _malformed_path["/a}"]()
+    _malformed_path["/{{a}}"]()
+    _malformed_path["/{a}}"]()
     # Query part.
-    _malformed["/a?"]()
-    _malformed["/a?limit"]()
-    _malformed["/a?{}"]()
-    _malformed["/a?{lim it}"]()
-    _malformed["/a?{límit}"]()
-    _malformed["/a?{a=b}"]()
-    _malformed["/a?{a?b}"]()
-    _malformed["/a?{a#b}"]()
-    _malformed["/a?{{a}}"]()
-    _malformed["/a?{a}b"]()
-    _malformed["/a?{a}&"]()
-    _malformed["/a?&{a}"]()
-    _malformed["/a?{a}&&{b}"]()
-    _malformed["/a?{q}?"]()
-    _malformed["/a?{q}?{r}"]()
+    _malformed_query["/a?"]()
+    _malformed_query["/a?limit"]()
+    _malformed_query["/a?{}"]()
+    _malformed_query["/a?{lim it}"]()
+    _malformed_query["/a?{límit}"]()
+    _malformed_query["/a?{a=b}"]()
+    _malformed_query["/a?{a?b}"]()
+    _malformed_query["/a?{a#b}"]()
+    _malformed_query["/a?{{a}}"]()
+    _malformed_query["/a?{a}b"]()
+    _malformed_query["/a?{a}&"]()
+    _malformed_query["/a?&{a}"]()
+    _malformed_query["/a?{a}&&{b}"]()
+    _malformed_query["/a?{q}?"]()
+    _malformed_query["/a?{q}?{r}"]()
 
 
 def test_query_keys_compare_whole() raises:
