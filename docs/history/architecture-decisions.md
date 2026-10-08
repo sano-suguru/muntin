@@ -2837,3 +2837,34 @@ def create_user(var body: Json[NewUser]) raises -> Json[User]:
 - Verification: `docs/DEVELOPMENT.md` section 3, including the base-wide diagnostic comparison (the initializer's signature can appear in candidate notes), the new fixture built against the base's `src`, and a local `check_flare.sh` run.
 - Docs: `docs/DX.md` section 5 (the status with `Json(value, status=)`, the default, the 500 rule; the override kept for the media type) and section 4 where it states the JSON result is 200; `docs/ARCHITECTURE.md` (the `Json` paragraph; `Json(value, status=)` leaves "Other current limits"; the revisit index row); `docs/SPEC.md` (the M3 table gains the capability as shipped; "JSON follow-ups" without it); `AGENT_PROGRESS.md`.
 - Not in the slice: a status policy or validation, a public status field, response header fields or another media type on `Json`, `+json`, top-level list results, any change to `Response`, the adapter or `App.handle`.
+
+### Method not allowed decision (M3-030)
+
+Status: **decision** (M3-030; `src/muntin`, `adapters/` and `tests/` are unchanged in it). It decides what a request gets when its path matches a route but its method matches none. Today that is 404 `Not Found`, the answer for a path no route matches (M3-020, candidate F).
+
+**Why this candidate.** A client that sends the wrong method to an existing resource cannot tell that from a missing resource: both are 404 with the same body. RFC 9110 section 9.1 says such a request "SHOULD" get 405, and section 15.5.6 says a 405 "MUST" carry `Allow`. M3-020 deferred it (candidate F) because a 405 needs a resource-level method set and would have to decide how `HEAD`, `OPTIONS` and raw routes count and what a path that would fail its route value answers; it named "`HEAD` and `OPTIONS` are decided" as a revisit condition. `HEAD` is decided (M3-026), and M3-026 committed that an `Allow` lists `HEAD` wherever it lists `GET`. What is open is public and changes what existing registrations answer: which requests stop being 404, what `Allow` lists and in which order, and how the answer relates to the 400 a matched route gives an invalid route value.
+
+**Question.** When no route matches a request's method and path, but some route matches its path, what does `App.handle` answer: 404 as today, or 405 with `Allow`? If 405: what "matches its path" means (the path-shape match the scan already makes, or that plus route-value decoding or conversion); which methods `Allow` lists, in which order and without repeats, and whether it lists `HEAD` for a `GET` route; whether a method no route of the `App` has (`OPTIONS`, `FOO`, `get`) is answered like a registered one; whether raw and typed routes count alike; what the body is; what the Flare adapter sends for it, `HEAD` included; and which statements of the M2 contract, DX and existing tests change.
+
+**What settles it:**
+- the current answers, measured through `App.handle` on the unchanged `src`: a method mismatch on a static path, on a parameterized path, on a path served by several methods, on a path a static and a parameterized route both match, `HEAD` on a path only non-`GET` routes serve, `OPTIONS`, an unknown and a lowercase method, an invalid route value, a query the route needs, and no route at all;
+- the same requests through a scratch copy of `App.handle` with each candidate applied (not retained), so the record states each answer as measured, `Allow` included;
+- which existing tests, fixtures and DX statements assert a 404 that a candidate changes, found by running the existing tests against that scratch copy;
+- the wire: whether Flare v0.12.0 sends a 405 with an `Allow` field from `App.handle` through the unchanged `MuntinHandler`, over HTTP/1.1 and cleartext HTTP/2, and what a `HEAD` request's 405 carries there (M3-027's rule);
+- whether the change follows M2-016's reopen conditions, compared with the earlier reopens (M3-019, M3-027);
+- RFC 9110 sections 9.1 (405 and 501), 15.5.6 (405 and `Allow`), 10.2.1 (`Allow`) and 5.6.1 (list syntax), cited for what they say, not as the reason.
+
+**Boundaries that do not change silently:**
+- every request some route matches by method and path: its route, its steps and its answer, the 400 for an invalid or missing route value included; first registered matching route wins, and a matched route never falls through;
+- 404 for a request whose path no route matches, whatever its method;
+- method matching byte for byte except `HEAD` to `GET` (M3-026); route values decoded once at capture, only on the matched route (M3-018);
+- the raw escape hatch; `State`, `Headers`, `WithHeaders[B]`, `Json[T]`;
+- the accepted set, the overload set and every diagnostic;
+- the backend seam `App.handle(Request) -> Response`, the adapter's header policy and its `HEAD` rule, Flare out of the public API and of `src/muntin`.
+
+**Candidates to measure:**
+- D0: method mismatch stays 404;
+- A: 405 with `Allow` when no route matches by method and path but some route's path shape matches (`_match`, nothing decoded or converted), every method answered alike;
+- A2: A for methods that some route of the `App` has (`HEAD` with `GET`), and 404 (or 501) for any other method;
+- B: A, counting a route only if its route values would also decode and convert;
+- for A: `Allow` in registration order or in a fixed method order.
