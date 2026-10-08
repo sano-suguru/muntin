@@ -1,4 +1,4 @@
-# DX section 4 and 5's JSON examples (M3-009), compiled and run as written
+# DX section 4 and 5's JSON examples (M3-009; section 5's `status=`, M3-029), compiled and run as written
 # there against production `muntin`. The successful JSON bodies go through
 # `TestClient.post(target, body, headers=headers^)` with the `Content-Type`
 # set, as DX section 4 shows (M3-011), one of them also compared with
@@ -61,9 +61,13 @@ def replace_user(id: Int, var body: Json[CreateUser]) -> Json[User]:
     return Json(User(id, c.name))
 
 
+def register(var body: Json[CreateUser]) -> Json[User]:
+    var c = body^.take()
+    return Json(User(2, c.name), status=201)
+
+
 def create() raises -> Response:
-    var r = Json(User(7, "Ada")).to_response()
-    r.status = 201
+    var r = Json(User(7, "Ada"), status=201).to_response()
     r.headers.set("Content-Type", "application/problem+json")
     return r^
 
@@ -88,6 +92,7 @@ def test_dx_json_examples() raises:
     app.post["/users"](create_user)
     app.post["/users/{id}"](replace_user)
     app.get["/create"](create)
+    app.post["/accounts"](register)
     var client = TestClient(app)
     var headers = Headers()
     headers.add("Content-Type", "application/json")
@@ -152,6 +157,15 @@ def test_dx_json_examples() raises:
     assert_equal(
         c.headers.get("content-type").value(), "application/problem+json"
     )
+    var a = TestClient(app).post(
+        "/accounts",
+        '{"name":"Bo","age":1}',
+        headers=_content_type("application/json"),
+    )
+    assert_equal(a.status, 201)
+    assert_equal(a.body, '{"id":2,"name":"Bo"}')
+    assert_equal(len(a.headers), 1)
+    assert_equal(a.headers.get("content-type").value(), "application/json")
 
 
 def main() raises:

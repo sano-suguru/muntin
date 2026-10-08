@@ -68,6 +68,7 @@ An M3 area with an open design question is cut decision-first: a decision item p
 | application state shared with handlers (`State[S]`) on `get`, `post` and raw handlers | shipped |
 | request and response headers (`Headers`) | shipped |
 | JSON bodies and results (`Json[T]`) | shipped |
+| a chosen status for a JSON result (`Json(value, status=201)`; `Json(value)` stays 200) | shipped |
 | request header fields from `TestClient` (`headers=`) | shipped |
 | request header fields in typed `post` handlers (`WithHeaders[B]`) | shipped |
 | registration on generic-arity slots (one `get`/`post` overload per request-slot arity) | shipped |
@@ -83,7 +84,7 @@ An M3 area with an open design question is cut decision-first: a decision item p
 Each becomes its own item, a decision item first where it opens a design question.
 
 - **OpenAPI/schema output**: needs a type-to-format mapping; codecs are hand-mapped today, so a schema source waits for a derived codec;
-- **JSON follow-ups**: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, `Json(value, status=)`, top-level list results;
+- **JSON follow-ups**: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, top-level list results;
 - **compile-time header names, a `FromHeaders` converter**: a converter makes Muntin choose a status for header values; `Headers` can conform to it without changing the `get` shapes;
 - **more route values**: three or more values, a default written in the literal (`?{limit=20}`), other value types, a named carrier that checks placeholder names. A value type is a slot kind; a third value beside a body or `Headers` needs slot arity 4 ([M3-022](history/architecture-decisions.md#several-route-values-decision-m3-022));
 - **more HTTP methods** (bodyless typed `post`, `put` and `patch` handlers, `OPTIONS`, 405 with `Allow`, a typed `DELETE` body, methods outside `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` or a generic entrypoint, a registered `HEAD`, `TestClient.head`): each has a revisit condition in [M3-020](history/architecture-decisions.md#http-methods-decision-m3-020) or, for the two `HEAD` items, [M3-026](history/architecture-decisions.md#head-decision-m3-026). A bodyless shape is a rule change on `post`'s family, and 405 changes the M2 contract's 404;

@@ -112,7 +112,9 @@ M3-009 serves `json_app()`: the JSON body route `POST /greet` ->
 (the request built without one: Flare's `post(url, String)` adds
 `application/json` itself) and `text/plain` are 415, a body over 1 MiB is
 413, and malformed JSON is 400; each status, body and `Content-Type` equals
-`App.handle` with the same fields. The adapter is unchanged.
+`App.handle` with the same fields. The adapter is unchanged. M3-029 adds
+`POST /greet-created` (`Json(..., status=201)`): 201 with the same body and
+`Content-Type` on the wire, 415 without the field.
 
 M3-013 registers the stateful carrier route `POST /signed-greet` ->
 `signed_greet(gate: State[Gate], input: WithHeaders[Json[Greeting]])
@@ -1433,6 +1435,10 @@ def greet(var body: Json[Greeting]) -> Json[Greeting]:
     return Json(body^.take())
 
 
+def greet_created(var body: Json[Greeting]) -> Json[Greeting]:
+    return Json(body^.take(), status=201)
+
+
 @fieldwise_init
 struct Greeter(Movable):
     var title: String
@@ -1480,6 +1486,7 @@ def signed_note(
 def json_app() -> App:
     var app = App()
     app.post["/greet"](greet)
+    app.post["/greet-created"](greet_created)
     app.post["/greet/{id}"](greet_staff, State(Greeter("Dr. ")))
     app.post["/signed-greet"](signed_greet, State(Gate("t0k")))
     return app^
@@ -1500,16 +1507,33 @@ def test_json_over_localhost_matches_app_handle() raises:
         var app = json_app()
         var good = '{"name":"Ad\\u00e9 \\"x\\""}'
         var big = '{"name":"b"}' + String(" ") * 1_048_565
+        # (path suffix, body, request Content-Type, status, whether the
+        # answer is a converted `Json` with `Content-Type: application/json`,
+        # whatever its status).
         var cases = [
-            (String(""), good, String("application/json; charset=utf-8"), 200),
-            (String(""), good, String(""), 415),
-            (String(""), good, String("text/plain"), 415),
-            (String(""), big, String("application/json"), 413),
-            (String(""), String('{"name":'), String("application/json"), 400),
-            (String("/7"), good, String("application/json"), 200),
-            (String("/7"), good, String(""), 415),
-            (String("/7"), big, String("application/json"), 413),
-            (String("/x"), big, String("text/plain"), 400),
+            (
+                String(""),
+                good,
+                String("application/json; charset=utf-8"),
+                200,
+                True,
+            ),
+            (String(""), good, String(""), 415, False),
+            (String(""), good, String("text/plain"), 415, False),
+            (String(""), big, String("application/json"), 413, False),
+            (
+                String(""),
+                String('{"name":'),
+                String("application/json"),
+                400,
+                False,
+            ),
+            (String("/7"), good, String("application/json"), 200, True),
+            (String("/7"), good, String(""), 415, False),
+            (String("/7"), big, String("application/json"), 413, False),
+            (String("/x"), big, String("text/plain"), 400, False),
+            (String("-created"), good, String("application/json"), 201, True),
+            (String("-created"), good, String(""), 415, False),
         ]
         for c in cases:
             var path = "/greet" + c[0]
@@ -1525,7 +1549,7 @@ def test_json_over_localhost_matches_app_handle() raises:
             assert_equal(resp.status, c[3], label)
             assert_equal(resp.status, local.status, label)
             assert_equal(resp.text(), local.body, label)
-            if c[3] == 200:
+            if c[4]:
                 assert_equal(
                     resp.headers.get("content-type"), "application/json"
                 )

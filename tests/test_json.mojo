@@ -7,7 +7,8 @@
 # route is pinned as 415, and routes that only return `Json[T]` go through
 # `TestClient`. `TestClient`'s `headers=` (M3-011):
 # tests/test_testclient_headers.mojo. DX sections 4 and 5:
-# tests/test_json_dx.mojo. Must-not-compile cases: tests/json_api_fail.
+# tests/test_json_dx.mojo. Must-not-compile cases: tests/json_api_fail. A
+# chosen result status, `Json(value, status=)`: M3-029.
 
 from std.collections import Optional
 from std.memory import bitcast
@@ -391,6 +392,63 @@ def created() raises -> Response:
     return r^
 
 
+def created_address(id: Int) -> Json[Address]:
+    # `get_address`'s value with a chosen status.
+    return Json(Address("Paris", id), status=201)
+
+
+def teapot_address(id: Int) -> Json[Address]:
+    return Json(Address("Paris", id), status=418)
+
+
+def measure_created(id: Int) -> Json[Measurement]:
+    if id == 0:
+        return Json(Measurement(Float64(0) / Float64(0)), status=201)
+    return Json(Measurement(1.5), status=201)
+
+
+def refusing_created() -> Json[Refusing]:
+    return Json(Refusing(), status=201)
+
+
+def explicit_address(id: Int) -> Json[Address]:
+    return Json[Address](Address("Paris", id))
+
+
+def unvalidated_address(id: Int) -> Json[Address]:
+    # Not a valid HTTP status: Muntin passes it on, as for `Response`.
+    return Json(Address("Paris", id), status=999)
+
+
+def status_set_after_failure() raises -> Response:
+    # DX section 5: an edit after `to_response()` applies to the fixed 500.
+    var r = Json(Measurement(Float64(0) / Float64(0))).to_response()
+    r.status = 201
+    return r^
+
+
+def media_type_after_failure() raises -> Response:
+    # DX section 5's media-type example, with a value that fails to write.
+    var r = Json(Measurement(Float64(0) / Float64(0)), status=201).to_response()
+    r.headers.set("Content-Type", "application/problem+json")
+    return r^
+
+
+def return_body(var body: Json[Token]) -> Json[Token]:
+    # The body `from_body` built is returned as it is: the default status.
+    return body^
+
+
+def create_token(var body: Json[Token]) -> Json[Token]:
+    _bump(HANDLER)
+    return Json(body^.take(), status=201)
+
+
+def staff_token(dir: State[Directory], var body: Json[Token]) -> Json[Token]:
+    _bump(HANDLER)
+    return Json(body^.take(), status=202)
+
+
 def hello() -> String:
     return "hello"
 
@@ -428,6 +486,17 @@ def json_app() raises -> App:
     app.get["/repeated"](repeated)
     app.get["/refusing"](refusing)
     app.get["/created"](created)
+    app.get["/created-addresses/{id}"](created_address)
+    app.get["/teapot-addresses/{id}"](teapot_address)
+    app.get["/measure-created/{id}"](measure_created)
+    app.get["/refusing-created"](refusing_created)
+    app.get["/explicit-addresses/{id}"](explicit_address)
+    app.get["/unvalidated-addresses/{id}"](unvalidated_address)
+    app.get["/status-after-failure"](status_set_after_failure)
+    app.get["/media-type-after-failure"](media_type_after_failure)
+    app.post["/return-body"](return_body)
+    app.post["/tokens-created"](create_token)
+    app.post["/staff-tokens"](staff_token, dir)
     app.get["/hello"](hello)
     app.get["/health"](health)
     return app^
@@ -999,6 +1068,90 @@ def test_explicit_response_override() raises:
     assert_equal(
         r.headers.get("content-type").value(), "application/problem+json"
     )
+
+
+def _assert_json(r: Response, status: Int, body: String) raises:
+    assert_equal(r.status, status)
+    assert_equal(r.body, body)
+    assert_equal(len(r.headers), 1)
+    assert_equal(r.headers.name(0), "Content-Type")
+    assert_equal(r.headers.value(0), "application/json")
+
+
+def test_json_result_status() raises:
+    # `Json(value)` is 200; `Json(value, status=)` answers that status with
+    # the same body and the one `Content-Type` field, 2xx or not.
+    var app = json_app()
+    var client = TestClient(app)
+    var plain = client.get("/addresses/7")
+    _assert_json(plain, 200, '{"city":"Paris","zip":7}')
+    _assert_json(client.get("/created-addresses/7"), 201, plain.body)
+    _assert_json(client.get("/teapot-addresses/7"), 418, plain.body)
+    _assert_json(client.get("/unvalidated-addresses/7"), 999, plain.body)
+    _assert_json(client.get("/explicit-addresses/7"), 200, plain.body)
+    _assert_json(client.get("/measure-created/2"), 201, '{"value":1.5}')
+    # `Json[T].to_response()` called directly applies it too.
+    _assert_json(Json(Address("Paris", 7)).to_response(), 200, plain.body)
+    _assert_json(
+        Json(Address("Paris", 7), status=201).to_response(), 201, plain.body
+    )
+
+
+def test_json_result_status_on_json_body_routes() raises:
+    # A JSON body in, a chosen status out: the request steps are unchanged
+    # (415 before the handler), and the stateful form answers its own status.
+    var app = json_app()
+    _reset()
+    _assert_json(
+        _post(app, "/tokens-created", '{"secret":"s"}'), 201, '{"secret":"s"}'
+    )
+    _assert_json(
+        _post(app, "/staff-tokens", '{"secret":"t"}'), 202, '{"secret":"t"}'
+    )
+    assert_equal(_count(HANDLER), 2)
+    _assert_json(
+        _post(app, "/return-body", '{"secret":"u"}'), 200, '{"secret":"u"}'
+    )
+    _reset()
+    _assert_fixed(
+        _post(app, "/tokens-created", '{"secret":"s"}', ""),
+        415,
+        "Unsupported Media Type",
+    )
+    _assert_fixed(_post(app, "/staff-tokens", "{"), 400, "Bad Request")
+    assert_equal(_count(HANDLER), 0)
+
+
+def test_serialization_failure_ignores_the_chosen_status() raises:
+    # The status applies to a successful write only: a non-finite number or
+    # a raising `write_json` is the fixed 500 without a Content-Type.
+    var app = json_app()
+    var client = TestClient(app)
+    _assert_fixed(
+        client.get("/measure-created/0"), 500, "Internal Server Error"
+    )
+    _assert_fixed(client.get("/refusing-created"), 500, "Internal Server Error")
+    # A status set after the conversion overwrites the 500 (DX section 5).
+    _assert_fixed(
+        client.get("/status-after-failure"), 201, "Internal Server Error"
+    )
+    # So does a field set there: the 500 carries it.
+    var m = client.get("/media-type-after-failure")
+    assert_equal(m.status, 500)
+    assert_equal(m.body, "Internal Server Error")
+    assert_equal(len(m.headers), 1)
+    assert_equal(
+        m.headers.get("content-type").value(), "application/problem+json"
+    )
+
+
+def test_head_on_a_json_result_with_a_status() raises:
+    # In memory, `HEAD` answers what `GET` answers, chosen status included;
+    # the backend keeps the content off the wire (adapters/flare).
+    var app = json_app()
+    var get = app.handle(Request("GET", "/created-addresses/7"))
+    var head = app.handle(Request("HEAD", "/created-addresses/7"))
+    _assert_json(head, 201, get.body)
 
 
 def test_text_results_keep_no_default_fields() raises:
