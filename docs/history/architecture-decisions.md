@@ -2868,3 +2868,104 @@ Status: **decision** (M3-030; `src/muntin`, `adapters/` and `tests/` are unchang
 - A2: A for methods that some route of the `App` has (`HEAD` with `GET`), and 404 (or 501) for any other method;
 - B: A, counting a route only if its route values would also decode and convert;
 - for A: `Allow` in registration order or in a fixed method order.
+
+**Selected: candidate A. When no route matches a request's method and path, but some route's path matches it by the same segment test the scan uses for selection, `App.handle` answers 405 `Method Not Allowed` with one `Allow` field listing those routes' methods. Nothing is decoded or converted to decide it, and every method is answered alike.** No overload, public type, slot kind, `TestClient` method or adapter change is added. It reopens M2 (below).
+
+- **When.** After the scan, unchanged, has selected no route. A route "matches the path" when `_match(route.path, request.path)` holds: equal static segments, one non-empty segment per placeholder, the query ignored, on the raw path. That is the test selection already makes, so a method listed in `Allow` selects a route when sent to the same target, and a method not listed gets 405. If no route matches the path, the answer is 404, as today.
+- **`Allow`.** The methods of the routes that match the path, each once, in the order their first such route was registered, with `HEAD` right after `GET` (`HEAD` selects a `GET` route, M3-026). The value joins them with `, ` (RFC 9110 section 5.6.1's list form) in one field. Raw and typed routes, stateless and stateful, count alike: only a route's method and path are read.
+- **Every method alike.** `OPTIONS`, `FOO`, `get` and `head` on a matching path are 405 with the same `Allow` as `POST`. Muntin implements none of them, so RFC 9110 section 9.1 recommends 501 for them, and neither 404 (today) nor 405 is that; 405 is the answer that names what the resource accepts. Over Flare, a method with a lowercase letter is still Flare's 400 before `App.handle` (M3-020).
+- **Answer.** `Response.text("Method Not Allowed", status=405)` plus the `Allow` field: a fixed plain-text body without `Content-Type`, like the 404. No handler, conversion or decoding runs, as for a 404. Applications cannot replace it (no fallback hook exists; middleware is its own item).
+- **Backends.** Unchanged. `Allow` is an ordinary response field, which the adapter copies (it is not one of the fields the adapter drops). A `HEAD` request's 405 follows M3-027's rule like any answer: no content, `Content-Length` 18.
+
+**Measured premises.** Every answer below was measured through `App.handle` on the unchanged `src` (D0) and on scratch copies of `src/muntin/app.mojo` with A, A2a, A2b and B1 applied (not retained), with this `App`, registered in this order:
+
+```mojo
+app.get["/users/me"](me)                  # "me"
+app.delete["/users/{id}"](delete_user)    # id: Int
+app.get["/users/{id}"](get_user)          # id: Int, "user <id>"
+app.put["/users/{id}"](update_user)       # id: Int, body: Note
+app.post["/users"](create_user)           # body: Note
+app.get["/search?{q}"](search)            # q: String
+app.get["/report"](report)                # raw, answers "report " + req.method
+app.post["/hooks"](hook)                  # raw
+app.put["/items/{name}"](put_item)        # name: String, body: Note
+app.get["/items/{name}"](show_item)       # registered twice
+app.get["/items/{name}"](show_item)
+```
+
+| Request | D0 (today) | A (selected) |
+|---|---|---|
+| `POST /users` | 200 `created x` | unchanged |
+| `GET /users`, `HEAD /users`, `OPTIONS /users` | 404 | 405, `Allow: POST` |
+| `GET /users/me`, `HEAD /users/me` | 200 `me` | unchanged |
+| `POST /users/me` (static and parameterized routes match) | 404 | 405, `Allow: GET, HEAD, DELETE, PUT` |
+| `PUT /users/me`, `DELETE /users/me` (`{id}` routes selected, `me` is no `Int`) | 400 | unchanged |
+| `GET /users/7`, `HEAD /users/7` | 200 `user 7` | unchanged |
+| `POST /users/7`, `PATCH /users/7`, `OPTIONS /users/7`, `FOO /users/7`, `get /users/7`, `head /users/7` | 404 | 405, `Allow: DELETE, GET, HEAD, PUT` |
+| `GET /users/abc` | 400 | unchanged |
+| `POST /users/abc`, `POST /users/%zz` (invalid value, bad escape) | 404 | 405, `Allow: DELETE, GET, HEAD, PUT` |
+| `POST /users/` (empty segment), `POST /users/7/x` | 404 | unchanged |
+| `GET /search?q=a` | 200 `search a` | unchanged |
+| `GET /search` (required value missing) | 400 | unchanged |
+| `POST /search?q=a`, `POST /search` | 404 | 405, `Allow: GET, HEAD` |
+| `GET /report`; `HEAD /report` | 200 `report GET`; 200 `report HEAD` | unchanged |
+| `POST /report` | 404 | 405, `Allow: GET, HEAD` |
+| `GET /hooks`, `HEAD /hooks` | 404 | 405, `Allow: POST` |
+| `PATCH /items/a` (one method on two routes) | 404 | 405, `Allow: PUT, GET, HEAD` |
+| `POST /missing`, `OPTIONS /missing`, `GET http://h/users` | 404 | unchanged |
+
+Every 405 has the body `Method Not Allowed` and exactly one `Allow` field; every 404 has none. `TestClient(app).post("/users/me", "x")` answers what `App.handle` does (405, `GET, HEAD, DELETE, PUT`). A second `App` with raw `post["/a"]` registered before raw `get["/a"]` answers `PUT /a` and `OPTIONS /a` with `Allow: POST, GET, HEAD`.
+
+- A2a (405 only for a method that some route of the `App` has, `HEAD` with `GET`; 404 otherwise) differs from A in `PATCH /users/7` and `PATCH /items/a` (404, because this `App` has no `patch` route anywhere, while `POST /users/7` is 405), in `OPTIONS`, `FOO`, `get` and `head` on matching paths (404), and in `PUT /a` and `OPTIONS /a` (404).
+- A2b (405 only for `GET`, `HEAD`, `POST`, `PUT`, `PATCH` and `DELETE`; 404 otherwise) differs from A in `OPTIONS`, `FOO`, `get` and `head` on matching paths, which stay 404.
+- B1 (a route counts only if its path captures also decode) differs from A in `POST /users/%zz` only (404).
+- The wire, through Flare v0.12.0 and the unchanged `MuntinHandler` over loopback (raw bytes over HTTP/1.1 with `Connection: close`, frames over h2c with prior knowledge; an `App` with `get["/hello"]` and raw `post["/form"]`), with A applied: `POST /hello` is `HTTP/1.1 405 Method Not Allowed`, `Allow: GET, HEAD`, `Content-Length: 18`, the body; `HEAD /form` is 405, `Allow: POST`, `Content-Length: 18`, no content; `OPTIONS /hello` and `FOO /hello` as `POST /hello`; `get /hello` is Flare's own `400 Bad Request` (as on D0); `POST /missing` is 404. Over h2c, `POST /hello` is `HEADERS{:status: 405; allow: GET, HEAD} DATA{Method Not Allowed}/END`, `HEAD /form` is `HEADERS{:status: 405; allow: POST; content-length: 18}/END`. On D0 the same requests are 404 (`HEAD /form` over h2c: `HEADERS{:status: 404; content-length: 9}/END`). Flare sends `Allow` with the value `App.handle` gave it; h2c lowercases its name, as HTTP/2 requires.
+- Existing evidence that changes under A, found by running `scripts/test.sh` and `scripts/check_flare.sh` against the scratch copy: 23 test functions in `tests/` (in `test_app`, `test_body`, `test_error_response`, `test_error`, `test_head`, `test_int_body`, `test_methods`, `test_raw`, `test_response`, `test_state_post`, `test_state_raw`, `test_state`, `test_testclient_headers`, `test_with_headers`), 3 in `adapters/flare/test_muntin_flare.mojo` (`test_unmatched_method_is_not_found`, `test_head_sends_get_fields_and_length_without_body`, `test_other_methods_keep_their_body`) and 3 in `adapters/flare/test_localhost_roundtrip.mojo` (`test_typed_route_over_localhost_matches_test_client`, `test_stateful_raw_over_localhost_matches_app_handle`, `test_headers_over_h2c_follow_the_same_rules`); each fails on an assertion of 404 that is now 405, and none fails otherwise. A test stops at its first failed assertion, so later 404 assertions in the same function are not counted. `compat/flare/head/head_probe.mojo` and the other probes pass unchanged.
+
+**Candidates.**
+
+| Candidate | Verdict |
+|---|---|
+| D0: a method mismatch stays 404 | rejected: a client cannot tell a wrong method from a missing resource, against RFC 9110 section 9.1's SHOULD. M3-020 kept it for a missing resource-level method set and the undecided `HEAD`, `OPTIONS` and raw-route questions; `HEAD` is decided (M3-026), the method set is computed per request from the test selection already makes, `OPTIONS` is answered as any method without a route, and raw routes count by their method |
+| A: 405 with `Allow` on a path-shape match, every method alike, `Allow` in registration order | **chosen** |
+| A2a: 405 only for methods some route of the `App` has | rejected: measured, a request's answer depends on routes on other paths (`PATCH /users/7` is 404 while `POST /users/7` is 405, and registering any `patch` route elsewhere turns it into 405) |
+| A2b: 405 only for Muntin's six methods, 404 for others | rejected: a second list of methods in `App.handle` that every new registration method must update, and `OPTIONS /users/7` stays "Not Found" for a resource that exists. RFC 9110 recommends 501 for those methods; that is a new status and M3-020's "other methods" question, which this record does not decide, and 404 is no closer to it than 405 |
+| B: count a route only if its route values would also decode and convert | rejected: conversion runs in the adapter behind `_Erased`, whose one entry (`invoke`) also runs the handler, so B needs a second erased function per route, a storage change, for a status choice. It also contradicts selection, which never looks at the value: `GET /users/abc` selects its route and is 400, while B makes `POST /users/abc` 404, saying the resource does not exist. B1 (decode only) measured: it differs from A in `POST /users/%zz` alone |
+| A with `Allow` in a fixed method order | rejected: a second place that knows the method set (as A2b); registration order needs no list and holds for any method a later registration name adds |
+| A computed during the selection scan | rejected: it calls `_match` on every route of another method before the selected one, a cost on requests that do match. A second scan runs only when the first selected nothing |
+
+**M2 contract: reopened.** A request that M2 answers 404 now gets 405: one whose path some route matches and whose method no route on that path has. That changes the answer of existing registrations, so it is an M2 reopen under [M2-016](#m2-closure-m2-016) ("a different 400/404/500 boundary"), as M3-019 (an escaped value that was 400 is accepted) and M3-027 (`HEAD` that was 404 runs a `get` route) were; like M3-027 it changes one request class from 404 and leaves every other answer as it was. By kind:
+- 404: narrowed to "no route matches the path". `HEAD` on a path only non-`get` routes match is 405 too.
+- 405: new, for the class above, with `Allow`. No handler, conversion or decoding runs.
+- 400: unchanged. Every 400 comes from a selected route, and selection is unchanged; a request that becomes 405 was 404, never 400.
+- 500: unchanged.
+- Selection: unchanged. First registered matching route wins, a matched route never falls through, methods match byte for byte except `HEAD` to `GET`.
+- Route-value decoding and conversion: unchanged, on the selected route only.
+- The raw escape hatch: unchanged; a raw route counts in `Allow` by its method and never receives a 405's request, as it never received a 404's.
+- The accepted set, the overload set and every diagnostic: unchanged.
+- The wire: through Flare, the 405 and its `Allow` go out as `App.handle` gives them; a `HEAD` 405 has no content and `Content-Length: 18`.
+
+**Invariants:**
+- `App.handle` answers 405 exactly when it selects no route and some route matches the path by `_match`; then `Allow` holds each method of those routes once, in first-registration order, with `HEAD` right after `GET`.
+- Each method in an `Allow`, sent to the same target, selects a route; each method not in it gets 405.
+- A 404 or a 405 decodes nothing, converts nothing and runs no handler.
+
+**Cost.** At least 29 test functions and the DX statements that assert 404 for a method mismatch change. A request that selects no route scans the routes twice. Methods Muntin implements for no route (`OPTIONS`, unknown tokens) get 405 on a matching path, not RFC 9110's recommended 501. An `Allow`'s order follows registration, so reordering registrations reorders it. The 405 body is fixed.
+
+**Revisit when:**
+- `OPTIONS` or CORS preflight is decided: they need the same method set; revisit whether they share the `Allow` computation, and `OPTIONS` leaves the 405 class;
+- 501 for methods Muntin does not implement is decided (M3-020, "other methods"): revisit A2b;
+- a registered `HEAD` is decided (M3-026, candidate B): `HEAD` is listed once whether it comes from a `GET` route or its own;
+- applications need their own answer for a 405 or a 404 (a fallback or middleware): revisit the fixed body;
+- a backend, or a Flare upgrade, drops or rewrites `Allow`, or frames a `HEAD` 405 differently: re-run the wire premise;
+- the route table gains an index or another lookup structure: keep the 405 set the routes that `_match` the path.
+
+**Next production slice (M3-031): 405 with `Allow`.**
+- Code: `src/muntin/app.mojo`, `App.handle` only. Where the scan returns 404 today, a second scan over `self._routes` calls `_match` with a scratch argument list and collects each matching route's method once in registration order, adding `HEAD` right after `GET`. No method collected: the 404 as today. Otherwise `Response.text("Method Not Allowed", status=405)` with one field added through `Headers.add("Allow", ...)`, the methods joined by `", "`; its `except` answers `_internal_error()` (no route method can fail `add`: each is a registration name's constant). Any helper is module-level after `App`, so that no line above `def handle` moves; the pull request shows that every hunk in `app.mojo` is at or after `def handle`. `handle`'s docstring states the 405 rule. No other `src` file, no adapter and no `compat` file changes.
+- Tests: `tests/test_method_not_allowed.mojo` through `App.handle`: the `App` and every row of the table above as written (status, body, exactly one `Allow` value for a 405 and none for a 404), the two-route `App` (`POST, GET, HEAD`), and for every 405 row that each listed method to the same target is neither 404 nor 405, that one unlisted method is 405, and that no `Allow` token repeats; a 405 runs no handler and no body conversion (counted, as `tests/test_response.mojo`'s `test_rejected_requests_run_neither_handler_nor_conversion` counts); a stateful route counts like a stateless one; `TestClient.get`, `.post`, `.put`, `.patch` and `.delete` each equal `App.handle` on one 405. Every existing assertion that fails under the slice because a 404 is now 405 changes to 405 with that request's exact `Allow`, in the functions the measured premise names and any later assertion they hide; a function whose name says 404 or "not found" for a case that is now 405 is renamed to say what it asserts (known: `test_method_mismatch_is_not_found`, `test_unmatched_method_or_path_is_404_without_conversion`, `test_unmatched_routes_are_404_before_a_raising_handler`, `test_unmatched_method_or_path_is_404_without_extraction`, `test_method_without_a_route_on_a_matching_path_is_404`, `test_unmatched_is_404`, and `test_unmatched_method_is_not_found` in `adapters/flare/test_muntin_flare.mojo`). No must-build or must-not-build fixture: nothing a registration compiles to changes.
+- Adapter contract tests (`adapters/flare/test_muntin_flare.mojo`): the three functions above; `to_flare_response` keeps the 405's `Allow`, and `HEAD` on a path only a `post` route serves is 405 with `Allow`, `Content-Length: 18` and no body.
+- Loopback (`adapters/flare/test_localhost_roundtrip.mojo`): the three functions above assert 405 and compare `Allow` with `App.handle`'s over HTTP/1.1 and h2c; the lowercase `delete` entry stays 400 over Flare and its `App.handle` comparison becomes 405. `test_headers_over_h2c_follow_the_same_rules` gains a method mismatch (`:status: 405`, `allow` equal to `App.handle`'s, DATA `Method Not Allowed`) and a `HEAD` on a path only a non-`get` route serves (405, `allow`, `content-length: 18`, no DATA).
+- Mutations, each on a scratch copy, each killed by a test above: `HEAD` left out of `Allow`; `HEAD` added once per `GET` route (repeats); a fixed method order; decoding the captures before counting a route (B1); 405 whenever no route is selected; 405 decided before the scan (a later-registered route of the request's method never reached); `Allow` built from every route, not those matching the path.
+- Verification: `docs/DEVELOPMENT.md` section 3. Its wire trigger applies (how `App.handle` builds the response, a new status and field): a local `check_flare.sh` run before pushing. The base-wide diagnostic comparison does not apply: no overload, signature, `where` clause or call chain to `_check` changes, and no line above `def handle` moves.
+- Docs: `docs/DX.md`: grep `404`, `Not Found`, `405` and `Allow`. Each statement or example comment that answers 404 for a request whose path a route of that example's `App` matches, or says Muntin sends no 405 or `Allow`, changes to this record's rule; each that answers 404 for a path no route matches stays. Known instances that change: "Unmatched method/path pairs return status 404"; `GET /users` and `PUT /users` in the body-only `post` example (`POST /missing` stays); `PUT /users/1` in the route-value-then-body example (`POST /users/1/x` stays); `POST /users/7`, `HEAD /users/7`, `OPTIONS /users/7`, `GET /cache` and `delete /users/7` in the `put`/`patch`/`delete` example; `HEAD /cache/1`, `head /users/7` and `OPTIONS /users/7` in the `HEAD` example (`HEAD /missing` stays); `GET /webhook` in the raw example (`POST /webhook/x` stays); section 4's matching paragraph, its Flare-lowercase sentence and the `HEAD` paragraph's "`head` and `Head` are 404" and "no 405 or `Allow`"; the order sentences that put 404 first ("no matching method and path is 404", "no matching route 404", "404 otherwise"). Known instance that stays: `GET /users -> 404` under "Typed path parameter" (its `App` has `/hello` and `/users/{id}` only). DX gains a 405 paragraph in section 4 with this record's rules and an example. `docs/ARCHITECTURE.md`: request handling's paragraph and table gain the 405 step; "Other current limits" drops 405 and says `OPTIONS` and other methods are 405 on a matching path; the revisit index rows for M3-020 and M3-026 say 405 is decided (M3-030), and a row links this record's revisit conditions; `docs/SPEC.md` (the M3 table gains the capability as shipped, "more HTTP methods" without 405, and a paragraph after the M2 contract, "M3-031 reopened the contract (decided by M3-030)", stating the kinds above); `AGENT_PROGRESS.md`. `README.md`'s `GET /users -> 404` stays: its `App` has no route on `/users`.
+- Not in the slice: `OPTIONS` answers, CORS, 501, a registered `HEAD`, `TestClient.head`, a configurable 405 or 404, a route index, any change to selection, route values, the adapter or `compat`.
