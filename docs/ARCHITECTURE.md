@@ -120,10 +120,12 @@ src/muntin/headers_body.mojo      WithHeaders[B] (post/put/patch body carrier wi
 src/muntin/app.mojo               App: route table, the get/post/put/patch/delete overloads (one per request-slot arity), App.handle;
                                   private route matching (_match), slot extraction, adapters and the one rebind helper
 src/muntin/_registration_rules.mojo
-                                  private registration rules: slot kinds (_kind), route-literal parsing, _rule, _check, _admits;
+                                  private registration rules: slot kinds (_kind), the route-literal grammar (_split_literal,
+                                  _path_part, _query_items, _is_param, _param_name) and the parsers built on it, _rule, _check,
+                                  _admits;
                                   the rules are evaluated at compile time (_check, _admits); _route also uses _kind, _is_optional
-                                  and _path_params (with the _is_param it calls) to build route metadata at registration; the one
-                                  per-request part is the shared _is_param segment predicate (_match);
+                                  and _path_params, and _Route.__init__ _path_part, _query_items and _param_name, to build route
+                                  metadata at registration; the one per-request part is the _is_param outer-shape predicate (_match);
                                   imported by app.mojo; imports only the types it classifies (.http, .body, .headers_body, .state)
 src/muntin/state.mojo             State[S]; private marker _InjectedState
 src/muntin/json.mojo              Json[T], FromJson, ToJson, JsonValue, JsonWriter; private parser, limits, _JsonBody
