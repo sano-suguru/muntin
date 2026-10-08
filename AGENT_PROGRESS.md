@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-No item is named next. Choose one coherent item from `docs/SPEC.md`, "Remaining candidates"; make it a decision item only if it opens a new design question (`docs/DEVELOPMENT.md` section 2). Blockers: none.
+M3-031, 405 with `Allow`: implement the "Next production slice" of [Method not allowed decision (M3-030)](docs/history/architecture-decisions.md#method-not-allowed-decision-m3-030) as written. Blockers: none.
 
 ## Easy to miss
 
