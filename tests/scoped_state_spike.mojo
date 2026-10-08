@@ -26,7 +26,8 @@ from muntin import Request, Response, ToResponse
 from muntin.body import FromBody
 from muntin._handler_storage import _Erased
 from muntin.app import _bad_request, _handler_error, _internal_error
-from muntin.app import _match, _parse_int, _path_params, _query_params
+from muntin._registration_rules import _path_params, _query_params
+from muntin.app import _match, _parse_int
 from muntin.app import _query_value
 from state_spike import _Respond, _call_body, _call_int, _call_int_body
 from state_spike import _call_none, _call_raw, _converted, _text

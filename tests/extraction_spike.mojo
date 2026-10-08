@@ -21,13 +21,8 @@
 
 from muntin import Request, Response
 from muntin._handler_storage import _Erased
-from muntin.app import (
-    _match,
-    _parse_int,
-    _path_params,
-    _query_params,
-    _query_value,
-)
+from muntin._registration_rules import _path_params, _query_params
+from muntin.app import _match, _parse_int, _query_value
 
 
 trait FromBody(Deinitable, Movable):

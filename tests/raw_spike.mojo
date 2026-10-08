@@ -35,7 +35,8 @@ from muntin.body import FromBody
 from muntin._handler_storage import _Erased
 from muntin.app import _bad_request, _carrier_fields, _handler_error
 from muntin.app import _internal_error, _json_answer, _json_status
-from muntin.app import _match, _parse_int, _path_params, _query_params
+from muntin._registration_rules import _path_params, _query_params
+from muntin.app import _match, _parse_int
 from muntin.app import _query_value
 from muntin.headers_body import _HeaderCarrier
 from muntin.http import Headers
