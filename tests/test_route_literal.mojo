@@ -12,7 +12,10 @@ from muntin import App, Request, Response
 from muntin._handler_storage import _Erased
 from muntin._registration_rules import (
     _distinct_query_keys,
+    _is_param,
+    _param_name,
     _path_params,
+    _query_items,
     _query_params,
 )
 from muntin.app import _Route, _match
@@ -114,6 +117,33 @@ def test_malformed_literals() raises:
     _malformed_query["/a?{a}&&{b}"]()
     _malformed_query["/a?{q}?"]()
     _malformed_query["/a?{q}?{r}"]()
+
+
+def test_query_items_tell_no_query_from_an_empty_one() raises:
+    # `/a` has no query part; `/a?` has an empty one, which the query
+    # checks must see as one (empty, so malformed) item.
+    assert_equal(len(_query_items("/a")), 0)
+    assert_equal(len(_query_items("/a?")), 1)
+    assert_equal(_query_items("/a?")[0].byte_length(), 0)
+    assert_equal(len(_query_items("/a?{q}&{r}")), 2)
+
+
+def _brace_round_trip(item: StaticString) raises:
+    assert_true(_is_param(item), String(item))
+    assert_equal(String("{", _param_name(item), "}"), String(item))
+
+
+def test_param_name_strips_what_is_param_recognizes() raises:
+    # `_is_param` and `_param_name` both know the brace shape; the name is
+    # what lies between the braces `_is_param` checked, nothing more.
+    _brace_round_trip("{a}")
+    _brace_round_trip("{id}")
+    _brace_round_trip("{!~}")
+    _brace_round_trip("{a}b}")
+    assert_false(_is_param("{}"))
+    assert_false(_is_param("{a"))
+    assert_false(_is_param("a}"))
+    assert_false(_is_param(""))
 
 
 def test_query_keys_compare_whole() raises:

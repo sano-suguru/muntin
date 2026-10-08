@@ -7,10 +7,13 @@ first registration rule a shape breaks; `_check` states each rule as a
 compile-time assert with Muntin's message, and `_admits`, the same rules as
 one Bool, guards the adapter's instantiation.
 
-The route-literal grammar is the primitives `_path_part` (the text
-before the first `?`), `_query_items` (the text after it, split at `&`),
-`_is_param` (a `{name}` segment or `{key}` item) and `_param_name` (the text
-between its braces). The rules' parsers (`_path_params`, `_query_params`,
+The route-literal grammar is the primitives `_split_literal` (the path and
+query parts, at the first `?`); `_path_part` (the path part) and
+`_query_items` (the query part split at `&`), which read that split;
+`_is_param` (whether a segment or item is `{`, a non-empty name, `}`); and
+`_param_name` (the name between the braces of one that is). `_is_param` recognizes the brace shape and
+`_param_name` strips it, so both know it; `tests/test_route_literal.mojo`
+checks that they agree. The rules' parsers (`_path_params`, `_query_params`,
 `_distinct_query_keys`) validate and count through them at compile time,
 and `_route` in `app.mojo` also calls `_path_params` at registration;
 `_Route.__init__` in `app.mojo` splits a literal into its matched path and
@@ -26,21 +29,32 @@ from .http import Headers, Request, Response
 from .state import _InjectedState
 
 
-def _path_part(route: StaticString) -> StaticString:
-    """The path part of a route literal: the text before its first `?`, or
-    the whole literal without one. Requests are matched against it."""
+def _split_literal(
+    route: StaticString,
+) -> Tuple[StaticString, Optional[StaticString]]:
+    """A route literal's path part and query part, split at its first `?`:
+    the query part is `None` without a `?`, and empty for a `?` with nothing
+    after it. `_path_part` and `_query_items` read the split from here."""
     var mark = route.find("?")
-    return route[byte=:mark] if mark >= 0 else route
+    if mark < 0:
+        return (route, None)
+    return (route[byte=:mark], route[byte = mark + 1 :])
+
+
+def _path_part(route: StaticString) -> StaticString:
+    """The path part of a route literal (`_split_literal`). Requests are
+    matched against it."""
+    return _split_literal(route)[0]
 
 
 def _query_items(route: StaticString) -> List[StaticString]:
-    """The query items of a route literal: the text after its first `?`,
-    split at `&`, in the literal's order. Empty without a `?`; a `?` with
-    nothing after it gives one empty item."""
-    var mark = route.find("?")
-    if mark < 0:
+    """The query part of a route literal (`_split_literal`) split at `&`, in
+    the literal's order. Empty without a query part; an empty query part
+    gives one empty item, which no `{key}` is."""
+    var query = _split_literal(route)[1]
+    if not query:
         return List[StaticString]()
-    return route[byte = mark + 1 :].split("&")
+    return query.value().split("&")
 
 
 def _is_param(segment: StringSlice) -> Bool:

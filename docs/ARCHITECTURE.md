@@ -120,8 +120,9 @@ src/muntin/headers_body.mojo      WithHeaders[B] (post/put/patch body carrier wi
 src/muntin/app.mojo               App: route table, the get/post/put/patch/delete overloads (one per request-slot arity), App.handle;
                                   private route matching (_match), slot extraction, adapters and the one rebind helper
 src/muntin/_registration_rules.mojo
-                                  private registration rules: slot kinds (_kind), the route-literal grammar (_path_part,
-                                  _query_items, _is_param, _param_name) and the parsers built on it, _rule, _check, _admits;
+                                  private registration rules: slot kinds (_kind), the route-literal grammar (_split_literal,
+                                  _path_part, _query_items, _is_param, _param_name) and the parsers built on it, _rule, _check,
+                                  _admits;
                                   the rules are evaluated at compile time (_check, _admits); _route also uses _kind, _is_optional
                                   and _path_params, and _Route.__init__ _path_part, _query_items and _param_name, to build route
                                   metadata at registration; the one per-request part is the _is_param placeholder predicate (_match);
