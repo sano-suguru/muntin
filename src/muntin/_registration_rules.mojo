@@ -8,19 +8,19 @@ compile-time assert with Muntin's message, and `_admits`, the same rules as
 one Bool, guards the adapter's instantiation.
 
 The route-literal grammar is the primitives `_split_literal` (the path and
-query parts, at the first `?`); `_path_part` (the path part) and
-`_query_items` (the query part split at `&`), which read that split;
-`_is_param` (whether a segment or item is `{`, a non-empty name, `}`); and
-`_param_name` (the name between the braces of one that is). `_is_param` recognizes the brace shape and
-`_param_name` strips it, so both know it; `tests/test_route_literal.mojo`
-checks that they agree. The rules' parsers (`_path_params`, `_query_params`,
-`_distinct_query_keys`) validate and count through them at compile time,
-and `_route` in `app.mojo` also calls `_path_params` at registration;
-`_Route.__init__` in `app.mojo` splits a literal into its matched path and
-query keys through `_path_part`, `_query_items` and `_param_name` at
-registration; and `_match` in `app.mojo` classifies each route segment with
-`_is_param` per request. The `/` segment separator is written both in
-`_path_params` and in `_match`, which splits the request path with it too.
+query parts, at the first `?`); `_path_part` (the path part) and `_query_items`
+(the query part split at `&`), which read that split; `_is_param` (whether a
+segment or item is `{`, a non-empty name, `}`); and `_param_name` (the name
+between the braces of one that is). `_is_param` recognizes the brace shape and
+`_param_name` strips it, so both know it; a test checks that they agree. The
+rules' parsers (`_path_params`, `_query_params`, `_distinct_query_keys`)
+validate and count through them at compile time, and `_route` in `app.mojo`
+also calls `_path_params` at registration; `_Route.__init__` in `app.mojo`
+splits a literal into its matched path and query keys through `_path_part`,
+`_query_items` and `_param_name` at registration; and `_match` in `app.mojo`
+classifies each route segment with `_is_param` per request. The `/` segment
+separator is written both in `_path_params` and in `_match`, which splits the
+request path with it too.
 """
 
 from .body import FromBody
