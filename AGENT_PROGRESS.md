@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-M3-029, `Json(value, status=)`: implement the "Next production slice" of [JSON response status decision (M3-028)](docs/history/architecture-decisions.md#json-response-status-decision-m3-028) as written. Blockers: none.
+No item is named next. Choose one coherent item from `docs/SPEC.md`, "Remaining candidates"; make it a decision item only if it opens a new design question (`docs/DEVELOPMENT.md` section 2). Blockers: none.
 
 ## Easy to miss
 

@@ -4,7 +4,9 @@ Decision and evidence: docs/history/architecture-decisions.md, "JSON codec decis
 `Json[T]` is a request body through the existing `FromBody` when the
 application type `T` conforms to `FromJson`, and a result through the
 existing `ToResponse` when `T` conforms to `ToJson`, so it registers through
-`App.get`/`App.post` like any other body or result. The codec is Muntin's own: a strict
+`App.get`/`App.post` like any other body or result; `Json(value, status=)`
+chooses the result's status (M3-029, "JSON response status decision
+(M3-028)"). The codec is Muntin's own: a strict
 parser for the RFC 8259 grammar with Muntin's limits (duplicate member names
 rejected, nesting depth 64, 1 MiB, the Mojo 1.1.0 numeric limits of
 `float()`) and a writer.
@@ -747,18 +749,24 @@ struct Json[T: Movable & Deinitable](
     and a body of at most 1 MiB (else 413); the body is then parsed strictly
     and `T.from_json` builds the value, either failing answers 400, all
     before the handler. As a result (`T: ToJson`): `T.write_json` writes the
-    body and the response is 200 with exactly `Content-Type:
-    application/json`; a serialization failure is the fixed 500. The value
+    body and the response has the status given to the initializer (200 by
+    default) and exactly `Content-Type: application/json`; a serialization
+    failure is the fixed 500, whatever the status. The value
     is moved in and out (`Json(v^)`, `body^.take()`), so a move-only `T`
     works. A handler may borrow the body (`body: Json[T]`, read
     `body.value`) or own it (`var body`).
     """
 
     var value: Self.T
+    # The result's status, read once by `to_response`. A body built by
+    # `from_body` holds the default, which nothing on the request path reads.
+    var _status: Int
 
-    def __init__(out self, var value: Self.T):
-        """Moves `value` in."""
+    def __init__(out self, var value: Self.T, *, status: Int = 200):
+        """Moves `value` in. `status` is the response's status when the
+        value is a result (not validated, as for `Response`)."""
         self.value = value^
+        self._status = status
 
     def take(deinit self) -> Self.T:
         """Moves the value out (`body^.take()`): a field cannot be moved
@@ -777,14 +785,15 @@ struct Json[T: Movable & Deinitable](
         return Self(Self.T.from_json(_parse_json(body)))
 
     def to_response(var self) -> Response where conforms_to(Self.T, ToJson):
-        """200 with the written body and exactly `Content-Type:
-        application/json`. A raising or unbalanced `write_json`, or a
-        non-finite number, answers the fixed 500 (`Internal Server Error`,
-        no fields) instead; no partial body is sent."""
+        """The chosen status (200 by default) with the written body and
+        exactly `Content-Type: application/json`. A raising or unbalanced
+        `write_json`, or a non-finite number, answers the fixed 500
+        (`Internal Server Error`, no fields) instead, whatever the status;
+        no partial body is sent."""
         var out = JsonWriter()
         try:
             self.value.write_json(out)
-            var r = Response(200, out^._finish())
+            var r = Response(self._status, out^._finish())
             r.headers.set("Content-Type", "application/json")
             return r^
         except:

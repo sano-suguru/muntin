@@ -759,17 +759,32 @@ app.get["/health"](health)                # def health() -> Response: Response c
 - The conversion runs once, after the handler returns. A 400 (route value or body failed to convert) or 404 calls neither the handler nor the conversion; a handler that raises (section 6) skips the result conversion.
 - A result type that is neither `String`, `StaticString` nor conforming fails at the registration call: `no matching method in call to 'get'`, whose candidate note is `violated constraint` followed by the `where` clause (`... identical(R, StringSpan[ImmStaticOrigin]) ...`). When the call does not let the compiler decide the clause (a local's immutable origin, or a forwarding helper whose generic result is not pinned down by its own `where`), the error is `invalid call to '<method>': lacking evidence to prove correctness` instead.
 
-JSON results: a handler returns `Json[T]` with `T: ToJson` (section 4). The response is 200 with exactly one field, `Content-Type: application/json`; `String` results and `Response.text` still add no field. Another status or media type is an explicit edit of the converted response:
+JSON results: a handler returns `Json[T]` with `T: ToJson` (section 4). The response has exactly one field, `Content-Type: application/json`, and status 200; `String` results and `Response.text` still add no field. `Json(value, status=201)` chooses another status, with the same body and field; `Json(value)` is still 200:
+
+```mojo
+def register(var body: Json[CreateUser]) -> Json[User]:
+    var c = body^.take()
+    return Json(User(2, c.name), status=201)
+
+
+app.post["/accounts"](register)
+# POST /accounts  Content-Type: application/json  {"name":"Bo","age":1}
+#   -> 201, Content-Type: application/json, {"id":2,"name":"Bo"}
+```
+
+- `status` is keyword-only (`Json(value, 201)` does not compile: `no matching function in initialization`) and takes any `Int`. Muntin does not validate it, as it does not validate `Response`'s.
+- A body (`body: Json[T]`) has no public status; the status belongs to the result, and the request steps (415, 413, 400) are unchanged.
+
+Another media type is an explicit edit of the converted response:
 
 ```mojo
 def create() raises -> Response:
-    var r = Json(User(7, "Ada")).to_response()
-    r.status = 201
+    var r = Json(User(7, "Ada"), status=201).to_response()
     r.headers.set("Content-Type", "application/problem+json")   # a set after the conversion wins
     return r^
 ```
 
-If `write_json` raises (including NaN or infinity, which JSON cannot represent) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`; the handler's `ToErrorResponse` is not called, because the handler did not fail.
+If `write_json` raises (including NaN or infinity, which JSON cannot represent) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`, whatever status was chosen; the handler's `ToErrorResponse` is not called, because the handler did not fail. An edit after `to_response()` applies to that 500 too, so a status set there (`r.status = 201`) would turn the failure into a success status with the body `Internal Server Error`; choose the status with `status=` instead. Why: [JSON response status decision (M3-028)](history/architecture-decisions.md#json-response-status-decision-m3-028).
 
 ## 6. Application errors
 
