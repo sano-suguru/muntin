@@ -772,7 +772,7 @@ app.post["/accounts"](register)
 #   -> 201, Content-Type: application/json, {"id":2,"name":"Bo"}
 ```
 
-- `status` is keyword-only (`Json(value, 201)` does not compile: `no matching function in initialization`) and takes any `Int`. Muntin does not validate it, as it does not validate `Response`'s.
+- `status` is keyword-only: `Json(value, 201)` does not compile, and the compiler's candidate note shows `def __init__(out self, var value: Self.T, *, status: Int = 200)` (`tests/json_api_fail/positional_status.mojo`). It takes any `Int`; Muntin does not validate it, as it does not validate `Response`'s.
 - A body (`body: Json[T]`) has no public status; the status belongs to the result, and the request steps (415, 413, 400) are unchanged.
 
 Another media type is an explicit edit of the converted response:
