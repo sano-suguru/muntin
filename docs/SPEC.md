@@ -89,6 +89,7 @@ An M3 area with an open design question is cut decision-first: a decision item p
 | optional query values (`Optional[Int]`, `Optional[String]`; `None` when absent or empty) | shipped |
 | `HEAD` through `get` routes (the `GET` route's steps; the backend sends no content and the body's length) | shipped |
 | 405 `Method Not Allowed` with `Allow` for a request whose path a route of another method matches (404 when no route matches the path) | shipped |
+| serving an `App` over cleartext HTTP/1.1 and h2c through the Flare adapter's `Server` (`Server.bind(host, port)`, `server.port()`, `server.serve(app)`; one thread, IP literals, no graceful shutdown; no core `app.run()`) | shipped |
 
 ### Remaining candidates
 
@@ -106,7 +107,7 @@ Each becomes its own item, a decision item first where it opens a design questio
 - structured errors, including application-level error mappers (rejected on Mojo 1.1.0 by M2-012; its revisit conditions apply);
 - observability hooks, including logging of dropped handler errors;
 - streaming;
-- serving an `App`: decided by [M3-032](history/architecture-decisions.md#serving-entrypoint-decision-m3-032) (`Server` in the Flare adapter module, no core `app.run()`), next item M3-033; graceful shutdown, signal handling, several serving threads and backend configuration are later lifecycle items, each with a revisit condition there;
+- serving lifecycle beyond `Server`: graceful shutdown, signal handling, several serving threads, backend configuration (body size, timeouts, TLS), host names, and one call that binds and serves, each with a revisit condition in [M3-032](history/architecture-decisions.md#serving-entrypoint-decision-m3-032);
 - performance benchmarks and allocation profiling.
 
 ## Long-term success criterion

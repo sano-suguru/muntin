@@ -35,8 +35,8 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
 - `HEAD` (M3-027, decided in docs/history/architecture-decisions.md "HEAD
   decision (M3-026)"): `App.handle` answers a `HEAD` request through `GET`
   routes, body included; the backend keeps the content off the wire. For a request
-  whose method is `HEAD`, `MuntinHandler.serve` takes the response it would
-  send at every exit (`App.handle`'s answer, `to_flare_response`'s fixed
+  whose method is `HEAD`, `_serve_app` (which both handlers call) takes the
+  response it would send at every exit (`App.handle`'s answer, `to_flare_response`'s fixed
   500, its own 400) and sends its status and fields with no body, declaring
   a `Content-Length` equal to the body's byte length, except for a status
   that never carries content (1xx, 204, 205, 304), where it declares none.
@@ -45,13 +45,33 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   the adapter's; over HTTP/1.1 Flare still frames a 205 or 304 with
   `Content-Length: 0` itself. A handler's own `Content-Length` is still
   dropped. Every other method is unchanged.
+
+Serving (M3-033, decided in docs/history/architecture-decisions.md "Serving
+entrypoint decision (M3-032)"): `Server.bind(host, port)` checks that `port`
+is 0 to 65535 (`port out of range: <port>` otherwise, before anything is
+parsed or bound), then binds and listens on `host`, an IPv4 or IPv6 literal
+(Flare's `IpAddr.parse`: no name resolution), with Flare's default
+`ServerConfig`. A bind failure raises; dropping the `Server` closes its
+listener. `server.port()` is the bound port. `server.serve(app)` borrows
+`app` and runs Flare's single-worker `serve` on the calling thread with
+`_BorrowedHandler`, which answers through `_serve_app` as `MuntinHandler`
+does; a raise propagates and a return returns, with no policy of its own.
+On Flare v0.12.0 a return means the reactor stopped (a failed poll). There
+is no stop call, graceful shutdown, signal handling, worker count or
+backend configuration: SIGINT and SIGTERM end the process by their default
+action. `_BorrowedHandler` is not `Copyable`, which keeps Flare's
+multi-worker `serve` out of reach. `Server`'s one initializer takes
+keyword-only `_host` and `_port`, so `Server.bind` is the one public
+spelling. `MuntinHandler` stays for the adapter's own tests and probes.
 """
 
 from flare.http import (
     Handler,
+    HttpServer,
     Request as FlareRequest,
     Response as FlareResponse,
 )
+from flare.net import IpAddr, SocketAddr
 from muntin import App, Headers, Request, Response
 
 
@@ -189,6 +209,26 @@ def _without_content(var response: FlareResponse) -> FlareResponse:
     return response^
 
 
+def _answer(app: App, request: FlareRequest) -> FlareResponse:
+    var muntin_request: Request
+    try:
+        muntin_request = to_muntin_request(request)
+    except:
+        return FlareResponse(
+            status=400, body=List(String("Bad Request").as_bytes())
+        )
+    return to_flare_response(app.handle(muntin_request))
+
+
+def _serve_app(app: App, request: FlareRequest) -> FlareResponse:
+    """`app`'s answer to `request` as the adapter sends it: the conversion,
+    `App.handle`, the adapter's 400 and 500, and the `HEAD` rule. Every
+    handler in this module answers through it."""
+    if request.method == "HEAD":
+        return _without_content(_answer(app, request))
+    return _answer(app, request)
+
+
 struct MuntinHandler(Handler):
     """Serves a Muntin `App` as a Flare handler."""
 
@@ -198,16 +238,50 @@ struct MuntinHandler(Handler):
         self.app = app^
 
     def serve(self, request: FlareRequest) -> FlareResponse:
-        if request.method == "HEAD":
-            return _without_content(self._answer(request))
-        return self._answer(request)
+        return _serve_app(self.app, request)
 
-    def _answer(self, request: FlareRequest) -> FlareResponse:
-        var muntin_request: Request
-        try:
-            muntin_request = to_muntin_request(request)
-        except:
-            return FlareResponse(
-                status=400, body=List(String("Bad Request").as_bytes())
-            )
-        return to_flare_response(self.app.handle(muntin_request))
+
+struct _BorrowedHandler[origin: Origin[mut=False]](Handler):
+    """Serves a borrowed `App` as a Flare handler, for `Server.serve`. Not
+    `Copyable` on purpose: Flare's multi-worker `serve` requires it."""
+
+    var _app: Pointer[App, Self.origin]
+
+    def __init__(out self, ref[Self.origin] app: App):
+        self._app = Pointer(to=app)
+
+    def serve(self, request: FlareRequest) -> FlareResponse:
+        return _serve_app(self._app[], request)
+
+
+struct Server(Movable):
+    """A listening socket that serves a Muntin `App` over HTTP through Flare
+    (M3-033). `Server.bind` is the one public spelling."""
+
+    var _server: HttpServer
+
+    def __init__(out self, *, _host: String, _port: Int) raises:
+        if _port < 0 or _port > 65535:
+            raise Error("port out of range: " + String(_port))
+        self._server = HttpServer.bind(
+            SocketAddr(IpAddr.parse(_host), UInt16(_port))
+        )
+
+    @staticmethod
+    def bind(host: String, port: Int) raises -> Server:
+        """Binds and listens on `host` (an IPv4 or IPv6 literal) and `port`
+        (0 to 65535; 0 lets the system choose). A client may connect once it
+        returns. Raises for a port out of range, a host that is not an IP
+        literal, an address in use or any other OS error."""
+        return Server(_host=host, _port=port)
+
+    def port(self) -> Int:
+        """The bound port: the system's choice when bound with 0."""
+        return Int(self._server.local_addr().port)
+
+    def serve(mut self, app: App) raises:
+        """Serves the borrowed `app` on the calling thread with Flare's
+        single-worker reactor. It does not return while serving; when
+        Flare's `serve` raises, the raise propagates, and when it returns,
+        this returns."""
+        self._server.serve(_BorrowedHandler(app))

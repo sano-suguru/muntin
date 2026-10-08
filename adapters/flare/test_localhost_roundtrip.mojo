@@ -1,15 +1,17 @@
 """Real localhost HTTP round trip through Flare and Muntin (M1-003).
 
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). A real
-HTTP/1.1 client sends `GET /hello` over a loopback TCP connection to Flare's
-`HttpServer`, which serves `MuntinHandler`, which calls `App.handle`.
+HTTP/1.1 client sends `GET /hello` over a loopback TCP connection to the
+adapter's `Server`, which serves the `App` through Flare's `HttpServer` and
+calls `App.handle`.
 
-Lifecycle (test-only, not a Muntin API): `HttpServer.serve` owns the calling
-thread, so the server runs in a forked child, as in Flare's own integration
-tests. `HttpServer.bind` returns a listening socket (`listen(2)`, backlog 128)
-on an ephemeral loopback port, so the kernel queues the client's connection
-even before the child enters `serve`: readiness is `bind` returning, with no
-sleep. The client has connect and read timeouts; the parent SIGKILLs and reaps
+Lifecycle (M3-033): every server here is the supported one,
+`Server.bind("127.0.0.1", 0)` in the parent and `server.serve(app)` in a
+forked child, because `serve` owns the calling thread, as in Flare's own
+integration tests. `Server.bind` returns a listening socket (`listen(2)`,
+backlog 128) on an ephemeral loopback port, so the kernel queues the client's
+connection even before the child enters `serve`: readiness is `bind`
+returning, with no sleep. The client has connect and read timeouts; the parent SIGKILLs and reaps
 the child in `finally`, and the child also arms a 30-second `alarm(2)` so it
 cannot outlive a parent killed from outside.
 
@@ -68,8 +70,7 @@ carries the request and the final `Response`. Each must equal `TestClient`.
 M3-003 registers the stateful `GET /staff/{id}` -> `find_staff(staff:
 State[Staff], id: Int) raises OutOfStock -> Person`, with `Staff` defined
 here and its `State` built inside `users_app()`, so the child's `App` and
-the in-memory one each own a value, moved with its `App` into
-`MuntinHandler`. The handler reads the state, receives the converted `Int`
+the in-memory one each own a value, served with its `App`. The handler reads the state, receives the converted `Int`
 or is not called (400), and an out-of-range id raises `OutOfStock` (409).
 Each must equal `TestClient`.
 
@@ -180,7 +181,7 @@ in DATA. A lowercase `head` is still Flare's 400. The adapter is unchanged.
 from std.ffi import c_uint, external_call
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
-from flare.http import HttpClient, HttpServer
+from flare.http import HttpClient
 from flare.http import Request as FlareRequest
 from flare.http.proto import ascii_unchecked_string
 from flare.http2 import (
@@ -214,7 +215,7 @@ from muntin import (
     WithHeaders,
 )
 from muntin.testing import TestClient
-from muntin_flare import MuntinHandler
+from muntin_flare import Server
 
 comptime TIMEOUT_MS = 5_000
 comptime CHILD_LIFETIME_S = 30
@@ -585,11 +586,11 @@ struct _Child(Copyable):
     var port: Int
 
 
-def _serve_in_child(var app: App) raises -> _Child:
+def _serve_in_child(app: App) raises -> _Child:
     """Binds an ephemeral loopback port and forks a child serving `app` there
-    through `MuntinHandler`. The caller must SIGKILL and reap `pid`."""
-    var server = HttpServer.bind(SocketAddr.localhost(0))
-    var port = Int(server.local_addr().port)
+    through `Server`. The caller must SIGKILL and reap `pid`."""
+    var server = Server.bind("127.0.0.1", 0)
+    var port = server.port()
 
     var pid = fork()
     if pid < 0:
@@ -597,7 +598,7 @@ def _serve_in_child(var app: App) raises -> _Child:
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
         try:
-            server.serve(MuntinHandler(app^))
+            server.serve(app)
         except e:
             print("server child: serve failed:", e)
         exit(1)
@@ -1402,7 +1403,7 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
         assert_equal(binary[0][0].value, "400")
         assert_equal(binary[1], "Bad Request")
 
-        # M3-027: HEAD at every exit of `MuntinHandler.serve`. (target,
+        # M3-027: HEAD at every exit of the adapter's answer. (target,
         # fields, status, content-length or "" for none); each goes out
         # with no DATA frame.
         var app = headers_app()

@@ -2,7 +2,7 @@
 
 Muntin is a typed application layer for building web services in Mojo. Your handlers depend on Muntin, not on Flare or another networking runtime.
 
-Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and there is no supported way to serve one yet.
+Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over cleartext HTTP on one thread, with no graceful shutdown. It is not production-ready.
 
 ```mojo
 from muntin import App
@@ -61,7 +61,7 @@ application code
          /             \
         v               v
   TestClient        Flare adapter
-  in memory         over HTTP (tests only)
+  in memory         over HTTP (Server)
 ```
 
 Your handlers and routes stay independent of Flare or any other networking runtime, and Muntin adds no executor or async runtime that application code must adopt. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
@@ -75,7 +75,8 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON), application errors, shared application state, headers, and a raw `Request -> Response` escape hatch.
-- **Not yet:** serving an application, and middleware. The Flare integration is test-only today; Flare is a candidate production backend, not a supported deployment path.
+- **Serving:** `Server` in the Flare adapter module (`muntin_flare`) serves an `App` over cleartext HTTP/1.1 and HTTP/2 with prior knowledge, on one thread. Its limits: no graceful shutdown (Ctrl-C or SIGTERM ends the process and cuts in-flight requests), an IP literal as the host (`"127.0.0.1"`, `"0.0.0.0"`, `"::1"`; not `"localhost"`), no TLS or HTTP/3, Flare's default limits (such as a 10 MiB body), no backend configuration, and it runs from a clone with two `-I` paths, not from a published package. Details: [`docs/DX.md`](docs/DX.md) section 1.
+- **Not yet:** middleware, and serving beyond those limits.
 
 Shipped and remaining capabilities: [`docs/SPEC.md`](docs/SPEC.md). Long-term API targets: [`docs/DX.md`](docs/DX.md).
 
@@ -91,6 +92,13 @@ pixi run run   # runs main.mojo: an App answering one request through TestClient
 ```
 
 To run the example above, save it as `example.mojo` in the repository root and run `pixi run mojo run -I src example.mojo`.
+
+To serve [`examples/hello_server.mojo`](examples/hello_server.mojo) on `http://127.0.0.1:8080` (it needs the `flare` environment, which pixi builds from Flare's pinned source on first use):
+
+```sh
+pixi run -e flare mojo run -I src -I adapters/flare examples/hello_server.mojo
+curl http://127.0.0.1:8080/   # Hello, Mojo!
+```
 
 ## Documentation
 
