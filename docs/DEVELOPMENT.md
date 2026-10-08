@@ -15,7 +15,7 @@ Where an item's contract is written depends on its kind, and nowhere else:
 | decision (a design question, settled with evidence suited to it: existing records and pull requests where they suffice, spikes and fixtures under `tests/` where compiler or runtime behavior must be measured; `src/muntin` unchanged) | its new record in `docs/history/architecture-decisions.md`: the question and what would settle it, then the choice and exactly one next action: a "Next production slice", or an explicit deferral with a concrete revisit condition | the question and settling condition before any measurement; the choice and next action after the evidence |
 | production (implements a decided slice) | the decision record's "Next production slice", as written | already, by the decision item |
 | production that cannot follow its slice as written | an amendment record: the delta to the slice, why, and the invariant or compatibility boundary it affects | before the change merges; a new design question is a new decision item, not an amendment |
-| fix, tooling or docs with no design question | the pull request | with the pull request |
+| fix, behavior-preserving refactor, tooling or docs with no design question | the pull request | with the pull request |
 
 A product item, decision or production, gets a milestone ID (`M3-017`) where it is first named: a decision record's title or its "Next production slice". A process or tooling decision gets none unless `docs/SPEC.md` tracks it as milestone work. `docs/SPEC.md` and `AGENT_PROGRESS.md` refer to it; nothing else tracks it.
 
