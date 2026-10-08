@@ -3,7 +3,9 @@
 # answer is 405 `Method Not Allowed` with one `Allow` field listing those
 # routes' methods once, in first-registration order, `HEAD` right after
 # `GET`; otherwise 404 as before. Every method is answered alike. The `App`
-# and the requests are the measured premise's, as written. Decision:
+# and the requests are the measured premise's, as written, except that
+# `report` records the method in `RAW_METHOD` instead of echoing it, as DX's
+# raw `HEAD` rule asks. Decision:
 # docs/history/architecture-decisions.md, "Method not allowed decision
 # (M3-030)".
 

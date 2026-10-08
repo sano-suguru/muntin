@@ -4,9 +4,9 @@
 # answer equals the `GET`'s (status, body and header fields), the body kept
 # (keeping it off the wire is the backend's); a raw `get` handler sees
 # `req.method == "HEAD"`, and one that follows DX's raw rule answers as for
-# the `GET`. Every other request keeps its
-# answer: on a path only routes of other methods match, `HEAD` is 405 with
-# `Allow` like any method (M3-031), and on a path no route matches 404.
+# the `GET`. Every other request keeps its answer, except that on a path
+# only routes of other methods match, `HEAD` is 405 with `Allow` like any
+# method (M3-031), and on a path no route matches 404.
 # Decision: docs/history/architecture-decisions.md, "HEAD decision
 # (M3-026)". The Flare adapter's side: adapters/flare.
 
