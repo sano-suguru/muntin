@@ -6,5 +6,4 @@ from muntin_flare import Server
 
 
 def main() raises:
-    var server = Server("127.0.0.1", 0)
-    print(server.port())
+    _ = Server("127.0.0.1", 0)

@@ -2,7 +2,7 @@
 
 Muntin is a typed application layer for building web services in Mojo. Your handlers depend on Muntin, not on Flare or another networking runtime.
 
-Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over cleartext HTTP on one thread, with no graceful shutdown. It is not production-ready.
+Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over cleartext HTTP on one thread, with an IP-literal host and no graceful shutdown. It is not production-ready.
 
 ```mojo
 from muntin import App
@@ -61,7 +61,7 @@ application code
          /             \
         v               v
   TestClient        Flare adapter
-  in memory         over HTTP (Server)
+  in memory         over HTTP (Server, one thread)
 ```
 
 Your handlers and routes stay independent of Flare or any other networking runtime, and Muntin adds no executor or async runtime that application code must adopt. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).

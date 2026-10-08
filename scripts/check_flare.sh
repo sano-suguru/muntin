@@ -150,7 +150,7 @@ fi
 step "serve probe (compile-only: HttpServer.serve accepts MuntinHandler)"
 ./build/serve_probe
 
-step "run localhost round trip (GET /hello, typed GET routes, body-only and route-value-then-body POSTs over loopback: Flare -> MuntinHandler -> App.handle)"
+step "run localhost round trip (GET /hello, typed GET routes, body-only and route-value-then-body POSTs over loopback: Flare -> Server -> App.handle)"
 # Output goes to a file, not a pipe: a leftover child holding the pipe would
 # make the shell wait for it and hide it from the pgrep check below.
 status=0

@@ -18,7 +18,7 @@ from std.testing import assert_equal, assert_true, TestSuite
 from flare.net import SocketAddr
 from flare.tcp import TcpStream
 from flare.utils import SIGINT, SIGKILL, SIGTERM, exit, fork, kill, waitpid
-from muntin import App
+from muntin import App, Request, Response
 from muntin.testing import TestClient
 from muntin_flare import Server
 
@@ -35,10 +35,17 @@ def get_user(id: Int) -> String:
     return "user " + String(id)
 
 
+def not_modified(var req: Request) -> Response:
+    """A raw 304 with a body: over HTTP/1.1 Flare frames a 304 with the
+    body's length unless the adapter's `HEAD` step emptied it first."""
+    return Response(304, "abc")
+
+
 def borrowed_app() -> App:
     var app = App()
     app.get["/hello"](hello)
     app.get["/users/{id}"](get_user)
+    app.get["/nm"](not_modified)
     return app^
 
 
@@ -174,11 +181,19 @@ def test_serve_answers_right_after_bind() raises:
         assert_true("\r\nAllow: GET, HEAD\r\n" in raw, raw)
 
         # `HEAD` through the borrowed handler: the GET answer's length, no
-        # content.
+        # content. Flare alone would send the same bytes for this one.
         raw = _exchange(child.port, _request("HEAD", "/hello"))
         print("observed: HEAD /hello ->", repr(raw))
         assert_equal(_status_line(raw), "HTTP/1.1 200 OK")
         assert_true("\r\nContent-Length: 5\r\n" in raw, raw)
+        assert_equal(_content(raw), "")
+        # This one tells the adapter's `HEAD` step apart: with it the body is
+        # gone before Flare frames the 304 (`Content-Length: 0`); without it
+        # Flare declares the body's 3 bytes.
+        raw = _exchange(child.port, _request("HEAD", "/nm"))
+        print("observed: HEAD /nm ->", repr(raw))
+        assert_equal(_status_line(raw), "HTTP/1.1 304 Not Modified")
+        assert_true("\r\nContent-Length: 0\r\n" in raw, raw)
         assert_equal(_content(raw), "")
     finally:
         _stop(child.pid)
@@ -193,7 +208,7 @@ def test_bind_raises_for_a_port_a_child_serves() raises:
         var error = _bind_error("127.0.0.1", child.port)
         print("observed: bind a served port ->", error)
         assert_true(not error.startswith("bound port"), error)
-        # The raise leaves the borrowed `App` usable.
+        # A bind raise leaves the parent's `App` usable.
         assert_equal(TestClient(app).get("/hello").body, "hello")
     finally:
         _stop(child.pid)
