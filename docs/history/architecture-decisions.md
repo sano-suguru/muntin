@@ -2978,7 +2978,7 @@ Every 405 has the body `Method Not Allowed` and exactly one `Allow` field; every
 
 ### Serving entrypoint decision (M3-032)
 
-Status: **decision** (M3-032, PR #?; `src/muntin`, `adapters/`, `compat/` and `tests/` are unchanged in it). It decides the first supported way for application code to serve an `App` over a real socket. Today there is none: the Flare integration is exercised only by tests, and a program that builds Flare's `HttpServer` around `MuntinHandler` itself is unsupported (`docs/ARCHITECTURE.md`, "Flare adapter").
+Status: **decision** (M3-032, PR #69; `src/muntin`, `adapters/`, `compat/` and `tests/` are unchanged in it). It decides the first supported way for application code to serve an `App` over a real socket. Today there is none: the Flare integration is exercised only by tests, and a program that builds Flare's `HttpServer` around `MuntinHandler` itself is unsupported (`docs/ARCHITECTURE.md`, "Flare adapter").
 
 **Why now.** No supported way to serve is the largest gap in reach ([M3-024](#optional-query-values-decision-m3-024)). M3-024 deferred it because the pinned Flare v0.11.0 could not stop gracefully and would drop its server spellings in v0.12. The pin is now v0.12.0, whose spellings (`HttpServer.bind`, `serve`) this record measures. Graceful stopping is still out of reach from the serving thread (below), so this record decides a lifecycle that does not need it.
 
