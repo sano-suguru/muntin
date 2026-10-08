@@ -2773,7 +2773,7 @@ app.delete["/cache"](purge)
 
 ### JSON response status decision (M3-028)
 
-Status: **decision** (M3-028, PR #TBD; `src/muntin`, `adapters/` and `tests/` are unchanged in it). It decides how a handler answers a `Json[T]` result with a status other than 200. Today `Json[T].to_response()` answers 200, and another status is an edit of the converted `Response` (DX section 5).
+Status: **decision** (M3-028, PR #64; `src/muntin`, `adapters/` and `tests/` are unchanged in it). It decides how a handler answers a `Json[T]` result with a status other than 200. Today `Json[T].to_response()` answers 200, and another status is an edit of the converted `Response` (DX section 5).
 
 **Why this candidate.** The registration and method work SPEC tracked is shipped through M3-027, and AGENT_PROGRESS names no next item. Of SPEC's remaining candidates, `Json(value, status=)` is the smallest user-visible capability: `201 Created` for a `POST` that creates a resource and `202 Accepted` are ordinary JSON API answers, and today each needs a handler declared `-> Response`. M3-008 left it out of its slice and M3-022 deferred it because an application `ToResponse` type answers with any status. What is open is public: the spelling, where the status lives on a type that is also a request body, what a serialization failure answers when a status was chosen, and whether Muntin checks the value.
 
