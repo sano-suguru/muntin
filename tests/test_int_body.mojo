@@ -226,13 +226,15 @@ def test_bad_body_is_400_without_the_handler() raises:
             assert_equal(_count(CONVERSIONS), 0, target + " " + body)
 
 
-def test_unmatched_method_or_path_is_404_without_extraction() raises:
+def test_method_mismatch_is_405_and_unmatched_path_404_without_extraction() raises:
     var app = int_body_app()
     _reset()
     for method in ["PUT", "PATCH", "DELETE"]:
         var response = app.handle(Request(method, "/users/1", "name=Ada"))
-        assert_equal(response.status, 404, method)
-        assert_equal(response.text(), "Not Found", method)
+        assert_equal(response.status, 405, method)
+        assert_equal(response.text(), "Method Not Allowed", method)
+        assert_equal(len(response.headers.get_all("Allow")), 1, method)
+        assert_equal(response.headers.get_all("Allow")[0], "GET, HEAD, POST")
     for target in ["/users/1/x", "/users/", "/missing/1", "/people/1/2"]:
         _expect_post(app, target, "name=Ada", 404, "Not Found")
     assert_equal(_count(FROM_BODY_CALLS), 0)

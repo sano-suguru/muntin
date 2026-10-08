@@ -108,7 +108,10 @@ def test_bare_forms_are_unchanged() raises:
     assert_equal(missing.status, 404)
     _assert_same(missing, app.handle(Request("GET", "/missing")))
     var wrong_method = client.post("/hello", "")
-    assert_equal(wrong_method.status, 404)
+    assert_equal(wrong_method.status, 405)
+    assert_equal(wrong_method.body, "Method Not Allowed")
+    assert_equal(len(wrong_method.headers.get_all("Allow")), 1)
+    assert_equal(wrong_method.headers.get_all("Allow")[0], "GET, HEAD")
     _assert_same(wrong_method, app.handle(Request("POST", "/hello", "")))
 
 

@@ -61,7 +61,8 @@ Unsigned -> Response`, with `Unsigned` defined here and declaring
 `muntin.ToErrorResponse`: the handler echoes the request's method, path,
 query and body as Muntin received them (an empty body and a query a typed
 route would answer 400 included), or raises `Unsigned`, answered 401 by
-`to_error_response` in Muntin. `GET /webhook` is 404. The adapter only
+`to_error_response` in Muntin. `GET /webhook` is 405 with `Allow: POST`
+(M3-031). The adapter only
 carries the request and the final `Response`. Each must equal `TestClient`.
 
 M3-003 registers the stateful `GET /staff/{id}` -> `find_staff(staff:
@@ -143,9 +144,10 @@ echoes the request, on `users_app()`. Flare delivers each method with its
 body unchanged: `PUT` and `PATCH` with a body, `DELETE` without one and, to
 the raw route, with one. Each status and body equals `TestClient`'s new
 method, or `App.handle` for the `DELETE` with a body. A lowercase `delete` is
-400 from Flare's parser before `App.handle`, which would answer it 404: a
+400 from Flare's parser before `App.handle`, which would answer it 405: a
 current backend limit, not Muntin's matching; an unknown uppercase method
-(`FOO`) reaches `App.handle` and is 404. The adapter is unchanged.
+(`FOO`) reaches `App.handle` and is 405 with `Allow`. The adapter is
+unchanged.
 
 M3-025 registers `GET /pages?{size}` -> `page_of(size: Optional[Int])` on
 `users_app()`. Muntin reads an absent key, `size=` and `size` (no `=`) as
@@ -164,6 +166,15 @@ body. Over h2c (the raw client takes the method), a typed route, the raw
 their status and `Content-Length` (Flare's client reads no content for
 `HEAD`, so its empty body is no evidence; `compat/flare/head/head_probe.mojo`
 reads the raw bytes).
+
+M3-031 answers a request whose path a route matches but whose method none
+does 405 `Method Not Allowed` with `Allow`. Over HTTP/1.1 the typed, body,
+method and stateful raw cases above that are now 405 compare `Allow` with
+`App.handle`'s. `headers_app()` gains the raw `POST /form`, the only route on
+its path: `HEAD /form` is 405 with `Allow: POST`, `Content-Length: 18` and no
+content, over h2c (no DATA frame) and over HTTP/1.1 (read as raw bytes); over
+h2c `POST /hello` is 405 with an `allow` equal to `App.handle`'s and the body
+in DATA. A lowercase `head` is still Flare's 400. The adapter is unchanged.
 """
 
 from std.ffi import c_uint, external_call
@@ -504,6 +515,11 @@ def reset_content(var req: Request) -> Response:
     return Response(205, "abc")
 
 
+def form(req: Request) -> Response:
+    """A raw `post` route, the only route on its path (M3-031)."""
+    return Response.text("form")
+
+
 def headers_app() -> App:
     var app = App()
     app.get["/hello"](hello)
@@ -517,6 +533,7 @@ def headers_app() -> App:
     app.get["/report"](report)
     app.get["/nm"](not_modified)
     app.get["/rc"](reset_content)
+    app.post["/form"](form)
     return app^
 
 
@@ -629,6 +646,15 @@ def test_get_hello_over_localhost_matches_test_client() raises:
         waitpid(pid)
 
 
+def _same_allow(wire: List[String], local: Response, at: String) raises:
+    """The `Allow` values on the wire equal `App.handle`'s, in order: one
+    for a 405, none otherwise."""
+    var want = local.headers.get_all("Allow")
+    assert_equal(len(wire), len(want), at)
+    for i in range(len(want)):
+        assert_equal(wire[i], want[i], at)
+
+
 def test_typed_route_over_localhost_matches_test_client() raises:
     var child = _serve_in_child(users_app())
     var base = String("http://127.0.0.1:", child.port)
@@ -644,7 +670,9 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/users/042"), 200, String("42")),
             (String("/users/-7"), 200, String("-7")),
             (String("/users/abc"), 400, String("Bad Request")),
-            (String("/users"), 404, String("Not Found")),
+            # M3-031: a path only routes of other methods match is 405; each
+            # 405 below has `Allow: POST`.
+            (String("/users"), 405, String("Method Not Allowed")),
             (String("/hello"), 200, String("hello")),
             # M2-002: routing sees the path only; the query is extracted by
             # Muntin. "010" -> "items 10" only if the handler got an Int.
@@ -671,7 +699,7 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/stock/3"), 200, String("reserved 3")),
             (String("/stock/abc"), 400, String("Bad Request")),
             # M2-015: the raw route is POST only.
-            (String("/webhook"), 404, String("Not Found")),
+            (String("/webhook"), 405, String("Method Not Allowed")),
             # M3-003: "Person(1, Grace)" only if the handler read its state
             # and got Int(1) from "01"; the 409 is its raise, the 400 a
             # value it never saw.
@@ -679,7 +707,7 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             (String("/staff/0"), 200, String("Person(0, Ada)")),
             (String("/staff/2"), 409, String("out of stock 2")),
             (String("/staff/x"), 400, String("Bad Request")),
-            (String("/staff"), 404, String("Not Found")),
+            (String("/staff"), 405, String("Method Not Allowed")),
             # M3-019: Muntin decodes a route value once, so the backend must
             # pass the target encoded. Decoded twice, "%2541" would be "A",
             # "a%2Fb" would split a segment (404), and "%2534" would be 4.
@@ -721,9 +749,13 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             var local = in_memory.get(path)
             assert_equal(response.status, local.status, path)
             assert_equal(response.text(), local.body, path)
+            _same_allow(response.headers.get_all("allow"), local, path)
+            if want[1] == 405:
+                assert_equal(response.headers.get("allow"), "POST", path)
 
         # M2-006: "created Ada" only if Muntin converted the body; the raw
-        # body is "name=Ada". GET /users above is the wrong method (404).
+        # body is "name=Ada". GET /users above is the wrong method (405).
+        # Each 405 below has `Allow: GET, HEAD`.
         var posts = [
             (String("/users"), String("name=Ada"), 200, String("created Ada")),
             (
@@ -742,8 +774,18 @@ def test_typed_route_over_localhost_matches_test_client() raises:
                 200,
                 String("[ a=b&c?d \n]"),
             ),
-            (String("/users/42"), String("name=Ada"), 404, String("Not Found")),
-            (String("/hello"), String("name=Ada"), 404, String("Not Found")),
+            (
+                String("/users/42"),
+                String("name=Ada"),
+                405,
+                String("Method Not Allowed"),
+            ),
+            (
+                String("/hello"),
+                String("name=Ada"),
+                405,
+                String("Method Not Allowed"),
+            ),
             (String("/missing"), String("name=Ada"), 404, String("Not Found")),
             # M2-008: typed result from a body handler.
             (
@@ -889,6 +931,9 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             var local = in_memory.post(path, body)
             assert_equal(response.status, local.status, path + " " + body)
             assert_equal(response.text(), local.body, path + " " + body)
+            _same_allow(response.headers.get_all("allow"), local, path)
+            if want[2] == 405:
+                assert_equal(response.headers.get("allow"), "GET, HEAD", path)
 
         # M3-021: Flare delivers `PUT`, `PATCH` and `DELETE`, with and
         # without a body, to `App.handle` with the method and body
@@ -951,12 +996,13 @@ def test_typed_route_over_localhost_matches_test_client() raises:
                 202,
                 String("DELETE|/purge|| a=b&c?d \n"),
             ),
+            # M3-031: `Allow: PUT, PATCH, DELETE`.
             (
                 String("POST"),
                 String("/notes/7"),
                 String("name=Ada"),
-                404,
-                String("Not Found"),
+                405,
+                String("Method Not Allowed"),
             ),
         ]
         for want in methods:
@@ -984,26 +1030,33 @@ def test_typed_route_over_localhost_matches_test_client() raises:
                 local = in_memory.delete(path)
             assert_equal(response.status, local.status, at)
             assert_equal(response.text(), local.body, at)
+            _same_allow(response.headers.get_all("allow"), local, at)
+            if want[3] == 405:
+                assert_equal(
+                    response.headers.get("allow"), "PUT, PATCH, DELETE", at
+                )
 
         # A current Flare limit: its HTTP/1.1 parser answers a method with a
         # lowercase letter 400 before `App.handle`, which matches methods
-        # byte for byte and would answer 404.
+        # byte for byte and would answer 405.
         var lowercase = client.send(
             FlareRequest("delete", base + "/notes/7", List[UInt8]())
         )
         print("observed: delete /notes/7", lowercase.status)
         assert_equal(lowercase.status, 400)
-        assert_equal(app.handle(Request("delete", "/notes/7")).status, 404)
+        assert_equal(app.handle(Request("delete", "/notes/7")).status, 405)
         # An unknown uppercase method reaches `App.handle`, which answers it
-        # 404 as it does in memory.
+        # 405 with `Allow` as it does in memory.
         var unknown = client.send(
             FlareRequest("FOO", base + "/notes/7", List[UInt8]())
         )
         print("observed: FOO /notes/7", unknown.status, repr(unknown.text()))
         var local_unknown = app.handle(Request("FOO", "/notes/7"))
-        assert_equal(local_unknown.status, 404)
+        assert_equal(local_unknown.status, 405)
         assert_equal(unknown.status, local_unknown.status)
         assert_equal(unknown.text(), local_unknown.body)
+        _same_allow(unknown.headers.get_all("allow"), local_unknown, "FOO")
+        assert_equal(unknown.headers.get("allow"), "PUT, PATCH, DELETE")
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
@@ -1169,13 +1222,17 @@ def test_stateful_raw_over_localhost_matches_app_handle() raises:
             assert_equal(forged_resp.status, 401, method)
             assert_equal(forged_resp.status, local_forged.status, method)
             assert_equal(forged_resp.text(), local_forged.body, method)
-        # The route is GET and POST only; no other path reaches it.
-        assert_equal(
-            client.send(
-                FlareRequest("PUT", base + "/keyed", List[UInt8]())
-            ).status,
-            404,
+        # The route is GET and POST only: another method on its path is 405
+        # with `App.handle`'s `Allow`, and no other path reaches it.
+        var put = client.send(
+            FlareRequest("PUT", base + "/keyed", List[UInt8]())
         )
+        var local_put = app.handle(Request("PUT", "/keyed"))
+        assert_equal(put.status, 405)
+        assert_equal(put.status, local_put.status)
+        assert_equal(put.text(), local_put.body)
+        _same_allow(put.headers.get_all("allow"), local_put, "PUT /keyed")
+        assert_equal(put.headers.get("allow"), "GET, HEAD, POST")
         assert_equal(client.get(base + "/keyed/x").status, 404)
     finally:
         _ = kill(child.pid, SIGKILL)
@@ -1260,6 +1317,30 @@ def h2_request(
     return (fields_out^, String(from_utf8_lossy=Span(body)), data_frames)
 
 
+def h1_raw(port: Int, method: String, path: String) raises -> String:
+    """One HTTP/1.1 request with `Connection: close` and no body; every byte
+    of the response until the server closes the connection."""
+    var wire = String(
+        method,
+        " ",
+        path,
+        " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.set_recv_timeout(TIMEOUT_MS)
+    stream.write_all(wire.as_bytes())
+    var acc = List[UInt8]()
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    while True:
+        var n = stream.read(buf.unsafe_ptr(), len(buf))
+        if n == 0:
+            break
+        for k in range(n):
+            acc.append(buf[k])
+    return String(from_utf8_lossy=Span(acc))
+
+
 def _h2_fields(fields: List[HpackHeader]) -> String:
     var out = String()
     for f in fields:
@@ -1339,6 +1420,7 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
             (String("/signed/x"), authorized^, 400, String("11")),
             (String("/hello"), invalid_name^, 400, String("11")),
             (String("/missing"), none.copy(), 404, String("9")),
+            (String("/form"), none.copy(), 405, String("18")),
             (String("/nm"), none.copy(), 304, String("")),
             (String("/rc"), none.copy(), 205, String("")),
         ]
@@ -1381,6 +1463,31 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
         var nm_get = h2_request(child.port, "GET", "/nm", none)
         assert_equal(nm_get[1], "abc")
 
+        # M3-031: a method mismatch is 405 with `App.handle`'s `allow`, the
+        # body in DATA; `HEAD` on a path only a `post` route serves is 405
+        # with `allow`, a content-length and no DATA frame.
+        var mismatch = h2_request(child.port, "POST", "/hello", none)
+        var local_mismatch = app.handle(Request("POST", "/hello"))
+        print("observed h2c POST /hello", _h2_fields(mismatch[0]), mismatch[1])
+        assert_equal(local_mismatch.status, 405)
+        assert_equal(
+            _h2_fields(mismatch[0]),
+            ":status=405;allow="
+            + local_mismatch.headers.get("Allow").value()
+            + ";",
+        )
+        assert_equal(_h2_fields(mismatch[0]), ":status=405;allow=GET, HEAD;")
+        assert_equal(mismatch[1], local_mismatch.body)
+        assert_true(mismatch[2] > 0)
+        var head_form = h2_request(child.port, "HEAD", "/form", none)
+        var local_form = app.handle(Request("HEAD", "/form"))
+        assert_equal(local_form.headers.get("Allow").value(), "POST")
+        assert_equal(
+            _h2_fields(head_form[0]),
+            ":status=405;allow=POST;content-length=18;",
+        )
+        assert_equal(head_form[2], 0)
+
         # Over HTTP/1.1, Flare's client reads no content for HEAD whatever
         # is sent, so only status and Content-Length are evidence here; the
         # no-content evidence is compat/flare/head/head_probe.mojo's raw
@@ -1391,6 +1498,7 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
             (String("/hello"), 200, String("5")),
             (String("/report"), 200, String("6")),
             (String("/signed/x"), 400, String("11")),
+            (String("/form"), 405, String("18")),
         ]
         for c in h1_cases:
             var resp = client.head(base + c[0])
@@ -1402,15 +1510,26 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
             )
             assert_equal(resp.status, c[1], c[0])
             assert_equal(resp.headers.get("content-length"), c[2], c[0])
+            var local = app.handle(Request("HEAD", c[0]))
+            _same_allow(resp.headers.get_all("allow"), local, c[0])
+        # The raw bytes of `HEAD /form` over HTTP/1.1: 405, `Allow`, the
+        # length, and nothing after the header block.
+        var raw_head = h1_raw(child.port, "HEAD", "/form")
+        print("observed HTTP/1.1 HEAD /form:", repr(raw_head))
+        assert_true(raw_head.startswith("HTTP/1.1 405 Method Not Allowed\r\n"))
+        assert_true("\r\nAllow: POST\r\n" in raw_head)
+        assert_true("\r\nContent-Length: 18\r\n" in raw_head)
+        assert_true(raw_head.endswith("\r\n\r\n"))
+        assert_equal(raw_head.count("\r\n\r\n"), 1)
         # Only the exact token maps: Flare answers `head` and `Head` 400
-        # before `App.handle`, which would answer them 404.
+        # before `App.handle`, which would answer them 405.
         for method in ["head", "Head"]:
             var other = client.send(
                 FlareRequest(method, base + "/hello", List[UInt8]())
             )
             print("observed:", method, "/hello", other.status)
             assert_equal(other.status, 400, method)
-            assert_equal(app.handle(Request(method, "/hello")).status, 404)
+            assert_equal(app.handle(Request(method, "/hello")).status, 405)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)

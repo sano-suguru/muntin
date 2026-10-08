@@ -1,5 +1,5 @@
 """Socket-free contract tests for the Flare adapter (M1-002; headers M3-005;
-`HEAD` M3-027).
+`HEAD` M3-027; 405 M3-031).
 
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). Every
 dispatch goes through `MuntinHandler.serve`, the entry point Flare's server
@@ -120,13 +120,17 @@ def test_unmatched_path_is_not_found() raises:
     assert_equal(response.text(), "Not Found")
 
 
-def test_unmatched_method_is_not_found() raises:
+def test_unmatched_method_is_405_with_allow() raises:
     var handler = MuntinHandler(app_with_routes())
 
     var response = handler.serve(FlareRequest("POST", "/hello"))
 
-    assert_equal(response.status, 404)
-    assert_equal(response.text(), "Not Found")
+    assert_equal(response.status, 405)
+    assert_equal(response.text(), "Method Not Allowed")
+    # `to_flare_response` keeps `App.handle`'s `Allow` as given.
+    assert_equal(_wire(response), "Allow: GET, HEAD\r\n")
+    var direct = handler.app.handle(Request("POST", "/hello"))
+    assert_equal(_wire(to_flare_response(direct^)), _wire(response))
 
 
 def test_adapter_matches_in_memory_backend() raises:
@@ -371,14 +375,15 @@ def _wire(response: FlareResponse) -> String:
 
 def test_head_sends_get_fields_and_length_without_body() raises:
     var handler = MuntinHandler(head_app())
-    # (target, status): `App.handle`'s answers, its 400 and 404 included,
-    # and `to_flare_response`'s fixed 500.
+    # (target, status): `App.handle`'s answers, its 400, 404 and 405
+    # included, and `to_flare_response`'s fixed 500.
     for want in [
         ("/hello", 200),
         ("/items?limit=010", 200),
         ("/items?limit=abc", 400),
         ("/missing", 404),
-        ("/users", 404),
+        # Only a `post` route serves `/users`: `GET` and `HEAD` are 405.
+        ("/users", 405),
         ("/cl", 202),
         ("/bad-field", 500),
         # Below 100 is not 1xx: the rule declares its length.
@@ -402,6 +407,10 @@ def test_head_sends_get_fields_and_length_without_body() raises:
     assert_equal(_wire(cl), "X-Request-Id: 7\r\nContent-Length: 3\r\n")
     var bad = handler.serve(FlareRequest("HEAD", "/bad-field"))
     assert_equal(_wire(bad), "Content-Length: 21\r\n")
+    var not_allowed = handler.serve(FlareRequest("HEAD", "/users"))
+    assert_equal(not_allowed.status, 405)
+    assert_equal(len(not_allowed.body), 0)
+    assert_equal(_wire(not_allowed), "Allow: POST\r\nContent-Length: 18\r\n")
 
 
 def test_head_declares_no_length_for_statuses_without_content() raises:
@@ -441,13 +450,13 @@ def test_other_methods_keep_their_body() raises:
     var get = handler.serve(FlareRequest("GET", "/cl"))
     assert_equal(get.text(), "abc")
     assert_equal(_wire(get), "X-Request-Id: 7\r\n")
-    # Only the exact token `HEAD` is the rule's: `head` is 404 in `App.handle`
+    # Only the exact token `HEAD` is the rule's: `head` is 405 in `App.handle`
     # and goes out with its body.
     for method in ["head", "Head", "OPTIONS"]:
         var r = handler.serve(FlareRequest(method, "/hello"))
-        assert_equal(r.status, 404, method)
-        assert_equal(r.text(), "Not Found", method)
-        assert_equal(_wire(r), "", method)
+        assert_equal(r.status, 405, method)
+        assert_equal(r.text(), "Method Not Allowed", method)
+        assert_equal(_wire(r), "Allow: GET, HEAD\r\n", method)
     var post = handler.serve(
         FlareRequest("POST", "/users", body=List("name=Ada".as_bytes()))
     )

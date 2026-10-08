@@ -78,13 +78,22 @@ def test_unregistered_path_is_not_found() raises:
     assert_equal(response.status, 404)
 
 
-def test_method_mismatch_is_not_found() raises:
+def _allow(response: Response) raises -> String:
+    """The response's one `Allow` value."""
+    var allow = response.headers.get_all("Allow")
+    assert_equal(len(allow), 1)
+    return allow[0]
+
+
+def test_method_mismatch_is_405_with_allow() raises:
     var app = App()
     app.get["/hello"](hello)
 
     var response = app.handle(Request("POST", "/hello"))
 
-    assert_equal(response.status, 404)
+    assert_equal(response.status, 405)
+    assert_equal(response.text(), "Method Not Allowed")
+    assert_equal(_allow(response), "GET, HEAD")
 
 
 def test_response_text_constructor() raises:
@@ -150,7 +159,9 @@ def test_typed_route_does_not_match_other_paths() raises:
 
     for path in ["/users", "/users/", "/users/42/", "/user/42", "/users/1/2"]:
         assert_equal(client.get(path).status, 404, path)
-    assert_equal(app.handle(Request("POST", "/users/42")).status, 404)
+    var post = app.handle(Request("POST", "/users/42"))
+    assert_equal(post.status, 405)
+    assert_equal(_allow(post), "GET, HEAD")
 
 
 def test_exact_and_typed_routes_share_one_app() raises:
@@ -297,7 +308,9 @@ def test_query_route_does_not_match_other_paths_or_methods() raises:
 
     for target in ["/items/?limit=1", "/item?limit=1", "/items/1?limit=1"]:
         assert_equal(client.get(target).status, 404, target)
-    assert_equal(app.handle(Request("POST", "/items?limit=1")).status, 404)
+    var post = app.handle(Request("POST", "/items?limit=1"))
+    assert_equal(post.status, 405)
+    assert_equal(_allow(post), "GET, HEAD")
 
 
 def test_query_does_not_take_part_in_route_selection() raises:

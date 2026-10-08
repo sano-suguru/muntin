@@ -331,7 +331,11 @@ def test_bad_route_value_is_400_before_the_body() raises:
         var got = client.post(target, "name=cy")
         assert_equal(got.status, 404, target)
         assert_equal(got.body, "Not Found", target)
-    assert_equal(client.get("/users/1").status, 404)
+    var get = client.get("/users/1")
+    assert_equal(get.status, 405)
+    assert_equal(get.body, "Method Not Allowed")
+    assert_equal(len(get.headers.get_all("Allow")), 1)
+    assert_equal(get.headers.get_all("Allow")[0], "POST")
     assert_equal(_calls(users), 0)
     assert_equal(_from_body_calls(), 0)
 
