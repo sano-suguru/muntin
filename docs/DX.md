@@ -507,7 +507,7 @@ Returning a `String` should be convertible to a successful text response by Munt
 
 The parameterized `app.get["/"](...)` syntax is a target because route literals known at compile time may enable better validation. It becomes canonical only after it compiles cleanly on the supported Mojo version.
 
-Status: `app.get["/"](hello)` compiles and dispatches (see "Proven vs. target status"). `app.run()` remains a target: whether Muntin owns a public run/lifecycle API is undecided.
+Status: `app.get["/"](hello)` compiles and dispatches (see "Proven vs. target status"). Serving is decided, not shipped ([Serving entrypoint decision (M3-032)](history/architecture-decisions.md#serving-entrypoint-decision-m3-032)): Muntin core gets no `app.run()`; the Flare adapter module gets `Server` (`Server.bind(host, port)`, then `server.serve(app)`), the next item (M3-033), and this target changes to that spelling once it is proven. There is no supported way to serve an `App` until then.
 
 ## 2. Typed path parameters
 
@@ -1277,7 +1277,7 @@ Status: the handler model of this example is production: `get_user(id: Int) -> U
 - `users` is not a global: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`) and handlers cannot capture. A handler reaches it as `State` (section 8): `def get_user(users: State[Users], id: Int) -> User` registered as `app.get["/users/{id}"](get_user, users)`, and on `post`: `def create_user(users: State[Users], body: CreateUser) -> User` registered as `app.post["/users"](create_user, users)`;
 - there is no `app.run()`.
 
-Derived codecs, list results and `app.run()` are remaining candidates (`docs/SPEC.md`). The closest runnable form today is section 4's JSON example (`Json[CreateUser]` in, `Json[User]` out) with section 8's `State`: JSON request bodies through `TestClient.post(target, body, headers=headers^)` or `App.handle` with the `Content-Type` field set (without it, 415), JSON results through either. A handler that also needs a request field, such as a credential, takes `WithHeaders[Json[CreateUser]]` (section 4).
+Derived codecs and list results are remaining candidates (`docs/SPEC.md`); serving is section 1's status. The closest runnable form today is section 4's JSON example (`Json[CreateUser]` in, `Json[User]` out) with section 8's `State`: JSON request bodies through `TestClient.post(target, body, headers=headers^)` or `App.handle` with the `Content-Type` field set (without it, 415), JSON results through either. A handler that also needs a request field, such as a credential, takes `WithHeaders[Json[CreateUser]]` (section 4).
 
 ## 20. Non-goals
 

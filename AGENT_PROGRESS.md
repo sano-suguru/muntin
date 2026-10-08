@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-No item is named next. Choose one coherent item from `docs/SPEC.md`, "Remaining candidates"; make it a decision item only if it opens a new design question (`docs/DEVELOPMENT.md` section 2). Blockers: none.
+M3-033: `Server` in the Flare adapter, the "Next production slice" of [Serving entrypoint decision (M3-032)](docs/history/architecture-decisions.md#serving-entrypoint-decision-m3-032), as written. Blockers: none.
 
 ## Easy to miss
 

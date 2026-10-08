@@ -106,7 +106,7 @@ Each becomes its own item, a decision item first where it opens a design questio
 - structured errors, including application-level error mappers (rejected on Mojo 1.1.0 by M2-012; its revisit conditions apply);
 - observability hooks, including logging of dropped handler errors;
 - streaming;
-- lifecycle, including whether Muntin owns a public `app.run()` (serving is backend/lifecycle work, not part of the handler model);
+- serving an `App`: decided by [M3-032](history/architecture-decisions.md#serving-entrypoint-decision-m3-032) (`Server` in the Flare adapter module, no core `app.run()`), next item M3-033; graceful shutdown, signal handling, several serving threads and backend configuration are later lifecycle items, each with a revisit condition there;
 - performance benchmarks and allocation profiling.
 
 ## Long-term success criterion
