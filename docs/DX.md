@@ -784,7 +784,7 @@ def create() raises -> Response:
     return r^
 ```
 
-If `write_json` raises (including NaN or infinity, which JSON cannot represent) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`, whatever status was chosen; the handler's `ToErrorResponse` is not called, because the handler did not fail. An edit after `to_response()` applies to that 500 too, so a status set there (`r.status = 201`) would turn the failure into a success status with the body `Internal Server Error`; choose the status with `status=` instead. Why: [JSON response status decision (M3-028)](history/architecture-decisions.md#json-response-status-decision-m3-028).
+If `write_json` raises (including NaN or infinity, which JSON cannot represent) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`, whatever status was chosen; the handler's `ToErrorResponse` is not called, because the handler did not fail. An edit after `to_response()` applies to that 500 too: on a failure, the example above sends the 500 with `Content-Type: application/problem+json`, and a status set there (`r.status = 201`) would turn the failure into a success status with the body `Internal Server Error`; choose the status with `status=` instead. Why: [JSON response status decision (M3-028)](history/architecture-decisions.md#json-response-status-decision-m3-028).
 
 ## 6. Application errors
 

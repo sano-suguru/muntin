@@ -427,6 +427,13 @@ def status_set_after_failure() raises -> Response:
     return r^
 
 
+def media_type_after_failure() raises -> Response:
+    # DX section 5's media-type example, with a value that fails to write.
+    var r = Json(Measurement(Float64(0) / Float64(0)), status=201).to_response()
+    r.headers.set("Content-Type", "application/problem+json")
+    return r^
+
+
 def return_body(var body: Json[Token]) -> Json[Token]:
     # The body `from_body` built is returned as it is: the default status.
     return body^
@@ -486,6 +493,7 @@ def json_app() raises -> App:
     app.get["/explicit-addresses/{id}"](explicit_address)
     app.get["/unvalidated-addresses/{id}"](unvalidated_address)
     app.get["/status-after-failure"](status_set_after_failure)
+    app.get["/media-type-after-failure"](media_type_after_failure)
     app.post["/return-body"](return_body)
     app.post["/tokens-created"](create_token)
     app.post["/staff-tokens"](staff_token, dir)
@@ -1126,6 +1134,14 @@ def test_serialization_failure_ignores_the_chosen_status() raises:
     # A status set after the conversion overwrites the 500 (DX section 5).
     _assert_fixed(
         client.get("/status-after-failure"), 201, "Internal Server Error"
+    )
+    # So does a field set there: the 500 carries it.
+    var m = client.get("/media-type-after-failure")
+    assert_equal(m.status, 500)
+    assert_equal(m.body, "Internal Server Error")
+    assert_equal(len(m.headers), 1)
+    assert_equal(
+        m.headers.get("content-type").value(), "application/problem+json"
     )
 
 
