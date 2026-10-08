@@ -125,7 +125,7 @@ src/muntin/_registration_rules.mojo
                                   _admits;
                                   the rules are evaluated at compile time (_check, _admits); _route also uses _kind, _is_optional
                                   and _path_params, and _Route.__init__ _path_part, _query_items and _param_name, to build route
-                                  metadata at registration; the one per-request part is the _is_param placeholder predicate (_match);
+                                  metadata at registration; the one per-request part is the _is_param outer-shape predicate (_match);
                                   imported by app.mojo; imports only the types it classifies (.http, .body, .headers_body, .state)
 src/muntin/state.mojo             State[S]; private marker _InjectedState
 src/muntin/json.mojo              Json[T], FromJson, ToJson, JsonValue, JsonWriter; private parser, limits, _JsonBody

@@ -10,17 +10,17 @@ one Bool, guards the adapter's instantiation.
 The route-literal grammar is the primitives `_split_literal` (the path and
 query parts, at the first `?`); `_path_part` (the path part) and `_query_items`
 (the query part split at `&`), which read that split; `_is_param` (whether a
-segment or item is `{`, a non-empty name, `}`); and `_param_name` (the name
-between the braces of one that is). `_is_param` recognizes the brace shape and
-`_param_name` strips it, so both know it; a test checks that they agree. The
-rules' parsers (`_path_params`, `_query_params`, `_distinct_query_keys`)
-validate and count through them at compile time, and `_route` in `app.mojo`
-also calls `_path_params` at registration; `_Route.__init__` in `app.mojo`
-splits a literal into its matched path and query keys through `_path_part`,
-`_query_items` and `_param_name` at registration; and `_match` in `app.mojo`
-classifies each route segment with `_is_param` per request. The `/` segment
-separator is written both in `_path_params` and in `_match`, which splits the
-request path with it too.
+segment or item has a placeholder's outer shape: `{`, a non-empty interior,
+`}`); and `_param_name` (the text between those braces). `_is_param` recognizes
+the brace shape and `_param_name` strips it, so both know it; a test checks
+that they agree. The rules' parsers (`_path_params`, `_query_params`,
+`_distinct_query_keys`) validate and count through them at compile time, and
+`_route` in `app.mojo` also calls `_path_params` at registration;
+`_Route.__init__` in `app.mojo` splits a literal into its matched path and
+query keys through `_path_part`, `_query_items` and `_param_name` at
+registration; and `_match` in `app.mojo` classifies each route segment with
+`_is_param` per request. The `/` segment separator is written both in
+`_path_params` and in `_match`, which splits the request path with it too.
 """
 
 from .body import FromBody
@@ -58,8 +58,8 @@ def _query_items(route: StaticString) -> List[StaticString]:
 
 
 def _is_param(segment: StringSlice) -> Bool:
-    """Whether a path segment or query item is a placeholder: `{`, a
-    non-empty name, `}`.
+    """Whether a path segment or query item has a placeholder's outer shape:
+    `{`, a non-empty interior, `}`; the parsers check the rest of validity.
 
     The classification the registration rules' parsers (`_path_params`,
     `_query_params`) and `_match` (for every request) share, so registration
@@ -72,8 +72,8 @@ def _is_param(segment: StringSlice) -> Bool:
 
 
 def _param_name(item: StaticString) -> StaticString:
-    """The name of a placeholder (`_is_param` holds): the text between its
-    braces."""
+    """The text between the outer braces of an item `_is_param` accepts: a
+    placeholder's name once the parsers accepted it."""
     return item[byte = 1 : item.byte_length() - 1]
 
 
