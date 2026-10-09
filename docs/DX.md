@@ -275,10 +275,11 @@ Semantics:
 - `TestClient.put(target, body)`, `.patch(target, body)` and `.delete(target)` send `PUT`, `PATCH` and `DELETE` through `App.handle` (section 10); `delete` sends an empty body.
 - Through Flare, a method with a lowercase letter (`delete`) is 400 from Flare before `App.handle`, which would answer 405 or 404 as for any method no route has (`docs/ARCHITECTURE.md`, "Other current limits").
 
-`HEAD`, proven by `tests/test_head.mojo` (which runs this example as written), `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo` and `compat/flare/head/head_probe.mojo` (via `./scripts/check_flare.sh`). A `get` route answers `HEAD`; there is no `app.head`:
+`HEAD`, proven by `tests/test_head.mojo` (which runs this example as written), `tests/test_testclient_head.mojo` (`TestClient.head`), `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo` and `compat/flare/head/head_probe.mojo` (via `./scripts/check_flare.sh`). A `get` route answers `HEAD`; there is no `app.head`:
 
 ```mojo
 from muntin import App, Request, Response
+from muntin.testing import TestClient
 
 
 def show_user(id: Int) -> String:
@@ -304,14 +305,14 @@ app.delete["/cache/{id}"](drop)
 # head /users/7, OPTIONS /users/7 -> 405 "Method Not Allowed", Allow: GET, HEAD
 # HEAD /missing   -> 404 "Not Found"
 
-var head = app.handle(Request("HEAD", "/users/7"))  # no TestClient.head
+var head = TestClient(app).head("/users/7")  # = app.handle(Request("HEAD", "/users/7"))
 # head.status == 200, head.text() == "user 7": the in-memory response keeps the body
 ```
 
 - A `HEAD` request is answered by the first route, in registration order, whose method is `GET` and whose path matches: route values, the `Headers` parameter, `State`, the handler, the result or error conversion and the 400/404/500 order all run as for `GET`. A typed handler gets the `GET`'s arguments, so `App.handle` returns the `GET`'s status, fields and body; a raw handler receives the `HEAD` request (below). A route of another method on the path is skipped, as for any method. Only the exact token `HEAD` maps: `head` and `Head` are answered as any method no route has, 405 on a path some route matches (through Flare they are 400 before `App.handle`, as `delete` is). `HEAD` on a path no `get` route matches is 405 with `Allow` when a route of another method matches it, and 404 otherwise.
 - The backend keeps the content off the wire. A network backend sends the response's status and fields with no content and declares a `Content-Length` equal to the byte length of the body it would send for the `GET` (the one `App.handle` returned, or the backend's own answer), or none for a status that never carries content (1xx, 204, 205, 304). The Flare adapter applies this to every answer it sends for `HEAD`, its own 400 and 500 included, over HTTP/1.1 and cleartext HTTP/2; over HTTP/1.1 Flare itself still frames a 205 or 304 with `Content-Length: 0`. A handler's own `Content-Length` is dropped, as for every method. Why: [HEAD decision (M3-026)](history/architecture-decisions.md#head-decision-m3-026).
 - A typed handler cannot tell `HEAD` from `GET`: it receives the same arguments. A raw `get` handler receives the request as sent, `req.method == "HEAD"`, and must answer it with the body it would give `GET`: the backend declares the length of the body the handler returned, so a shorter body for `HEAD` (to skip work) sends a wrong `Content-Length`. Muntin cannot check this.
-- Testing: `TestClient` has no `head`; a test builds `Request("HEAD", target)` and calls `app.handle`, and the response has the body a network backend does not send. Decided, not shipped ([TestClient HEAD decision (M3-036)](history/architecture-decisions.md#testclient-head-decision-m3-036)): `TestClient.head(target, *, headers=)` will return that same response, body included.
+- Testing: `TestClient(app).head(target)` sends `HEAD` and returns `app.handle(Request("HEAD", target))` unchanged, its body included: the in-memory response, not what a network backend sends (section 10). Its body is the `GET`'s only when the route and every middleware answer `HEAD` as `GET`; a raw handler or middleware that answers `HEAD` with another body gets that body back, which is how a test sees the length a network backend would declare.
 - Cost: every `HEAD` computes and converts the whole `GET` body for the backend to drop.
 
 405 `Method Not Allowed`, proven by `tests/test_method_not_allowed.mojo` (which runs this example as written), `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`. A request whose path a route matches, when no route on that path has its method, is Muntin's own 405 with an `Allow` field:
@@ -897,7 +898,7 @@ app.get["/users/{id}"](get_user)
 
 Middleware should be able to inspect a request, short-circuit, call the next layer, inspect/modify a response, and attach request-scoped typed context. The public middleware contract must be Muntin-owned even if an adapter internally translates to a backend-specific mechanism.
 
-Status: production, proven by `tests/test_middleware.mojo` (through `TestClient`, except `HEAD`, which goes through `App.handle` because `TestClient` has no `head`; it runs the example below as written), `tests/middleware_api_fail/` (via `./scripts/check.sh`) and, over real loopback connections through Flare's `Server` (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`. Middleware is a function (why: [Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034)):
+Status: production, proven by `tests/test_middleware.mojo` (through `TestClient`, `HEAD` through `TestClient.head`; it runs the example below as written), `tests/test_testclient_head.mojo` (`HEAD` through middleware: seen as `HEAD`, a field added, a short circuit, a replaced 404), `tests/middleware_api_fail/` (via `./scripts/check.sh`) and, over real loopback connections through Flare's `Server` (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`. Middleware is a function (why: [Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034)):
 
 ```mojo
 from muntin import App, Next, Request, Response
@@ -1070,7 +1071,7 @@ app.post["/webhook"](webhook)
 - `add(name, value)` appends; `set(name, value)` removes every field with that name, then appends. Both raise on a name that is not an RFC 9110 token, or on a value with a control byte (other than HTAB) or SP/HTAB at either end. In a raising handler that error is the fixed 500, or its `ToErrorResponse`. Code that must not raise, such as `to_response`, wraps `add` in `try`.
 - `Request` has `headers` (as the backend received them); `Request(method, target, body, headers^)` builds one, and existing calls without headers are unchanged. `Response` has `headers`, empty from `Response(status, body)` and `Response.text`: Muntin adds no `Content-Type` or other default field.
 - Raw handlers read `req.headers` (a `var req` handler owns a copy it may change) and set fields on the `Response` they return. Typed `post`, `put` and `patch` handlers read them through a `WithHeaders[B]` body (section 4), typed `get` and `delete` handlers through a `Headers` parameter (below). A typed result sets fields through the `Response` its `to_response` builds. `String` results set none.
-- `TestClient.get`, `.post`, `.put`, `.patch` and `.delete` send the fields passed as `headers=` and none otherwise (section 10); a test may also build `Request(..., headers^)` and call `app.handle`, the same seam.
+- `TestClient.get`, `.head`, `.post`, `.put`, `.patch` and `.delete` send the fields passed as `headers=` and none otherwise (section 10); a test may also build `Request(..., headers^)` and call `app.handle`, the same seam.
 - Through Flare, a request field Muntin cannot represent is answered 400 before the handler: over HTTP/2 Flare admits a name that is not a token (`x-user/admin`), a control byte in a value and a value that is not UTF-8. Fields the backend owns or that are connection-specific (`Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`, `TE`, `Trailer`), and any field a `Connection` value names, are not written to the wire; they stay in the in-memory `Response`. Over HTTP/2, names go out lowercase. Header values are text: Flare answers 400 to an HTTP/1.1 header byte ≥ 0x80 itself.
 
 Semantics:
@@ -1153,7 +1154,7 @@ def test_hello():
 
 The in-memory path must execute the same Muntin application dispatch seam used by real transports. This is an architecture proof, not merely test convenience.
 
-Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)`, `TestClient.post(target, body)`, `TestClient.put(target, body)`, `TestClient.patch(target, body)` and `TestClient.delete(target)` build a Muntin `Request` and call `App.handle`, the same entry point network adapters use (`delete` with an empty body; a test that sends a `DELETE` body builds the `Request` and calls `app.handle`). Each takes the request's header fields as a keyword-only, defaulted argument, moved into the `Request` as `Request`'s initializer takes them (proven by `tests/test_testclient_headers.mojo`, `tests/test_methods.mojo`, `tests/testclient_headers_api_fail/` and `tests/methods_api_fail/`, via `./scripts/check.sh`):
+Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)`, `TestClient.head(target)`, `TestClient.post(target, body)`, `TestClient.put(target, body)`, `TestClient.patch(target, body)` and `TestClient.delete(target)` build a Muntin `Request` and call `App.handle`, the same entry point network adapters use (`head` and `delete` with an empty body; a test that sends a `HEAD` or `DELETE` body builds the `Request` and calls `app.handle`). Each takes the request's header fields as a keyword-only, defaulted argument, moved into the `Request` as `Request`'s initializer takes them (proven by `tests/test_testclient_headers.mojo`, `tests/test_methods.mojo`, `tests/test_testclient_head.mojo`, `tests/testclient_headers_api_fail/` and `tests/methods_api_fail/`, via `./scripts/check.sh`):
 
 ```mojo
 var headers = Headers()
@@ -1164,9 +1165,9 @@ _ = client.get("/echo")                             # no fields
 ```
 
 - The client builds `Request(method, target, body, headers^)` and nothing else: it adds, removes, inspects or merges no field, so its answer equals `app.handle(Request(...))` built from the same method, target and body and a `Headers` value with the same fields. Fields keep their order, casing and repeats, and an empty value is sent as a value.
-- `headers=` is keyword-only: a positional `Headers` after the target or the body is `invalid call to 'get'` (or `'post'`, `'put'`, `'patch'`, `'delete'`): `unexpected argument`. A plain variable is `cannot be implicitly copied` (pass `headers^` or `headers.copy()`), and using it after `^` is `use of uninitialized value`. Each call without `headers=` sends none; the client keeps no per-client fields.
+- `headers=` is keyword-only: a positional `Headers` after the target or the body is `invalid call to 'get'` (or `'head'`, `'post'`, `'put'`, `'patch'`, `'delete'`): `unexpected argument`. A plain variable is `cannot be implicitly copied` (pass `headers^` or `headers.copy()`), and using it after `^` is `use of uninitialized value`. Each call without `headers=` sends none; the client keeps no per-client fields.
 - Building `Headers` raises (`add` validates), so a test that sends fields runs in a raising context.
-- `HEAD` has no `TestClient` method: a test builds `Request("HEAD", target)` and calls `app.handle`. The response is `App.handle`'s, body included (the `GET`'s when the route and middleware answer `HEAD` as `GET`); a network backend sends no content ("`HEAD`" in "Proven vs. target status"). Decided, not shipped ([TestClient HEAD decision (M3-036)](history/architecture-decisions.md#testclient-head-decision-m3-036)): `TestClient.head(target, *, headers=)`, returning `App.handle`'s answer unchanged.
+- `TestClient.head(target)` sends `HEAD`: a raw `get` handler sees `req.method == "HEAD"`, middleware `request.method == "HEAD"`. It returns `App.handle`'s answer unchanged, as every method does: the status, every field and the body, which is the `GET`'s when the route and every middleware answer `HEAD` as `GET`, and otherwise whatever they returned. It applies no wire rule: it removes no body and declares no `Content-Length`, for 204, 205 and 304 too, and keeps a `Content-Length` a handler set. On the wire a network backend sends the status and fields without content and declares the length itself ("`HEAD`" in "Proven vs. target status"); a test of that goes through the backend (`adapters/flare`). Why: [TestClient HEAD decision (M3-036)](history/architecture-decisions.md#testclient-head-decision-m3-036).
 
 ## 11. Transport independence
 

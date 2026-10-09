@@ -21,6 +21,17 @@ struct TestClient[origin: Origin[mut=False]]:
         default."""
         return self._app[].handle(Request("GET", target, "", headers^))
 
+    def head(
+        self, target: String, *, var headers: Headers = Headers()
+    ) -> Response:
+        """Sends `HEAD target` with an empty body, as `get` sends `GET`, and
+        returns `App.handle`'s `Response` unchanged, its body included: the
+        `GET`'s only when the route and every middleware answer `HEAD` as
+        `GET`. Keeping the content off the wire and declaring its length is
+        the network backend's; this client removes no body and adds no
+        field."""
+        return self._app[].handle(Request("HEAD", target, "", headers^))
+
     def post(
         self,
         target: String,

@@ -25,6 +25,7 @@ from muntin import (
     ToErrorResponse,
     ToJson,
 )
+from muntin.testing import TestClient
 
 
 # Application types.
@@ -374,9 +375,13 @@ def test_dx_example() raises:
         assert_equal(row[0].headers.get_all("Allow")[0], row[1])
     assert_equal(app.handle(Request("DELETE", "/cache/1")).body, "dropped 1")
 
-    var head = app.handle(Request("HEAD", "/users/7"))  # no TestClient.head
+    var head = TestClient(app).head("/users/7")
     assert_equal(head.status, 200)
     assert_equal(head.text(), "user 7")
+    var handled = app.handle(Request("HEAD", "/users/7"))
+    assert_equal(head.status, handled.status)
+    assert_equal(head.body, handled.body)
+    assert_equal(_dump(head.headers), _dump(handled.headers))
 
 
 def main() raises:
