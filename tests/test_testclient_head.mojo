@@ -6,8 +6,8 @@
 # network backend's (adapters/flare). Every answer here is compared with
 # `App.handle` for the same request. Contract:
 # docs/history/architecture-decisions.md, "TestClient HEAD decision
-# (M3-036)", "Next production slice"; semantics: docs/DX.md sections 4 and
-# 10. Must-not-build evidence: tests/methods_api_fail/testclient_head_*.
+# (M3-036)", "Next production slice"; semantics: docs/DX.md, "`HEAD`" in
+# "Proven vs. target status", and section 10. Must-not-build evidence: tests/methods_api_fail/testclient_head_*.
 
 from std.memory import ArcPointer
 from std.testing import assert_equal, assert_true, TestSuite
@@ -211,6 +211,7 @@ def test_head_is_app_handle_unchanged() raises:
     )
     # Muntin's own answers, each with its body.
     _ = _expect(app, "/users/abc", 400, "Bad Request", "", h)
+    _ = _expect(app, "/count/abc", 400, "Bad Request", "", h)
     _ = _expect(app, "/fields/3", 400, "Bad Request", "", h)
     _ = _expect(app, "/missing", 404, "Not Found", "", h)
     _ = _expect(
@@ -218,7 +219,7 @@ def test_head_is_app_handle_unchanged() raises:
     )
     _ = _expect(app, "/fail", 500, "Internal Server Error", "", h)
     # `_expect` sends each request twice (`head`, then `App.handle`): `/count/5`
-    # ran twice, and no 400 reached a handler.
+    # ran twice, and `/count/abc`'s 400 never reached its handler.
     assert_equal(calls[].n[], 2)
 
 
