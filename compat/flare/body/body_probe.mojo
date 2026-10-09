@@ -361,14 +361,18 @@ def test_from_utf8_raises_exactly_where_text_replaces() raises:
         assert_equal(lossy, c.text, c.name)
         # `text()` changes exactly the bodies that are not UTF-8.
         assert_equal(lossy == hex(Span(c.bytes)), c.utf8, c.name)
+        # Only the conversion is inside `try`: an assertion that fails must
+        # not count as the conversion raising.
         var raised = False
+        var converted = String()
         try:
-            var s = String(from_utf8=Span(c.bytes))
-            assert_equal(hex(s.as_bytes()), hex(Span(c.bytes)), c.name)
-            assert_equal(s.byte_length(), len(c.bytes), c.name)
+            converted = String(from_utf8=Span(c.bytes))
         except:
             raised = True
         assert_equal(raised, not c.utf8, c.name)
+        if not raised:
+            assert_equal(hex(converted.as_bytes()), hex(Span(c.bytes)), c.name)
+            assert_equal(converted.byte_length(), len(c.bytes), c.name)
 
 
 def main() raises:
