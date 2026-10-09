@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-M3-038 (request body bytes: [Request body bytes decision (M3-038)](docs/history/architecture-decisions.md#request-body-bytes-decision-m3-038), decided and implemented in one item) is implemented on this branch and complete when its pull request merges. Next: no item is named next. Choose one coherent item from `docs/SPEC.md`, "Remaining candidates"; make it a decision item only if it opens a new design question (`docs/DEVELOPMENT.md` section 2). Blockers: none.
+M3-038 (request body bytes: [Request body bytes decision (M3-038)](docs/history/architecture-decisions.md#request-body-bytes-decision-m3-038), decided and implemented in one item) is implemented on this branch and complete when its pull request merges. Next: the request target over h2c (`docs/ARCHITECTURE.md`, "Other current limits", the known defect): Flare v0.12.0 passes target and method bytes that are not UTF-8 through, and one such target aborts the serving process. It is request data Muntin cannot represent, as M3-005's header fields and M3-038's bodies are; decide whether it follows their rule (the adapter's 400 before `App.handle`) as a decision item, since it changes what goes on the wire. Blockers: none.
 
 ## Easy to miss
 
@@ -16,7 +16,7 @@ M3-038 (request body bytes: [Request body bytes decision (M3-038)](docs/history/
 - `check_unsafe.sh` requires exactly one `rebind_var[` in `src/muntin`, comments included: write "the rebind" in prose.
 - `check_flare.sh` builds the two binaries that reach Flare's `HttpClient` (the round trip and the JSON probe) without `--Werror`, because Flare v0.12.0 warns on one line of its own source (`KNOWN_WARNING`). Any other warning fails them, and so does that warning disappearing: then build them with `--Werror` again. Every other build in that parallel step is `--Werror`.
 - The Flare adapter has two handlers, `MuntinHandler` (owns the `App`; the adapter's tests and probes) and the private `_BorrowedHandler` (`Server.serve`), and both answer only through `_serve_app`: an adapter answer change goes there, and the loopback suite, which serves through `Server`, then covers the borrowed path. `_BorrowedHandler` stays non-`Copyable` (`compat/flare/serve/server_handler_not_copyable.mojo`).
-- The Flare adapter builds `Request.body` from Flare's raw `request.body` bytes with `String(from_utf8=)`, and a body that is not UTF-8 is its 400 before `App.handle` (M3-038). Never use Flare's `Request.text()` (or `from_utf8_lossy`) on request data: it replaces bytes with U+FFFD silently. Bodies are still text; binary bodies are M3-038's candidate B, not shipped.
+- The Flare adapter builds `Request.body` from Flare's raw `request.body` bytes with `String(from_utf8=)`, and a body that is not UTF-8 is its 400 before `App.handle` (M3-038). No lossy conversion may decide what reaches `App.handle`: Flare's `Request.text()` replaces bytes with U+FFFD silently (`to_muntin_headers` decodes lossily only to parse, then checks every field against Flare's own view). Bodies are still text; binary bodies are M3-038's candidate B, not shipped.
 - `TestClient` adds no header field: a JSON body route answers `client.post(target, body)` (or `put`, `patch`) with 415 unless the test passes `headers=`. `TestClient.head` and `.delete` send an empty body; a test that needs a `HEAD` or `DELETE` body builds the `Request` and calls `App.handle`.
 
 ## Temporary watch

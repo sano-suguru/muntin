@@ -2086,6 +2086,7 @@ def test_request_body_bytes_over_http1_and_h2c() raises:
             assert_equal(t1[0], "HTTP/1.1 200 OK", name)
             assert_true(_same_bytes(Span(t1[2]), Span(bracketed)), name)
             var t2 = h2_exchange(child.port, "POST", "/echo", octets, body)
+            assert_equal(t2[0][0].value, "200", name)
             assert_true(_same_bytes(Span(t2[1]), Span(bracketed)), name)
         for c in refused:
             var name = c[0]
@@ -2152,6 +2153,8 @@ def test_request_body_bytes_over_http1_and_h2c() raises:
             String(from_utf8_lossy=Span(b1[2])),
         )
         assert_equal(b1[0], "HTTP/1.1 400 Bad Request")
+        # The adapter's 400, not App.handle's: no middleware field.
+        assert_equal(b1[1], "Content-Length: 11;Connection: close;")
         assert_equal(String(from_utf8=Span(b1[2])), "Bad Request")
         var b2 = h2_exchange(child.port, "POST", "/greet", json, bad_json)
         print(

@@ -15,12 +15,15 @@ HTTP/1.1 (a raw `TcpStream` request with `Content-Length` and
 `Connection: close`) and over cleartext HTTP/2 with prior knowledge (one
 HEADERS frame, then one DATA frame carrying the body with END_STREAM; an
 empty body is a HEADERS frame with END_STREAM). Each body in `cases()` is
-sent on both protocols.
+sent on both protocols; a body in pieces is also sent chunked over
+HTTP/1.1 and in two DATA frames over h2c.
 
 Observations:
 - Flare delivers every body to the handler, on both protocols: none of them
   is answered by Flare itself, the ones that are not UTF-8 included;
-- `Request.body` holds exactly the bytes sent, on both protocols;
+- `Request.body` holds exactly the bytes sent, on both protocols, also when
+  they arrive in pieces (chunked, or several DATA frames) that split a code
+  point;
 - `Request.text()` replaces each maximal ill-formed subpart with U+FFFD
   (`EF BF BD`), so a sent U+FFFD and a replaced byte give the same text;
 - Mojo 1.1.0's `String(from_utf8=)` raises on exactly the bodies `text()`
@@ -157,19 +160,9 @@ def _serve() raises -> _Child:
     return _Child(pid, port)
 
 
-def h1_post(port: UInt16, body: List[UInt8]) raises -> Tuple[String, String]:
-    """`POST /p` over HTTP/1.1 with `body`; the status line and the response
-    body (ASCII here) after the blank line."""
-    var head = String(
-        (
-            "POST /p HTTP/1.1\r\nHost: probe\r\nContent-Type:"
-            " application/octet-stream\r\nContent-Length: "
-        ),
-        len(body),
-        "\r\nConnection: close\r\n\r\n",
-    )
-    var wire = List(head.as_bytes())
-    wire.extend(Span(body))
+def _h1_send(port: UInt16, wire: List[UInt8]) raises -> Tuple[String, String]:
+    """Sends `wire` and returns the response's status line and body (ASCII
+    here) after the blank line, read until the server closes."""
     var stream = TcpStream.connect(SocketAddr.localhost(port))
     stream.set_recv_timeout(TIMEOUT_MS)
     stream.write_all(Span[UInt8, _](wire))
@@ -190,6 +183,44 @@ def h1_post(port: UInt16, body: List[UInt8]) raises -> Tuple[String, String]:
     return (String(text[byte=:line_end]), String(text[byte = blank + 4 :]))
 
 
+def h1_post(port: UInt16, body: List[UInt8]) raises -> Tuple[String, String]:
+    """`POST /p` over HTTP/1.1 with `body` and `Content-Length`."""
+    var head = String(
+        (
+            "POST /p HTTP/1.1\r\nHost: probe\r\nContent-Type:"
+            " application/octet-stream\r\nContent-Length: "
+        ),
+        len(body),
+        "\r\nConnection: close\r\n\r\n",
+    )
+    var wire = List(head.as_bytes())
+    wire.extend(Span(body))
+    return _h1_send(port, wire)
+
+
+def h1_post_chunked(
+    port: UInt16, chunks: List[List[UInt8]]
+) raises -> Tuple[String, String]:
+    """`POST /p` over HTTP/1.1 with `Transfer-Encoding: chunked`, one chunk
+    per element of `chunks`."""
+    var wire = List(
+        String(
+            "POST /p HTTP/1.1\r\nHost: probe\r\nTransfer-Encoding:"
+            " chunked\r\nConnection: close\r\n\r\n"
+        ).as_bytes()
+    )
+    var digits = "0123456789abcdef"
+    for c in chunks:
+        wire.extend(Span(List(String(digits[byte=len(c)]).as_bytes())))
+        wire.append(13)
+        wire.append(10)
+        wire.extend(Span(c))
+        wire.append(13)
+        wire.append(10)
+    wire.extend(Span(List(String("0\r\n\r\n").as_bytes())))
+    return _h1_send(port, wire)
+
+
 def _frame(
     typ: FrameType, flags: UInt8, sid: Int, var payload: List[UInt8]
 ) -> List[UInt8]:
@@ -202,8 +233,20 @@ def _frame(
 
 
 def h2_post(port: UInt16, body: List[UInt8]) raises -> Tuple[String, String]:
-    """`POST /p` over h2c on stream 1 with `body` in one DATA frame; the
-    `:status` value and the response body."""
+    """`POST /p` over h2c on stream 1 with `body` in one DATA frame (none
+    when empty); the `:status` value and the response body."""
+    var frames = List[List[UInt8]]()
+    if len(body) > 0:
+        frames.append(body.copy())
+    return h2_post_frames(port, frames)
+
+
+def h2_post_frames(
+    port: UInt16, frames: List[List[UInt8]]
+) raises -> Tuple[String, String]:
+    """`POST /p` over h2c on stream 1 with one DATA frame per element of
+    `frames`, the last carrying END_STREAM (with none, the HEADERS frame
+    carries it)."""
     var hdrs = List[HpackHeader]()
     hdrs.append(HpackHeader(":method", "POST"))
     hdrs.append(HpackHeader(":scheme", "http"))
@@ -213,30 +256,19 @@ def h2_post(port: UInt16, body: List[UInt8]) raises -> Tuple[String, String]:
     var block = HpackEncoder().encode(Span[HpackHeader, _](hdrs))
     var wire = List(H2_PREFACE.as_bytes())
     wire.extend(Span(_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
-    if len(body) == 0:
-        wire.extend(
-            Span(
-                _frame(
-                    FrameType.HEADERS(),
-                    FrameFlags.END_HEADERS() | FrameFlags.END_STREAM(),
-                    1,
-                    block^,
-                )
+    var end = FrameFlags.END_STREAM() if len(frames) == 0 else UInt8(0)
+    wire.extend(
+        Span(
+            _frame(
+                FrameType.HEADERS(), FrameFlags.END_HEADERS() | end, 1, block^
             )
         )
-    else:
-        wire.extend(
-            Span(
-                _frame(FrameType.HEADERS(), FrameFlags.END_HEADERS(), 1, block^)
-            )
+    )
+    for i in range(len(frames)):
+        var flags = FrameFlags.END_STREAM() if i == len(frames) - 1 else UInt8(
+            0
         )
-        wire.extend(
-            Span(
-                _frame(
-                    FrameType.DATA(), FrameFlags.END_STREAM(), 1, body.copy()
-                )
-            )
-        )
+        wire.extend(Span(_frame(FrameType.DATA(), flags, 1, frames[i].copy())))
     var stream = TcpStream.connect(SocketAddr.localhost(port))
     stream.set_recv_timeout(TIMEOUT_MS)
     stream.write_all(Span[UInt8, _](wire))
@@ -287,6 +319,34 @@ def test_flare_delivers_every_body_unchanged() raises:
             print("observed h2c", c.name + ":", h2[0], h2[1])
             assert_equal(h2[0], "200", c.name)
             assert_equal(h2[1], expected, c.name)
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+def test_flare_reassembles_framed_bodies() raises:
+    """A body sent in several pieces, a code point split across two: chunked
+    over HTTP/1.1, two DATA frames over h2c. `Request.body` is the bytes
+    joined; framing replaces nothing."""
+    var child = _serve()
+    try:
+        # "hé" with é (C3 A9) split, then a piece that is not UTF-8.
+        var kept: List[List[UInt8]] = [_bytes([0x68, 0xC3]), _bytes([0xA9])]
+        var refused: List[List[UInt8]] = [_bytes([0xC3]), _bytes([0xFF])]
+        var c1 = h1_post_chunked(child.port, kept)
+        print("observed HTTP/1.1 chunked kept:", c1[0], c1[1])
+        assert_equal(c1[0], "HTTP/1.1 200 OK")
+        assert_equal(c1[1], "raw=68c3a9;text=68c3a9")
+        var c2 = h1_post_chunked(child.port, refused)
+        print("observed HTTP/1.1 chunked refused:", c2[0], c2[1])
+        assert_equal(c2[1], "raw=c3ff;text=efbfbdefbfbd")
+        var d1 = h2_post_frames(child.port, kept)
+        print("observed h2c two DATA kept:", d1[0], d1[1])
+        assert_equal(d1[0], "200")
+        assert_equal(d1[1], "raw=68c3a9;text=68c3a9")
+        var d2 = h2_post_frames(child.port, refused)
+        print("observed h2c two DATA refused:", d2[0], d2[1])
+        assert_equal(d2[1], "raw=c3ff;text=efbfbdefbfbd")
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
