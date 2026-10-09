@@ -184,6 +184,21 @@ HTTP/1.1 and over h2c, `GET /hello` and the 404 carry the field, and
 5 and no content (no DATA frame over h2c; over HTTP/1.1 read as raw bytes),
 so the adapter's `HEAD` step applies to the middleware's answer. The adapter
 is unchanged.
+
+M3-038 serves `bodies_app()` (middleware adding `X-Seen: 1`, a raw
+`POST /bytes` answering the hex of the body bytes it received, a raw
+`POST /echo-raw` answering its body unchanged, the typed `POST /echo`, the
+JSON `POST /greet` and `GET /hello`) and sends request bodies with raw
+clients over HTTP/1.1 (`h1_exchange`) and h2c (`h2_exchange`, the body in
+one DATA frame), reading the response bytes unparsed. A well-formed UTF-8
+body (a U+FFFD the client sent, NUL, empty and an octet stream that happens
+to be UTF-8 included) reaches `App.handle` byte for byte, equal to
+`App.handle`'s answer, and comes back unchanged; a body that is not UTF-8
+(`0x80`, `0xFF`, truncated, overlong, a surrogate, a sent U+FFFD then
+`0xFF`, the PNG signature) is the adapter's 400 before `App.handle` on a
+route, a 405 path and a 404 path, without the middleware's field, and
+under the `HEAD` rule over h2c; the JSON route parses a sent U+FFFD and
+answers 400 to a `0xFF` it parsed as U+FFFD before.
 """
 
 from std.ffi import c_uint, external_call
@@ -1321,6 +1336,19 @@ def h2_request(
     """One request over cleartext HTTP/2 (prior knowledge) on stream 1: the
     response's decoded header fields (`:status` first), its body and the
     number of DATA frames it came in (an empty DATA frame counts)."""
+    var got = h2_exchange(port, method, path, fields, List[UInt8]())
+    return (got[0].copy(), String(from_utf8_lossy=Span(got[1])), got[2])
+
+
+def h2_exchange(
+    port: Int,
+    method: String,
+    path: String,
+    fields: List[Tuple[String, String]],
+    body: List[UInt8],
+) raises -> Tuple[List[HpackHeader], List[UInt8], Int]:
+    """As `h2_request`, with `body` sent in one DATA frame after the HEADERS
+    frame (none when empty) and the response body returned as bytes."""
     var hdrs = List[HpackHeader]()
     hdrs.append(HpackHeader(":method", method))
     hdrs.append(HpackHeader(":scheme", "http"))
@@ -1331,16 +1359,22 @@ def h2_request(
     var block = HpackEncoder().encode(Span[HpackHeader, _](hdrs))
     var wire = List(H2_PREFACE.as_bytes())
     wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
+    var end = FrameFlags.END_STREAM() if len(body) == 0 else UInt8(0)
     wire.extend(
         Span(
             _h2_frame(
-                FrameType.HEADERS(),
-                FrameFlags.END_HEADERS() | FrameFlags.END_STREAM(),
-                1,
-                block^,
+                FrameType.HEADERS(), FrameFlags.END_HEADERS() | end, 1, block^
             )
         )
     )
+    if len(body) > 0:
+        wire.extend(
+            Span(
+                _h2_frame(
+                    FrameType.DATA(), FrameFlags.END_STREAM(), 1, body.copy()
+                )
+            )
+        )
     var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     stream.set_recv_timeout(TIMEOUT_MS)
     stream.write_all(Span[UInt8, _](wire))
@@ -1350,7 +1384,7 @@ def h2_request(
     buf.resize(4096, 0)
     var pos = 0
     var fields_out = List[HpackHeader]()
-    var body = List[UInt8]()
+    var received = List[UInt8]()
     var data_frames = 0
     while True:
         var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
@@ -1370,13 +1404,13 @@ def h2_request(
         if f.header.type.value == FrameType.HEADERS().value:
             fields_out = decoder.decode(Span[UInt8, _](f.payload))
         elif f.header.type.value == FrameType.DATA().value:
-            body.extend(Span[UInt8, _](f.payload))
+            received.extend(Span[UInt8, _](f.payload))
             data_frames += 1
         elif f.header.type.value == FrameType.RST_STREAM().value:
             raise Error("RST_STREAM")
         if f.header.flags.has(FrameFlags.END_STREAM()):
             break
-    return (fields_out^, String(from_utf8_lossy=Span(body)), data_frames)
+    return (fields_out^, received^, data_frames)
 
 
 def h1_raw(port: Int, method: String, path: String) raises -> String:
@@ -1836,6 +1870,299 @@ def test_get_headers_over_localhost_match_app_handle() raises:
             if c[2] == 200:
                 # The fields in order, with their casing, over the wire.
                 assert_equal(resp.text(), "note 7 X-A=1 x-a=2")
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+# ── M3-038: request body bytes ─────────────────────────────────────────────
+
+
+def _hex(bytes: Span[UInt8, _]) -> String:
+    var digits = "0123456789abcdef"
+    var out = String()
+    for i in range(len(bytes)):
+        var b = Int(bytes[i])
+        out += String(digits[byte=b // 16]) + String(digits[byte=b % 16])
+    return out^
+
+
+def _octets(values: List[Int]) -> List[UInt8]:
+    var out = List[UInt8]()
+    for v in values:
+        out.append(UInt8(v))
+    return out^
+
+
+def body_bytes(req: Request) raises -> Response:
+    """Answers with the hex of the body bytes it received, which the wire
+    cannot alter, and their count in a field."""
+    var r = Response.text(_hex(req.body.as_bytes()))
+    r.headers.add("X-Body-Length", String(req.body.byte_length()))
+    return r^
+
+
+def body_echo(req: Request) -> Response:
+    """Answers with the body it received, unchanged."""
+    return Response.text(req.body)
+
+
+def marked(var request: Request, var next: Next) raises -> Response:
+    """Adds `X-Seen: 1` to every answer `App.handle` gives."""
+    var response = next^.run(request^)
+    response.headers.add("X-Seen", "1")
+    return response^
+
+
+def bodies_app() -> App:
+    var app = App()
+    app.use(marked)
+    app.get["/hello"](hello)
+    app.post["/bytes"](body_bytes)
+    app.post["/echo-raw"](body_echo)
+    app.post["/echo"](echo)
+    app.post["/greet"](greet)
+    return app^
+
+
+def h1_exchange(
+    port: Int,
+    method: String,
+    path: String,
+    fields: List[Tuple[String, String]],
+    body: List[UInt8],
+) raises -> Tuple[String, String, List[UInt8]]:
+    """One HTTP/1.1 request with `Content-Length`, `Connection: close`,
+    `fields` and `body`: the response's status line, its header lines
+    (`\\r\\n`-separated, `Date` removed) and every byte after the blank
+    line."""
+    var head = String(method, " ", path, " HTTP/1.1\r\nHost: localhost\r\n")
+    for f in fields:
+        head += f[0] + ": " + f[1] + "\r\n"
+    head += String(
+        "Content-Length: ", len(body), "\r\nConnection: close\r\n\r\n"
+    )
+    var wire = List(head.as_bytes())
+    wire.extend(Span(body))
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.set_recv_timeout(TIMEOUT_MS)
+    stream.write_all(Span[UInt8, _](wire))
+    var acc = List[UInt8]()
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    while True:
+        var n = stream.read(buf.unsafe_ptr(), len(buf))
+        if n == 0:
+            break
+        for k in range(n):
+            acc.append(buf[k])
+    var split = -1
+    for i in range(len(acc) - 3):
+        if (
+            acc[i] == 13
+            and acc[i + 1] == 10
+            and acc[i + 2] == 13
+            and acc[i + 3] == 10
+        ):
+            split = i
+            break
+    if split < 0:
+        raise Error("no HTTP/1.1 response head")
+    var text = String(from_utf8=Span(acc)[:split])
+    var lines = text.split("\r\n")
+    var kept = String()
+    for i in range(1, len(lines)):
+        if not lines[i].startswith("Date: "):
+            kept += String(lines[i]) + ";"
+    var rest = List[UInt8]()
+    for i in range(split + 4, len(acc)):
+        rest.append(acc[i])
+    return (String(lines[0]), kept^, rest^)
+
+
+def _h2_field(fields: List[HpackHeader], name: String) -> String:
+    for f in fields:
+        if f.name == name:
+            return f.value
+    return "<none>"
+
+
+def _same_bytes(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
+    if len(a) != len(b):
+        return False
+    for i in range(len(a)):
+        if a[i] != b[i]:
+            return False
+    return True
+
+
+def test_request_body_bytes_over_http1_and_h2c() raises:
+    """Every request body reaches `App.handle` byte for byte, or is answered
+    400 by the adapter before it, over HTTP/1.1 and h2c (M3-038)."""
+    # Well-formed UTF-8: a U+FFFD the client sent and NUL included.
+    var kept: List[Tuple[String, List[UInt8]]] = [
+        (String("ascii"), List("hello".as_bytes())),
+        (String("utf8"), List("hé✓".as_bytes())),
+        (String("fffd"), _octets([0x61, 0xEF, 0xBF, 0xBD, 0x62])),
+        (String("nul"), _octets([0x61, 0x00, 0x62, 0x00])),
+        (String("empty"), List[UInt8]()),
+        (String("octets_utf8"), _octets([0x00, 0x01, 0x7F, 0x0A])),
+    ]
+    # Not UTF-8: each one changed by a lossy conversion.
+    var refused: List[Tuple[String, List[UInt8]]] = [
+        (String("x80"), _octets([0x80])),
+        (String("xff"), _octets([0xFF])),
+        (String("truncated"), _octets([0xE3, 0x81])),
+        (String("overlong"), _octets([0xC0, 0xAF])),
+        (String("surrogate"), _octets([0xED, 0xA0, 0x80])),
+        (String("fffd_ff"), _octets([0xEF, 0xBF, 0xBD, 0xFF])),
+        (
+            String("png"),
+            _octets([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+        ),
+    ]
+    var octets: List[Tuple[String, String]] = [
+        (String("content-type"), String("application/octet-stream"))
+    ]
+    var json: List[Tuple[String, String]] = [
+        (String("content-type"), String("application/json"))
+    ]
+    var app = bodies_app()
+    var child = _serve_in_child(bodies_app())
+    try:
+        for c in kept:
+            var name = c[0]
+            ref body = c[1]
+            var text = String(from_utf8=Span(body))
+            var local = app.handle(Request("POST", "/bytes", text))
+            assert_equal(local.body, _hex(Span(body)), name)
+            # The bytes App.handle received, through the raw route.
+            var h1 = h1_exchange(child.port, "POST", "/bytes", octets, body)
+            print(
+                "observed HTTP/1.1 /bytes",
+                name + ":",
+                h1[0],
+                h1[1],
+                String(from_utf8=Span(h1[2])),
+            )
+            assert_equal(h1[0], "HTTP/1.1 200 OK", name)
+            assert_equal(String(from_utf8=Span(h1[2])), local.body, name)
+            assert_equal(
+                h1[1],
+                String(
+                    "X-Body-Length: ",
+                    len(body),
+                    ";X-Seen: 1;Content-Length: ",
+                    local.body.byte_length(),
+                    ";Connection: close;",
+                ),
+                name,
+            )
+            var h2 = h2_exchange(child.port, "POST", "/bytes", octets, body)
+            print(
+                "observed h2c /bytes",
+                name + ":",
+                _h2_fields(h2[0]),
+                String(from_utf8=Span(h2[1])),
+            )
+            assert_equal(h2[0][0].value, "200", name)
+            assert_equal(String(from_utf8=Span(h2[1])), local.body, name)
+            assert_equal(
+                _h2_field(h2[0], "x-body-length"), String(len(body)), name
+            )
+            assert_equal(_h2_field(h2[0], "x-seen"), "1", name)
+            # The response body goes out as the handler's bytes.
+            var e1 = h1_exchange(child.port, "POST", "/echo-raw", octets, body)
+            assert_equal(e1[0], "HTTP/1.1 200 OK", name)
+            assert_true(_same_bytes(Span(e1[2]), Span(body)), name)
+            var e2 = h2_exchange(child.port, "POST", "/echo-raw", octets, body)
+            assert_equal(e2[0][0].value, "200", name)
+            assert_true(_same_bytes(Span(e2[1]), Span(body)), name)
+            # A typed FromBody route receives the same text.
+            var bracketed = List("[".as_bytes())
+            bracketed.extend(Span(body))
+            bracketed.append(UInt8(ord("]")))
+            var t1 = h1_exchange(child.port, "POST", "/echo", octets, body)
+            assert_equal(t1[0], "HTTP/1.1 200 OK", name)
+            assert_true(_same_bytes(Span(t1[2]), Span(bracketed)), name)
+            var t2 = h2_exchange(child.port, "POST", "/echo", octets, body)
+            assert_equal(t2[0][0].value, "200", name)
+            assert_true(_same_bytes(Span(t2[1]), Span(bracketed)), name)
+        for c in refused:
+            var name = c[0]
+            ref body = c[1]
+            # A route, a path only GET matches (405 in App.handle) and a path
+            # no route matches (404): the adapter answers 400 first, and the
+            # middleware does not run.
+            for target in ["/bytes", "/echo", "/hello", "/missing"]:
+                var h1 = h1_exchange(child.port, "POST", target, octets, body)
+                print(
+                    "observed HTTP/1.1",
+                    target,
+                    name + ":",
+                    h1[0],
+                    h1[1],
+                    String(from_utf8_lossy=Span(h1[2])),
+                )
+                assert_equal(h1[0], "HTTP/1.1 400 Bad Request", name)
+                assert_equal(
+                    h1[1], "Content-Length: 11;Connection: close;", name
+                )
+                assert_equal(String(from_utf8=Span(h1[2])), "Bad Request", name)
+                var h2 = h2_exchange(child.port, "POST", target, octets, body)
+                print(
+                    "observed h2c",
+                    target,
+                    name + ":",
+                    _h2_fields(h2[0]),
+                    String(from_utf8_lossy=Span(h2[1])),
+                )
+                assert_equal(_h2_fields(h2[0]), ":status=400;", name)
+                assert_equal(String(from_utf8=Span(h2[1])), "Bad Request", name)
+            # `HEAD` with such a body: the adapter's 400 under the HEAD rule.
+            var hh = h2_exchange(child.port, "HEAD", "/hello", octets, body)
+            assert_equal(
+                _h2_fields(hh[0]), ":status=400;content-length=11;", name
+            )
+            assert_equal(hh[2], 0, name)
+        # A well-formed body on a path only GET matches is App.handle's 405.
+        var allowed = h2_exchange(
+            child.port, "POST", "/hello", octets, List("x".as_bytes())
+        )
+        assert_equal(allowed[0][0].value, "405")
+        assert_equal(_h2_field(allowed[0], "allow"), "GET, HEAD")
+        assert_equal(_h2_field(allowed[0], "x-seen"), "1")
+        # JSON: a sent U+FFFD is a value; a byte that is not UTF-8 inside a
+        # JSON string is 400 before parsing, where it parsed as U+FFFD.
+        var sent_fffd = List('{"name":"'.as_bytes())
+        sent_fffd.extend(Span(_octets([0xEF, 0xBF, 0xBD])))
+        sent_fffd.extend(Span(List('"}'.as_bytes())))
+        var bad_json = List('{"name":"'.as_bytes())
+        bad_json.append(0xFF)
+        bad_json.extend(Span(List('"}'.as_bytes())))
+        var j1 = h1_exchange(child.port, "POST", "/greet", json, sent_fffd)
+        assert_equal(j1[0], "HTTP/1.1 200 OK")
+        assert_equal(String(from_utf8=Span(j1[2])), '{"hello":"�"}')
+        var j2 = h2_exchange(child.port, "POST", "/greet", json, sent_fffd)
+        assert_equal(String(from_utf8=Span(j2[1])), '{"hello":"�"}')
+        var b1 = h1_exchange(child.port, "POST", "/greet", json, bad_json)
+        print(
+            "observed HTTP/1.1 /greet 0xFF:",
+            b1[0],
+            b1[1],
+            String(from_utf8_lossy=Span(b1[2])),
+        )
+        assert_equal(b1[0], "HTTP/1.1 400 Bad Request")
+        # The adapter's 400, not App.handle's: no middleware field.
+        assert_equal(b1[1], "Content-Length: 11;Connection: close;")
+        assert_equal(String(from_utf8=Span(b1[2])), "Bad Request")
+        var b2 = h2_exchange(child.port, "POST", "/greet", json, bad_json)
+        print(
+            "observed h2c /greet 0xFF:",
+            _h2_fields(b2[0]),
+            String(from_utf8_lossy=Span(b2[1])),
+        )
+        assert_equal(_h2_fields(b2[0]), ":status=400;")
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)

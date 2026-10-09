@@ -101,6 +101,7 @@ build_bg flare_header_probe -I src -I "$adapter" compat/flare/headers/flare_head
 build_bg inbound_rebuild -I src -I tests -I "$adapter" compat/flare/headers/inbound_rebuild.mojo
 build_bg_known json_loopback_probe -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo
 build_bg head_probe -I src -I "$adapter" compat/flare/head/head_probe.mojo
+build_bg body_probe compat/flare/body/body_probe.mojo
 built=0
 for i in "${!pids[@]}"; do
     log="$tmp/build_${outs[i]}.log"
@@ -300,8 +301,30 @@ if ((head_status != 0)); then
     exit 1
 fi
 
+# M3-038 body evidence (docs/history/architecture-decisions.md "Request body bytes decision (M3-038)"):
+# what pinned Flare hands a handler of its own as the request body over
+# HTTP/1.1 and h2c, and what Request.text() and String(from_utf8=) make of it.
+step "Flare request body probe (M3-038)"
+body_status=0
+./build/body_probe >"$tmp/body_probe.log" 2>&1 || body_status=$?
+cat "$tmp/body_probe.log"
+leftover_body='^\./build/body_probe$'
+if pgrep -f "$leftover_body"; then
+    pkill -KILL -f "$leftover_body" || true
+    echo "error: the body probe left a server process behind" >&2
+    exit 1
+fi
+if ((body_status != 0)); then
+    echo "error: Flare body behavior differs from the recorded M3-038 evidence" >&2
+    exit 1
+fi
+if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/body_probe.log"; then
+    echo "error: compat/flare/body/body_probe.mojo ran no tests" >&2
+    exit 1
+fi
+
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo compat/flare/body/body_probe.mojo; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1

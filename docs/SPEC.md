@@ -67,6 +67,14 @@ M3-031 reopened the contract (decided by M3-030): a request whose path some rout
 
 Answering `OPTIONS` itself and CORS preflight are not decided; until then `OPTIONS` is answered like any method no route has ([Method not allowed decision (M3-030)](history/architecture-decisions.md#method-not-allowed-decision-m3-030)).
 
+M3-038 reopened the contract (decided in the same item): through the Flare adapter, a request Flare hands to the adapter whose body is not well-formed UTF-8 is answered 400 `Bad Request` by the adapter before `App.handle`, where M2 routed it with the body's bytes replaced by U+FFFD. That changes the 400/404 boundary for that class of requests over Flare, so it is an M2 reopen under M2-016 ("a different 400/404/500 boundary"). By kind:
+- `App.handle` and `TestClient`: unchanged;
+- the wire: over HTTP/1.1 and h2c, such a request, once Flare hands it to the adapter, is 400 whatever its method and path, before middleware and routing (a `HEAD` one under M3-027's rule); every other body, U+FFFD and NUL included, reaches the application byte for byte, as before;
+- the raw escape hatch: a raw handler receives the whole `Request` of every request that reaches `App.handle`; over Flare a body that is not UTF-8 does not reach it;
+- the accepted set, the overload set and every diagnostic are unchanged.
+
+Binary bodies are still not supported ([Request body bytes decision (M3-038)](history/architecture-decisions.md#request-body-bytes-decision-m3-038)).
+
 Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it, except one: the contract's opening sentence holds for `HEAD`'s answer but not for its content. The in-memory response to `HEAD` keeps the body, and keeping it off the wire, with the length, is each network backend's obligation ([HEAD decision (M3-026)](history/architecture-decisions.md#head-decision-m3-026)). What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
 
 ## M3 — composition and production ergonomics
@@ -92,6 +100,7 @@ An M3 area with an open design question is cut decision-first: a decision item p
 | 405 `Method Not Allowed` with `Allow` for a request whose path a route of another method matches (404 when no route matches the path) | shipped |
 | serving an `App` over cleartext HTTP/1.1 and h2c through the Flare adapter's `Server` (`Server.bind(host, port)`, `server.port()`, `server.serve(app)`; one thread, IP literals, no graceful shutdown; no core `app.run()`) | shipped |
 | middleware functions (`app.use(f)` with `def(var Request, var Next) raises -> Response`; the rest runs at most once through `next^.run(request^)`; every request `App.handle` receives, in registration order; compile-time configuration only) | shipped |
+| request body bytes kept exactly through Flare (a well-formed UTF-8 body, U+FFFD and NUL included, byte for byte; a body that is not UTF-8 is the adapter's 400 before `App.handle`, never replaced; not binary support) | shipped |
 
 ### Remaining candidates
 
@@ -102,7 +111,7 @@ Each becomes its own item, a decision item first where it opens a design questio
 - **compile-time header names, a `FromHeaders` converter**: a converter makes Muntin choose a status for header values; `Headers` can conform to it without changing the `get` shapes;
 - **more route values**: three or more values, a default written in the literal (`?{limit=20}`), other value types, a named carrier that checks placeholder names. A value type is a slot kind; a third value beside a body or `Headers` needs slot arity 4 ([M3-022](history/architecture-decisions.md#several-route-values-decision-m3-022));
 - **more HTTP methods** (bodyless typed `post`, `put` and `patch` handlers, answering `OPTIONS` itself or a CORS preflight, 501 for a method Muntin does not implement, a typed `DELETE` body, methods outside `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` or a generic entrypoint, a registered `HEAD`): each has a revisit condition in [M3-020](history/architecture-decisions.md#http-methods-decision-m3-020), in [M3-026](history/architecture-decisions.md#head-decision-m3-026) for a registered `HEAD`, or in [M3-030](history/architecture-decisions.md#method-not-allowed-decision-m3-030) for `OPTIONS`, CORS preflight and 501. A bodyless shape is a rule change on `post`'s family;
-- **more body shapes**: a Muntin text type conforming to `FromBody` (raw `String` is a route-value type, never a body), optional, multiple, streaming and binary bodies (binary needs a non-`String` body representation);
+- **more body shapes**: a Muntin text type conforming to `FromBody` (raw `String` is a route-value type, never a body), optional, multiple, streaming and binary bodies (binary needs a non-`String` body representation: candidate B of [M3-038](history/architecture-decisions.md#request-body-bytes-decision-m3-038), which today refuses a body that is not UTF-8);
 - **fallible conversions and parameter-name checking**: a raising `to_response`/`to_error_response` needs its own error answer; name checking needs function-parameter reflection, which Mojo 1.1.0 lacks;
 - **broader raw handlers**: raw route values, `String`/`ToResponse` raw results (each a rule change on the arity overloads);
 - **more middleware**: runtime-configured middleware (middleware values, A in [M3-034](history/architecture-decisions.md#middleware-decision-m3-034), or a `State` bound to a middleware function), request-scoped typed context (an identity a handler receives), per-route or per-group middleware and middleware error types, each with a revisit condition there;

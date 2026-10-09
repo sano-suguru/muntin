@@ -10,8 +10,14 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   verbatim to Muntin's `Request`, which splits path from query, exactly as
   for the in-memory backend. The adapter does not split, parse or decode the
   query, and does not use Flare's query helpers.
-- request body: bytes copied into a `String`, decoded as UTF-8 with invalid
-  sequences replaced by U+FFFD (Flare's `Request.text()`).
+- request body (M3-038, decided in docs/history/architecture-decisions.md
+  "Request body bytes decision (M3-038)"): Flare's raw body bytes copied
+  into a `String` only when they are well-formed UTF-8, so `Request.body`
+  holds exactly the bytes received (a U+FFFD the client sent and NUL
+  included). A body that is not UTF-8 cannot be represented: the answer is
+  400 before `App.handle`, as for a header field. Flare's `Request.text()`
+  is not used: it replaces such bytes with U+FFFD, which a handler could
+  not tell from a U+FFFD the client sent.
 - request headers: every field, in order and casing, rebuilt from Flare's
   public `HeaderMap.encode_to` (Flare has no public field iterator) and
   verified against Flare's by-name view: the parsed count is `len()`, and
@@ -140,8 +146,16 @@ def to_muntin_headers(request: FlareRequest) raises -> Headers:
 
 
 def to_muntin_request(request: FlareRequest) raises -> Request:
+    """Exactly the request's method, target, body and fields, or a raise
+    when they cannot be represented. The body is built from Flare's raw
+    bytes, never `Request.text()`, which replaces bytes that are not UTF-8
+    with U+FFFD: `String(from_utf8=)` keeps well-formed UTF-8 byte for byte
+    and raises on anything else (M3-038)."""
     return Request(
-        request.method, request.url, request.text(), to_muntin_headers(request)
+        request.method,
+        request.url,
+        String(from_utf8=Span(request.body)),
+        to_muntin_headers(request),
     )
 
 
