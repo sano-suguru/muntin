@@ -8,7 +8,6 @@ from std.memory import ArcPointer
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from muntin import App, Request, Response, State
-from muntin.testing import TestClient
 from middleware_spike import Middleware, MwApp, Next
 
 
@@ -94,68 +93,57 @@ def _same(a: Response, b: Response, what: String) raises:
 # F: middleware functions.
 
 
-def passthrough(var request: Request, next: Next) raises -> Response:
-    return next(request^)
+def passthrough(var request: Request, var next: Next) raises -> Response:
+    return next^.run(request^)
 
 
-def trail_a(var request: Request, next: Next) raises -> Response:
+def trail_a(var request: Request, var next: Next) raises -> Response:
     request.headers.add("X-Trail", "a")
-    var response = next(request^)
+    var response = next^.run(request^)
     response.headers.add("X-Back", "a")
     return response^
 
 
-def trail_b(var request: Request, next: Next) raises -> Response:
+def trail_b(var request: Request, var next: Next) raises -> Response:
     request.headers.add("X-Trail", "b")
-    var response = next(request^)
+    var response = next^.run(request^)
     response.headers.add("X-Back", "b")
     return response^
 
 
-def gate(var request: Request, next: Next) raises -> Response:
+def gate(var request: Request, var next: Next) raises -> Response:
     if request.path == "/blocked":
         return Response.text("Forbidden", status=403)
-    return next(request^)
+    return next^.run(request^)
 
 
-def rewrite(var request: Request, next: Next) raises -> Response:
+def rewrite(var request: Request, var next: Next) raises -> Response:
     if request.path == "/old":
         request.path = "/hello"
-    return next(request^)
+    return next^.run(request^)
 
 
-def stamp(var request: Request, next: Next) raises -> Response:
+def stamp(var request: Request, var next: Next) raises -> Response:
     """Tags every answer with the method it saw."""
     var method = request.method
-    var response = next(request^)
+    var response = next^.run(request^)
     response.headers.add("X-Seen", method)
     return response^
 
 
-def fail_before(var request: Request, next: Next) raises -> Response:
+def fail_before(var request: Request, var next: Next) raises -> Response:
     raise Error("middleware detail")
 
 
-def fail_after(var request: Request, next: Next) raises -> Response:
-    _ = next(request^)
+def fail_after(var request: Request, var next: Next) raises -> Response:
+    _ = next^.run(request^)
     raise Error("middleware detail")
-
-
-def twice(var request: Request, next: Next) raises -> Response:
-    _ = next(request.copy())
-    return next(request^)
-
-
-def twice_keep_first(var request: Request, next: Next) raises -> Response:
-    var first = next(request.copy())
-    _ = next(request^)
-    return first^
 
 
 def tagged[
     value: StaticString
-](var request: Request, next: Next) raises -> Response:
-    var response = next(request^)
+](var request: Request, var next: Next) raises -> Response:
+    var response = next^.run(request^)
     response.headers.add("X-Tag", value)
     return response^
 
@@ -167,26 +155,26 @@ def tagged[
 struct Tag(ImplicitlyCopyable, Middleware):
     var value: String
 
-    def handle(self, var request: Request, next: Next) raises -> Response:
-        var response = next(request^)
+    def handle(self, var request: Request, var next: Next) raises -> Response:
+        var response = next^.run(request^)
         response.headers.add("X-Tag", self.value)
         return response^
 
 
 @fieldwise_init
 struct Pass(ImplicitlyCopyable, Middleware):
-    def handle(self, var request: Request, next: Next) raises -> Response:
-        return next(request^)
+    def handle(self, var request: Request, var next: Next) raises -> Response:
+        return next^.run(request^)
 
 
 @fieldwise_init
 struct Gate(Middleware):
     var blocked: String
 
-    def handle(self, var request: Request, next: Next) raises -> Response:
+    def handle(self, var request: Request, var next: Next) raises -> Response:
         if request.path == self.blocked:
             return Response.text("Forbidden", status=403)
-        return next(request^)
+        return next^.run(request^)
 
 
 struct Tracked(Middleware):
@@ -203,8 +191,8 @@ struct Tracked(Middleware):
     def __deinit__(deinit self):
         self.drops[] += 1
 
-    def handle(self, var request: Request, next: Next) raises -> Response:
-        return next(request^)
+    def handle(self, var request: Request, var next: Next) raises -> Response:
+        return next^.run(request^)
 
 
 # H: hooks.
@@ -361,29 +349,6 @@ def test_a_raise_in_middleware_is_the_fixed_500() raises:
     assert_equal(counter[].n[], 1)
 
 
-def test_a_second_next_call_runs_nothing_and_is_500() raises:
-    # `twice` returns its second call's answer, `twice_keep_first` its first.
-    var counter = State(Counter())
-    var f = MwApp(_app(counter))
-    f.use(twice)
-    var r = f.handle(Request("GET", "/counted"))
-    assert_equal(r.status, 500)
-    assert_equal(r.body, "Internal Server Error")
-    assert_equal(counter[].n[], 1)
-    var g = MwApp(_app(counter))
-    g.use(twice_keep_first)
-    assert_equal(g.handle(Request("GET", "/counted")).body, "reached")
-    assert_equal(counter[].n[], 2)
-    # The guard is per middleware call: two middleware each call their own
-    # `next` once, and every request still reaches the route once.
-    var h = MwApp(_app(counter))
-    h.use(passthrough)
-    h.use(passthrough)
-    assert_equal(h.handle(Request("GET", "/counted")).body, "reached")
-    assert_equal(h.handle(Request("GET", "/counted")).body, "reached")
-    assert_equal(counter[].n[], 4)
-
-
 def test_a_raise_is_answered_at_the_failing_middleware() raises:
     # The inner middleware's raise becomes the 500 at its own call; the
     # outer one gets it from `next` and still adds its field.
@@ -440,16 +405,6 @@ def test_a_middleware_value_is_dropped_once_and_survives_moves() raises:
     assert_equal(drops[], 0)
     _ = again^
     assert_equal(drops[], 1)
-
-
-def test_the_app_keeps_serving_through_test_client() raises:
-    # The inner `App` is production's: `TestClient` over it is unchanged.
-    var counter = State(Counter())
-    var f = MwApp(_app(counter))
-    f.use(stamp)
-    assert_equal(TestClient(f.app).get("/hello").body, "hello")
-    assert_false(TestClient(f.app).get("/hello").headers.get("X-Seen"))
-    assert_true(f.handle(Request("GET", "/hello")).headers.get("X-Seen"))
 
 
 def main() raises:

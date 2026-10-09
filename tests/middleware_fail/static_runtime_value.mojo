@@ -9,8 +9,8 @@ from middleware_spike import Middleware, MwApp, Next
 struct Tag(ImplicitlyCopyable, Middleware):
     var value: String
 
-    def handle(self, var request: Request, next: Next) raises -> Response:
-        return next(request^)
+    def handle(self, var request: Request, var next: Next) raises -> Response:
+        return next^.run(request^)
 
 
 def main():

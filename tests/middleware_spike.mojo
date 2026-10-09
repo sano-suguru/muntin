@@ -3,9 +3,9 @@
 # application module (tests/test_spike_middleware.mojo) that defines the
 # middleware and handlers. Production `App` is used unchanged as the innermost
 # layer: every request the chain passes on reaches `App.handle`, so 404, 405,
-# the pre-handler 400s and handler errors are production's. check.sh builds it
-# through that test (--Werror) and through tests/middleware_lib_only/driver.mojo;
-# test.sh runs it. Decision and evidence: docs/history/architecture-decisions.md,
+# the pre-handler 400s and handler errors are production's. test.sh builds
+# (--Werror) and runs it through that test; check.sh builds it through
+# tests/middleware_lib_only/driver.mojo. Decision and evidence: docs/history/architecture-decisions.md,
 # "Middleware decision (M3-034)". Must-not-compile evidence:
 # tests/middleware_fail.
 #
@@ -13,21 +13,21 @@
 # registers a link on the same `MwApp`, so the candidates run against the same
 # request set; an application uses one of them.
 #
-#   Next[o, c] the rest of the chain: an immutable `Pointer[MwApp, o]`, the
-#             index of the next link, and a mutable `Pointer[Bool, c]` to a
-#             flag in the frame of the `_run` call that made it. Neither
-#             `Copyable` nor `Movable`; made in that frame and passed by
-#             borrow, so both origins are tracked and no `AnyOrigin` or
-#             untracked pointer is involved (a struct field cannot hold
-#             `AnyOrigin` on Mojo 1.1.0). The first call runs the rest and
-#             returns its response (at the end of the chain, production
-#             `App.handle`); every later call through the same `Next` runs
-#             nothing and returns the fixed 500, so one middleware call
-#             dispatches the rest at most once.
-#   F         `use(f)`: a thin function `def(var Request, Next) raises -> Response`.
-#             The stored type is generic over `next`'s origin
-#             (`MiddlewareFn`); an application function written with a plain
-#             `next: Next` converts to it. No value is stored with it, so no
+#   Next[o]   the rest of the chain: an immutable `Pointer[MwApp, o]` and the
+#             index of the next link, made in `_run`'s frame and moved into the
+#             middleware (`var next: Next`). Its origin is the borrowed
+#             `MwApp`'s, so it cannot outlive that borrow, and no `AnyOrigin`
+#             or untracked pointer is involved (a struct field cannot hold
+#             `AnyOrigin` on Mojo 1.1.0). `Movable`, not `Copyable`; its one
+#             call, `next^.run(request)`, consumes it (`deinit self`), so a
+#             second call or a call in a loop does not compile (`use of
+#             uninitialized value 'next'`): one middleware call dispatches the
+#             rest at most once, by type. `run` runs the rest and returns its
+#             response (at the end of the chain, production `App.handle`).
+#   F         `use(f)`: a thin function
+#             `def(var Request, var Next) raises -> Response`. The stored type
+#             is generic over `next`'s origin (`MiddlewareFn`); an application
+#             function written with a plain `var next: Next` converts to it. No value is stored with it, so no
 #             erasure and no unsafe operation; configuration is compile-time
 #             only, through the function's own parameters (`use(tag["v"])`).
 #   A         `use(m)`: a value of an application struct conforming to
@@ -57,32 +57,25 @@ from muntin import App, Request, Response
 from muntin.app import _internal_error
 
 
-struct Next[o: Origin[mut=False], c: Origin[mut=True]]:
+struct Next[o: Origin[mut=False]](Movable):
     """The rest of the chain after one middleware, for the duration of its
     call."""
 
     var _app: Pointer[MwApp, Self.o]
     var _i: Int
-    var _called: Pointer[Bool, Self.c]
 
-    def __init__(
-        out self, ref[Self.o] app: MwApp, i: Int, ref[Self.c] called: Bool
-    ):
+    def __init__(out self, ref[Self.o] app: MwApp, i: Int):
         self._app = Pointer(to=app)
         self._i = i
-        self._called = Pointer(to=called)
 
-    def __call__(self, var request: Request) -> Response:
-        """Runs the rest of the chain on `request` and returns its answer;
-        a second call runs nothing and returns the fixed 500."""
-        if self._called[]:
-            return _internal_error()
-        self._called[] = True
+    def run(deinit self, var request: Request) -> Response:
+        """Runs the rest of the chain on `request` and returns its answer.
+        Consumes `self`: call it as `next^.run(request^)`, at most once."""
         return self._app[]._run(self._i, request^)
 
 
-comptime MiddlewareFn = def[o: Origin[mut=False], c: Origin[mut=True]](
-    var Request, Next[o, c]
+comptime MiddlewareFn = def[o: Origin[mut=False]](
+    var Request, var Next[o]
 ) raises thin -> Response
 """F: a middleware function."""
 
@@ -96,21 +89,21 @@ comptime AfterHook = def(Request, var Response) raises thin -> Response
 trait Middleware(Deinitable, Movable):
     """A and A': an application struct that wraps the rest of the chain."""
 
-    def handle(self, var request: Request, next: Next) raises -> Response:
+    def handle(self, var request: Request, var next: Next) raises -> Response:
         ...
 
 
 # A: the erased box. In production this would sit in `_handler_storage.mojo`.
 comptime _Box = MutOpaquePointer[MutUntrackedOrigin]
-comptime _MwInvoke = def[o: Origin[mut=False], c: Origin[mut=True]](
-    _Box, var Request, Next[o, c]
+comptime _MwInvoke = def[o: Origin[mut=False]](
+    _Box, var Request, var Next[o]
 ) raises thin -> Response
 
 
 def _invoke_mw[
     M: Middleware
-](box: _Box, var request: Request, next: Next) raises -> Response:
-    return box.unsafe_bitcast[M]()[].handle(request^, next)
+](box: _Box, var request: Request, var next: Next) raises -> Response:
+    return box.unsafe_bitcast[M]()[].handle(request^, next^)
 
 
 def _drop_mw[M: Middleware](box: _Box):
@@ -137,19 +130,19 @@ struct _ErasedMw(Movable):
     def __deinit__(deinit self):
         self._drop(self._value)
 
-    def invoke(self, var request: Request, next: Next) raises -> Response:
-        return self._invoke(self._value, request^, next)
+    def invoke(self, var request: Request, var next: Next) raises -> Response:
+        return self._invoke(self._value, request^, next^)
 
 
 # A': the trampoline for a compile-time value.
 def _call_static[
     M: Middleware & ImplicitlyCopyable, //, m: M
-](var request: Request, next: Next) raises -> Response:
-    return materialize[m]().handle(request^, next)
+](var request: Request, var next: Next) raises -> Response:
+    return materialize[m]().handle(request^, next^)
 
 
 # Placeholders for the unused fields of a link.
-def _no_fn(var request: Request, next: Next) raises -> Response:
+def _no_fn(var request: Request, var next: Next) raises -> Response:
     return _internal_error()
 
 
@@ -236,15 +229,11 @@ struct MwApp(Movable):
         if i == len(self._links):
             return self.app.handle(request)
         ref link = self._links[i]
-        # One flag per middleware call: its `Next` dispatches the rest once.
-        var called = False
         try:
             if link.kind == _FN:
-                return link.function(request^, Next(self, i + 1, called))
+                return link.function(request^, Next(self, i + 1))
             if link.kind == _BOXED:
-                return link.boxed.value().invoke(
-                    request^, Next(self, i + 1, called)
-                )
+                return link.boxed.value().invoke(request^, Next(self, i + 1))
             if link.kind == _BEFORE:
                 var early = link.before(request)
                 if early:

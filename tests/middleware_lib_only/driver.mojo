@@ -16,8 +16,8 @@ def hello() -> String:
     return "hello"
 
 
-def mark(var request: Request, next: Next) raises -> Response:
-    var response = next(request^)
+def mark(var request: Request, var next: Next) raises -> Response:
+    var response = next^.run(request^)
     response.headers.add("X-Driver", "function")
     return response^
 
@@ -26,8 +26,8 @@ def mark(var request: Request, next: Next) raises -> Response:
 struct Mark(ImplicitlyCopyable, Middleware):
     var value: String
 
-    def handle(self, var request: Request, next: Next) raises -> Response:
-        var response = next(request^)
+    def handle(self, var request: Request, var next: Next) raises -> Response:
+        var response = next^.run(request^)
         response.headers.add("X-Driver", self.value)
         return response^
 
