@@ -897,7 +897,7 @@ app.get["/users/{id}"](get_user)
 
 Middleware should be able to inspect a request, short-circuit, call the next layer, inspect/modify a response, and attach request-scoped typed context. The public middleware contract must be Muntin-owned even if an adapter internally translates to a backend-specific mechanism.
 
-Status: not implemented (`docs/SPEC.md`). `app.use` does not exist.
+Status: not implemented (`docs/SPEC.md`). `app.use` does not exist. Decided, not shipped: application-wide hooks, `app.before(hook)` before route selection and `app.after(hook)` on every answer, each with an optional `State` ([Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034)). On Mojo 1.1.0 a `next` argument cannot hold the borrowed `App` without an untracked borrow, so the target above is not the decided API; M3-035 replaces this section with the hooks once they are proven.
 
 ## 8. Application state
 

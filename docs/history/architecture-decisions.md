@@ -3090,3 +3090,190 @@ From a clone it runs as `pixi run -e flare mojo run -I src -I adapters/flare exa
 - Verification: `docs/DEVELOPMENT.md` section 3. Its wire trigger applies (`adapters/`): a local `check_flare.sh` run before pushing. The base-wide diagnostic comparison does not apply: `src/muntin` and every overload are unchanged.
 - Docs, by one rule: grep `test-only`, `tests only`, `app.run`, `no supported way to serve`, `lifecycle` and `Serving is` in `README.md`, `docs/DX.md`, `docs/ARCHITECTURE.md` and `docs/SPEC.md`; a statement changes when it says Muntin has no supported way to serve, that the Flare integration is test-only, or that `app.run()` is a target or a candidate. Known instances: `README.md`'s opening paragraph, its diagram's `over HTTP (tests only)`, its "Not yet" bullet and "Try it" (which gains the serving command beside `pixi run run`); wherever `README.md` says Muntin can serve, it names the limits (one thread, no graceful shutdown, IP literals only) and does not call serving production-ready; `docs/DX.md` section 1's target and status (the target becomes the program above once it is proven; the status says once that `serve` returning does not distinguish a stop from Flare's reactor stopping and Muntin adds no exit or error policy, so a `main` that does nothing after `serve` can end with status 0) and section 19's `app.run()` and its last bullet and paragraph; `docs/ARCHITECTURE.md`'s "Flare adapter" serving paragraph (it states `Server`'s contract, including the same sentence on `serve` returning), the module list (`Server`), the backend seam's concurrency line (`Server`'s one thread), "Other current limits" (the not-implemented list's serving entry becomes graceful shutdown, signal handling, several serving threads, backend configuration and hostnames; `main.mojo` uses `TestClient` because it builds in the default environment), and a revisit index row for `test_server.mojo` and the four must-not-build fixtures; `docs/SPEC.md`'s M3 table (serving, shipped) and the lifecycle candidate; `AGENT_PROGRESS.md`.
 - Not in the slice: B1, graceful shutdown, signal handling, a worker count, backend configuration, TLS, HTTP/3, host names, a startup line printed by Muntin, a package, middleware, any change to `src/muntin` or `App.handle`.
+
+### Middleware decision (M3-034)
+
+Status: **decision** (M3-034; `src/muntin`, `adapters/`, `compat/` and `tests/` are unchanged in it). It decides the first mechanism by which application code applies one rule to every request without repeating it in each handler. Today there is none (`docs/DX.md` section 7: `app.use` does not exist).
+
+**Why now.** Middleware is a remaining M3 candidate that earlier records deferred because no handler shape depends on it and because its design was "the largest and least settled on Mojo 1.1.0 (no captures, no existentials)" ([M3-018](#route-value-decoding-and-string-route-values-decision-m3-018), [M3-020](#http-methods-decision-m3-020), [M3-022](#several-route-values-decision-m3-022)). Serving now exists ([M3-033](#serving-entrypoint-decision-m3-032)), so an application that serves has nowhere to put a rule that every request must pass. This record measures those Mojo constraints instead of assuming them.
+
+**The problems, not a framework.** The design is judged by two application tasks, written today and with each candidate:
+- **P1, API key.** A request without a valid `X-Api-Key` field is answered 401, and no handler runs. The key is configuration loaded at startup.
+- **P2, common response field.** Every response carries `X-Content-Type-Options: nosniff`, including the ones Muntin itself builds (404, 405, 400, the fixed 500).
+
+Today (D0) both are per-handler work, and P2 is out of reach:
+- P1: a typed `get` handler reads fields only through a trailing `Headers` parameter, a typed `post` handler only through a `WithHeaders[B]` body, a raw handler through `req.headers` (`docs/DX.md` sections 4, 8, 9). So every protected handler changes its signature and calls a check, and a handler that forgets is open: the rule fails open, one route at a time. A route value or body that fails to convert answers 400 before the handler, so P1's 401 cannot come before Muntin's 400, 404 or 405.
+- P2: a `String` result has no fields (`docs/ARCHITECTURE.md`, "Headers"), so every handler returns a `Response` it builds. Muntin's own 404, 405, 400, 415, 413 and fixed 500 are built inside `App.handle`, and no application code runs there: they can never carry the field.
+
+**Question.** Which smallest mechanism expresses P1 and P2 once per `App`, and: its public spelling; registration and execution order; whether and how it short-circuits; whether it can change the request and the response, and who owns each; what a failure inside it answers; how it reads configuration (`State`); where it runs relative to route selection, route-value decoding, body conversion, the handler, 404, 405, 400, 500 and `ToErrorResponse`; whether `App.handle`, `TestClient` and the Flare `Server` run it alike; and what it costs on the hot path, in allocations, in overloads, in unsafe code and in diagnostics.
+
+**What settles it:**
+- the current request path, traced in code (`App.handle`, `TestClient`, the adapter's `_serve_app` and `Server.serve`);
+- per candidate, a scratch copy of `src/muntin` (and of the adapter where the candidate changes it), not retained, with a probe driven through `App.handle` and `TestClient` that solves P1 and P2 and checks: zero, one and two registrations and their order; that the handler does not run on a 401; the short-circuit's status, body and fields; the field on 200, 404, 405, 400 and 500; `HEAD`; the `State` reference count across registration, requests, a move of the `App` and its drop;
+- the same `App` served by the real Flare `Server` (forked child, raw HTTP/1.1 and h2c prior knowledge) and compared with `TestClient`;
+- compile-time behavior: what registers, what does not and with which diagnostic, and whether any existing fixture's compiler output changes;
+- the hot-path cost, timed through `App.handle`.
+
+**The request path today.** `App.handle(self, request: Request) -> Response` is the only seam (`docs/ARCHITECTURE.md`, "Backend seam"). `TestClient` builds a `Request` and calls it; the adapter's `_serve_app` converts Flare's request (answering 400 itself for a field it cannot represent), calls it, converts back (500 for an invalid outgoing field) and applies the `HEAD` rule; `Server.serve` and `MuntinHandler` both answer through `_serve_app`. Inside, the route scan selects the first route whose method and path match; with none, a second scan answers 405 with `Allow` or 404; on a typed route the query values are gathered and every route value decoded (400), then the adapter converts the slots (400, and 415 or 413 for `Json[T]`), calls the handler (`ToErrorResponse` or the fixed 500) and converts the result. Mojo 1.1.0 constraints in play (`docs/ARCHITECTURE.md`, "Mojo 1.1.0 facts"): stored handlers are thin function values and cannot capture; module-level variables do not compile, so `State` is the only way a handler reads runtime data; there are no existentials, so a list of values of different types needs a type-erased box (`_Erased`), whose unsafe operations are confined to `_handler_storage.mojo` by `scripts/check_unsafe.sh`.
+
+**Candidates.**
+- D0: no mechanism (above).
+- A: application-wide hooks. `app.before(hook)` runs before route selection and may answer instead of it; `app.after(hook)` runs on every answer and may change it. Each also takes a `State` as a second argument, as routes do.
+- B: a chain with `next`. `app.use(middleware)` with `def(Request, Next) -> Response`; calling `next(request)` runs the later middleware and then route dispatch; the first registered is outermost.
+- C: composition outside `App.handle`. A Muntin trait (`Service`, measured name) with `handle(self, Request) -> Response`, which `App` conforms to; application wrapper types conform too and are composed by nesting; `TestClient` and `Server.serve` accept any conforming type.
+- E: hook objects. As A, but `app.before(RequireApiKey("k1"))` takes a value of an application struct conforming to a Muntin trait, whose fields hold the configuration (DX section 7's `app.use(Tracing())` shape).
+
+**Measured premises.** Linux x86-64, Mojo 1.1.0 (8189361e), Flare v0.12.0, on scratch copies of `main` at `487d236`.
+
+| | D0 | A | B | C | E |
+|---|---|---|---|---|---|
+| P1 and P2 written once, through `App.handle` and `TestClient` | no | yes, 10 of 10 probe tests | yes, 6 of 6 | yes, 2 of 2 | P1 yes (built and run) |
+| field on Muntin's own 404, 405, 400, 500 | no | yes (measured) | yes (outermost middleware; measured on the 401) | yes (outer wrapper; measured on the 401) | as A (not run) |
+| over the real `Server`, equal to `TestClient` | — | 8 of 8 HTTP/1.1 cases; `HEAD` and h2c below | 2 of 2; `HEAD` and h2c as A | 2 of 2; `HEAD` and h2c as A | not run |
+| public types added | — | none | `Next` | the trait; `TestClient` and `Server.serve` become generic | the trait |
+| unsafe code added (confined module) | — | one generic hook box | one box and an untracked-origin borrow | none | as A |
+| lines added to `src/muntin` (scratch, unformatted) | 0 | 176 | 150 | 7 added, 7 changed (and 7 changed in the adapter) | A + 26 |
+
+- **A, in memory** (`App.handle` and `TestClient`): with no hook every existing answer is unchanged (200, 400, 404, 405 with `Allow: GET, HEAD`, 500). One `before` and one `after` run as `before; handler; after`; two of each as `b1; b2; handler; a1; a2`, and the response carries `X-Order: a1` then `a2`. Hooks registered before the routes behave the same. P1 and P2: without the field, `GET /hello` is 401 `Unauthorized` with `WWW-Authenticate: ApiKey` and `X-Content-Type-Options: nosniff` and exactly those two fields, and the log shows `auth; sec` (no handler); with it, 200 `hello` and the field (`auth; hello; sec`). Unauthenticated `GET /missing`, `POST /hello`, `GET /users/abc` and `POST /names` with an empty body are each 401, with nothing decoded and no `from_body`; authenticated, they are 404, 405 with `Allow: GET, HEAD`, 400 and 400 (`from_body` ran), and `GET /boom` is the fixed 500, each with the field. A before that answers (418) stops the later befores and dispatch, and the afters still run on its answer (`b1; bstop; a1:418`). A before raising a `ToErrorResponse` type answers with it (499) and the afters run; one raising `Error` answers the fixed 500 `Internal Server Error`. An after raising `Error` replaces the response with the fixed 500, dropping the fields earlier afters added, and the later afters run on it (`hello; a1:200; araise; a2:500`). An after can replace the response (203 `replaced`). `HEAD /hello` reaches the hooks as `HEAD` and keeps its body in memory; `HEAD /raw` reaches a raw `get` handler as `HEAD`. A stateful after hook (an origin allow-list, `raises` a `ToErrorResponse` type) works. `State` count: 1, then 2 after a stateful registration, 2 after a request and after moving the `App`, 1 after dropping it; a stateful after hook's registration raises it to 2 too, and dropping the `App` returns it to 1. The record's example below, run as written with `TestClient`, gives the four answers it states.
+- **A over the wire** (`Server.bind("127.0.0.1", 0)`, a forked child serving the borrowed `App`): for `GET /hello` without and with the key, `GET /missing` without and with it, `POST /hello`, `GET /users/abc`, `GET /users/7` and `GET /boom` with it, the HTTP/1.1 status, fields (less `Date`, `Connection`, `Content-Length`) and body equal `TestClient`'s, 8 of 8. `HEAD /hello` without the key: 401 with both fields, no content, `Content-Length: 12` (the 401 body's length), over HTTP/1.1; over h2c `:status=401`, both fields, `content-length=12`, 0 DATA frames. With the key: 200, `Content-Length: 5`, 0 DATA frames over h2c. The adapter is unchanged: the hooks run inside `App.handle`, and its `HEAD` step applies to whatever `App.handle` answered.
+- **A, diagnostics** (each `no matching method in call to 'before'` or `'after'`, with one candidate note per overload): a capturing closure (`cannot be converted from 'def(req: Request) capturing thin -> Optional[Response]' to 'def(Request) raises Never thin -> Optional[Response]'`); `var req: Request`; a stateful hook without its state (with the note `.k of the first type is 'State[K]' but the second type is 'Request'`); the state after the request (`it depends on an unresolved parameter 'S'`); an after hook without the request; an after hook with `mut req`. An explicitly typed non-raising function value fails earlier with `TODO: function type conversions between closures not supported yet`, as for routes; spelled `raises Never` it registers. Two shapes register that were not designed: an after hook taking the response borrowed (`resp: Response`) registers and cannot change it, and a before hook declared `-> Response` registers and answers every request (its result converts to `Optional[Response]`; measured 401 for every request).
+- **A, existing fixtures and tests:** every one of the 403 fixtures under `tests/*/` was built against `main`'s `src` and against A's, and the whole outputs compared with paths normalized and `app.mojo` lines mapped through difflib's equal blocks: 0 differ (230 cite `app.mojo`, every citation mapped). Every `tests/test_*.mojo` built with `--Werror` against A's `src` and ran: 38 files, 396 of 396 tests passed. So with no hook registered nothing observable changes, and adding the `before` and `after` overloads changes no existing diagnostic: they are other method names, and Mojo 1.1.0 counts candidate notes per method name.
+- **B, the `Next` type.** A thin function value cannot be generic, so the stored type must name one concrete `Next`. A `Next` generic over the borrowed `App`'s origin makes the application's `def mw(req: Request, next: Next)` generic, and it does not convert: `cannot be converted from 'def mw1(req: String, next: Next[*?]) thin -> String' to 'def(String, Next[ImmutAnyOrigin]) thin -> String'`. A field `Pointer[App, ImmutAnyOrigin]` does not compile (`struct fields cannot expose AnyOrigin in their type ... use UntrackedOrigin if lifetime is managed explicitly`). So `Next` holds the `App` through `ImmUntrackedOrigin`, made by `unsafe_origin_cast`, an unsafe operation the compiler no longer checks. With a plain initializer, this safe program compiles and crashes with a segmentation fault: `var n = Next(app, 0); _ = app^; n(Request("GET", "/"))`; so does a struct that stores a `Next` it made. A middleware cannot move the `next` it receives (`cannot transfer out of immutable reference`), so only a `Next` made outside `App.handle` dangles; the initializer would have to be `_unsafe_`-named, as `_Erased`'s helpers are.
+- **B, semantics:** P1 and P2 hold in memory and over the wire as for A. A middleware that calls `next` twice runs the handler twice (`hello; hello`). A middleware registered before the API-key middleware can rewrite the request it passes on (`copy.headers.set("X-Api-Key", "k1")`), and the protected handler answers 200 without a key: what a later middleware checks depends on every earlier one.
+- **C:** the wrapper types are generic structs the application writes (`ApiKeyGate[Inner: Service & Movable & Deinitable]`); with `Service & Movable` alone the field does not compile (`field 'inner' has non-'Deinitable' type 'Inner'`). `handle` is non-raising, so `Headers.set` needs a `try` with a hand-written 500. `TestClient(svc)` and `server.serve(svc)` work with the trait generic (`TestClient[S: Service, //, origin]`); `TestClient(app)` still builds for the bare `App`, so whether a test or a server exercises the gate depends on which value it is given.
+- **E:** `app.before(RequireApiKey("k1"))` builds and answers 401 beside a function hook on the same `App`; a struct that does not conform gets the note `argument type 'RequireApiKey' does not conform to trait 'BeforeHook & Deinitable & Movable'`. A hook method declared `raises Teapot` does not conform to a trait method declared `raises` (`no 'before' candidates have type 'def(self: Gate, request: Request) raises thin -> Optional[Response]'`), so an object hook cannot answer through `ToErrorResponse`.
+- **Registration while borrowed:** `var client = TestClient(app); app.before(b1); client.get(...)` compiles and the client sees the hook; `main` already accepts the same order for `app.get` (measured 200). It is Mojo 1.1.0's existing behavior for `TestClient`'s pointer, not something hooks add, and it is not a dangling reference: the pointer is to the `App`, not into its lists. `Server.serve` borrows the `App` for a call that does not return while serving, so nothing registers while it serves.
+- **Hot path** (`App.handle(Request("GET", "/hello"))` on a one-route `App`, best of five runs of 200,000 requests, three repetitions, default `mojo build`): `main` 122 to 123 ns per request; A with no hook 121 to 124 (no measurable difference); A with one no-op before and one no-op after hook 135 to 137; B with no middleware 125 to 143, with two no-op middleware 155 to 156. By construction, not measured, no candidate's mechanism allocates per request: a hook is called through the box with a borrowed `Request`, the empty `Optional[Response]` is a value, and a stateful hook borrows its route-held `State` (count unchanged, measured); what a hook allocates (a field it adds) is its own.
+
+**Selected: A. `App` gains application-wide hooks: `app.before(hook)` runs before route selection and may answer instead of it, and `app.after(hook)` runs on every answer `App.handle` gives and may change it. Each takes a `State` as an optional second argument.** Both run inside `App.handle`, so `TestClient`, `Server` and any later backend run them alike; no backend or adapter changes, and no public type is added.
+
+```mojo
+from muntin import App, Request, Response, State
+
+
+struct ApiKeys(Movable):
+    var key: String
+
+    def __init__(out self, key: String):
+        self.key = key
+
+
+def require_api_key(keys: State[ApiKeys], req: Request) -> Optional[Response]:
+    var key = req.headers.get("x-api-key")
+    if not key or key.value() != keys[].key:
+        return Response.text("Unauthorized", status=401)   # answers; no route runs
+    return None                                            # continue
+
+
+def no_sniff(req: Request, mut resp: Response) raises:
+    resp.headers.set("X-Content-Type-Options", "nosniff")
+
+
+def hello() -> String:
+    return "hello"
+
+
+def main() raises:
+    var app = App()
+    app.before(require_api_key, State(ApiKeys("k1")))
+    app.after(no_sniff)
+    app.get["/hello"](hello)
+# GET /hello                  -> 401 "Unauthorized", X-Content-Type-Options: nosniff (hello not called)
+# GET /hello  X-Api-Key: k1   -> 200 "hello",        X-Content-Type-Options: nosniff
+# GET /missing X-Api-Key: k1  -> 404 "Not Found",    X-Content-Type-Options: nosniff
+# POST /hello X-Api-Key: k1   -> 405, Allow: GET, HEAD, X-Content-Type-Options: nosniff
+```
+
+How the key is compared (here `!=`, not constant-time) and where it comes from are the application's.
+
+- **Spellings.** Four methods on `App`, each `mut self`:
+  - `app.before(hook)` with `hook: def(Request) -> Optional[Response]`;
+  - `app.before(hook, state)` with `hook: def(State[S], Request) -> Optional[Response]`;
+  - `app.after(hook)` with `hook: def(Request, mut Response)`;
+  - `app.after(hook, state)` with `hook: def(State[S], Request, mut Response)`.
+
+  Each hook may be non-raising, `raises` or `raises T`, inferred as for handlers (`thin raises E`). The overloads take these exact function types: there is no generic slot, rule, `where` clause or registration-time check, so a wrong shape is `no matching method` with the overloads' notes (measured above). `State` is first and the state is the registration's second argument, as for routes ([M3-001](#application-state-decision-m3-001)). Measured but not designed, and documented as such: an after hook taking `resp: Response` borrowed registers (it can read but not change the response), and a before hook declared `-> Response` registers and answers every request.
+- **Execution order, in `App.handle(request)`:**
+  1. each before hook, in registration order, with `request` borrowed. A hook that returns a `Response` answers: no later before hook and no route dispatch runs. A hook that raises answers with its error's response (`ToErrorResponse` if the declared `T` conforms, else the fixed 500 with the error dropped unread, exactly as for a handler, M2-012), and nothing later runs either. `None` continues;
+  2. if no before hook answered: route dispatch, which is today's `App.handle` unchanged (selection, 405 or 404, value gathering and decoding, the adapter's conversions, the handler, `ToErrorResponse` or the fixed 500, the result conversion);
+  3. each after hook, in registration order, with `request` borrowed and the current response `mut`: the before hook's answer or the dispatch's, whatever its status. An after hook may change the status, body and fields or replace the response. If it raises, its error's response (as in step 1) replaces the current response, earlier changes included, and the later after hooks still run on it;
+  4. the result is returned to the backend.
+
+  Registration order between hooks and routes does not matter: hooks are kept apart from the route list, and all of them apply to every request. With no hook registered, step 2 is the whole of `App.handle`, and every answer is what it is today.
+- **Where hooks run, against today's steps:**
+
+  | Step | Before hooks | After hooks |
+  |---|---|---|
+  | the backend's own answers before `App.handle`: Flare's 400 (lowercase method, target bytes), Flare's 413 (body over 10 MiB), the adapter's 400 for a request field it cannot represent | do not run | do not run |
+  | route selection, 404, 405 with `Allow` | run first; can answer instead (a 401 for a path no route has, or for a wrong method) | run on the 404 or 405; `Allow` stays unless a hook changes it |
+  | route-value gathering and decoding (400) | run first; can answer instead | run on the 400 |
+  | slot conversion: route values (400), `Json[T]` 415 and 413, header rebuild 500, `from_body` (400) | run first; can answer instead | run on the answer |
+  | the handler, `ToErrorResponse`, the fixed 500, result conversion (including `Json[T]`'s fixed 500) | run first; can answer instead, then the handler is not called | run on the answer |
+  | the adapter's outgoing field check (500) and its `HEAD` step | — | have run; the adapter sends their result, emptied for `HEAD` with that result's `Content-Length` |
+
+  Hooks see neither the selected route nor its values: a before hook that exempts paths compares `req.path`, which is the raw, undecoded path selection itself matches byte for byte, so `/%68ealth` neither selects `/health` nor equals it. `HEAD` reaches hooks as `HEAD`, not as `GET`. First-match selection, `Allow`, the validation order and every answer with no hook registered are unchanged.
+- **Short-circuit.** Only a before hook can stop dispatch, by returning a `Response` or raising. The answer is that response as built, status, body and fields (Muntin adds nothing to it), then the after hooks. Because every before hook runs before route selection and receives the same, unchanged `Request`, no later hook and no route can change what an earlier hook checked, and no route is reachable around a before hook: route handlers are called only from dispatch, which runs only after every before hook returned `None`. Backends call only `App.handle`.
+- **Ownership.**
+  - The request: owned by the backend's caller as today; every hook borrows it immutably. Hooks cannot change it, so dispatch sees what the backend built.
+  - The response: owned by `App.handle`; each after hook borrows it `mut`, and can replace it.
+  - Hook values: each registration moves the function value into one type-erased box held by the `App` (two allocations at registration, none per request, as for routes); a stateful registration copies the `State` handle once (count +1), and requests borrow it (count unchanged; measured). Dropping or moving the `App` drops or moves the hooks.
+  - The `App`: `TestClient(app)` and `server.serve(app)` borrow it as today; hooks are registered by `mut self` calls before serving.
+- **No request mutation, no request-scoped context.** A before hook cannot pass what it learned (a user id) to the handler. A handler that needs it reads the same field again (a `Headers` parameter, a `WithHeaders[B]` body or a raw `req.headers`) and, if needed, the same `State`. A typed channel would be request-scoped injection, a second injected kind that [M3-001](#application-state-decision-m3-001) and [M3-014](#registration-structure-decision-m3-014) send to its own decision; a header written by a hook would be text the client can also send. Neither is built here.
+- **Backend seam.** Unchanged: `App.handle(Request) -> Response` stays the only seam, and its meaning grows to include the hooks. The adapter, `TestClient`, `Server` and their tests do not change; the `HEAD` rule stays the network backend's and applies to the hooks' result (measured over HTTP/1.1 and h2c). No Flare or backend type appears in a hook's signature, and `src/muntin` still imports no backend.
+- **Storage.** `_handler_storage.mojo` gains a second box type, generic over what it is called with (`_Hook[A, B]`, called with a borrowed `A` and a `mut B`), built as `_Erased` is; the `App` holds `List[_Hook[Request, Optional[Response]]]` and `List[_Hook[Request, Response]]`. The storage module names neither `Request` nor `Response` for it (its instantiation is in `app.mojo`), so `check_unsafe.sh`'s request-data rule holds; its import rule gains `_Hook`.
+
+**Candidates.**
+
+| Candidate | Verdict |
+|---|---|
+| D0: no mechanism | rejected: P1 fails open one route at a time and cannot answer before Muntin's 400, 404 or 405; P2 cannot reach Muntin's own answers at all |
+| A: `app.before` and `app.after` | **chosen**: solves P1 and P2 with no public type, no backend change and no unsafe borrow; every before hook sees the request the backend built, so none can be bypassed by another hook; zero hooks leave every answer and every existing diagnostic as they are (measured) |
+| A with afters skipping a before hook's answer | rejected: P2's field belongs on the 401 too |
+| A with afters in reverse registration order (nesting) | rejected: hooks do not nest, so one order for both lists is simpler to state; an after hook that must run last is registered last |
+| A with a mutable request in before hooks | rejected: a hook could then change what later hooks check and which route is selected (B's rewrite, measured), and a header written for the handler is text a client can send too |
+| A with a raise as the only way to answer (`def(Request) raises T`) | rejected as the only spelling: an `Optional[Response]` result lets a hook answer without declaring an error type; a raise still answers (step 1) |
+| B: `app.use` with `next` | rejected on Mojo 1.1.0: `Next` cannot carry the `App`'s origin through a stored thin function type, so it needs an untracked borrow, and a public initializer makes a safe-code use-after-free (measured); the initializer would be `_unsafe_`-named and the soundness of a public type would rest on how it is constructed. Its extra power (code around the handler, calling `next` twice, passing a different request on) is what P1 and P2 do not need, and the rewrite is what lets an earlier middleware defeat a later check (measured). Revisit conditions below |
+| C: wrappers composed outside `App.handle` | rejected: safe and zero-cost, but it makes the backend seam a trait implemented by application types, makes `TestClient` and `Server.serve` generic over it, and moves error mapping, `HEAD` and fields into hand-written generic structs (bounds `Service & Movable & Deinitable`, measured). Serving the bare `App` instead of the wrapper still compiles, so the gate is only as present as the value the program passes. No application composes several `App`s today (A7) |
+| E: hook objects (`app.before(RequireApiKey("k1"))`) | rejected for now: it works beside function hooks (measured), but it is a second way to hold configuration beside `State`, its trait fixes the error type so `ToErrorResponse` is out of reach (measured), and the configuration cannot be shared with handlers as a `State` is. It can be added later as one more overload without changing A |
+
+**M2: not reopened.** Nothing that registers or answers today changes: with no hook registered, `App.handle` answers every request as it does now, and the route overloads, rules and diagnostics are untouched (existing fixtures measured unchanged above). What an application with hooks answers is its own choice. By kind: the accepted set and the overload set of `get`, `post`, `put`, `patch` and `delete` are unchanged; `App` gains two method names with two overloads each; no diagnostic changes; the runtime without hooks is unchanged.
+
+**Invariants:**
+- With no hook registered, `App.handle` answers exactly as before M3-035.
+- A route handler, a route-value decoding and a body conversion run only after every before hook returned `None`.
+- Every before hook receives the request the backend built; after hooks receive it too; no hook can change it.
+- Every after hook runs once on every answer `App.handle` gives, in registration order.
+- A hook's error answers through `ToErrorResponse` or the fixed 500, never its text.
+
+**Cost.** Two method names with two overloads each on `App`, and two lists in every `App`. A second type-erased box in the unsafe-confined module (about 50 lines in the same pattern as `_Erased`, with the same invariant), and `check_unsafe.sh`'s import rule widened by one name. With no hook, two list-length checks and an empty `Optional[Response]` per request (no measurable difference, timed above). Per hook, one indirect call per request. No request-scoped context; no route-local hooks; nothing around the handler (timing a request needs two hooks and somewhere to keep the start time, which a hook does not have). A before hook that guards some paths only compares raw paths itself. Muntin's fixed answers can now be rewritten by an application's after hook; they are unchanged when it does not.
+
+**Revisit when:**
+- an application needs a hook on some routes only, or on a group of routes (route-local middleware): revisit storing hooks with routes, and whether that needs route-aware selection;
+- an application needs to pass a typed value from a hook to a handler (an authenticated user): that is request-scoped injection, a second injected kind ([M3-001](#application-state-decision-m3-001), [M3-014](#registration-structure-decision-m3-014)); revisit together;
+- observability needs code around the handler (timing, tracing, logging of dropped errors): revisit B, and whether `Next` can hold the `App` without an untracked borrow on the Mojo version then pinned;
+- Mojo gains storable capturing closures, generic function values or existentials: revisit B and E;
+- a second network backend exists, or applications compose several `App`s or mount one in another: revisit C;
+- `OPTIONS` or CORS preflight is decided ([M3-030](#method-not-allowed-decision-m3-030)): a before hook can already answer `OPTIONS` before the 405; revisit whether that is the supported way;
+- `App.handle` may run concurrently: hooks' `State` values join [M3-001](#application-state-decision-m3-001)'s interior-mutability question;
+- the backend's own answers (Flare's 400 and 413, the adapter's 400) need the hooks' fields: revisit whether the adapter routes them through `App`.
+
+**Next production slice (M3-035): application-wide hooks.**
+- Code, `src/muntin/_handler_storage.mojo`: `struct _Hook[A: AnyType, B: AnyType](Movable)`, a second type-erased box built as `_Erased` is (one `ThinAllocation` header holding the invoke trampoline, the drop function and the erased `OwnedPointer[F]` allocation; `__init__[F, call: def(F, A, mut B) raises thin]` instantiates both functions for the same `F`; `invoke(self, a: A, mut b: B) raises`; not `Copyable`). The module docstring's list of unsafe operations and its invariant cover it. The module still names neither `Request` nor `Response` for it.
+- Code, `src/muntin/app.mojo`: `App` gains `_before: List[_Hook[Request, Optional[Response]]]` and `_after: List[_Hook[Request, Response]]`; four module-level trampolines, each calling its hook in a `try` and turning its error into `_handler_error(e^)` (stateful ones take the existing `_Bound` and pass `bound.state` first); the four methods with exactly these signatures:
+
+  ```mojo
+  def before[E: Deinitable, //](mut self, hook: def(Request) thin raises E -> Optional[Response])
+  def before[S: Movable & Deinitable, E: Deinitable, //](mut self, hook: def(State[S], Request) thin raises E -> Optional[Response], state: State[S])
+  def after[E: Deinitable, //](mut self, hook: def(Request, mut Response) thin raises E)
+  def after[S: Movable & Deinitable, E: Deinitable, //](mut self, hook: def(State[S], Request, mut Response) thin raises E, state: State[S])
+  ```
+
+  `handle` runs this record's steps 1 to 4 (a raise out of a hook box's `invoke`, which no trampoline makes, is the fixed 500), and today's body of `handle` moves unchanged into a private method that step 2 calls; `handle`'s docstring states the order and the boundary table's rows. `src/muntin/__init__.mojo` exports nothing new. No change to `testing.mojo`, the adapter or `compat`.
+- `scripts/check_unsafe.sh`: its import rule admits `_Hook` beside `_Erased` and `_Shared`; no other rule changes.
+- Tests, a new `tests/test_hooks.mojo` through `App.handle` and `TestClient` (`TestClient`'s answers equal `App.handle`'s for every case it can send): every probe case measured above, as written; the field on Muntin's 404, 405 (with `Allow` unchanged), 400 (a route value, a query value, an empty body), 415 (a `Json[T]` body without `Content-Type`) and the fixed 500; a typed handler's `ToErrorResponse` answer; a raw route reached through hooks; the two undesigned shapes (a borrowed-response after hook registers and leaves the response unchanged; a before hook declared `-> Response` answers every request); a `State` shared by a hook and a handler; and this record's example, verbatim, with its four answers. No handler, `from_body` or decoding runs on a before hook's answer (counted, as `tests/test_response.mojo` counts).
+- Must not build, a new directory `tests/hooks_api_fail/` added to `check.sh`'s must-fail list, one error each, with the texts measured above: a capturing closure passed to `before`; `def(var req: Request)` to `before`; a stateful before hook without its state; the state after the request; an after hook without the request; an after hook with `mut req`. Each is also built against the base `src`, where it fails differently (`App` has no `before` or `after`), so each is evidence for this change, not a regression pin.
+- Mutations, each on a scratch copy, each killed by `tests/test_hooks.mojo` (measured against the probe): after hooks skipped for a before hook's answer; after hooks in reverse order; before hooks continuing after one answered; dispatch running after a before hook answered; a raising after hook leaving the response as it was; a raising before hook continuing.
+- Loopback, `adapters/flare/test_localhost_roundtrip.mojo`: one new case (no existing `App` has hooks, and adding them to one would change its other assertions): this record's `App` served through `Server`, the eight HTTP/1.1 requests above compared with `TestClient` (status, fields less `Date`, `Connection` and `Content-Length`, body); `HEAD /hello` without the key over HTTP/1.1 as raw bytes (401, both fields, `Content-Length: 12`, nothing after the header block); and over h2c (`:status=401`, both fields, `content-length=12`, no DATA frame) and with the key (200, `content-length=5`, no DATA frame).
+- Verification: `docs/DEVELOPMENT.md` section 3. Its wire trigger applies (how `App.handle` builds the response): a local `check_flare.sh` run before pushing. The base-wide diagnostic comparison is not required by section 3 (no route overload, signature, `where` clause or call chain to `_check` changes); this record ran it on its scratch implementation and found 0 of 403 differ.
+- Docs, by one rule: grep `middleware`, `app.use`, `before` and `after` in `README.md`, `docs/DX.md`, `docs/ARCHITECTURE.md` and `docs/SPEC.md`; a statement changes when it says Muntin has no middleware or names `app.use` as the target. Known instances: `docs/DX.md` section 7 (the target becomes this record's example and contract, with B's measured limitation as the reason the target is not `app.use`, and the status names the tests); `docs/ARCHITECTURE.md`'s diagram (`later: middleware (M3)`), "Modules and public surface" (`App`'s hooks), "Request handling" (the hook steps before the table, and that the table is dispatch), "Storage and ownership" (`_Hook`), "Other current limits" (middleware becomes route-local hooks, code around the handler and request-scoped context), and a revisit-index row for `tests/hooks_api_fail` and `tests/test_hooks.mojo`; `docs/SPEC.md`'s M3 table (hooks, shipped) and the middleware candidate (what remains); `README.md`'s "Not yet" bullet; `AGENT_PROGRESS.md`.
+- Not in the slice: B (`app.use` and `next`), C, E, route-local hooks or groups, a mutable request, request-scoped context, async, dependency injection, built-in CORS, authentication, JWT, sessions, tracing, a plugin system, `TestClient.head`, any adapter or `compat` change.
