@@ -10,9 +10,15 @@ or retry. The child arms a 30-second `alarm(2)`; the parent SIGKILLs and reaps
 it in `finally` unless the test has already reaped it. Requests are raw
 HTTP/1.1 over `TcpStream` with `Connection: close`, read until the server
 closes.
+
+The `::1` case needs IPv6. It is skipped only where the host shows it has none
+(`socket(AF_INET6, ...)` fails with `EAFNOSUPPORT`) and `CI` is unset; under
+`CI` it always runs, so the CI runners keep binding `::1`.
 """
 
-from std.ffi import c_int, c_uint, external_call
+from std.ffi import c_int, c_uint, external_call, get_errno
+from std.os import getenv
+from std.sys import CompilationTarget
 from std.testing import assert_equal, assert_true, TestSuite
 
 from flare.net import SocketAddr
@@ -25,6 +31,9 @@ from muntin_flare import Server
 comptime TIMEOUT_MS = 5_000
 comptime CHILD_LIFETIME_S = 30
 comptime SIGALRM = 14
+comptime AF_INET6 = 30 if CompilationTarget.is_macos() else 10
+comptime SOCK_STREAM = 1
+comptime EAFNOSUPPORT = 47 if CompilationTarget.is_macos() else 97
 
 
 def hello() -> String:
@@ -234,12 +243,29 @@ def test_bind_raises_for_a_host_name() raises:
     assert_true(not error.startswith("bound port"), error)
 
 
-def test_bind_ipv6_loopback_and_ipv4_any() raises:
-    var v6 = Server.bind("::1", 0)
+def test_bind_ipv4_any() raises:
     var v4_any = Server.bind("0.0.0.0", 0)
-    print("observed: ::1 ->", v6.port(), "0.0.0.0 ->", v4_any.port())
-    assert_true(v6.port() > 0)
+    print("observed: 0.0.0.0 ->", v4_any.port())
     assert_true(v4_any.port() > 0)
+
+
+def test_bind_ipv6_loopback() raises:
+    var v6 = Server.bind("::1", 0)
+    print("observed: ::1 ->", v6.port())
+    assert_true(v6.port() > 0)
+
+
+def _host_has_no_ipv6() -> Bool:
+    """True only when the OS refuses an IPv6 socket as an unsupported address
+    family; any other result, an IPv6 socket or another errno, is False, so
+    `test_bind_ipv6_loopback` runs."""
+    var fd = external_call["socket", c_int](
+        c_int(AF_INET6), c_int(SOCK_STREAM), c_int(0)
+    )
+    if fd >= 0:
+        _ = external_call["close", c_int](fd)
+        return False
+    return Int(get_errno().value) == EAFNOSUPPORT
 
 
 def test_dropping_a_server_releases_its_port() raises:
@@ -284,4 +310,11 @@ def test_sigint_ends_a_serving_child() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    var suite = TestSuite.discover_tests[__functions_in_module()]()
+    if _host_has_no_ipv6():
+        if getenv("CI") != "":
+            print("observed: no IPv6 on this host; CI is set, so ::1 runs")
+        else:
+            print("observed: no IPv6 on this host (EAFNOSUPPORT); ::1 skipped")
+            suite.skip[test_bind_ipv6_loopback]()
+    suite^.run()
