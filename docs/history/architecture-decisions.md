@@ -3093,7 +3093,7 @@ From a clone it runs as `pixi run -e flare mojo run -I src -I adapters/flare exa
 
 ### Middleware decision (M3-034)
 
-Status: **decision** (M3-034; `src/muntin`, `adapters/`, `compat/` and `tests/` are unchanged in it). It decides the first mechanism by which application code applies one rule to every request without repeating it in each handler. Today there is none (`docs/DX.md` section 7: `app.use` does not exist).
+Status: **decision** (M3-034, PR #71; `src/muntin`, `adapters/`, `compat/` and `tests/` are unchanged in it). It decides the first mechanism by which application code applies one rule to every request without repeating it in each handler. Today there is none (`docs/DX.md` section 7: `app.use` does not exist).
 
 **Why now.** Middleware is a remaining M3 candidate that earlier records deferred because no handler shape depends on it and because its design was "the largest and least settled on Mojo 1.1.0 (no captures, no existentials)" ([M3-018](#route-value-decoding-and-string-route-values-decision-m3-018), [M3-020](#http-methods-decision-m3-020), [M3-022](#several-route-values-decision-m3-022)). Serving now exists ([M3-032](#serving-entrypoint-decision-m3-032), shipped by M3-033), so an application that serves has nowhere to put a rule that every request must pass. This record measures those Mojo constraints instead of assuming them.
 
