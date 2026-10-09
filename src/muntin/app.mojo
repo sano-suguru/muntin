@@ -855,13 +855,61 @@ struct _Route(Movable):
         self.handler = handler^
 
 
+struct Next[o: Origin[mut=False]](Movable):
+    """The rest of the request handling after one middleware, for the
+    duration of that middleware's call (M3-034).
+
+    A middleware receives it as `var next: Next` and runs the rest at most
+    once, as `next^.run(request^)`. It holds an immutable pointer to the
+    borrowed `App` with that borrow's origin `o`, so it cannot outlive the
+    call, and the index of the next middleware. It is `Movable`, not
+    `Copyable`, and has no plain call: `run` consumes it, so a second use of
+    the same `next` does not compile. Its initializer takes only
+    `_`-prefixed keyword arguments, so no public spelling builds one.
+    """
+
+    var _app: Pointer[App, Self.o]
+    var _index: Int
+
+    def __init__(out self, *, ref[Self.o] _app: App, _index: Int):
+        self._app = Pointer(to=_app)
+        self._index = _index
+
+    def run(deinit self, var request: Request) -> Response:
+        """Runs the rest on `request`, the next middleware or, after the
+        last, the routes, and returns its answer. Consumes `self`: call it
+        as `next^.run(request^)`."""
+        return self._app[]._run(self._index, request^)
+
+
+comptime Middleware = def[o: Origin[mut=False]](
+    var Request, var Next[o]
+) raises thin -> Response
+"""A middleware function, registered with `App.use` (M3-034). An
+application `def(var request: Request, var next: Next) raises -> Response`
+converts to it, as does one that borrows the request or does not raise."""
+
+
 struct App(Movable):
     """A Muntin application: a set of routes and the dispatch entry point."""
 
     var _routes: List[_Route]
+    var _middleware: List[Middleware]
 
     def __init__(out self):
         self._routes = List[_Route]()
+        self._middleware = List[Middleware]()
+
+    def use(mut self, middleware: Middleware):
+        """Registers `middleware` around every request `App.handle`
+        receives, after the middleware registered before it (M3-034).
+
+        Middleware runs in registration order, outermost first, whether
+        `use` comes before or after the routes are registered. A raise out of
+        a middleware is the fixed 500 at that middleware's call; the
+        middleware outside it receives that 500 from its `next`.
+        """
+        self._middleware.append(middleware)
 
     def get[
         E: Deinitable, R: Movable & Deinitable, //, path: StaticString
@@ -2136,12 +2184,18 @@ struct App(Movable):
             abort(_GUARD_DRIFT)
 
     def handle(self, request: Request) -> Response:
-        """Dispatches `request` through the application's routes.
+        """Answers `request` through the application's middleware and routes.
 
         This is the backend seam: every transport (the in-memory TestClient,
-        network adapters) delivers requests through this method. The first
-        registered route whose method and path match handles the request,
-        raw or typed; the query takes no part in selecting it. Methods match
+        network adapters) delivers requests through this method. With no
+        middleware registered, the routes answer the borrowed request
+        directly (`_dispatch`). Otherwise the request is copied once, its
+        body included, and passed to the first middleware; each `Next.run`
+        passes it on to the next one, and the last one's to the routes
+        (`_run`, M3-034). What follows is the routes' answer.
+
+        The first registered route whose method and path match handles the
+        request, raw or typed; the query takes no part in selecting it. Methods match
         byte for byte, except that a `HEAD` request also matches a `GET`
         route and runs the `GET` route's steps: a typed handler receives the
         same arguments as for the `GET`, a raw handler the `HEAD` request
@@ -2183,6 +2237,26 @@ struct App(Movable):
         a handler error into a response (`_handler_error`). A raise out of
         `invoke` is 500, never 400.
         """
+        if len(self._middleware) == 0:
+            return self._dispatch(request)
+        return self._run(0, request.copy())
+
+    def _run(self, index: Int, var request: Request) -> Response:
+        """The answer of the middleware at `index` and everything after it;
+        past the last middleware, the routes'. A raise out of the middleware
+        is the fixed 500 here, at its own call, so the middleware outside it
+        receives an ordinary response from its `next` (M3-034)."""
+        if index == len(self._middleware):
+            return self._dispatch(request)
+        try:
+            return self._middleware[index](
+                request^, Next(_app=self, _index=index + 1)
+            )
+        except:
+            return _internal_error()
+
+    def _dispatch(self, request: Request) -> Response:
+        """The routes' answer to `request`, as `handle` describes it."""
         var args = List[String]()
         # Indexed, not `for route in self._routes`: on Mojo 1.1.0 List
         # iteration requires a `Copyable` element, and routes are move-only

@@ -90,6 +90,7 @@ An M3 area with an open design question is cut decision-first: a decision item p
 | `HEAD` through `get` routes (the `GET` route's steps; the backend sends no content and the body's length) | shipped |
 | 405 `Method Not Allowed` with `Allow` for a request whose path a route of another method matches (404 when no route matches the path) | shipped |
 | serving an `App` over cleartext HTTP/1.1 and h2c through the Flare adapter's `Server` (`Server.bind(host, port)`, `server.port()`, `server.serve(app)`; one thread, IP literals, no graceful shutdown; no core `app.run()`) | shipped |
+| middleware functions (`app.use(f)` with `def(var Request, var Next) raises -> Response`; the rest runs at most once through `next^.run(request^)`; every request `App.handle` receives, in registration order; compile-time configuration only) | shipped |
 
 ### Remaining candidates
 
@@ -103,7 +104,7 @@ Each becomes its own item, a decision item first where it opens a design questio
 - **more body shapes**: a Muntin text type conforming to `FromBody` (raw `String` is a route-value type, never a body), optional, multiple, streaming and binary bodies (binary needs a non-`String` body representation);
 - **fallible conversions and parameter-name checking**: a raising `to_response`/`to_error_response` needs its own error answer; name checking needs function-parameter reflection, which Mojo 1.1.0 lacks;
 - **broader raw handlers**: raw route values, `String`/`ToResponse` raw results (each a rule change on the arity overloads);
-- middleware: decided by [Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034) (functions with `App.use` and `Next`), next item M3-035; runtime-configured middleware, request-scoped typed context and per-route middleware are later items, each with a revisit condition there;
+- **more middleware**: runtime-configured middleware (middleware values, A in [M3-034](history/architecture-decisions.md#middleware-decision-m3-034), or a `State` bound to a middleware function), request-scoped typed context (an identity a handler receives), per-route or per-group middleware and middleware error types, each with a revisit condition there;
 - structured errors, including application-level error mappers (rejected on Mojo 1.1.0 by M2-012; its revisit conditions apply);
 - observability hooks, including logging of dropped handler errors;
 - streaming;
