@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-M3-037: `TestClient.head`, the "Next production slice" of [TestClient HEAD decision (M3-036)](docs/history/architecture-decisions.md#testclient-head-decision-m3-036), as written: `head(target, *, headers=)` returns `App.handle(Request("HEAD", target, "", headers^))` unchanged, the `GET`'s body included; `TestClient` removes no body and declares no length (that stays the network backend's, M3-026). Blockers: none.
+M3-037: `TestClient.head`, the "Next production slice" of [TestClient HEAD decision (M3-036)](docs/history/architecture-decisions.md#testclient-head-decision-m3-036), as written: `head(target, *, headers=)` returns `App.handle(Request("HEAD", target, "", headers^))` unchanged, its body included (the `GET`'s when the route and middleware answer `HEAD` as `GET`); `TestClient` removes no body and declares no length (that stays the network backend's, M3-026). Blockers: none.
 
 ## Easy to miss
 

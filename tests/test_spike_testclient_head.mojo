@@ -2,7 +2,7 @@
 # `SpikeClient` holds the candidates over the unchanged production `App`,
 # `Request` and `Response`, built as production `TestClient`'s methods are:
 #   A  (`head_keep`): `App.handle(Request("HEAD", target, "", headers^))`,
-#      returned unchanged, the `GET`'s body included;
+#      returned unchanged, its body included;
 #   B1 (`head_drop`): that response with its body removed;
 #   B2 (`head_framed`): B1 plus a `Content-Length` equal to the removed
 #      body's byte length, none for 1xx, 204, 205 and 304: the Flare
@@ -242,7 +242,7 @@ def test_a_equals_app_handle_for_head() raises:
 
 
 def test_a_equals_the_get_answer() raises:
-    # Every route here answers `HEAD` as `GET` (the raw ones follow DX's
+    # Each of the 13 targets answers `HEAD` as `GET` (the raw ones follow DX's
     # rule), so A's answer is `TestClient.get`'s, body and fields included,
     # except 405, whose `GET` is a 405 too with the same `Allow`.
     var calls = State(Calls())
