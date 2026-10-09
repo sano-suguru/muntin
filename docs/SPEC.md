@@ -67,7 +67,7 @@ M3-031 reopened the contract (decided by M3-030): a request whose path some rout
 
 Answering `OPTIONS` itself and CORS preflight are not decided; until then `OPTIONS` is answered like any method no route has ([Method not allowed decision (M3-030)](history/architecture-decisions.md#method-not-allowed-decision-m3-030)).
 
-M3-038 reopened the contract (decided in the same item): through the Flare adapter, a request whose body is not well-formed UTF-8 is answered 400 `Bad Request` by the adapter before `App.handle`, where M2 routed it with the body's bytes replaced by U+FFFD. That changes the 400/404 boundary for that class of requests over Flare, so it is an M2 reopen under M2-016 ("a different 400/404/500 boundary"). By kind:
+M3-038 reopened the contract (decided in the same item): through the Flare adapter, a request Flare hands to the adapter whose body is not well-formed UTF-8 is answered 400 `Bad Request` by the adapter before `App.handle`, where M2 routed it with the body's bytes replaced by U+FFFD. That changes the 400/404 boundary for that class of requests over Flare, so it is an M2 reopen under M2-016 ("a different 400/404/500 boundary"). By kind:
 - `App.handle` and `TestClient`: unchanged;
 - the wire: over HTTP/1.1 and h2c, such a request, once Flare hands it to the adapter, is 400 whatever its method and path, before middleware and routing (a `HEAD` one under M3-027's rule); every other body, U+FFFD and NUL included, reaches the application byte for byte, as before;
 - the raw escape hatch: a raw handler receives the whole `Request` of every request that reaches `App.handle`; over Flare a body that is not UTF-8 does not reach it;
