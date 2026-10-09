@@ -211,6 +211,8 @@ def h1_post_chunked(
     )
     var digits = "0123456789abcdef"
     for c in chunks:
+        if len(c) == 0 or len(c) > 15:
+            raise Error("the probe writes chunk sizes 1 to 15 only")
         wire.extend(Span(List(String(digits[byte=len(c)]).as_bytes())))
         wire.append(13)
         wire.append(10)
