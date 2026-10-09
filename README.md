@@ -97,6 +97,11 @@ To serve [`examples/hello_server.mojo`](examples/hello_server.mojo) on `http://1
 
 ```sh
 pixi run -e flare mojo run -I src -I adapters/flare examples/hello_server.mojo
+```
+
+`server.serve(app)` blocks, so the server keeps running in that terminal. In another terminal:
+
+```sh
 curl http://127.0.0.1:8080/   # Hello, Mojo!
 ```
 

@@ -1282,7 +1282,7 @@ def main() raises:
     server.serve(app)
 ```
 
-The exact spellings are provisional. The durable properties are a small application surface, typed handlers, typed extraction, automatic conversion where safe, useful compile-time validation, low-level escape hatches, and backend independence.
+The spellings of what this example still lacks (below) are provisional; the shipped ones it uses, such as `App`, `app.get`, `app.post` and `Server.bind`/`serve`, are the current API (section 1). The durable properties are a small application surface, typed handlers, typed extraction, automatic conversion where safe, useful compile-time validation, low-level escape hatches, and backend independence.
 
 Status: the handler model of this example is production: `get_user(id: Int) -> User` with `app.get["/users/{id}"]` and `create_user(body: CreateUser) -> User` with `app.post["/users"]`, through `TestClient` and the Flare adapter. What still differs from the example:
 
