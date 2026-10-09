@@ -897,7 +897,7 @@ app.get["/users/{id}"](get_user)
 
 Middleware should be able to inspect a request, short-circuit, call the next layer, inspect/modify a response, and attach request-scoped typed context. The public middleware contract must be Muntin-owned even if an adapter internally translates to a backend-specific mechanism.
 
-Status: decided, not shipped ([Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034)): `app.use(f)` takes a function `def(var Request, var Next) raises -> Response`, which may answer itself or run the rest with `next^.run(request^)`; that call consumes `next`, so a second one does not compile. Configuration is compile-time (the function's own parameters); runtime-configured middleware (the `Tracing()` values above) and request-scoped typed context are later decisions, and request header fields are not a way to pass an identity to a handler. The next item (M3-035) ships it; `app.use` does not exist until then.
+Status: decided, not shipped ([Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034)): `app.use(f)` takes a function `def(var Request, var Next) raises -> Response`, which may answer itself or run the rest with `next^.run(request^)`; that call consumes `next`, so the rest runs at most once (a second direct call does not compile). Configuration is compile-time (the function's own parameters); runtime-configured middleware (the `Tracing()` values above) and request-scoped typed context are later decisions, and request header fields are not a way to pass an identity to a handler. The next item (M3-035) ships it; `app.use` does not exist until then.
 
 ## 8. Application state
 

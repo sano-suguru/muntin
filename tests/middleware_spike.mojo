@@ -19,7 +19,7 @@
 #             `MwApp`'s, so it cannot outlive that borrow, and no `AnyOrigin`
 #             or untracked pointer is involved (a struct field cannot hold
 #             `AnyOrigin` on Mojo 1.1.0). `Movable`, not `Copyable`; its one
-#             call, `next^.run(request)`, consumes it (`deinit self`), so a
+#             call, `next^.run(request^)`, consumes it (`deinit self`), so a
 #             second call or a call in a loop does not compile (`use of
 #             uninitialized value 'next'`): one middleware call dispatches the
 #             rest at most once, by type. `run` runs the rest and returns its
