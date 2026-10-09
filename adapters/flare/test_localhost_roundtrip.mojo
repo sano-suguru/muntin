@@ -2346,7 +2346,9 @@ def test_request_target_and_method_bytes_over_h2c_and_http1() raises:
             assert_equal(
                 _h2_field(answers[i][0], ":status"), String(local.status), at
             )
-            assert_true(_same_bytes(Span(answers[i][1]), local.body.as_bytes()))
+            assert_true(
+                _same_bytes(Span(answers[i][1]), local.body.as_bytes()), at
+            )
             assert_equal(_h2_field(answers[i][0], "x-seen"), "1", at)
             var allow = local.headers.get("allow")
             var want = allow.value() if allow else String("<none>")
