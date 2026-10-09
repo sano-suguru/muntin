@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Flare checks: builds and runs compat/flare, the Flare adapter's contract
-# tests and its real localhost round trips (adapters/flare) against the Flare
+# tests, its `Server` tests and its real localhost round trips
+# (adapters/flare), and builds examples/hello_server.mojo, against the Flare
 # release pinned in pixi.toml's `flare` environment, and checks that the
 # default environment (which builds src/muntin) cannot see Flare. Exits nonzero
 # on any failure.
@@ -15,6 +16,16 @@ adapter=adapters/flare
 adapter_tests=$adapter/test_muntin_flare.mojo
 serve_probe=$adapter/serve_probe.mojo
 roundtrip=$adapter/test_localhost_roundtrip.mojo
+server_tests=$adapter/test_server.mojo
+example=examples/hello_server.mojo
+# M3-032's must-not-build fixtures for Server (docs/history/architecture-decisions.md
+# "Serving entrypoint decision (M3-032)"), built with -I src -I $adapter.
+serve_fixtures=(
+    compat/flare/serve/workers_need_copyable.mojo
+    compat/flare/serve/server_handler_not_copyable.mojo
+    compat/flare/serve/server_positional_init.mojo
+    compat/flare/serve/server_keyword_init.mojo
+)
 
 step() { printf '\n== %s\n' "$*"; }
 
@@ -41,6 +52,12 @@ cp -R "$adapter" "$tmp/adapter"
 "${FLARE[@]}" format --quiet "$tmp/adapter"
 if ! diff -ru "$adapter" "$tmp/adapter"; then
     echo "error: $adapter is not formatted; run: pixi run -e flare mojo format $adapter" >&2
+    exit 1
+fi
+cp "$example" "$tmp/example.mojo"
+"${FLARE[@]}" format --quiet "$tmp/example.mojo"
+if ! diff -u "$example" "$tmp/example.mojo"; then
+    echo "error: $example is not formatted; run: pixi run -e flare mojo format $example" >&2
     exit 1
 fi
 echo "ok"
@@ -78,6 +95,8 @@ build_bg flare_smoke "$fixture"
 build_bg test_muntin_flare -I src -I "$adapter" "$adapter_tests"
 build_bg serve_probe -I src -I "$adapter" "$serve_probe"
 build_bg_known test_localhost_roundtrip -I src -I "$adapter" "$roundtrip"
+build_bg test_server -I src -I "$adapter" "$server_tests"
+build_bg hello_server -I src -I "$adapter" "$example"
 build_bg flare_header_probe -I src -I "$adapter" compat/flare/headers/flare_header_probe.mojo
 build_bg inbound_rebuild -I src -I tests -I "$adapter" compat/flare/headers/inbound_rebuild.mojo
 build_bg_known json_loopback_probe -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo
@@ -131,7 +150,7 @@ fi
 step "serve probe (compile-only: HttpServer.serve accepts MuntinHandler)"
 ./build/serve_probe
 
-step "run localhost round trip (GET /hello, typed GET routes, body-only and route-value-then-body POSTs over loopback: Flare -> MuntinHandler -> App.handle)"
+step "run localhost round trip (GET /hello, typed GET routes, body-only and route-value-then-body POSTs over loopback: Flare -> Server -> App.handle)"
 # Output goes to a file, not a pipe: a leftover child holding the pipe would
 # make the shell wait for it and hide it from the pgrep check below.
 status=0
@@ -154,6 +173,47 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/roundtrip.log"; then
     exit 1
 fi
 echo "ok: no server process left behind"
+
+# M3-033: Server.bind, port and serve (the example is built above, not run:
+# it binds the fixed port 8080).
+step "run Server tests (bind, port, serve a borrowed App, SIGTERM and SIGINT)"
+server_status=0
+NO_PROXY=127.0.0.1 ./build/test_server >"$tmp/server.log" 2>&1 || server_status=$?
+cat "$tmp/server.log"
+leftover_server='^\./build/test_server$'
+if pgrep -f "$leftover_server"; then
+    pkill -KILL -f "$leftover_server" || true
+    echo "error: $server_tests left a server process behind" >&2
+    exit 1
+fi
+if ((server_status != 0)); then
+    echo "error: Server tests failed" >&2
+    exit 1
+fi
+if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/server.log"; then
+    echo "error: $server_tests ran no tests" >&2
+    exit 1
+fi
+echo "ok: no server process left behind"
+
+step "Server must-not-build fixtures (M3-032)"
+for fixture_s in "${serve_fixtures[@]}"; do
+    expected_s="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check_flare.sh): //p' "$fixture_s")"
+    if [[ -z "$expected_s" ]]; then
+        echo "error: $fixture_s states no expected diagnostic" >&2
+        exit 1
+    fi
+    if "${FLARE[@]}" build -I src -I "$adapter" "$fixture_s" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
+        echo "error: $fixture_s built" >&2
+        exit 1
+    fi
+    if ! grep -qF "$expected_s" "$tmp/log"; then
+        cat "$tmp/log" >&2
+        echo "error: $fixture_s failed without '$expected_s'" >&2
+        exit 1
+    fi
+    echo "ok: $fixture_s"
+done
 
 # M3-002 headers evidence (docs/history/architecture-decisions.md "Headers decision (M3-002)"):
 # a self-checking probe of what pinned Flare preserves in request and
@@ -241,7 +301,7 @@ if ((head_status != 0)); then
 fi
 
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1

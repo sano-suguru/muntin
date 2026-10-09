@@ -485,21 +485,26 @@ Avoid hidden global state. Application code should not need to understand Flare 
 
 ## 1. Hello World
 
-Target shape:
+Target shape (`examples/hello_server.mojo`):
 
 ```mojo
 from muntin import App
+from muntin_flare import Server
 
 
 def hello() -> String:
     return "Hello, Mojo!"
 
 
-def main():
+def main() raises:
     var app = App()
     app.get["/"](hello)
-    app.run()
+    var server = Server.bind("127.0.0.1", 8080)
+    print("listening on http://127.0.0.1:" + String(server.port()))
+    server.serve(app)
 ```
+
+From a clone it runs as `pixi run -e flare mojo run -I src -I adapters/flare examples/hello_server.mojo`.
 
 A basic endpoint should not require users to manually construct a `Request`, `Response`, router entry, handler adapter, transport, executor, or allocator simply to return text.
 
@@ -507,7 +512,14 @@ Returning a `String` should be convertible to a successful text response by Munt
 
 The parameterized `app.get["/"](...)` syntax is a target because route literals known at compile time may enable better validation. It becomes canonical only after it compiles cleanly on the supported Mojo version.
 
-Status: `app.get["/"](hello)` compiles and dispatches (see "Proven vs. target status"). Serving is decided, not shipped ([Serving entrypoint decision (M3-032)](history/architecture-decisions.md#serving-entrypoint-decision-m3-032)): Muntin core gets no `app.run()`; the Flare adapter module gets `Server` (`Server.bind(host, port)`, then `server.serve(app)`), the next item (M3-033), and this target changes to that spelling once it is proven. There is no supported way to serve an `App` until then.
+Status: the program above runs on the shipped, supported serving API; it is a runnable example, not a production-ready deployment (the limits are below). `app.get["/"](hello)` compiles and dispatches (see "Proven vs. target status"), and `Server` in the Flare adapter module serves it ([Serving entrypoint decision (M3-032)](history/architecture-decisions.md#serving-entrypoint-decision-m3-032); `adapters/flare/test_server.mojo`, and every loopback case in `adapters/flare/test_localhost_roundtrip.mojo` runs through `Server`). Muntin core has no `app.run()`: the backend is chosen by the one import of `muntin_flare`, which builds only in the `flare` pixi environment with `-I src -I adapters/flare` (Muntin is not published as a package). `./scripts/check_flare.sh` builds the example and does not run it (it binds port 8080).
+
+- `Server.bind(host: String, port: Int) raises -> Server` binds and listens before it returns, so a client may connect as soon as it returns. There are no defaults. `host` is an IPv4 or IPv6 literal (`"127.0.0.1"`, `"0.0.0.0"`, `"::1"`), never a name: `"localhost"` raises. `port` is 0 to 65535, and 0 lets the system choose; outside that range it raises `port out of range: <port>` before anything is bound. An address in use or another OS error raises too; the text of those errors is Flare's, not part of the contract. Dropping the `Server` closes its listener, so the port can be bound again. `Server.bind` is the one spelling: `Server("127.0.0.1", 0)` and `Server(host="127.0.0.1", port=0)` do not build (`no matching function in initialization`); the initializer's `_host` and `_port` keywords are not API.
+- `server.port() -> Int` is the bound port, the system's choice for 0.
+- `server.serve(app) raises` borrows `app`, as `TestClient(app)` does, so a raise leaves it usable. It serves on the calling thread with one reactor (`App.handle` is never called concurrently) and does not return while serving. Each request that reaches Muntin is answered as `App.handle` answers it, with the adapter's 400 for a request field it cannot represent, its 500 for an invalid outgoing field, and the `HEAD` rule ("Proven vs. target status", `HEAD`). Flare answers some requests first: a lowercase method or a target byte outside `!`..`~` (400), and a body over its 10 MiB `max_body_size` (413).
+- Protocols: cleartext HTTP/1.1, and HTTP/2 with prior knowledge on the same listener. No TLS, no HTTP/3, and no backend configuration: Flare's `ServerConfig` defaults apply (among them the body size, keep-alive and timeouts). Flare reads an opt-in `FLARE_BUFRING_HANDLER=1` (Linux, HTTP/1.1 only) from the environment; answers on that path are not covered by Muntin's tests.
+- Stopping: there is no stop call, graceful shutdown or signal handling; neither Muntin nor Flare installs a signal handler. SIGINT (Ctrl-C) and SIGTERM end the process (on Mojo 1.1.0 the runtime's own handler for them re-raises the signal under the disposition the process inherited), unless the process inherited them ignored (a background job of a non-interactive shell inherits SIGINT ignored): in-flight requests are cut, nothing is drained, and no destructor runs.
+- When Flare's `serve` raises, the raise propagates; when it returns, `serve` returns. Nothing Muntin exposes stops Flare, so on Flare v0.12.0 a return means Flare's reactor stopped (a failed poll), and `serve` returning does not distinguish that from a stop. Muntin adds no exit or error policy for it: a `main` that does nothing after `serve`, as above, can then end with status 0.
 
 ## 2. Typed path parameters
 
@@ -1233,6 +1245,7 @@ The target feel is approximately:
 
 ```mojo
 from muntin import App
+from muntin_flare import Server
 
 
 @fieldwise_init
@@ -1260,24 +1273,25 @@ def create_user(body: CreateUser) -> User:
     return users.create(body)
 
 
-def main():
+def main() raises:
     var app = App()
     app.get["/users"](list_users)
     app.get["/users/{id}"](get_user)
     app.post["/users"](create_user)
-    app.run()
+    var server = Server.bind("127.0.0.1", 8080)
+    server.serve(app)
 ```
 
-The exact spellings are provisional. The durable properties are a small application surface, typed handlers, typed extraction, automatic conversion where safe, useful compile-time validation, low-level escape hatches, and backend independence.
+The spellings of what this example still lacks (below) are provisional; the shipped ones it uses, such as `App`, `app.get`, `app.post` and `Server.bind`/`serve`, are the current API (section 1). The durable properties are a small application surface, typed handlers, typed extraction, automatic conversion where safe, useful compile-time validation, low-level escape hatches, and backend independence.
 
 Status: the handler model of this example is production: `get_user(id: Int) -> User` with `app.get["/users/{id}"]` and `create_user(body: CreateUser) -> User` with `app.post["/users"]`, through `TestClient` and the Flare adapter. What still differs from the example:
 
 - JSON needs the wrapper (section 4): `def create_user(body: Json[CreateUser]) -> Json[User]`, with `CreateUser: FromJson` and `User: ToJson` mapping their fields by hand. The bare `body: CreateUser` form needs `CreateUser` to conform to `FromBody` and parse its own body; a JSON-capable type is not a body by itself, and there is no derived codec;
 - the stdlib `List[User]` conforms to neither `ToResponse` nor `ToJson`, and top-level list results are not supported, so a list result needs an application type that conforms;
 - `users` is not a global: on Mojo 1.1.0 module-level variables do not compile (`global variables are not supported`) and handlers cannot capture. A handler reaches it as `State` (section 8): `def get_user(users: State[Users], id: Int) -> User` registered as `app.get["/users/{id}"](get_user, users)`, and on `post`: `def create_user(users: State[Users], body: CreateUser) -> User` registered as `app.post["/users"](create_user, users)`;
-- there is no `app.run()`.
+- `Server` is the Flare adapter module's (`muntin_flare`, section 1), with section 1's serving limits.
 
-Derived codecs and list results are remaining candidates (`docs/SPEC.md`); serving is section 1's status. The closest runnable form today is section 4's JSON example (`Json[CreateUser]` in, `Json[User]` out) with section 8's `State`: JSON request bodies through `TestClient.post(target, body, headers=headers^)` or `App.handle` with the `Content-Type` field set (without it, 415), JSON results through either. A handler that also needs a request field, such as a credential, takes `WithHeaders[Json[CreateUser]]` (section 4).
+Derived codecs and list results are remaining candidates (`docs/SPEC.md`); serving is section 1's. The closest runnable form today is section 4's JSON example (`Json[CreateUser]` in, `Json[User]` out) with section 8's `State`: JSON request bodies through `TestClient.post(target, body, headers=headers^)` or `App.handle` with the `Content-Type` field set (without it, 415), JSON results through either. A handler that also needs a request field, such as a credential, takes `WithHeaders[Json[CreateUser]]` (section 4).
 
 ## 20. Non-goals
 

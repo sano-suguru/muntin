@@ -2,8 +2,9 @@
 `HEAD` M3-027; 405 M3-031).
 
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). Every
-dispatch goes through `MuntinHandler.serve`, the entry point Flare's server
-calls, and from there through the real `App.handle`.
+dispatch goes through `MuntinHandler.serve`, a Flare handler entry point that
+answers through the same `_serve_app` as `Server`'s, and from there through
+the real `App.handle`.
 """
 
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
