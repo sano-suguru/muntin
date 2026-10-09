@@ -61,9 +61,9 @@ def _serve_in_child(app: App, restore: Int) raises -> _Child:
     child first restores that signal's default disposition, so the test does
     not depend on what the runner's process inherited; this replaces the Mojo
     runtime's own handler, so the stop tests show the default action, not
-    that handler's re-raise. The parent's copy of
-    the listener is dropped when this returns, so only the child holds the
-    port. The caller must reap `pid`."""
+    that handler's re-raise. The parent's copy of the listener is dropped
+    when this returns, so only the child holds the port. The caller must
+    reap `pid`."""
     var server = Server.bind("127.0.0.1", 0)
     var port = server.port()
     var pid = fork()

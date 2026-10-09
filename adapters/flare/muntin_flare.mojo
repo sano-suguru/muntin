@@ -59,7 +59,8 @@ does; a raise propagates and a return returns, with no policy of its own.
 On Flare v0.12.0 a return means the reactor stopped (a failed poll). There
 is no stop call, graceful shutdown, signal handling, worker count or
 backend configuration: SIGINT and SIGTERM end the process unless it
-inherited them ignored (the Mojo runtime's own handler re-raises them).
+inherited them ignored (the Mojo 1.1.0 runtime's own handler re-raises
+them).
 `_BorrowedHandler` is not `Copyable`, which keeps Flare's multi-worker
 `serve` out of reach. `Server`'s one initializer takes
 keyword-only `_host` and `_port`, so `Server.bind` is the one public
