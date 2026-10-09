@@ -13,13 +13,17 @@
 # registers a link on the same `MwApp`, so the candidates run against the same
 # request set; an application uses one of them.
 #
-#   Next[o]   the rest of the chain: an immutable `Pointer[MwApp, o]` and the
-#             index of the next link. Neither `Copyable` nor `Movable`; made
-#             in `_run`'s frame and passed by borrow, so the origin is the
-#             borrowed `MwApp`'s and no `AnyOrigin` or untracked pointer is
-#             involved (a struct field cannot hold `AnyOrigin` on Mojo 1.1.0).
-#             Calling it runs the rest and returns the response; at the end of
-#             the chain it calls production `App.handle`.
+#   Next[o, c] the rest of the chain: an immutable `Pointer[MwApp, o]`, the
+#             index of the next link, and a mutable `Pointer[Bool, c]` to a
+#             flag in the frame of the `_run` call that made it. Neither
+#             `Copyable` nor `Movable`; made in that frame and passed by
+#             borrow, so both origins are tracked and no `AnyOrigin` or
+#             untracked pointer is involved (a struct field cannot hold
+#             `AnyOrigin` on Mojo 1.1.0). The first call runs the rest and
+#             returns its response (at the end of the chain, production
+#             `App.handle`); every later call through the same `Next` runs
+#             nothing and returns the fixed 500, so one middleware call
+#             dispatches the rest at most once.
 #   F         `use(f)`: a thin function `def(var Request, Next) raises -> Response`.
 #             The stored type is generic over `next`'s origin
 #             (`MiddlewareFn`); an application function written with a plain
@@ -41,8 +45,11 @@
 #             the request and the rest's response. Nothing passes between a
 #             `before` and its `after`.
 #
-# A raise out of any middleware or hook is the fixed 500, production's
-# `_internal_error()`: middleware has no error type of its own here.
+# A raise out of a middleware or hook is the fixed 500, production's
+# `_internal_error()` (no error text reaches the client), made at that
+# middleware's own call: the middleware outside it gets the 500 back from its
+# `next` as an ordinary response and runs the rest of its own code.
+# Middleware has no error type of its own here.
 
 from std.memory import MutOpaquePointer, OwnedPointer
 
@@ -50,24 +57,32 @@ from muntin import App, Request, Response
 from muntin.app import _internal_error
 
 
-struct Next[o: Origin[mut=False]]:
+struct Next[o: Origin[mut=False], c: Origin[mut=True]]:
     """The rest of the chain after one middleware, for the duration of its
     call."""
 
     var _app: Pointer[MwApp, Self.o]
     var _i: Int
+    var _called: Pointer[Bool, Self.c]
 
-    def __init__(out self, ref[Self.o] app: MwApp, i: Int):
+    def __init__(
+        out self, ref[Self.o] app: MwApp, i: Int, ref[Self.c] called: Bool
+    ):
         self._app = Pointer(to=app)
         self._i = i
+        self._called = Pointer(to=called)
 
     def __call__(self, var request: Request) -> Response:
-        """Runs the rest of the chain on `request` and returns its answer."""
+        """Runs the rest of the chain on `request` and returns its answer;
+        a second call runs nothing and returns the fixed 500."""
+        if self._called[]:
+            return _internal_error()
+        self._called[] = True
         return self._app[]._run(self._i, request^)
 
 
-comptime MiddlewareFn = def[o: Origin[mut=False]](
-    var Request, Next[o]
+comptime MiddlewareFn = def[o: Origin[mut=False], c: Origin[mut=True]](
+    var Request, Next[o, c]
 ) raises thin -> Response
 """F: a middleware function."""
 
@@ -87,8 +102,8 @@ trait Middleware(Deinitable, Movable):
 
 # A: the erased box. In production this would sit in `_handler_storage.mojo`.
 comptime _Box = MutOpaquePointer[MutUntrackedOrigin]
-comptime _MwInvoke = def[o: Origin[mut=False]](
-    _Box, var Request, Next[o]
+comptime _MwInvoke = def[o: Origin[mut=False], c: Origin[mut=True]](
+    _Box, var Request, Next[o, c]
 ) raises thin -> Response
 
 
@@ -221,11 +236,15 @@ struct MwApp(Movable):
         if i == len(self._links):
             return self.app.handle(request)
         ref link = self._links[i]
+        # One flag per middleware call: its `Next` dispatches the rest once.
+        var called = False
         try:
             if link.kind == _FN:
-                return link.function(request^, Next(self, i + 1))
+                return link.function(request^, Next(self, i + 1, called))
             if link.kind == _BOXED:
-                return link.boxed.value().invoke(request^, Next(self, i + 1))
+                return link.boxed.value().invoke(
+                    request^, Next(self, i + 1, called)
+                )
             if link.kind == _BEFORE:
                 var early = link.before(request)
                 if early:

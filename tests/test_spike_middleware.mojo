@@ -146,6 +146,12 @@ def twice(var request: Request, next: Next) raises -> Response:
     return next(request^)
 
 
+def twice_keep_first(var request: Request, next: Next) raises -> Response:
+    var first = next(request.copy())
+    _ = next(request^)
+    return first^
+
+
 def tagged[
     value: StaticString
 ](var request: Request, next: Next) raises -> Response:
@@ -355,12 +361,41 @@ def test_a_raise_in_middleware_is_the_fixed_500() raises:
     assert_equal(counter[].n[], 1)
 
 
-def test_next_called_twice_runs_the_rest_twice() raises:
+def test_a_second_next_call_runs_nothing_and_is_500() raises:
+    # `twice` returns its second call's answer, `twice_keep_first` its first.
     var counter = State(Counter())
     var f = MwApp(_app(counter))
     f.use(twice)
-    assert_equal(f.handle(Request("GET", "/counted")).body, "reached")
+    var r = f.handle(Request("GET", "/counted"))
+    assert_equal(r.status, 500)
+    assert_equal(r.body, "Internal Server Error")
+    assert_equal(counter[].n[], 1)
+    var g = MwApp(_app(counter))
+    g.use(twice_keep_first)
+    assert_equal(g.handle(Request("GET", "/counted")).body, "reached")
     assert_equal(counter[].n[], 2)
+    # The guard is per middleware call: two middleware each call their own
+    # `next` once, and every request still reaches the route once.
+    var h = MwApp(_app(counter))
+    h.use(passthrough)
+    h.use(passthrough)
+    assert_equal(h.handle(Request("GET", "/counted")).body, "reached")
+    assert_equal(h.handle(Request("GET", "/counted")).body, "reached")
+    assert_equal(counter[].n[], 4)
+
+
+def test_a_raise_is_answered_at_the_failing_middleware() raises:
+    # The inner middleware's raise becomes the 500 at its own call; the
+    # outer one gets it from `next` and still adds its field.
+    var counter = State(Counter())
+    var f = MwApp(_app(counter))
+    f.use(stamp)
+    f.use(fail_before)
+    var r = f.handle(Request("GET", "/counted"))
+    assert_equal(r.status, 500)
+    assert_equal(r.body, "Internal Server Error")
+    assert_equal(r.headers.get("X-Seen").or_else("<none>"), "GET")
+    assert_equal(counter[].n[], 0)
 
 
 def test_runtime_and_compile_time_configuration() raises:
