@@ -25,7 +25,7 @@ A change is not complete because the code looks plausible. Use, as applicable: a
 
 - `./scripts/check.sh`: toolchain version, formatting, architecture boundary, unsafe confinement, package and example builds, the library-only spike drivers, and every must-not-build and must-build fixture under `tests/` (in parallel; reports in file order). `CHECK_SHARD=I/N` builds only every N-th fixture, starting at the I-th, and still runs every other step; CI uses it. It does not build `tests/test_*.mojo`.
 - `./scripts/test.sh [FILE...]`: builds each `tests/test_*.mojo` (or the named files) with `--Werror` in parallel, then runs them one at a time.
-- `./scripts/check_flare.sh`: the Flare adapter and its localhost round trips, in the `flare` environment.
+- `./scripts/check_flare.sh`: the Flare adapter, its `Server` tests and localhost round trips, the serving must-not-build fixtures and the serving example's build, in the `flare` environment.
 
 A must-not-build fixture states its expected diagnostic on a line starting `# Expected diagnostic (checked by scripts/check.sh): `; `scripts/build_one.sh` reads it.
 
