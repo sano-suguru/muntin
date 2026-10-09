@@ -107,7 +107,7 @@ Each becomes its own item, a decision item first where it opens a design questio
 - structured errors, including application-level error mappers (rejected on Mojo 1.1.0 by M2-012; its revisit conditions apply);
 - observability hooks, including logging of dropped handler errors;
 - streaming;
-- serving lifecycle beyond `Server`: graceful shutdown, signal handling, several serving threads, backend configuration (body size, timeouts, TLS), host names, and one call that binds and serves, each with a revisit condition in [M3-032](history/architecture-decisions.md#serving-entrypoint-decision-m3-032);
+- serving lifecycle beyond `Server`: graceful shutdown, signal handling, several serving threads, backend configuration (body size, timeouts, TLS) and one call that binds and serves, each with a revisit condition in [M3-032](history/architecture-decisions.md#serving-entrypoint-decision-m3-032), and host names, which M3-032 leaves out of its slice with none;
 - performance benchmarks and allocation profiling.
 
 ## Long-term success criterion

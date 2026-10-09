@@ -59,7 +59,9 @@ def _serve_in_child(app: App, restore: Int) raises -> _Child:
     """Binds an ephemeral loopback port and forks a child that serves the
     borrowed `app` there with `server.serve(app)`. With `restore` > 0 the
     child first restores that signal's default disposition, so the test does
-    not depend on what the runner's process inherited. The parent's copy of
+    not depend on what the runner's process inherited; this replaces the Mojo
+    runtime's own handler, so the stop tests show the default action, not
+    that handler's re-raise. The parent's copy of
     the listener is dropped when this returns, so only the child holds the
     port. The caller must reap `pid`."""
     var server = Server.bind("127.0.0.1", 0)
@@ -209,7 +211,8 @@ def test_bind_raises_for_a_port_a_child_serves() raises:
         var error = _bind_error("127.0.0.1", child.port)
         print("observed: bind a served port ->", error)
         assert_true(not error.startswith("bound port"), error)
-        # A bind raise leaves the parent's `App` usable.
+        # The parent's `App` still answers after the bind raise (`bind` does
+        # not borrow it).
         assert_equal(TestClient(app).get("/hello").body, "hello")
     finally:
         _stop(child.pid)
@@ -221,6 +224,8 @@ def test_bind_raises_for_a_port_out_of_range() raises:
     print("observed:", low, "/", high)
     assert_equal(low, "port out of range: -1")
     assert_equal(high, "port out of range: 65536")
+    # The range check runs before the host is parsed.
+    assert_equal(_bind_error("localhost", 65536), "port out of range: 65536")
 
 
 def test_bind_raises_for_a_host_name() raises:

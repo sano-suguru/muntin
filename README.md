@@ -75,7 +75,7 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON), application errors, shared application state, headers, and a raw `Request -> Response` escape hatch.
-- **Serving:** `Server` in the Flare adapter module (`muntin_flare`) serves an `App` over cleartext HTTP/1.1 and HTTP/2 with prior knowledge, on one thread. Its limits: no graceful shutdown (by their default action, Ctrl-C or SIGTERM ends the process and cuts in-flight requests), an IP literal as the host (`"127.0.0.1"`, `"0.0.0.0"`, `"::1"`; not `"localhost"`), no TLS or HTTP/3, Flare's default limits (such as a 10 MiB body), no backend configuration, and it runs from a clone with two `-I` paths, not from a published package. Details: [`docs/DX.md`](docs/DX.md) section 1.
+- **Serving:** `Server` in the Flare adapter module (`muntin_flare`) serves an `App` over cleartext HTTP/1.1 and HTTP/2 with prior knowledge, on one thread. Its limits: no graceful shutdown (Ctrl-C or SIGTERM ends the process, unless it inherited them ignored, and cuts in-flight requests), an IP literal as the host (`"127.0.0.1"`, `"0.0.0.0"`, `"::1"`; not `"localhost"`), no TLS or HTTP/3, Flare's default limits (such as a 10 MiB body), no backend configuration, and it runs from a clone with two `-I` paths, not from a published package. Details: [`docs/DX.md`](docs/DX.md) section 1.
 - **Not yet:** middleware, and serving beyond those limits.
 
 Shipped and remaining capabilities: [`docs/SPEC.md`](docs/SPEC.md). Long-term API targets: [`docs/DX.md`](docs/DX.md).
