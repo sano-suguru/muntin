@@ -102,6 +102,8 @@ def _send(app: App, request: Request) -> Response:
         target += "?" + request.query
     if request.method == "GET":
         return client.get(target, headers=request.headers.copy())
+    if request.method == "HEAD":
+        return client.head(target, headers=request.headers.copy())
     if request.method == "POST":
         return client.post(target, request.body, headers=request.headers.copy())
     return app.handle(request)
