@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-M3-035 (middleware functions, the slice of [Middleware decision (M3-034)](docs/history/architecture-decisions.md#middleware-decision-m3-034)) is implemented on this branch and complete when its pull request merges. Next: the author picks one of `docs/SPEC.md`'s remaining M3 candidates; none is queued. Blockers: none.
+M3-035 (middleware functions, the slice of [Middleware decision (M3-034)](docs/history/architecture-decisions.md#middleware-decision-m3-034)) is implemented on this branch and complete when its pull request merges. Next: `TestClient.head`. M3-026's revisit condition "tests need `HEAD` through `TestClient`" fired in the M3-035 review (`tests/test_middleware.mojo` sends `HEAD` through `App.handle`). Decide first whether its answer keeps the `GET` body, as `App.handle` does, or drops it, as a backend does. Blockers: none.
 
 ## Easy to miss
 
