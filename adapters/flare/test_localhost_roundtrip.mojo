@@ -199,9 +199,24 @@ to be UTF-8 included) reaches `App.handle` byte for byte, equal to
 route, a 405 path and a 404 path, without the middleware's field, and
 under the `HEAD` rule over h2c; the JSON route parses a sent U+FFFD and
 answers 400 to a `0xFF` it parsed as U+FFFD before.
+
+M3-039 serves `targets_app()` (`marked`, `GET /hello`, `GET /names/{name}`
+and `GET /items?{limit}`) and sends methods and targets whose bytes are not
+UTF-8 over h2c, where Flare v0.12.0 passes them to the adapter, with the raw
+h2c client (`h2_streams` puts several requests on one connection). Each,
+method or target (path, query, a byte where `Request` or `App.handle` would
+slice), is the adapter's 400 `Bad Request` without the middleware's field
+(under the `HEAD` rule for `HEAD`); after each, the same connection answers
+a well-formed request on its next stream, a new connection answers one, and
+the serving child is still running. Well-formed methods and targets (non-ASCII
+UTF-8, a U+FFFD the client sent, percent-encoded bytes, an empty, unknown or
+lowercase method, 404, 405 and `HEAD`) are answered as `App.handle` answers
+them, through the middleware. Over HTTP/1.1 Flare refuses every such byte
+itself, well-formed or not, with its own `400 Bad Request` body, and the
+child keeps answering.
 """
 
-from std.ffi import c_uint, external_call
+from std.ffi import c_int, c_uint, external_call
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from flare.http import HttpClient
@@ -1349,21 +1364,16 @@ def h2_exchange(
 ) raises -> Tuple[List[HpackHeader], List[UInt8], Int]:
     """As `h2_request`, with `body` sent in one DATA frame after the HEADERS
     frame (none when empty) and the response body returned as bytes."""
-    var hdrs = List[HpackHeader]()
-    hdrs.append(HpackHeader(":method", method))
-    hdrs.append(HpackHeader(":scheme", "http"))
-    hdrs.append(HpackHeader(":path", path))
-    hdrs.append(HpackHeader(":authority", "localhost"))
-    for f in fields:
-        hdrs.append(HpackHeader(f[0], f[1]))
-    var block = HpackEncoder().encode(Span[HpackHeader, _](hdrs))
     var wire = List(H2_PREFACE.as_bytes())
     wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
     var end = FrameFlags.END_STREAM() if len(body) == 0 else UInt8(0)
     wire.extend(
         Span(
             _h2_frame(
-                FrameType.HEADERS(), FrameFlags.END_HEADERS() | end, 1, block^
+                FrameType.HEADERS(),
+                FrameFlags.END_HEADERS() | end,
+                1,
+                _h2_block(method, path, fields),
             )
         )
     )
@@ -1375,6 +1385,55 @@ def h2_exchange(
                 )
             )
         )
+    return _h2_answers(port, wire, 1)[0].copy()
+
+
+def h2_streams(
+    port: Int, requests: List[Tuple[String, String]]
+) raises -> List[Tuple[List[HpackHeader], List[UInt8], Int]]:
+    """Each `(method, path)` of `requests` on one cleartext HTTP/2
+    connection, on streams 1, 3, 5 and so on, with no fields and no body:
+    each response as `h2_exchange` returns it, in request order."""
+    var wire = List(H2_PREFACE.as_bytes())
+    wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
+    var none = List[Tuple[String, String]]()
+    for i in range(len(requests)):
+        wire.extend(
+            Span(
+                _h2_frame(
+                    FrameType.HEADERS(),
+                    FrameFlags.END_HEADERS() | FrameFlags.END_STREAM(),
+                    2 * i + 1,
+                    _h2_block(requests[i][0], requests[i][1], none),
+                )
+            )
+        )
+    return _h2_answers(port, wire, len(requests))
+
+
+def _h2_block(
+    method: String, path: String, fields: List[Tuple[String, String]]
+) -> List[UInt8]:
+    """A request header block: `method`'s and `path`'s bytes as given (a
+    test may pass bytes that are not UTF-8), then `fields`."""
+    var hdrs = List[HpackHeader]()
+    hdrs.append(HpackHeader(":method", method))
+    hdrs.append(HpackHeader(":scheme", "http"))
+    hdrs.append(HpackHeader(":path", path))
+    hdrs.append(HpackHeader(":authority", "localhost"))
+    for f in fields:
+        hdrs.append(HpackHeader(f[0], f[1]))
+    return HpackEncoder().encode(Span[HpackHeader, _](hdrs))
+
+
+def _h2_answers(
+    port: Int, wire: List[UInt8], streams: Int
+) raises -> List[Tuple[List[HpackHeader], List[UInt8], Int]]:
+    """Sends `wire` on a new connection and reads until streams 1, 3, ...
+    (`streams` of them) have each ended: per stream, the response's decoded
+    header fields, its body and the number of DATA frames it came in (an
+    empty DATA frame counts). A GOAWAY, an RST_STREAM on one of them or a
+    close before they end raises."""
     var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     stream.set_recv_timeout(TIMEOUT_MS)
     stream.write_all(Span[UInt8, _](wire))
@@ -1383,10 +1442,13 @@ def h2_exchange(
     var buf = List[UInt8]()
     buf.resize(4096, 0)
     var pos = 0
-    var fields_out = List[HpackHeader]()
-    var received = List[UInt8]()
-    var data_frames = 0
-    while True:
+    var out = List[Tuple[List[HpackHeader], List[UInt8], Int]]()
+    var ended = List[Bool]()
+    for _ in range(streams):
+        out.append((List[HpackHeader](), List[UInt8](), 0))
+        ended.append(False)
+    var open = streams
+    while open > 0:
         var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
         if not maybe:
             var n = stream.read(buf.unsafe_ptr(), len(buf))
@@ -1397,20 +1459,23 @@ def h2_exchange(
             continue
         var f = maybe.value().copy()
         pos += 9 + f.header.length
-        if f.header.stream_id != 1:
-            if f.header.type.value == FrameType.GOAWAY().value:
-                raise Error("GOAWAY")
+        if f.header.type.value == FrameType.GOAWAY().value:
+            raise Error("GOAWAY")
+        var sid = f.header.stream_id
+        if sid % 2 == 0 or sid > 2 * streams - 1:
             continue
+        var i = (sid - 1) // 2
         if f.header.type.value == FrameType.HEADERS().value:
-            fields_out = decoder.decode(Span[UInt8, _](f.payload))
+            out[i][0] = decoder.decode(Span[UInt8, _](f.payload))
         elif f.header.type.value == FrameType.DATA().value:
-            received.extend(Span[UInt8, _](f.payload))
-            data_frames += 1
+            out[i][1].extend(Span[UInt8, _](f.payload))
+            out[i][2] += 1
         elif f.header.type.value == FrameType.RST_STREAM().value:
             raise Error("RST_STREAM")
-        if f.header.flags.has(FrameFlags.END_STREAM()):
-            break
-    return (fields_out^, received^, data_frames)
+        if f.header.flags.has(FrameFlags.END_STREAM()) and not ended[i]:
+            ended[i] = True
+            open -= 1
+    return out^
 
 
 def h1_raw(port: Int, method: String, path: String) raises -> String:
@@ -2163,6 +2228,159 @@ def test_request_body_bytes_over_http1_and_h2c() raises:
             String(from_utf8_lossy=Span(b2[1])),
         )
         assert_equal(_h2_fields(b2[0]), ":status=400;")
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+def targets_app() -> App:
+    var app = App()
+    app.use(marked)
+    app.get["/hello"](hello)
+    app.get["/names/{name}"](name_of)
+    app.get["/items?{limit}"](list_items)
+    return app^
+
+
+def _unchecked(values: List[Int]) -> String:
+    """`values` as a `String`'s bytes, unchecked, as Flare v0.12.0 builds a
+    method or target over HTTP/2 from HPACK octets."""
+    return String(unsafe_from_utf8=Span(_octets(values)))
+
+
+def _running(pid: Int) -> Bool:
+    """Whether the child `pid` has not exited (`waitpid` with `WNOHANG`)."""
+    return Int(external_call["waitpid", c_int](c_int(pid), 0, c_int(1))) == 0
+
+
+def test_request_target_and_method_bytes_over_h2c_and_http1() raises:
+    """A method or target that is not UTF-8 is the adapter's 400 before
+    `App.handle`, and the `Server` keeps serving (M3-039)."""
+    var app = targets_app()
+    var child = _serve_in_child(targets_app())
+    try:
+        var get = String("GET")
+        var hello_path = String("/hello")
+        # Targets that are not UTF-8: in the path (a 404 path, a route's
+        # capture), in the query, and a byte where a slice would start
+        # inside a sequence (after `?`, after `=`, after `&`).
+        var bad_targets: List[String] = [
+            _unchecked([0x2F, 0xFF]),
+            _unchecked([0x2F, 0x80]),
+            _unchecked([0x2F, 0x6E, 0x61, 0x6D, 0x65, 0x73, 0x2F, 0xFF]),
+            _unchecked([0x2F, 0xE3, 0x81]),  # truncated
+            _unchecked([0x2F, 0xC0, 0xAF]),  # overlong
+            _unchecked([0x2F, 0xED, 0xA0, 0x80]),  # a surrogate
+            _unchecked([0x2F, 0xEF, 0xBF, 0xBD, 0xFF]),  # U+FFFD, then 0xFF
+            _unchecked([0x2F, 0xC3, 0x3F, 0x61]),  # truncated before `?`
+            hello_path + _unchecked([0x3F, 0xFF]),
+            hello_path + _unchecked([0x3F, 0x80]),
+            String("/items?limit=") + _unchecked([0x80]),
+            String("/items?a=1&") + _unchecked([0xBF, 0x3D, 0x35]),
+        ]
+        var bad_methods: List[String] = [
+            _unchecked([0xFF]),
+            _unchecked([0x47, 0x45, 0x80]),
+            _unchecked([0x47, 0xC3]),
+            _unchecked([0xEF, 0xBF, 0xBD, 0xFF]),
+        ]
+        var bad = List[Tuple[String, String]]()
+        for t in bad_targets:
+            bad.append((get, t))
+        for m in bad_methods:
+            bad.append((m, hello_path))
+            bad.append((m, String("/missing")))
+        bad.append((bad_methods[0], bad_targets[0]))
+        for b in bad:
+            var at = String("method ", _hex(b[0].as_bytes()), " target ")
+            at += _hex(b[1].as_bytes())
+            # The request, then a well-formed one on the next stream of the
+            # same connection.
+            var got = h2_streams(child.port, [b, (get, hello_path)])
+            assert_equal(_h2_field(got[0][0], ":status"), "400", at)
+            assert_equal(String(from_utf8=Span(got[0][1])), "Bad Request", at)
+            assert_equal(_h2_field(got[0][0], "x-seen"), "<none>", at)
+            assert_equal(_h2_field(got[1][0], ":status"), "200", at)
+            assert_equal(String(from_utf8=Span(got[1][1])), "hello", at)
+            assert_equal(_h2_field(got[1][0], "x-seen"), "1", at)
+            # A new connection to the same `Server`.
+            var again = h2_request(
+                child.port, get, hello_path, List[Tuple[String, String]]()
+            )
+            assert_equal(_h2_field(again[0], ":status"), "200", at)
+            assert_equal(again[1], "hello", at)
+            assert_true(_running(child.pid), at)
+        # `HEAD`: the adapter's 400 under the `HEAD` rule (M3-027).
+        var head = h2_streams(child.port, [(String("HEAD"), bad_targets[9])])
+        assert_equal(_h2_field(head[0][0], ":status"), "400")
+        assert_equal(_h2_field(head[0][0], "content-length"), "11")
+        assert_equal(_h2_field(head[0][0], "x-seen"), "<none>")
+        assert_equal(head[0][2], 0)
+
+        # Well-formed methods and targets: `App.handle`'s answer, through
+        # the middleware, as before.
+        var fffd = _unchecked([0xEF, 0xBF, 0xBD])
+        var good: List[Tuple[String, String]] = [
+            (get, hello_path),
+            (get, String("/names/é")),
+            (get, String("/names/") + fffd),
+            (get, String("/names/%C3%A9")),
+            (get, String("/names/%FF")),  # `App.handle`'s 400 (M3-018)
+            (get, String("/é")),
+            (get, String("/items?limit=5")),
+            (get, String("/items?limit=%35&q=é")),
+            (get, String("/hello?é=") + fffd),
+            (get, String("/missing")),
+            (String("POST"), hello_path),
+            (String("FOO"), hello_path),
+            (String("get"), hello_path),
+            (String(""), hello_path),
+            (String("é"), hello_path),
+            (fffd, hello_path),
+        ]
+        var answers = h2_streams(child.port, good)
+        for i in range(len(good)):
+            var at = String("method ", _hex(good[i][0].as_bytes()), " target ")
+            at += _hex(good[i][1].as_bytes())
+            var local = app.handle(Request(good[i][0], good[i][1]))
+            assert_equal(
+                _h2_field(answers[i][0], ":status"), String(local.status), at
+            )
+            assert_true(_same_bytes(Span(answers[i][1]), local.body.as_bytes()))
+            assert_equal(_h2_field(answers[i][0], "x-seen"), "1", at)
+            var allow = local.headers.get("allow")
+            var want = allow.value() if allow else String("<none>")
+            assert_equal(_h2_field(answers[i][0], "allow"), want, at)
+        var head_ok = h2_streams(child.port, [(String("HEAD"), hello_path)])
+        assert_equal(_h2_field(head_ok[0][0], ":status"), "200")
+        assert_equal(_h2_field(head_ok[0][0], "content-length"), "5")
+        assert_equal(_h2_field(head_ok[0][0], "x-seen"), "1")
+        assert_equal(head_ok[0][2], 0)
+
+        # HTTP/1.1: Flare refuses every byte outside `!`..`~` in a method or
+        # target itself, well-formed UTF-8 included, with its own body
+        # (`400 Bad Request`, not the adapter's `Bad Request`).
+        var h1_refused: List[Tuple[String, String]] = [
+            (get, bad_targets[0]),
+            (get, bad_targets[9]),
+            (get, String("/names/é")),
+            (bad_methods[0], hello_path),
+            (String("é"), hello_path),
+        ]
+        var none = List[Tuple[String, String]]()
+        for r in h1_refused:
+            var at = String("method ", _hex(r[0].as_bytes()), " target ")
+            at += _hex(r[1].as_bytes())
+            var h1 = h1_exchange(child.port, r[0], r[1], none, List[UInt8]())
+            assert_equal(h1[0], "HTTP/1.1 400 Bad Request", at)
+            assert_equal(String(from_utf8=Span(h1[2])), "400 Bad Request", at)
+            assert_true(_running(child.pid), at)
+        var h1_ok = h1_exchange(
+            child.port, get, String("/names/%C3%A9"), none, List[UInt8]()
+        )
+        assert_equal(h1_ok[0], "HTTP/1.1 200 OK")
+        assert_equal(String(from_utf8=Span(h1_ok[2])), "name é")
+        assert_true(_running(child.pid))
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
