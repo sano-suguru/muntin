@@ -17,9 +17,11 @@ seam does to the fields and bytes the JSON contract relies on:
 - Flare's `HttpClient.post(url, String)` sets `Content-Type:
   application/json` itself (so a test meaning "no Content-Type" must build
   the request);
-- invalid UTF-8 in a body reaches Muntin already replaced by U+FFFD (the
-  M2-016 fact), so the codec never sees the invalid bytes and a JSON string
-  holding them parses.
+- invalid UTF-8 in a body reached Muntin already replaced by U+FFFD (the
+  M2-016 fact), so the codec never saw the invalid bytes and a JSON string
+  holding them parsed. M3-038 re-pinned this observation: the adapter now
+  answers such a body 400 before `App.handle`, and a U+FFFD the client sent
+  still parses.
 """
 
 from std.ffi import c_uint, external_call
@@ -141,16 +143,25 @@ def test_json_fields_and_bytes_over_loopback() raises:
             bad.status, app.handle(Request("POST", "/greet", '{"name":')).status
         )
         assert_false(bad.headers.contains("content-type"))
-        # Invalid UTF-8 arrives replaced, so the JSON string parses.
+        # Invalid UTF-8 is the adapter's 400 before App.handle (M3-038; it
+        # arrived replaced and parsed before), and a U+FFFD the client sent
+        # is a value.
         var raw = List[UInt8]('{"name":"'.as_bytes())
         raw.append(0xFF)
         for b in '"}'.as_bytes():
             raw.append(b)
         var req = FlareRequest("POST", base + "/greet", raw^)
         req.headers.append("Content-Type", "application/json")
-        var lossy = client.send(req)
-        assert_equal(lossy.status, 200)
-        assert_equal(lossy.text(), '{"hello":"�"}')
+        var refused = client.send(req)
+        assert_equal(refused.status, 400)
+        assert_equal(refused.text(), "Bad Request")
+        var sent = FlareRequest(
+            "POST", base + "/greet", List('{"name":"�"}'.as_bytes())
+        )
+        sent.headers.append("Content-Type", "application/json")
+        var kept = client.send(sent)
+        assert_equal(kept.status, 200)
+        assert_equal(kept.text(), '{"hello":"�"}')
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)

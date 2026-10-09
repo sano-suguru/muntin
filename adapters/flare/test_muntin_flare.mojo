@@ -1,5 +1,5 @@
 """Socket-free contract tests for the Flare adapter (M1-002; headers M3-005;
-`HEAD` M3-027; 405 M3-031).
+`HEAD` M3-027; 405 M3-031; request body bytes M3-038).
 
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). Every
 dispatch goes through `MuntinHandler.serve`, a Flare handler entry point that
@@ -10,7 +10,7 @@ the real `App.handle`.
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from flare.http import Request as FlareRequest, Response as FlareResponse
-from muntin import App, FromBody, Headers, Request, Response
+from muntin import App, FromBody, Headers, Next, Request, Response
 from muntin.testing import TestClient
 from muntin_flare import MuntinHandler, to_flare_response, to_muntin_request
 
@@ -84,13 +84,112 @@ def test_request_conversion_keeps_method_target_and_body() raises:
     assert_equal(request.body, "ping")
 
 
-def test_request_body_is_decoded_as_lossy_utf8() raises:
-    var bytes = List("hé".as_bytes())
-    bytes.append(0xFF)
+def _octets(values: List[Int]) -> List[UInt8]:
+    var out = List[UInt8]()
+    for v in values:
+        out.append(UInt8(v))
+    return out^
 
-    var request = to_muntin_request(FlareRequest("POST", "/", body=bytes^))
 
-    assert_equal(request.body, "hé�")
+def _well_formed_bodies() -> List[List[UInt8]]:
+    """Request bodies that are well-formed UTF-8 (M3-038)."""
+    return [
+        List("ping".as_bytes()),
+        List("hé✓".as_bytes()),
+        _octets([0x61, 0xEF, 0xBF, 0xBD, 0x62]),  # a U+FFFD the client sent
+        _octets([0x61, 0x00, 0x62, 0x00]),  # NUL
+        List[UInt8](),
+        _octets([0x00, 0x01, 0x7F, 0x0A]),  # octets that happen to be UTF-8
+    ]
+
+
+def _ill_formed_bodies() -> List[List[UInt8]]:
+    """Request bodies that are not UTF-8 (M3-038)."""
+    return [
+        _octets([0x80]),
+        _octets([0xFF]),
+        _octets([0x68, 0xC3, 0xA9, 0xFF]),  # "hé" then 0xFF
+        _octets([0xE3, 0x81]),  # truncated U+3042
+        _octets([0xC0, 0xAF]),  # overlong
+        _octets([0xED, 0xA0, 0x80]),  # a surrogate
+        _octets([0xEF, 0xBF, 0xBD, 0xFF]),  # a sent U+FFFD, then 0xFF
+        _octets([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),  # PNG
+    ]
+
+
+def _same_bytes(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
+    if len(a) != len(b):
+        return False
+    for i in range(len(a)):
+        if a[i] != b[i]:
+            return False
+    return True
+
+
+def test_request_body_keeps_well_formed_bytes() raises:
+    for body in _well_formed_bodies():
+        var request = to_muntin_request(
+            FlareRequest("POST", "/", body=body.copy())
+        )
+        assert_true(_same_bytes(request.body.as_bytes(), Span(body)))
+        assert_equal(request.body.byte_length(), len(body))
+
+
+def test_request_body_that_is_not_utf8_cannot_be_converted() raises:
+    for body in _ill_formed_bodies():
+        var raised = False
+        try:
+            _ = to_muntin_request(FlareRequest("POST", "/", body=body.copy()))
+        except:
+            raised = True
+        assert_true(raised)
+
+
+def reached(req: Request) -> Response:
+    return Response.text("reached " + String(req.body.byte_length()))
+
+
+def seen(var request: Request, var next: Next) raises -> Response:
+    var response = next^.run(request^)
+    response.headers.add("X-Seen", "1")
+    return response^
+
+
+def body_app() -> App:
+    var app = App()
+    app.use(seen)
+    app.post["/reached"](reached)
+    app.get["/hello"](hello)
+    return app^
+
+
+def test_request_body_that_is_not_utf8_answers_400_before_app_handle() raises:
+    var handler = MuntinHandler(body_app())
+    for body in _ill_formed_bodies():
+        # A route, a path only `GET` matches (405 in `App.handle`) and a
+        # path no route matches (404): the adapter's 400 comes first, and
+        # neither the middleware nor a handler runs.
+        for target in ["/reached", "/hello", "/missing"]:
+            var out = handler.serve(
+                FlareRequest("POST", target, body=body.copy())
+            )
+            assert_equal(out.status, 400)
+            assert_equal(out.text(), "Bad Request")
+            assert_equal(_wire(out), "")
+        # `HEAD`: the adapter's 400 under the `HEAD` rule (M3-027).
+        var head = handler.serve(
+            FlareRequest("HEAD", "/hello", body=body.copy())
+        )
+        assert_equal(head.status, 400)
+        assert_equal(len(head.body), 0)
+        assert_equal(_wire(head), "Content-Length: 11\r\n")
+    for body in _well_formed_bodies():
+        var out = handler.serve(
+            FlareRequest("POST", "/reached", body=body.copy())
+        )
+        assert_equal(out.status, 200)
+        assert_equal(out.text(), "reached " + String(len(body)))
+        assert_equal(_wire(out), "X-Seen: 1\r\n")
 
 
 def test_response_conversion_keeps_status_and_body() raises:
