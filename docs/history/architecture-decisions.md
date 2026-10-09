@@ -3192,7 +3192,7 @@ def main() raises:
 
 ### TestClient HEAD decision (M3-036)
 
-Status: **decision** (M3-036; `src/muntin`, `adapters/` and `compat/` are unchanged in it). It decides whether `TestClient` gains a `head` method and what that method's response carries. The question and what settles it were committed before any measurement (`docs/DEVELOPMENT.md` section 2).
+Status: **decision** (M3-036, PR #74; `src/muntin`, `adapters/` and `compat/` are unchanged in it). It decides whether `TestClient` gains a `head` method and what that method's response carries. The question and what settles it were committed before any measurement (`docs/DEVELOPMENT.md` section 2).
 
 **Why now.** M3-026 kept `TestClient` without `head` (its candidate E) and recorded the revisit condition "tests need `HEAD` through `TestClient`: add `TestClient.head(target, *, headers=)` (candidate E, M3-010's pattern)". It fired in the M3-035 review: `tests/test_middleware.mojo` sends every request of its set through `TestClient` except `HEAD`, which it sends through `App.handle`, and DX section 7 says so. M3-026 decided where the content of a `HEAD` response is dropped (the network backend) but not what an in-memory `head` method returns, and the two readings disagree: `TestClient` builds a `Request` and calls `App.handle`, nothing else (M3-010's invariant), which keeps the `GET` body; while its module calls it the "in-memory backend", and a network backend sends no content for `HEAD` (M3-026's invariant).
 
