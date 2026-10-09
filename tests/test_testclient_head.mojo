@@ -7,7 +7,8 @@
 # `App.handle` for the same request. Contract:
 # docs/history/architecture-decisions.md, "TestClient HEAD decision
 # (M3-036)", "Next production slice"; semantics: docs/DX.md, "`HEAD`" in
-# "Proven vs. target status", and section 10. Must-not-build evidence: tests/methods_api_fail/testclient_head_*.
+# "Proven vs. target status", and section 10. Must-not-build evidence:
+# tests/methods_api_fail/testclient_head_*.
 
 from std.memory import ArcPointer
 from std.testing import assert_equal, assert_true, TestSuite
