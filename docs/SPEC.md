@@ -103,7 +103,7 @@ Each becomes its own item, a decision item first where it opens a design questio
 - **more body shapes**: a Muntin text type conforming to `FromBody` (raw `String` is a route-value type, never a body), optional, multiple, streaming and binary bodies (binary needs a non-`String` body representation);
 - **fallible conversions and parameter-name checking**: a raising `to_response`/`to_error_response` needs its own error answer; name checking needs function-parameter reflection, which Mojo 1.1.0 lacks;
 - **broader raw handlers**: raw route values, `String`/`ToResponse` raw results (each a rule change on the arity overloads);
-- middleware;
+- middleware: decided by [Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034) (functions with `App.use` and `Next`), next item M3-035; runtime-configured middleware, request-scoped typed context and per-route middleware are later items, each with a revisit condition there;
 - structured errors, including application-level error mappers (rejected on Mojo 1.1.0 by M2-012; its revisit conditions apply);
 - observability hooks, including logging of dropped handler errors;
 - streaming;

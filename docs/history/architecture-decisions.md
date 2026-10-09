@@ -3093,7 +3093,7 @@ From a clone it runs as `pixi run -e flare mojo run -I src -I adapters/flare exa
 
 ### Middleware decision (M3-034)
 
-Status: **decision, in progress** (M3-034; `src/muntin`, `adapters/` and `compat/` are unchanged in it). It decides whether and how application code wraps request handling in Muntin-owned middleware. The question and what settles it are written before any measurement (`docs/DEVELOPMENT.md` section 2).
+Status: **decision** (M3-034; `src/muntin`, `adapters/` and `compat/` are unchanged in it). It decides whether and how application code wraps request handling in Muntin-owned middleware. The question and what settles it were committed before any measurement (`docs/DEVELOPMENT.md` section 2).
 
 **Why now.** Middleware is a `docs/SPEC.md` candidate that earlier records postponed for ordering, not on a revisit condition: `App.handle` is already the one seam and no handler shape depends on what wraps it (M3-018, M3-020), and it needs a hook stored with the `App`, which on Mojo 1.1.0 cannot be a capture or a module-level variable (M3-022, M3-024). Serving shipped in M3-033, so a program can now be wrapped end to end; the author chose middleware next.
 
@@ -3113,3 +3113,75 @@ Status: **decision, in progress** (M3-034; `src/muntin`, `adapters/` and `compat
 - whether "the rest" can outlive the call, by a must-not-build probe when the candidate passes such a value;
 - for the selected candidate, a scratch copy of the repository with it applied to production (not retained): `src/muntin` precompiles, `check_boundaries.sh` and `check_unsafe.sh` pass (or the record names the one rule that widens and why), and `./scripts/check.sh`, `./scripts/test.sh` and `./scripts/check_flare.sh` exit 0 with every existing suite count and fixture expected text unchanged;
 - what the selected candidate cannot express on Mojo 1.1.0, each with a minimal reproduction, and the closest type-safe alternative (AGENTS.md).
+
+**The paths today.** `App.handle(self, request: Request) -> Response` matches routes, decodes and converts, and answers 400, 404, 405, a handler's answer or the fixed 500 (`_internal_error()`, no error text). `TestClient` and both Flare handlers (`MuntinHandler`, `Server`'s `_BorrowedHandler`) call it and nothing else; `HEAD`'s content is dropped by the adapter afterwards (M3-027). A registration stores a handler in `_Erased`, whose stored call is `def(F, List[String]) raises -> Response`; `_Shared` holds `State` values. `_handler_storage.mojo` is the only module with unsafe operations, imports only the standard library and `.http`, and names no request or body data (`check_unsafe.sh`, M2-006). On Mojo 1.1.0 handlers cannot capture and module-level variables do not compile (M3-001).
+
+**Measured premises.** Mojo 1.1.0, default environment. `tests/middleware_spike.mojo` puts one chain in front of an unchanged production `App` (`MwApp`), with every candidate's registration on it, and `tests/test_spike_middleware.mojo` (13 tests) runs each candidate on one request set: `GET /hello`, `GET /users/7`, `GET /users/abc` (400), `GET /missing` (404), `POST /hello` (405, `Allow: GET, HEAD`), `HEAD /hello`, a handler raise (500) and a `POST` body.
+- **The rest of the chain as a value.** A struct field cannot hold `AnyOrigin` (`struct fields cannot expose AnyOrigin in their type`, scratch probe). `Next[o, c]` holds an immutable `Pointer` to the chain owner with origin `o`, the next index, and a mutable `Pointer[Bool, c]` to a flag in the frame of the call that made it; it is neither `Copyable` nor `Movable`. A function type generic over both origins (`def[o: Origin[mut=False], c: Origin[mut=True]](var Request, Next[o, c]) raises thin -> Response`) is storable in a `List`, and an application function written with a plain `next: Next` converts to it. Copying `next` is `cannot be implicitly copied`, moving it out `cannot transfer out of immutable reference` (`tests/middleware_fail`). This is the smallest form measured here, not a proof that no other form exists.
+- **Every candidate, without middleware or with a pass-through, answers the request set exactly as the `App`** (status, body and every field, `Allow` included).
+- **Each of (1) to (4)** holds for F, A and A′ (and (1), (2), (4) for H): a middleware sees the method and path of every request `App.handle` receives (404, 405, the pre-handler 400 and the handler's 500 included; `HEAD` arrives as `HEAD`), short-circuits (the route's handler is not called: a `State` count stays 0), rewrites the request before `next` and the response after it.
+- **Order:** registration order, outermost first: two middleware writing a request field and a response field give `a,b` on the way in and `b,a` on the way out. Middleware wraps the whole `App`, so registering it after a route changes nothing.
+- **A second call to `next`** (first measured: it ran the rest twice, a route's handler included). With the flag, the first call through a `Next` runs the rest and every later call through the same `Next` runs nothing and returns the fixed 500; the guard is per middleware call, so a chain of two each calling its own `next` once reaches the route once (`test_a_second_next_call_runs_nothing_and_is_500`).
+- **A raise in middleware** is the fixed 500, made at that middleware's call (`_run` catches around each link): the middleware outside it receives the 500 from its `next` as an ordinary response and runs the rest of its code (`test_a_raise_is_answered_at_the_failing_middleware`; a raise before `next` leaves the handler uncalled, after `next` it was called once).
+- **Configuration:** F takes compile-time parameters (`use(tagged["v1"])`); a capturing closure does not convert (`function_captures.mojo`). A takes a runtime value (`use(Tag("run" + suffix))`), dropped exactly once after two moves of the chain owner. A′ takes only a compile-time value (`use[Tag("static")]()`; a runtime one is `cannot use a dynamic value in call argument`) and materializes it on every call.
+- **Diagnostics:** a value that is not middleware is `does not conform to trait 'Middleware'` (A) and a function without `next` is `cannot be converted ... to 'MiddlewareFn'` (F), each with the other registrations' notes.
+- **Storage:** F and A′ store thin function values, no erasure. A stores values of application types behind `_ErasedMw`, a box modeled on `_Erased` whose stored invoke function is generic over `next`'s origins; it names `Request` and `Next`.
+- **Library only:** `tests/middleware_lib_only/driver.mojo` registers each candidate with types the library has never seen.
+- **Mutations** (planted in the spike, reverted; 6), each red: `next` skipping a link (3 tests), the chain run in reverse (2), a `before` hook's answer ignored, the erased box never dropping its value, the second-call guard removed, and the raise caught only around the whole chain (the outer middleware's field missing).
+- **Production, scratch copy (not retained).** F with the guard applied to `src/muntin/app.mojo` (`Next`, a private function type, `App.use`, `App.handle` calling the chain and the old body moved to `_dispatch`; with no middleware, `handle` calls `_dispatch` without copying the request) and `Next` exported; a scratch test through `TestClient`: middleware sees the request, short-circuits, a 404 passes, a second `next` call is 500. See "Verification" in the pull request for the three scripts on it.
+
+**Selected: F, middleware functions, with a `next` that dispatches the rest at most once.**
+
+```mojo
+from muntin import App, Next, Request, Response
+
+
+def tracing(var request: Request, next: Next) raises -> Response:
+    var response = next(request^)
+    response.headers.add("X-Trace", "1")
+    return response^
+
+
+def main() raises:
+    var app = App()
+    app.use(tracing)
+    app.get["/users/{id}"](get_user)
+```
+
+- **Contract.** `app.use(f)` takes a thin function `def(var Request, Next) raises -> Response`. It receives the request by value, may change it, may answer without calling `next`, or calls `next(request^)` once and may change the response it returns. Configuration is compile-time: the function's own parameters (`app.use(cors["https://app.example"])`). No value is stored with it.
+- **`Next`.** Public, Muntin-owned, neither `Copyable` nor `Movable`, valid only during the middleware call that received it. The first call runs the rest (the next middleware, or the routes) and returns its response; a later call through the same `Next` runs nothing and returns the fixed 500, so one request reaches a route's handler at most once per pass through a middleware.
+- **Scope.** Every request `App.handle` receives, in registration order, outermost first, whenever `use` is called. That includes 404, 405 and the pre-handler 400s: a middleware that answers 401 before calling `next` answers 401 for a path no route matches too, which is the order the application chose. It excludes what never reaches `App.handle`: requests Flare refuses itself (its 400s and the 413 over `max_body_size`). A middleware may replace or change any response, including Muntin's own: removing `Allow` from a 405 or answering 405 without it is the application's responsibility; Muntin's own answers pass through middleware that does not touch them unchanged.
+- **Errors.** A raise out of a middleware is the fixed 500 at that middleware's call; no error text reaches the client; the middleware outside it continues with that 500. Middleware has no error type of its own.
+- **`HEAD`, `TestClient`, `Server`.** Unchanged: they call `App.handle`. A middleware sees `HEAD` as `HEAD`; the backend drops the content of whatever response comes out.
+- **Cost.** An `App` with no middleware dispatches as before, plus a length check; with middleware, `handle` copies the borrowed request once, and each layer is one call, one flag and one `Next`.
+- **Not in this decision.** Runtime-configured middleware (A), request-scoped typed context, per-route or per-group middleware, middleware error types. A middleware can allow or deny a request (authentication by a compile-time check, for example), but passing an authenticated identity to a handler is not supported: request header fields are client input, so a middleware writing one for a handler to trust is not a substitute (a client can send the same name first).
+
+**Candidates.**
+
+| Candidate | Verdict |
+|---|---|
+| 0: no middleware | rejected: no way to wrap requests; a raw handler cannot reach the `App` (no captures) |
+| F: thin functions, `app.use(f)`, `Next` with the once-guard | **chosen**: (1) to (4) on every request `App.handle` receives; no new storage, no unsafe operation, no change to `_handler_storage.mojo` or `check_unsafe.sh`; configuration compile-time only |
+| A: values of application structs conforming to `Middleware`, `app.use(Tracing())`, type-erased | deferred (revisit below): DX section 7's spelling and runtime configuration, at the cost of a second erased box. Its stored call names `Request` and `Next`, so the storage module would name request data (M2-006) and import beyond `.http`, two `check_unsafe.sh` rules widened, and one more invariant the compiler does not check (each box restored only as the type it was made with) to maintain. Not a hole on ordinary paths (unlike M3-001's A2): the same kind of confined cost as `_Erased` and `_Shared` |
+| F and A together | rejected now: two spellings of one feature, and A's cost |
+| A′: compile-time struct values, `app.use[Tracing()]()` | rejected: A's spelling without A's runtime values; the value is rebuilt on every call (allocations for `String` fields); an unusual registration form |
+| H: `app.before(h)` and `app.after(h)` hooks | rejected: nothing passes between a request's `before` and `after` (timing a request needs a value from before to after), and two registration names for one concept |
+
+**Costs.** Runtime configuration (a secret or an allowed origin read at start-up) has no supported path; the closest are compile-time parameters, or reading the environment inside the middleware on every call, which is not a recommendation. Authentication middleware can gate requests but cannot hand a typed identity to handlers. `next` is runtime-guarded, not type-guarded: a second call is a 500 at run time, not a compile error.
+
+**Revisit when:**
+- an application example needs a start-up value, secret or state in middleware and F with existing features cannot express it properly: decide A (or `app.use(f, state)` over `State`). Measure then: F and A registered in one chain in registration order, the erased box's safety under the storage guarantee (M3-004), and whether F's spelling stays unchanged; this record does not claim that adding A leaves the internal storage unchanged;
+- request-scoped typed context is proposed (an identity a handler receives): its own decision, because a second injected kind doubles the overloads (M3-001);
+- a fixture in `tests/middleware_fail` builds or loses its text (`next` becomes copyable or movable, a capturing closure converts to a middleware function): re-measure `Next`'s guarantees;
+- Mojo can make a value callable at most once by type: replace the runtime guard;
+- per-route middleware or middleware error types are needed: their own decisions.
+
+**Next production slice (M3-035): middleware functions.**
+- Code: `src/muntin/app.mojo` only, plus `Next` exported from `muntin`. Public `struct Next[o: Origin[mut=False], c: Origin[mut=True]]` as measured (the app pointer, the index, the flag pointer; `__call__` with the guard); a private `comptime` for the function type; `App._middleware` and `App.use(mut self, middleware)`; `App.handle` runs the chain (`_run`: a flag and a `Next` per call, a raise caught around each link as `_internal_error()`), and its current body becomes `_dispatch`, called directly when no middleware is registered. No change to `_handler_storage.mojo`, `check_unsafe.sh`, `TestClient`, the adapter or any registration overload.
+- Tests, in a new `tests/test_middleware.mojo` through `TestClient` on production `App`: the spike's F cases (no middleware and pass-through answer as without; every request including 404, 405 with `Allow`, the 400 and the 500; `HEAD`; order; `use` after routes; short-circuit with the handler not called; request and response changed; a raise before and after `next`, and inside an inner middleware with the outer one's field kept; the second `next` call; compile-time configuration).
+- Must not build, in `tests/middleware_api_fail`, each against production: `next` copied, `next` moved out, a function without `next`, a capturing closure, a non-function value passed to `use`.
+- Loopback: one existing case in `adapters/flare/test_localhost_roundtrip.mojo` gains a middleware (a response field on a `GET` and its `HEAD`, over HTTP/1.1 and h2c), so `Server` is shown to run middleware and the adapter's `HEAD` step to apply to its answer.
+- Mutations, each on a scratch copy and each killed by a test above: the guard removed; the raise caught only around the whole chain; the chain reversed; `handle` skipping the chain when middleware is registered.
+- Verification: `docs/DEVELOPMENT.md` section 3. Its wire trigger applies (`App.handle` changes how it builds the response): a local `check_flare.sh` before pushing. The base-wide diagnostic comparison does not apply: no overload, `_check` or candidate set changes.
+- Docs: DX section 7 (the contract above, the example, what is not supported, including that header fields are not an identity channel), section 19 if it mentions middleware; `docs/ARCHITECTURE.md` (request handling: the chain in front of dispatch; the module list: `Next`, `App.use`; "Other current limits": runtime-configured middleware, context, per-route middleware; a revisit index row for `tests/middleware_api_fail`); `docs/SPEC.md` (middleware shipped as functions; A, context and per-route middleware as candidates); `README.md` (the "Not yet" bullet); `AGENT_PROGRESS.md`.
+- Not in the slice: A, A′, H, `State`-bound middleware, request-scoped context, per-route or per-group middleware, middleware error types, async.
