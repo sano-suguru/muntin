@@ -41,7 +41,7 @@ def main() raises:
     var custom = Response.text("ok", status=201)
 ```
 
-A request whose path no route matches returns status 404; one whose path a route matches, when no route on that path has its method, returns 405 with `Allow` ("405 `Method Not Allowed`", below).
+A request whose path no route matches returns status 404; one whose path a route matches, when no route on that path has its method, returns 405 with `Allow` ("405 `Method Not Allowed`", below). These, and every status and field this document gives for a request, are Muntin's own answers: what `App.handle` returns when no middleware changes them. Middleware may answer instead or change any answer, Muntin's 404 and 405 included (section 7).
 
 Typed path parameter, proven by `tests/test_app.mojo`, `tests/compile_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo` (via `./scripts/check_flare.sh`):
 
@@ -314,7 +314,7 @@ var head = app.handle(Request("HEAD", "/users/7"))  # no TestClient.head
 - Testing: `TestClient` has no `head`; a test builds `Request("HEAD", target)` and calls `app.handle`, and the response has the body a network backend does not send.
 - Cost: every `HEAD` computes and converts the whole `GET` body for the backend to drop.
 
-405 `Method Not Allowed`, proven by `tests/test_method_not_allowed.mojo` (which runs this example as written), `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`. A request whose path a route matches, when no route on that path has its method, is 405 with an `Allow` field:
+405 `Method Not Allowed`, proven by `tests/test_method_not_allowed.mojo` (which runs this example as written), `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`. A request whose path a route matches, when no route on that path has its method, is Muntin's own 405 with an `Allow` field:
 
 ```mojo
 var app = App()                          # its own App
@@ -331,10 +331,10 @@ app.post["/hooks"](hook)                 # raw: def hook(req: Request) -> Respon
 # POST /users/7/x, POST /missing -> 404 "Not Found"
 ```
 
-- When no route matches a request's method and path, `App.handle` checks each route's path with the test selection uses (equal static segments, one non-empty segment per placeholder, the query ignored, on the raw path). If some route's path matches, the answer is `Response.text("Method Not Allowed", status=405)` with one `Allow` field and no `Content-Type`; if none does, it is 404 `Not Found`. Neither decodes or converts anything or runs a handler. A request some route matches by method and path keeps its answer, a 400 included.
+- When no route matches a request's method and path, `App.handle` checks each route's path with the test selection uses (equal static segments, one non-empty segment per placeholder, the query ignored, on the raw path). If some route's path matches, Muntin's answer is `Response.text("Method Not Allowed", status=405)` with one `Allow` field and no `Content-Type`; if none does, it is 404 `Not Found`. Neither decodes or converts anything or runs a handler. A request some route matches by method and path keeps its answer, a 400 included.
 - `Allow` lists the methods of the routes whose path matches, each once, in the order their first such route was registered, with `HEAD` right after `GET` (a `get` route answers `HEAD`), joined by `, `. Raw and typed routes, stateless and stateful, count alike. A method in `Allow`, sent to the same target, selects a route, which may still answer 400 for its route value or body (`PUT /users/me`); a method not in it gets 405. Reordering registrations reorders `Allow`.
 - Every method is answered alike: `OPTIONS`, an unknown method (`FOO`) and a lowercase one (`get`, `head`) are 405 on a path some route matches and 404 elsewhere. Muntin does not answer `OPTIONS` itself or a CORS preflight, and does not answer 501 for a method it does not implement (why: [Method not allowed decision (M3-030)](history/architecture-decisions.md#method-not-allowed-decision-m3-030)). Through Flare, a method with a lowercase letter is still 400 before `App.handle`.
-- The body is fixed, and an application cannot replace the 405 or the 404. Through Flare the 405 goes out with its `Allow`; a `HEAD` 405 has no content and `Content-Length: 18`, by the `HEAD` rule above.
+- Muntin's body is fixed. An application answers a 405 or a 404 itself with middleware (section 7), which may replace either answer or change it; a 405 the middleware builds or changes carries whatever `Allow` the middleware leaves on it, which is the application's responsibility (`tests/test_middleware.mojo`). Through Flare the 405 goes out with the fields `App.handle` returned, Muntin's `Allow` included; a `HEAD` 405 has no content and `Content-Length: 18`, by the `HEAD` rule above.
 
 Two route values, proven by `tests/test_route_values.mojo` (which runs this example as written), `tests/route_values_api_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. A handler takes up to two route values, on every method:
 
@@ -897,7 +897,39 @@ app.get["/users/{id}"](get_user)
 
 Middleware should be able to inspect a request, short-circuit, call the next layer, inspect/modify a response, and attach request-scoped typed context. The public middleware contract must be Muntin-owned even if an adapter internally translates to a backend-specific mechanism.
 
-Status: decided, not shipped ([Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034)): `app.use(f)` takes a function `def(var Request, var Next) raises -> Response`, which may answer itself or run the rest with `next^.run(request^)`; that call consumes `next`, so the rest runs at most once (a second direct call does not compile). Configuration is compile-time (the function's own parameters); runtime-configured middleware (the `Tracing()` values above) and request-scoped typed context are later decisions, and request header fields are not a way to pass an identity to a handler. The next item (M3-035) ships it; `app.use` does not exist until then.
+Status: production, proven by `tests/test_middleware.mojo` (through `TestClient`, except `HEAD`, which goes through `App.handle` because `TestClient` has no `head`; it runs the example below as written), `tests/middleware_api_fail/` (via `./scripts/check.sh`) and, over real loopback connections through Flare's `Server` (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`. Middleware is a function (why: [Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034)):
+
+```mojo
+from muntin import App, Next, Request, Response
+
+
+def tracing(var request: Request, var next: Next) raises -> Response:
+    var response = next^.run(request^)
+    response.headers.add("X-Trace", "1")
+    return response^
+
+
+def hello() -> String:
+    return "hello"
+
+
+def main() raises:
+    var app = App()
+    app.use(tracing)
+    app.get["/hello"](hello)
+# GET /hello    -> 200 "hello"; X-Trace: 1
+# GET /missing  -> 404 "Not Found"; X-Trace: 1
+# POST /hello   -> 405 "Method Not Allowed"; Allow: GET, HEAD; X-Trace: 1
+```
+
+- `app.use(f)` takes a function `def(var request: Request, var next: Next) raises -> Response`; one that borrows the request (`request: Request`) or does not raise converts too. Its type is public as `Middleware`. A middleware may change the request, answer without running the rest (short-circuit), or run the rest with `next^.run(request^)` and change or replace the response that comes back.
+- `next^.run(request^)` consumes `next`, so the rest runs at most once per middleware call: a second direct use of `next`, or one inside a loop, does not compile (`use of uninitialized value 'next'`), and `Next` has no plain call (`next(request^)` does not compile) and no copy (`next.copy()` does not compile; `Next` is not `Copyable`). The once rule holds by type for `next` itself: a `Next` moved into a container (`var o = Optional(next^)`) and taken twice runs the rest once and then aborts the process at the second `take()`, an abort, not a 500. A `Next` cannot outlive the call that received it (a middleware written for a `Next` of a fixed origin does not register), and no public spelling constructs one. Code that names `_`-prefixed members, or applies the standard library's unsafe pointer operations (`unsafe_*`, `UnsafePointer`) or an origin rebind (`rebind_var`) to a `Next`, is outside these guarantees.
+- Scope and order: every request `App.handle` receives, 404, 405, the route values' 400, a handler's 500 and `HEAD` included, in registration order, outermost first, whether `use` comes before or after the routes: two middleware `a` then `b` see the request as `a`, `b` and the response as `b`, `a`. `HEAD` arrives as `HEAD`, and the backend drops the content of whatever response comes out and declares its length by the `HEAD` rule, so a middleware must answer `HEAD` with the body it would give the `GET` (as a raw `get` handler must, "`HEAD`" in "Proven vs. target status"); Muntin cannot check this. Requests a backend refuses before `App.handle` (Flare's own 400s and its 413 over `max_body_size`) never reach middleware; that describes where `App.handle` sits and is not tested.
+- Muntin's answers: middleware that does not touch a response passes it through unchanged, fields included. A middleware may replace or change any answer, Muntin's 404 and 405 included; on a 405 it builds or changes, `Allow` is the application's responsibility.
+- Errors: a raise out of a middleware is the fixed 500 `Internal Server Error` at that middleware's call, with no error text; the middleware outside it receives that 500 from its `next` as an ordinary response and continues. A raise before `next^.run` leaves the rest, the handler included, uncalled. Middleware has no error type of its own.
+- Configuration is compile-time only, through the function's own parameters (`app.use(tagged["v1"])` for `def tagged[value: StaticString](var request: Request, var next: Next) raises -> Response`). A closure that captures a runtime value does not convert (`cannot be converted from ... to 'Middleware'`), nor does a function without `next` or a plain value. Not supported: runtime-configured middleware (the `Tracing()` values above, or a value read at start-up), request-scoped typed context, per-route or per-group middleware, middleware error types, async.
+- An identity is not passed in header fields: middleware can allow or deny a request, but request header fields are client input (a client can send the same name itself), so a field middleware writes for a handler to trust is not a way to hand it an authenticated identity, and an application must not use one as such.
+- Cost: an `App` with no middleware dispatches as before, plus a length check. With middleware, `App.handle` copies the borrowed request once per request (method, path, query, header fields and body), and each middleware is one call and one `Next`. Over Flare the body in that copy is bounded by Flare's `max_body_size` (10 MiB by default); `TestClient` and other in-memory callers have no such bound. Each middleware also adds one level of nested calls (`App.handle` to the middleware, to `next^.run`, to the next one), so the stack grows with the number registered. Neither the copy nor the stack is measured.
 
 ## 8. Application state
 

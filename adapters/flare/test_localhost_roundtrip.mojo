@@ -176,6 +176,14 @@ its path: `HEAD /form` is 405 with `Allow: POST`, `Content-Length: 18` and no
 content, over h2c (no DATA frame) and over HTTP/1.1 (read as raw bytes); over
 h2c `POST /hello` is 405 with an `allow` equal to `App.handle`'s and the body
 in DATA. A lowercase `head` is still Flare's 400. The adapter is unchanged.
+
+M3-035 registers the middleware `tracing` on `hello_app()`, which adds
+`X-Trace: 1` to every answer, so `Server` is shown to run middleware: over
+HTTP/1.1 and over h2c, `GET /hello` and the 404 carry the field, and
+`HEAD /hello` carries it with the GET's status and fields, a content length of
+5 and no content (no DATA frame over h2c; over HTTP/1.1 read as raw bytes),
+so the adapter's `HEAD` step applies to the middleware's answer. The adapter
+is unchanged.
 """
 
 from std.ffi import c_uint, external_call
@@ -206,6 +214,7 @@ from muntin import (
     Json,
     JsonValue,
     JsonWriter,
+    Next,
     Request,
     Response,
     State,
@@ -538,8 +547,16 @@ def headers_app() -> App:
     return app^
 
 
+def tracing(var request: Request, var next: Next) raises -> Response:
+    """Adds `X-Trace: 1` to every answer (M3-035)."""
+    var response = next^.run(request^)
+    response.headers.add("X-Trace", "1")
+    return response^
+
+
 def hello_app() -> App:
     var app = App()
+    app.use(tracing)
     app.get["/hello"](hello)
     return app^
 
@@ -642,6 +659,50 @@ def test_get_hello_over_localhost_matches_test_client() raises:
         var missing = client.get(base + "/missing")
         assert_equal(missing.status, 404)
         assert_equal(missing.text(), "Not Found")
+
+        # M3-035: the App's middleware runs behind `Server`, for the route,
+        # the 404 and `HEAD`, whose content the adapter still drops.
+        assert_equal(expected.headers.get("X-Trace").value(), "1")
+        assert_equal(response.headers.get("x-trace"), "1")
+        assert_equal(missing.headers.get("x-trace"), "1")
+        var head = client.head(base + "/hello")
+        print(
+            "observed HTTP/1.1 HEAD /hello:",
+            head.status,
+            repr(head.headers.get("x-trace")),
+            repr(head.headers.get("content-length")),
+        )
+        assert_equal(head.status, 200)
+        assert_equal(head.headers.get("x-trace"), "1")
+        assert_equal(head.headers.get("content-length"), "5")
+        var raw_head = h1_raw(child.port, "HEAD", "/hello")
+        print("observed HTTP/1.1 HEAD /hello:", repr(raw_head))
+        assert_true(raw_head.startswith("HTTP/1.1 200 OK\r\n"))
+        assert_true("\r\nX-Trace: 1\r\n" in raw_head)
+        assert_true("\r\nContent-Length: 5\r\n" in raw_head)
+        assert_true(raw_head.endswith("\r\n\r\n"))
+        assert_equal(raw_head.count("\r\n\r\n"), 1)
+        var none = List[Tuple[String, String]]()
+        var h2_get = h2_request(child.port, "GET", "/hello", none)
+        var h2_head = h2_request(child.port, "HEAD", "/hello", none)
+        var h2_missing = h2_request(child.port, "GET", "/missing", none)
+        print("observed h2c GET /hello:", _h2_fields(h2_get[0]), h2_get[1])
+        print(
+            "observed h2c HEAD /hello:",
+            _h2_fields(h2_head[0]),
+            "DATA frames:",
+            h2_head[2],
+        )
+        assert_equal(_h2_fields(h2_get[0]), ":status=200;x-trace=1;")
+        assert_equal(h2_get[1], "hello")
+        assert_true(h2_get[2] > 0)
+        assert_equal(
+            _h2_fields(h2_head[0]), ":status=200;x-trace=1;content-length=5;"
+        )
+        assert_equal(h2_head[1], "")
+        assert_equal(h2_head[2], 0)
+        assert_equal(_h2_fields(h2_missing[0]), ":status=404;x-trace=1;")
+        assert_equal(h2_missing[1], "Not Found")
     finally:
         _ = kill(pid, SIGKILL)
         waitpid(pid)
