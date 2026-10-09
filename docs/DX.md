@@ -917,9 +917,9 @@ def main() raises:
     var app = App()
     app.use(tracing)
     app.get["/hello"](hello)
-# GET /hello    -> 200 "hello", X-Trace: 1
-# GET /missing  -> 404 "Not Found", X-Trace: 1
-# POST /hello   -> 405 "Method Not Allowed", Allow: GET, HEAD, X-Trace: 1
+# GET /hello    -> 200 "hello"; X-Trace: 1
+# GET /missing  -> 404 "Not Found"; X-Trace: 1
+# POST /hello   -> 405 "Method Not Allowed"; Allow: GET, HEAD; X-Trace: 1
 ```
 
 - `app.use(f)` takes a function `def(var request: Request, var next: Next) raises -> Response`; one that borrows the request (`request: Request`) or does not raise converts too. Its type is public as `Middleware`. A middleware may change the request, answer without running the rest (short-circuit), or run the rest with `next^.run(request^)` and change or replace the response that comes back.
