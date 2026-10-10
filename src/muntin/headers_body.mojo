@@ -1,8 +1,9 @@
-"""Typed request-header access for `post` bodies (M3-013).
+"""Typed request-header access for `post`, `put` and `patch` bodies (M3-013).
 
 `WithHeaders[B]` carries the request's header fields beside a body in the
-existing body slot of `App.post` (docs/history/architecture-decisions.md, "Typed header access
-decision (M3-012)"). It is not itself a `FromBody` or a `FromBytes`: the
+existing body slot of `App.post`, `put` and `patch`
+(docs/history/architecture-decisions.md, "Typed header access decision
+(M3-012)"). It is not itself a `FromBody` or a `FromBytes`: the
 body slot in `app.mojo` accepts `FromBody`, `FromBytes` (M3-041) or the
 private `_HeaderCarrier`, so a body alone never produces a carrier without
 the request's fields. A carrier's body is a `FromBody` or, since M3-042, a

@@ -132,7 +132,8 @@ def _call_body[
     with the header fields' names and values. After the JSON steps for a
     `Json[T]` inner body (`_json_status` allows the trailing pairs), the
     fields are rebuilt into `Headers` (a failure is the fixed 500), then the
-    carrier is built with `B._from_parts`, whose inner `from_body` raise is
+    carrier is built with `B._from_parts` from the text's bytes (it takes
+    bytes since M3-042), whose inner `from_body` raise is
     the same 400.
 
     `B` is refined here rather than bounded, as in `App.post`: forwarding a
@@ -153,7 +154,7 @@ def _call_body[
         except:
             return _internal_error()  # only the `_fields` gap gets here
         try:
-            body = B._from_parts(args[0], fields^)
+            body = B._from_parts(List(args[0].as_bytes()), fields^)
         except:
             return _bad_request()
     else:
@@ -207,7 +208,7 @@ def _call_int_body[
         except:
             return _internal_error()  # only the `_fields` gap gets here
         try:
-            body = B._from_parts(args[1], fields^)
+            body = B._from_parts(List(args[1].as_bytes()), fields^)
         except:
             return _bad_request()
     else:

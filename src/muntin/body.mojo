@@ -16,8 +16,8 @@ trait FromBody(_FromBodyOrBytes):
     """An application type that a handler can take as its request body.
 
     The application type conforms itself, in its own module, and decides the
-    body format; Muntin never names it. `App.post` passes the request body
-    to `from_body` before calling the handler.
+    body format; Muntin never names it. `App.post` (`put`, `patch`) passes
+    the request body to `from_body` before calling the handler.
 
     `Deinitable`: Muntin may have to drop a converted value. A body type may
     be move-only; the handler receives the converted value by move.
@@ -47,8 +47,9 @@ trait FromBytes(_FromBodyOrBytes):
     `FromBody` body is, inside `WithHeaders[B]` too (M3-042): `App.post`,
     `put` and `patch` pass the request's body bytes to `from_bytes` before
     calling the handler, exactly as received (or as middleware replaced
-    them), with no UTF-8 check and no text conversion. A type conforms to one of the two traits, never both:
-    a body type that conforms to both is rejected at registration.
+    them), with no UTF-8 check and no text conversion. A type conforms to
+    one of the two traits, never both: a body type that conforms to both is
+    rejected at registration.
 
     `Deinitable` and `Movable` as for `FromBody`: a bytes body type may be
     move-only, and the handler receives the converted value by move.

@@ -2486,11 +2486,11 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                 put_want.extend(Span(_bracketed(body)))
                 assert_true(_same_bytes(Span(bytes_put), Span(put_want)), name)
                 # The fields and the same bytes reached one typed handler.
-                var fields_got = fields_want.copy()
-                fields_got.extend(Span(_bracketed(body)))
-                assert_equal(len(bytes_fields), len(fields_got), name)
+                var fields_expected = fields_want.copy()
+                fields_expected.extend(Span(_bracketed(body)))
+                assert_equal(len(bytes_fields), len(fields_expected), name)
                 assert_true(
-                    _same_bytes(Span(bytes_fields), Span(fields_got)), name
+                    _same_bytes(Span(bytes_fields), Span(fields_expected)), name
                 )
                 if utf8:
                     assert_true(

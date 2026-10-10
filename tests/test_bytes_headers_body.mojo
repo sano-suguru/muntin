@@ -483,6 +483,7 @@ def test_dx_example() raises:
     assert_equal(empty.text(), "Bad Request")
     var get = client.get("/objects/a")
     assert_equal(get.status, 405)
+    assert_equal(get.text(), "Method Not Allowed")
     assert_equal(get.headers.get("allow").value(), "PUT")
 
 
@@ -522,6 +523,23 @@ def test_from_bytes_borrows_request_body_itself() raises:
     var r = app.handle(req)
     assert_equal(r.text(), "256 4")
     assert_equal(getenv(SEEN_AT), String(Int(req.body.unsafe_ptr())))
+
+
+def test_no_muntin_cap_or_content_type_rule_on_a_bytes_carrier() raises:
+    # One byte over the JSON cap (1 MiB), beside a JSON `Content-Type`:
+    # only `Json[T]` has a Muntin cap and a `Content-Type` rule.
+    var app = carrier_app()
+    var big = List[UInt8](length=1_048_577, fill=UInt8(0xFF))
+    big[0] = 0x00
+    var json = _h("Content-Type", "application/json")
+    var r = TestClient(app).post("/post/r", big.copy(), headers=json^)
+    assert_equal(r.status, 200)
+    var want = _prefixed("|Content-Type=<application/json>;|", big)
+    assert_equal(len(r.body), len(want))
+    assert_true(r.body == want)  # one comparison; per-byte asserts are slow
+    var none = TestClient(app).post("/post/r", big.copy())
+    assert_equal(none.status, 200)
+    assert_true(none.body == _prefixed("||", big))
 
 
 def test_from_bytes_raise_is_400_and_the_handler_is_not_called() raises:
