@@ -2034,6 +2034,11 @@ def body_echo(req: Request) -> Response:
     return Response(200, req.body.copy())
 
 
+def blob(req: Request) -> Response:
+    """A binary `GET` answer: three bytes, not UTF-8."""
+    return Response(200, _octets([0xFF, 0x00, 0x80]))
+
+
 def marked(var request: Request, var next: Next) raises -> Response:
     """Adds `X-Seen: 1` to every answer `App.handle` gives."""
     var response = next^.run(request^)
@@ -2049,6 +2054,7 @@ def bodies_app() -> App:
     app.post["/echo-raw"](body_echo)
     app.post["/echo"](echo)
     app.post["/greet"](greet)
+    app.get["/blob"](blob)
     return app^
 
 
@@ -2349,6 +2355,23 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
         assert_equal(String(from_utf8=Span(b1[2])), "Bad Request")
         var b2 = h2_exchange(child.port, "POST", "/greet", json, bad_json, True)
         assert_equal(_h2_fields(b2[0]), ":status=400;x-seen=1;")
+        # A binary GET answer goes out exactly; HEAD sends no content and
+        # declares the byte length, 3, on both protocols.
+        var none = List[Tuple[String, String]]()
+        var blob_bytes = _octets([0xFF, 0x00, 0x80])
+        var g1 = h1_exchange(child.port, "GET", "/blob", none, List[UInt8]())
+        assert_equal(g1[1], "X-Seen: 1;Content-Length: 3;Connection: close;")
+        assert_true(_same_bytes(Span(g1[2]), Span(blob_bytes)))
+        var g2 = h2_exchange(child.port, "GET", "/blob", none, List[UInt8]())
+        assert_true(_same_bytes(Span(g2[1]), Span(blob_bytes)))
+        var hd1 = h1_exchange(child.port, "HEAD", "/blob", none, List[UInt8]())
+        assert_equal(hd1[1], "X-Seen: 1;Content-Length: 3;Connection: close;")
+        assert_equal(len(hd1[2]), 0)
+        var hd2 = h2_exchange(child.port, "HEAD", "/blob", none, List[UInt8]())
+        assert_equal(
+            _h2_fields(hd2[0]), ":status=200;x-seen=1;content-length=3;"
+        )
+        assert_equal(len(hd2[1]), 0)
         # The same Server still answers after every exchange above.
         var after = h2_exchange(
             child.port,

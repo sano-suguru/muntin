@@ -160,6 +160,11 @@ def reached(req: Request) raises -> Response:
     return r^
 
 
+def blob(req: Request) -> Response:
+    """A binary `GET` answer: three bytes, not UTF-8."""
+    return Response(200, _octets([0xFF, 0x00, 0x80]))
+
+
 def seen(var request: Request, var next: Next) raises -> Response:
     var response = next^.run(request^)
     response.headers.add("X-Seen", "1")
@@ -172,7 +177,21 @@ def body_app() -> App:
     app.post["/reached"](reached)
     app.post["/echo"](echo)
     app.get["/hello"](hello)
+    app.get["/blob"](blob)
     return app^
+
+
+def test_binary_response_under_the_head_rule() raises:
+    # `GET` sends the bytes; `HEAD` sends none and declares their byte
+    # length, 3 (a lossy text length would be 7).
+    var handler = MuntinHandler(body_app())
+    var get = handler.serve(FlareRequest("GET", "/blob"))
+    assert_true(_same_bytes(Span(get.body), Span(_octets([0xFF, 0x00, 0x80]))))
+    assert_equal(_wire(get), "X-Seen: 1\r\n")
+    var head = handler.serve(FlareRequest("HEAD", "/blob"))
+    assert_equal(head.status, 200)
+    assert_equal(len(head.body), 0)
+    assert_equal(_wire(head), "X-Seen: 1\r\nContent-Length: 3\r\n")
 
 
 def test_every_request_body_reaches_app_handle() raises:
