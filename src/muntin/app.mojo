@@ -1243,7 +1243,9 @@ struct App(Movable):
         request's header fields, for which Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. The body may be declared `body: B` or
+        413 when it is over 1 MiB. Every body's bytes are read as UTF-8
+        before `from_body` (400 if they are not, M3-040). The body may be
+        declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
         handled as for `get` on `def()`; this holds for every body shape,
@@ -1488,7 +1490,9 @@ struct App(Movable):
         request's header fields, for which Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. The body may be declared `body: B` or
+        413 when it is over 1 MiB. Every body's bytes are read as UTF-8
+        before `from_body` (400 if they are not, M3-040). The body may be
+        declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
         handled as for `get` on `def()`; this holds for every body shape,
@@ -1735,7 +1739,9 @@ struct App(Movable):
         request's header fields, for which Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. The body may be declared `body: B` or
+        413 when it is over 1 MiB. Every body's bytes are read as UTF-8
+        before `from_body` (400 if they are not, M3-040). The body may be
+        declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
         handled as for `get` on `def()`; this holds for every body shape,

@@ -58,8 +58,10 @@ def put(inv: State[Inventory], id: Int, body: Item) -> Count:
     return Count(id + len(inv[].items))
 
 
-def raw(inv: State[Inventory], req: Request) raises -> Response:
-    return Response.text(req.text() + String(len(inv[].items)))
+def raw(inv: State[Inventory], req: Request) -> Response:
+    var out = req.body.copy()
+    out.extend(Span(String(len(inv[].items)).as_bytes()))
+    return Response(200, out^)
 
 
 def main() raises:

@@ -52,13 +52,23 @@ def create_user(body: Json[CreateUser]) -> Json[User]:
     return Json(User(1, body.value.name))
 
 
-def echo(req: Request) raises -> Response:
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
+
+
+def echo(req: Request) -> Response:
     """Answers with the method, path, body and every header field, in
     order, each value in angle brackets."""
-    var out = req.method + " " + req.path + " [" + req.text() + "]"
+    var out = String("]")
     for i in range(len(req.headers)):
         out += " " + req.headers.name(i) + "=<" + req.headers.value(i) + ">"
-    return Response.text(out)
+    return Response(
+        200, _spliced(req.method + " " + req.path + " [", req.body, out)
+    )
 
 
 def empty_probe(req: Request) -> Response:

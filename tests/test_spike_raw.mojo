@@ -77,13 +77,23 @@ struct Unmapped(Movable):
 # Raw handlers.
 
 
-def _fields(req: Request) raises -> String:
-    return req.method + "|" + req.path + "|" + req.query + "|" + req.text()
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
 
 
-def echo(req: Request) raises -> Response:
+def _fields(req: Request) -> List[UInt8]:
+    return _spliced(
+        req.method + "|" + req.path + "|" + req.query + "|", req.body
+    )
+
+
+def echo(req: Request) -> Response:
     _bump(HANDLER)
-    return Response.text(_fields(req), status=202)
+    return Response(202, _fields(req))
 
 
 def take_body(var req: Request) -> Response:
@@ -190,9 +200,9 @@ def test_raw_handlers_receive_the_whole_request() raises:
         var sent = Request("POST", t, " payload?\n")
         var r = app.handle(sent)
         assert_equal(r.status, 202)
-        assert_equal(r.text(), _fields(sent))
+        assert_equal(r.body, _fields(sent))
     var g = Request("GET", "/raw?id=abc")
-    assert_equal(app.handle(g).text(), _fields(g))
+    assert_equal(app.handle(g).body, _fields(g))
     assert_equal(_count(HANDLER), 5)
 
 

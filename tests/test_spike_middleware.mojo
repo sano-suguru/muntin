@@ -36,8 +36,16 @@ def boom() raises -> String:
     raise Error("internal detail")
 
 
-def echo(var request: Request) raises -> Response:
-    return Response.text(request.method + " " + request.text())
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
+
+
+def echo(var request: Request) -> Response:
+    return Response(200, _spliced(request.method + " ", request.body))
 
 
 def trail(var request: Request) -> Response:

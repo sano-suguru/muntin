@@ -237,15 +237,23 @@ def plain_json_state(
     return Json(Named(id, p[].text + body.value.name))
 
 
-def raw(req: Request) raises -> Response:
-    return Response.text(
-        "raw " + req.method + " " + req.text() + _fields(req.headers)
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
+
+
+def raw(req: Request) -> Response:
+    return Response(
+        200, _spliced("raw " + req.method + " ", req.body, _fields(req.headers))
     )
 
 
-def state_raw(p: State[Prefix], req: Request) raises -> Response:
-    return Response.text(
-        "state_raw " + p[].text + req.text() + _fields(req.headers)
+def state_raw(p: State[Prefix], req: Request) -> Response:
+    return Response(
+        200, _spliced("state_raw " + p[].text, req.body, _fields(req.headers))
     )
 
 

@@ -540,12 +540,13 @@ def delete_note(id: Int) -> String:
     return "deleted " + String(id)
 
 
-def purge(req: Request) raises -> Response:
+def purge(req: Request) -> Response:
     """A raw `delete` handler: a `DELETE` body reaches only a raw handler."""
-    return Response.text(
-        req.method + "|" + req.path + "|" + req.query + "|" + req.text(),
-        status=202,
+    var out = List(
+        String(req.method + "|" + req.path + "|" + req.query + "|").as_bytes()
     )
+    out.extend(Span(req.body))
+    return Response(202, out^)
 
 
 def report(req: Request) raises -> Response:

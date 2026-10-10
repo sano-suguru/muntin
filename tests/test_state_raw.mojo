@@ -202,8 +202,16 @@ def handles_raising(keys: State[Keys], req: Request) raises -> Response:
     return Response.text(String(keys._shared.count()))
 
 
-def track(tracked: State[Tracked], req: Request) raises -> Response:
-    return Response.text(String(tracked[].drops[]) + " " + req.text())
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
+
+
+def track(tracked: State[Tracked], req: Request) -> Response:
+    return Response(200, _spliced(String(tracked[].drops[]) + " ", req.body))
 
 
 def later(keys: State[Keys], req: Request) -> Response:
@@ -213,8 +221,8 @@ def later(keys: State[Keys], req: Request) -> Response:
 # Stateless and typed handlers registered on the same apps.
 
 
-def plain_raw(req: Request) raises -> Response:
-    return Response.text("plain raw " + req.text())
+def plain_raw(req: Request) -> Response:
+    return Response(200, _spliced("plain raw ", req.body))
 
 
 def typed_get() -> String:

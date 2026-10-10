@@ -138,17 +138,27 @@ def rename_user_typed(users: State[Users], id: Int, body: NewUser) -> User:
     return User(id, body.name)
 
 
-def audit(users: State[Users], req: Request) raises -> Response:
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
+
+
+def audit(users: State[Users], req: Request) -> Response:
     users[].count()
-    return Response.text(
-        req.method + " " + req.path + "?" + req.query + " " + req.text(),
-        status=202,
+    return Response(
+        202,
+        _spliced(req.method + " " + req.path + "?" + req.query + " ", req.body),
     )
 
 
-def audit_owned(users: State[Users], var req: Request) raises -> Response:
+def audit_owned(users: State[Users], var req: Request) -> Response:
     users[].count()
-    return Response.text(req.text(), status=201)
+    var body = req.body^
+    req.body = List[UInt8]()
+    return Response(201, body^)
 
 
 def handles(users: State[Users]) -> String:
@@ -179,8 +189,8 @@ def plain_create(body: NewUser) -> User:
     return User(0, body.name)
 
 
-def plain_raw(req: Request) raises -> Response:
-    return Response.text("raw " + req.text())
+def plain_raw(req: Request) -> Response:
+    return Response(200, _spliced("raw ", req.body))
 
 
 def _users() -> State[Users]:

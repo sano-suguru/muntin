@@ -187,6 +187,14 @@ def tag(var request: Request, var next: Next) raises -> Response:
     return response^
 
 
+def method_and_body(req: Request) raises -> Response:
+    """Answers `<method> <x-tag>|` then the body bytes, unread."""
+    var tag = req.headers.get("x-tag").or_else("<none>")
+    var out = List(String(req.method + " " + tag + "|").as_bytes())
+    out.extend(Span(req.body))
+    return Response(200, out^)
+
+
 def binary_app() -> App:
     var app = App()
     app.post["/echo"](echo)
@@ -250,6 +258,35 @@ def test_raw_echo_returns_every_body_byte_for_byte() raises:
         _assert_same(taken.body, body, "moved out")
         # Muntin adds no field, for bytes as for text.
         assert_equal(len(post.headers), 0)
+
+
+def test_testclient_bytes_overloads_send_their_method_and_fields() raises:
+    var app = App()
+    app.post["/m"](method_and_body)
+    app.put["/m"](method_and_body)
+    app.patch["/m"](method_and_body)
+    var client = TestClient(app)
+    var body = _octets([0x89, 0x00, 0xFF])
+    var h = Headers()
+    h.add("X-Tag", "t1")
+    for method in ["POST", "PUT", "PATCH"]:
+        var r: Response
+        if method == "POST":
+            r = client.post("/m", body.copy(), headers=h.copy())
+        elif method == "PUT":
+            r = client.put("/m", body.copy(), headers=h.copy())
+        else:
+            r = client.patch("/m", body.copy(), headers=h.copy())
+        var want = List(String(method + " t1|").as_bytes())
+        want.extend(Span(body))
+        _assert_same(r.body, want, method)
+        # Equal to `App.handle` with the same `Request`.
+        var direct = app.handle(Request(method, "/m", body.copy(), h.copy()))
+        _assert_same(r.body, direct.body, method + " vs App.handle")
+    # Without `headers=`, no field is sent.
+    var none = List(String("PUT <none>|").as_bytes())
+    none.extend(Span(body))
+    _assert_same(client.put("/m", body.copy()).body, none, "no fields")
 
 
 def test_text_and_bytes_requests_hold_the_same_bytes() raises:
@@ -372,7 +409,7 @@ def test_middleware_passes_and_changes_bytes_without_text() raises:
         assert_equal(r.status, 200)
         _assert_same(r.body, want, "reversed by middleware")
         assert_equal(r.headers.get("x-seen").value(), "1")
-    # Middleware sees the body bytes on 404 and 405 too.
+    # Middleware runs on 404 and 405 too, whatever the body bytes.
     var missing = client.post("/missing", _octets([0xFF]))
     assert_equal(missing.status, 404)
     assert_equal(missing.headers.get("x-seen").value(), "1")

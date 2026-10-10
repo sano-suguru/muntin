@@ -66,14 +66,26 @@ def logged(calls: State[Calls], var req: Request) -> Response:
     return Response.text("logged")
 
 
-def echo(var req: Request) raises -> Response:
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
+
+
+def echo(var req: Request) -> Response:
     """Raw: answers with the method, path, query and every field in order,
     each value in angle brackets."""
-    var out = req.method + " " + req.path + " ?" + req.query + " [" + req.text()
-    out += "]"
+    var out = String("]")
     for i in range(len(req.headers)):
         out += " " + req.headers.name(i) + "=<" + req.headers.value(i) + ">"
-    return Response.text(out)
+    return Response(
+        200,
+        _spliced(
+            req.method + " " + req.path + " ?" + req.query + " [", req.body, out
+        ),
+    )
 
 
 def report(req: Request) raises -> Response:

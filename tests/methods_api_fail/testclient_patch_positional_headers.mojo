@@ -3,7 +3,7 @@
 # docs/history/architecture-decisions.md, "HTTP methods decision (M3-020)".
 # Since M3-040 `patch` has a text and a bytes overload, so the compiler reports
 # `no matching method in call to 'patch'` with each candidate's reason.
-# Expected diagnostic (checked by scripts/check.sh): candidate not viable: unexpected argument
+# Expected diagnostic (checked by scripts/check.sh): no matching method in call to 'patch'
 from muntin import App, Headers
 from muntin.testing import TestClient
 
