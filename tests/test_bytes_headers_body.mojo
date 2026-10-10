@@ -129,6 +129,8 @@ comptime SENT_FIELDS = "X-Sig=<a>;x-sig=<b>;Empty=<>;Content-Type=<x/y>;"
 
 
 struct Upload(FromBytes):
+    comptime max_bytes = 8 << 20  # a longer body is 413, before from_bytes
+
     var data: List[UInt8]
 
     def __init__(out self, var data: List[UInt8]):
@@ -163,6 +165,8 @@ def put_object(
 struct Blob(FromBytes):
     """Keeps every byte it receives; move-only (no `Copyable`)."""
 
+    comptime max_bytes = Int.MAX
+
     var data: List[UInt8]
 
     def __init__(out self, var data: List[UInt8]):
@@ -179,6 +183,8 @@ struct Blob(FromBytes):
 
 struct Signed(FromBytes):
     """Accepts a body that starts with 0xFF 0x00; raises on anything else."""
+
+    comptime max_bytes = Int.MAX
 
     var payload: List[UInt8]
 
@@ -200,6 +206,8 @@ struct Signed(FromBytes):
 struct Pinned(FromBytes):
     """Records the address of the bytes it receives, to show they are
     `Request.body` itself, not a copy."""
+
+    comptime max_bytes = Int.MAX
 
     var n: Int
 
@@ -530,9 +538,10 @@ def test_from_bytes_borrows_request_body_itself() raises:
     assert_equal(getenv(SEEN_AT), String(Int(req.body.unsafe_ptr())))
 
 
-def test_no_muntin_cap_or_content_type_rule_on_a_bytes_carrier() raises:
-    # One byte over the JSON cap (1 MiB), beside a JSON `Content-Type`:
-    # only `Json[T]` has a Muntin cap and a `Content-Type` rule.
+def test_int_max_is_no_cap_and_no_content_type_rule_on_a_bytes_carrier() raises:
+    # One byte over the JSON cap (1 MiB), beside a JSON `Content-Type`: a
+    # carried type declaring `max_bytes = Int.MAX` has no Muntin cap
+    # (M3-043), and only `Json[T]` has a `Content-Type` rule.
     var app = carrier_app()
     var big = List[UInt8](length=1_048_577, fill=UInt8(0xFF))
     big[0] = 0x00

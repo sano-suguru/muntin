@@ -55,7 +55,22 @@ trait FromBytes(_FromBodyOrBytes):
 
     `Deinitable` and `Movable` as for `FromBody`: a bytes body type may be
     move-only, and the handler receives the converted value by move.
+
+    `max_bytes` (M3-043) is the longest body, in bytes, the type accepts:
+    a longer one is answered 413 `Content Too Large` without calling
+    `from_bytes` or the handler, after the route values and, in a carrier,
+    before the field rebuild. Every type declares it, so a missing or
+    misspelled limit does not compile; `Int.MAX`, which no body exceeds,
+    is no limit. A negative value is rejected at registration. It measures
+    the body `App.handle` holds after middleware, which the backend has
+    already received in full: it is not a receive limit, which is the
+    network backend's own configuration.
     """
+
+    comptime max_bytes: Int
+    """The longest body the type accepts, in bytes (0 or more): a type
+    declares `comptime max_bytes = 64 * 1024` once (or a refining trait
+    gives a default); `Int.MAX` is no limit."""
 
     @staticmethod
     def from_bytes(body: List[UInt8]) raises -> Self:

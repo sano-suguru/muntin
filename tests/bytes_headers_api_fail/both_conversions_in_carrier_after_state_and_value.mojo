@@ -8,6 +8,8 @@ from muntin import App, FromBody, FromBytes, State, WithHeaders
 
 
 struct Either(FromBody, FromBytes):
+    comptime max_bytes = Int.MAX
+
     var n: Int
 
     def __init__(out self, n: Int):
