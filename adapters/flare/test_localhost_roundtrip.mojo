@@ -2306,6 +2306,15 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                         chunked,
                     )
                     assert_equal(y[0], "HTTP/1.1 200 OK", name)
+                    assert_equal(
+                        y[1],
+                        String(
+                            "X-Seen: 1;Content-Length: ",
+                            len(body) + 2,
+                            ";Connection: close;",
+                        ),
+                        name,
+                    )
                     bytes_body = y[2].copy()
                     var yp = h1_exchange(
                         child.port,
@@ -2316,6 +2325,15 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                         chunked,
                     )
                     assert_equal(yp[0], "HTTP/1.1 200 OK", name)
+                    assert_equal(
+                        yp[1],
+                        String(
+                            "X-Seen: 1;Content-Length: ",
+                            len(body) + 5,
+                            ";Connection: close;",
+                        ),
+                        name,
+                    )
                     bytes_put = yp[2].copy()
                     assert_equal(status, "HTTP/1.1 200 OK", name)
                     # No `Content-Type`: the adapter adds none for bytes.

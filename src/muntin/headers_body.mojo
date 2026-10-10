@@ -7,7 +7,7 @@ decision (M3-012)"). It is not itself a `FromBody`: the body slot in
 alone never produces a carrier without the request's fields.
 """
 
-from .body import FromBody
+from .body import FromBody, FromBytes
 from .http import Headers
 from .json import _JsonBody
 
@@ -21,6 +21,14 @@ trait _HeaderCarrier(Deinitable, Movable):
     def _from_parts(body: String, var headers: Headers) raises -> Self:
         """Builds the carrier from the request body and the rebuilt fields;
         raises only when the body's `from_body` raises."""
+        ...
+
+    @staticmethod
+    def _two_conversions() -> Bool:
+        """Whether the carried body type also conforms to `FromBytes`
+        (M3-041), so `_kind` rejects the carrier as it rejects such a body
+        alone: a carrier converts with `from_body`, and Muntin never picks
+        one of two conversions silently."""
         ...
 
 
@@ -70,3 +78,7 @@ struct WithHeaders[B: FromBody](
     @staticmethod
     def _from_parts(body: String, var headers: Headers) raises -> Self:
         return Self(Self.B.from_body(body), headers^)
+
+    @staticmethod
+    def _two_conversions() -> Bool:
+        return conforms_to(Self.B, FromBytes)

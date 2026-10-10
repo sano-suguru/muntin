@@ -28,6 +28,7 @@ from muntin.testing import TestClient
 comptime FROM_BYTES_CALLS = "MUNTIN_TEST_BYTES_FROM_BYTES_CALLS"
 comptime HANDLER_CALLS = "MUNTIN_TEST_BYTES_HANDLER_CALLS"
 comptime FROM_BODY_CALLS = "MUNTIN_TEST_BYTES_FROM_BODY_CALLS"
+comptime SEEN_AT = "MUNTIN_TEST_BYTES_SEEN_AT"
 
 
 def _count(name: String) -> Int:
@@ -170,6 +171,19 @@ struct Signed(FromBytes):
         return Self(payload^)
 
 
+@fieldwise_init
+struct Pinned(FromBytes):
+    """Records the address of the bytes it receives, to show they are
+    `Request.body` itself, not a copy."""
+
+    var n: Int
+
+    @staticmethod
+    def from_bytes(body: List[UInt8]) raises -> Self:
+        _ = setenv(SEEN_AT, String(Int(body.unsafe_ptr())))
+        return Self(len(body))
+
+
 struct Note(FromBody):
     var text: String
 
@@ -250,6 +264,10 @@ def signed(s: Signed) -> Response:
     return Response(200, s.payload.copy())
 
 
+def pinned(p: Pinned) -> String:
+    return String(p.n)
+
+
 def note(n: Note) -> String:
     return "[" + n.text + "]"
 
@@ -281,6 +299,7 @@ def bytes_app() -> App:
     app.post["/size"](size)
     app.post["/signed"](signed)
     app.post["/note"](note)
+    app.post["/pinned"](pinned)
     app.post["/greet"](greet)
     app.post["/raw"](raw_echo)
     app.get["/raw"](raw_echo)
@@ -383,6 +402,18 @@ def test_route_values_and_state_then_bytes() raises:
             _prefixed("s 1 2|", body),
             "State, two values, body",
         )
+
+
+def test_from_bytes_borrows_request_body_itself() raises:
+    """`from_bytes` receives the borrowed `Request.body`, not a copy: the
+    same buffer `App.handle` was given (no middleware, which copies the
+    request once)."""
+    var app = bytes_app()
+    var req = Request("POST", "/pinned", _every_byte())
+    _ = unsetenv(SEEN_AT)
+    var r = app.handle(req)
+    assert_equal(r.text(), "256")
+    assert_equal(getenv(SEEN_AT), String(Int(req.body.unsafe_ptr())))
 
 
 def test_no_muntin_cap_on_a_bytes_body() raises:
