@@ -63,7 +63,7 @@ trait FromBytes(_FromBodyOrBytes):
     `Int.MAX`, which no body exceeds: no Muntin limit. A negative value is
     rejected at registration. It measures the body `App.handle` holds after
     middleware, which the backend has already received in full: it is not a
-    receive limit (the backend's own, such as Flare's `max_body_size`).
+    receive limit, which is the network backend's own configuration.
     """
 
     comptime max_bytes: Int = Int.MAX
