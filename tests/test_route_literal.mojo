@@ -33,6 +33,7 @@ def _route_of(literal: StaticString) -> _Route:
 def _call(
     handler: def(args: List[String]) thin raises -> Response,
     args: List[String],
+    bytes: List[UInt8],
 ) raises -> Response:
     return handler(args)
 

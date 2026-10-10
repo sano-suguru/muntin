@@ -82,7 +82,7 @@ def test_request_conversion_keeps_method_target_and_body() raises:
     # The adapter passes the target verbatim; Muntin's Request splits it.
     assert_equal(request.path, "/items")
     assert_equal(request.query, "page=1&x")
-    assert_equal(request.body, "ping")
+    assert_equal(request.text(), "ping")
 
 
 def _octets(values: List[Int]) -> List[UInt8]:
@@ -93,7 +93,7 @@ def _octets(values: List[Int]) -> List[UInt8]:
 
 
 def _well_formed_bodies() -> List[List[UInt8]]:
-    """Request bodies that are well-formed UTF-8 (M3-038)."""
+    """Request bodies that are well-formed UTF-8."""
     return [
         List("ping".as_bytes()),
         List("hé✓".as_bytes()),
@@ -105,7 +105,7 @@ def _well_formed_bodies() -> List[List[UInt8]]:
 
 
 def _ill_formed_bodies() -> List[List[UInt8]]:
-    """Request bodies that are not UTF-8 (M3-038)."""
+    """Request bodies that are not UTF-8: binary bodies since M3-040."""
     return [
         _octets([0x80]),
         _octets([0xFF]),
@@ -118,6 +118,13 @@ def _ill_formed_bodies() -> List[List[UInt8]]:
     ]
 
 
+def _all_bodies() -> List[List[UInt8]]:
+    var out = _well_formed_bodies()
+    for b in _ill_formed_bodies():
+        out.append(b.copy())
+    return out^
+
+
 def _same_bytes(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
     if len(a) != len(b):
         return False
@@ -127,27 +134,30 @@ def _same_bytes(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
     return True
 
 
-def test_request_body_keeps_well_formed_bytes() raises:
-    for body in _well_formed_bodies():
+def test_request_body_keeps_every_byte() raises:
+    # M3-040: the body is copied as bytes, whatever they are; nothing is
+    # validated, replaced or refused by the conversion.
+    for body in _all_bodies():
         var request = to_muntin_request(
             FlareRequest("POST", "/", body=body.copy())
         )
-        assert_true(_same_bytes(request.body.as_bytes(), Span(body)))
-        assert_equal(request.body.byte_length(), len(body))
+        assert_equal(len(request.body), len(body))
+        assert_true(_same_bytes(Span(request.body), Span(body)))
 
 
-def test_request_body_that_is_not_utf8_cannot_be_converted() raises:
-    for body in _ill_formed_bodies():
-        var raised = False
-        try:
-            _ = to_muntin_request(FlareRequest("POST", "/", body=body.copy()))
-        except:
-            raised = True
-        assert_true(raised)
+def test_response_body_keeps_every_byte() raises:
+    for body in _all_bodies():
+        var out = to_flare_response(Response(200, body.copy()))
+        assert_equal(len(out.body), len(body))
+        assert_true(_same_bytes(Span(out.body), Span(body)))
+        assert_equal(_wire(out), "")  # no `Content-Type` is added
 
 
-def reached(req: Request) -> Response:
-    return Response.text("reached " + String(req.body.byte_length()))
+def reached(req: Request) raises -> Response:
+    """A raw echo: the body bytes back, unread, with their count."""
+    var r = Response(200, req.body.copy())
+    r.headers.add("X-Body-Length", String(len(req.body)))
+    return r^
 
 
 def seen(var request: Request, var next: Next) raises -> Response:
@@ -160,37 +170,60 @@ def body_app() -> App:
     var app = App()
     app.use(seen)
     app.post["/reached"](reached)
+    app.post["/echo"](echo)
     app.get["/hello"](hello)
     return app^
 
 
-def test_request_body_that_is_not_utf8_answers_400_before_app_handle() raises:
+def test_every_request_body_reaches_app_handle() raises:
     var handler = MuntinHandler(body_app())
-    for body in _ill_formed_bodies():
-        # A route, a path only `GET` matches (405 in `App.handle`) and a
-        # path no route matches (404): the adapter's 400 comes first, and
-        # neither the middleware nor a handler runs.
-        for target in ["/reached", "/hello", "/missing"]:
-            var out = handler.serve(
-                FlareRequest("POST", target, body=body.copy())
-            )
-            assert_equal(out.status, 400)
-            assert_equal(out.text(), "Bad Request")
-            assert_equal(_wire(out), "")
-        # `HEAD`: the adapter's 400 under the `HEAD` rule (M3-027).
-        var head = handler.serve(
-            FlareRequest("HEAD", "/hello", body=body.copy())
-        )
-        assert_equal(head.status, 400)
-        assert_equal(len(head.body), 0)
-        assert_equal(_wire(head), "Content-Length: 11\r\n")
-    for body in _well_formed_bodies():
+    for body in _all_bodies():
+        # The raw route echoes every body byte for byte, through middleware.
         var out = handler.serve(
             FlareRequest("POST", "/reached", body=body.copy())
         )
         assert_equal(out.status, 200)
-        assert_equal(out.text(), "reached " + String(len(body)))
+        assert_equal(len(out.body), len(body))
+        assert_true(_same_bytes(Span(out.body), Span(body)))
+        assert_equal(
+            _wire(out),
+            "X-Body-Length: " + String(len(body)) + "\r\nX-Seen: 1\r\n",
+        )
+        # A path only `GET` matches (405) and one no route matches (404):
+        # `App.handle`'s answers, through the middleware, whatever the body.
+        var other = handler.serve(
+            FlareRequest("POST", "/hello", body=body.copy())
+        )
+        assert_equal(other.status, 405)
+        assert_equal(_wire(other), "Allow: GET, HEAD\r\nX-Seen: 1\r\n")
+        var missing = handler.serve(
+            FlareRequest("POST", "/missing", body=body.copy())
+        )
+        assert_equal(missing.status, 404)
+        assert_equal(_wire(missing), "X-Seen: 1\r\n")
+        # `HEAD` on a `GET` route: its answer under the `HEAD` rule (M3-027).
+        var head = handler.serve(
+            FlareRequest("HEAD", "/hello", body=body.copy())
+        )
+        assert_equal(head.status, 200)
+        assert_equal(len(head.body), 0)
+        assert_equal(_wire(head), "X-Seen: 1\r\nContent-Length: 5\r\n")
+
+
+def test_typed_text_body_that_is_not_utf8_is_400_in_app_handle() raises:
+    # M3-040: a typed text body reads the bytes as UTF-8; one that is not is
+    # `App.handle`'s 400 (through middleware), never a replaced byte.
+    var handler = MuntinHandler(body_app())
+    for body in _ill_formed_bodies():
+        var out = handler.serve(FlareRequest("POST", "/echo", body=body.copy()))
+        assert_equal(out.status, 400)
+        assert_equal(out.text(), "Bad Request")
         assert_equal(_wire(out), "X-Seen: 1\r\n")
+    for body in _well_formed_bodies():
+        var out = handler.serve(FlareRequest("POST", "/echo", body=body.copy()))
+        var text = String(from_utf8=Span(body))
+        assert_equal(out.status, 200)
+        assert_equal(out.text(), "[" + text + "]")
 
 
 def _unchecked(values: List[Int]) -> String:
@@ -438,7 +471,7 @@ def test_request_headers_are_rebuilt_in_order() raises:
         _fields(got.headers),
         "X-B=2;Content-Type=text/plain; q=1;x-b=;X-Odd=a: b\tc;X-Utf8=é;",
     )
-    assert_equal(got.body, "b")
+    assert_equal(got.text(), "b")
     assert_equal(got.query, "x=1")
 
 

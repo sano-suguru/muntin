@@ -42,7 +42,7 @@ def fail(id: Int) raises -> String:
     raise Error("boom")
 
 
-def main():
+def main() raises:
     var app = ErrorResponseApp()
     app.get["/find/{id}"](find)
     app.get["/hide/{id}"](hide)
@@ -54,11 +54,11 @@ def main():
     var bad = app.handle(Request("GET", "/find/x"))
     if (
         ok.status != 200
-        or ok.body != "found"
+        or ok.text() != "found"
         or missing.status != 404
-        or missing.body != "missing 0"
+        or missing.text() != "missing 0"
         or hidden.status != 500
-        or hidden.body != "Internal Server Error"
+        or hidden.text() != "Internal Server Error"
         or failed.status != 500
         or bad.status != 400
     ):

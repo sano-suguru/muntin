@@ -303,7 +303,7 @@ def _expect(
 ) raises:
     var response = app.handle(Request(method, target, request_body))
     assert_equal(response.status, status, method + " " + target)
-    assert_equal(response.body, body, method + " " + target)
+    assert_equal(response.text(), body, method + " " + target)
 
 
 def _expect_counts(handler: Int, conversions: Int, errors: Int) raises:

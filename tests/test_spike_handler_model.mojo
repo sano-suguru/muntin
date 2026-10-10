@@ -267,7 +267,9 @@ def get_user(id: Int) -> User:
 
 
 def raw(req: Request) -> Response:
-    return Response.text("raw:" + req.body, status=201)
+    var out = List(String("raw:").as_bytes())
+    out.extend(Span(req.body))
+    return Response(201, out^)
 
 
 def _runtime_app() -> RuntimeApp:

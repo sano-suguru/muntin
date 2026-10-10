@@ -80,7 +80,9 @@ def _handler_error[E: Deinitable](var e: E) -> Response:
 
 def _call_none[
     E: Deinitable, R: Movable & Deinitable, respond: _Respond[R]
-](handler: def() thin raises E -> R, args: List[String]) -> Response:
+](
+    handler: def() thin raises E -> R, args: List[String], bytes: List[UInt8]
+) -> Response:
     var result: R
     try:
         result = handler()
@@ -91,7 +93,9 @@ def _call_none[
 
 def _call_int[
     E: Deinitable, R: Movable & Deinitable, respond: _Respond[R]
-](handler: def(Int) thin raises E -> R, args: List[String]) -> Response:
+](
+    handler: def(Int) thin raises E -> R, args: List[String], bytes: List[UInt8]
+) -> Response:
     """Answers 400 itself, without calling `handler`, if the argument is
     not an integer (production raises into `App.handle` instead)."""
     var id: Int
@@ -112,7 +116,11 @@ def _call_body[
     E: Deinitable,
     R: Movable & Deinitable,
     respond: _Respond[R],
-](handler: def(var B) thin raises E -> R, args: List[String]) -> Response:
+](
+    handler: def(var B) thin raises E -> R,
+    args: List[String],
+    bytes: List[UInt8],
+) -> Response:
     comptime assert conforms_to(B, FromBody)
     var body: B
     try:
@@ -132,7 +140,11 @@ def _call_int_body[
     E: Deinitable,
     R: Movable & Deinitable,
     respond: _Respond[R],
-](handler: def(Int, var B) thin raises E -> R, args: List[String]) -> Response:
+](
+    handler: def(Int, var B) thin raises E -> R,
+    args: List[String],
+    bytes: List[UInt8],
+) -> Response:
     """Route value, then body, each answering its own 400, then the
     handler (production's order)."""
     comptime assert conforms_to(B, FromBody)
@@ -358,9 +370,13 @@ struct ErrorApp(Movable):
                 except:
                     return _bad_request()
             if route.body:
-                args.append(request.body)
+                # The spike carries the body as text: one that is not UTF-8 is 400.
+                try:
+                    args.append(request.text())
+                except:
+                    return Response.text("Bad Request", status=400)
             try:
-                return route.handler.invoke(args)
+                return route.handler.invoke(args, List[UInt8]())
             except:
                 return _internal_error()
         return Response.text("Not Found", status=404)

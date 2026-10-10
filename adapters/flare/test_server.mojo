@@ -181,7 +181,7 @@ def test_serve_answers_right_after_bind() raises:
         var expected = TestClient(app).get("/users/7")
         raw = _exchange(child.port, _request("GET", "/users/7"))
         assert_equal(_status_line(raw), "HTTP/1.1 200 OK")
-        assert_equal(_content(raw), expected.body)
+        assert_equal(_content(raw), expected.text())
         raw = _exchange(child.port, _request("GET", "/users/abc"))
         assert_true(_status_line(raw).startswith("HTTP/1.1 400"), raw)
         assert_equal(_content(raw), "Bad Request")
@@ -222,7 +222,7 @@ def test_bind_raises_for_a_port_a_child_serves() raises:
         assert_true(not error.startswith("bound port"), error)
         # The parent's `App` still answers after the bind raise (`bind` does
         # not borrow it).
-        assert_equal(TestClient(app).get("/hello").body, "hello")
+        assert_equal(TestClient(app).get("/hello").text(), "hello")
     finally:
         _stop(child.pid)
 

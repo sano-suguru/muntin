@@ -214,7 +214,7 @@ def test_request_body_is_borrowed_not_consumed() raises:
     var app = body_app()
     var request = Request("POST", "/users", "name=Ada")
     _ = app.handle(request)
-    assert_equal(request.body, "name=Ada")
+    assert_equal(request.text(), "name=Ada")
     assert_equal(app.handle(request).text(), "created Ada")
 
 

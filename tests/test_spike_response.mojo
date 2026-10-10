@@ -140,7 +140,7 @@ def _expect(
     var request = Request(method, target, "Ada" if method == "POST" else "")
     var response = app.handle(request)
     assert_equal(response.status, status, method + " " + target)
-    assert_equal(response.body, body, method + " " + target)
+    assert_equal(response.text(), body, method + " " + target)
 
 
 def test_string_compatible_handlers_keep_the_string_overload() raises:
@@ -216,7 +216,7 @@ def _convert_raising[R: ToResponseRaising](var result: R) raises -> Response:
 def test_widened_raising_requirement_accepts_existing_conformance() raises:
     comptime assert conforms_to(User, ToResponse)
     comptime assert conforms_to(User, ToResponseRaising)
-    assert_equal(_convert_raising(User(3, "Bo")).body, "User(3, Bo)")
+    assert_equal(_convert_raising(User(3, "Bo")).text(), "User(3, Bo)")
 
 
 def user_json(var user: User) -> Response:

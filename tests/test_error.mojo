@@ -537,7 +537,7 @@ def test_app_with_raising_routes_moves() raises:
 
 
 def _broken_adapter(
-    handler: def() thin -> String, args: List[String]
+    handler: def() thin -> String, args: List[String], bytes: List[UInt8]
 ) raises -> Response:
     """An adapter that breaks the rule that adapters do not raise, with a
     request-like message."""

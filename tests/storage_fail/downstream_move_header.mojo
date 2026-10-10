@@ -13,7 +13,7 @@ def hello() -> String:
 
 
 def _hello_trampoline(
-    handler: def() thin -> String, args: List[String]
+    handler: def() thin -> String, args: List[String], bytes: List[UInt8]
 ) -> Response:
     """A local adapter for `hello`'s shape: the fixture needs a box, not
     production's adapters."""

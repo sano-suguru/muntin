@@ -263,14 +263,14 @@ def raw_token(var req: Request) raises -> Response:
     # A raw handler decodes with `Json[T].from_body` itself: no Content-Type
     # or size step runs before it, and the parser's cap raises into the
     # handler's own error model (here: the fixed 500).
-    var body = Json[Token].from_body(req.body)
+    var body = Json[Token].from_body(req.text())
     return Response.text(body.value.secret)
 
 
 def raw_token_mapped(var req: Request) -> Response:
     # The same decode with the application's own answer to a failure.
     try:
-        return Response.text(Json[Token].from_body(req.body).value.secret)
+        return Response.text(Json[Token].from_body(req.text()).value.secret)
     except:
         return Response.text("rejected", status=422)
 
@@ -562,7 +562,7 @@ def _is_json_result(target: String) -> Bool:
 
 def _assert_fixed(r: Response, status: Int, body: String) raises:
     assert_equal(r.status, status)
-    assert_equal(r.body, body)
+    assert_equal(r.text(), body)
     assert_equal(len(r.headers), 0)
 
 
@@ -575,7 +575,7 @@ def test_json_bodies_on_every_typed_shape() raises:
         _reset()
         var r = _post(app, target, BODY)
         assert_equal(r.status, 200, target)
-        assert_equal(r.body, s[1], target)
+        assert_equal(r.text(), s[1], target)
         if _is_json_result(target):
             assert_equal(len(r.headers), 1, target)
             assert_equal(r.headers.name(0), "Content-Type")
@@ -724,7 +724,7 @@ def test_field_errors_are_400_and_extra_members_are_ignored() raises:
             assert_equal(_count(HANDLER), 0, s)
     _reset()
     var ok = '{"name":"A","age":1,"admin":false,"score":1,"tags":[],"home":{"city":"","zip":0},"past":[],"zzz":{"deep":[1,2,3]}}'
-    assert_equal(_post(app, "/users-text", ok).body, "created A")
+    assert_equal(_post(app, "/users-text", ok).text(), "created A")
     assert_equal(_count(HANDLER), 1)
 
 
@@ -814,7 +814,7 @@ def test_content_type_is_415_on_every_json_body_shape() raises:
             _reset()
             var r = _post(app, target, BODY, v)
             assert_equal(r.status, 200, target + " " + v)
-            assert_equal(r.body, s[1])
+            assert_equal(r.text(), s[1])
             assert_equal(_count(HANDLER), 1)
         for v in materialize[REFUSED]():
             _reset()
@@ -886,7 +886,7 @@ def test_body_cap_on_every_json_body_shape() raises:
         _reset()
         var ok = _post(app, target, at_cap)
         assert_equal(ok.status, 200, target)
-        assert_equal(ok.body, s[1])
+        assert_equal(ok.text(), s[1])
         assert_equal(_count(HANDLER), 1)
         _reset()
         _assert_fixed(_post(app, target, over), 413, "Content Too Large")
@@ -963,11 +963,11 @@ def test_move_only_body_and_result() raises:
     _reset()
     var r = _post(app, "/tokens", '{"secret":"s3"}')
     assert_equal(r.status, 200)
-    assert_equal(r.body, '{"secret":"s3"}')
+    assert_equal(r.text(), '{"secret":"s3"}')
     assert_equal(r.headers.get("content-type").value(), "application/json")
     assert_equal(_count(HANDLER), 1)
     # Borrowed: the handler reads `body.value`.
-    assert_equal(_post(app, "/peek", '{"secret":"s4"}').body, "s4")
+    assert_equal(_post(app, "/peek", '{"secret":"s4"}').text(), "s4")
     # `take()` moves the value out of a `Json` the caller owns.
     var t = Json(Token("s5"))
     var token = t^.take()
@@ -979,14 +979,14 @@ def test_raw_handler_decodes_with_from_body() raises:
     # itself, and the parser's cap raises into its own error model.
     var app = json_app()
     var token = '{"secret":"r"}'
-    assert_equal(_post(app, "/raw", token, "").body, "r")
-    assert_equal(_post(app, "/raw", token, "text/plain").body, "r")
+    assert_equal(_post(app, "/raw", token, "").text(), "r")
+    assert_equal(_post(app, "/raw", token, "text/plain").text(), "r")
     var at_cap = _padded(token, _MAX_BODY_BYTES)
     var over = _padded(token, _MAX_BODY_BYTES + 1)
-    assert_equal(_post(app, "/raw", at_cap).body, "r")
+    assert_equal(_post(app, "/raw", at_cap).text(), "r")
     _assert_fixed(_post(app, "/raw", over), 500, "Internal Server Error")
     _assert_fixed(_post(app, "/raw", "{", ""), 500, "Internal Server Error")
-    assert_equal(_post(app, "/raw-mapped", at_cap).body, "r")
+    assert_equal(_post(app, "/raw-mapped", at_cap).text(), "r")
     _assert_fixed(_post(app, "/raw-mapped", over), 422, "rejected")
     # The cap is in the parser itself, wherever `from_body` is called.
     assert_equal(Json[Token].from_body(at_cap).value.secret, "r")
@@ -1010,13 +1010,13 @@ def test_json_results_on_get_and_post() raises:
     ]:
         var r = client.get(pair[0])
         assert_equal(r.status, 200)
-        assert_equal(r.body, pair[1])
+        assert_equal(r.text(), pair[1])
         assert_equal(len(r.headers), 1)
         assert_equal(r.headers.name(0), "Content-Type")
         assert_equal(r.headers.value(0), "application/json")
     var p = client.post("/note-address", 'Ri"ga')
     assert_equal(p.status, 200)
-    assert_equal(p.body, '{"city":"Ri\\"ga","zip":1}')
+    assert_equal(p.text(), '{"city":"Ri\\"ga","zip":1}')
     assert_equal(len(p.headers), 1)
     assert_equal(p.headers.value(0), "application/json")
     assert_equal(client.post("/note-address", "fail").status, 400)
@@ -1053,17 +1053,17 @@ def test_serialization_failure_is_not_a_handler_error() raises:
     _ = setenv(FAIL, "1")
     var e = client.get("/measure/2")
     assert_equal(e.status, 418)
-    assert_equal(e.body, "teapot")
+    assert_equal(e.text(), "teapot")
     assert_equal(_count(ERROR_CONVERSIONS), 1)
     _reset()
-    assert_equal(client.get("/measure/2").body, '{"value":1.5}')
+    assert_equal(client.get("/measure/2").text(), '{"value":1.5}')
 
 
 def test_explicit_response_override() raises:
     var app = json_app()
     var r = TestClient(app).get("/created")
     assert_equal(r.status, 201)
-    assert_equal(r.body, '{"city":"Rome","zip":7}')
+    assert_equal(r.text(), '{"city":"Rome","zip":7}')
     assert_equal(len(r.headers), 1)
     assert_equal(
         r.headers.get("content-type").value(), "application/problem+json"
@@ -1072,7 +1072,7 @@ def test_explicit_response_override() raises:
 
 def _assert_json(r: Response, status: Int, body: String) raises:
     assert_equal(r.status, status)
-    assert_equal(r.body, body)
+    assert_equal(r.text(), body)
     assert_equal(len(r.headers), 1)
     assert_equal(r.headers.name(0), "Content-Type")
     assert_equal(r.headers.value(0), "application/json")
@@ -1085,15 +1085,15 @@ def test_json_result_status() raises:
     var client = TestClient(app)
     var plain = client.get("/addresses/7")
     _assert_json(plain, 200, '{"city":"Paris","zip":7}')
-    _assert_json(client.get("/created-addresses/7"), 201, plain.body)
-    _assert_json(client.get("/teapot-addresses/7"), 418, plain.body)
-    _assert_json(client.get("/unvalidated-addresses/7"), 999, plain.body)
-    _assert_json(client.get("/explicit-addresses/7"), 200, plain.body)
+    _assert_json(client.get("/created-addresses/7"), 201, plain.text())
+    _assert_json(client.get("/teapot-addresses/7"), 418, plain.text())
+    _assert_json(client.get("/unvalidated-addresses/7"), 999, plain.text())
+    _assert_json(client.get("/explicit-addresses/7"), 200, plain.text())
     _assert_json(client.get("/measure-created/2"), 201, '{"value":1.5}')
     # `Json[T].to_response()` called directly applies it too.
-    _assert_json(Json(Address("Paris", 7)).to_response(), 200, plain.body)
+    _assert_json(Json(Address("Paris", 7)).to_response(), 200, plain.text())
     _assert_json(
-        Json(Address("Paris", 7), status=201).to_response(), 201, plain.body
+        Json(Address("Paris", 7), status=201).to_response(), 201, plain.text()
     )
 
 
@@ -1138,7 +1138,7 @@ def test_serialization_failure_ignores_the_chosen_status() raises:
     # So does a field set there: the 500 carries it.
     var m = client.get("/media-type-after-failure")
     assert_equal(m.status, 500)
-    assert_equal(m.body, "Internal Server Error")
+    assert_equal(m.text(), "Internal Server Error")
     assert_equal(len(m.headers), 1)
     assert_equal(
         m.headers.get("content-type").value(), "application/problem+json"
@@ -1151,7 +1151,7 @@ def test_head_on_a_json_result_with_a_status() raises:
     var app = json_app()
     var get = app.handle(Request("GET", "/created-addresses/7"))
     var head = app.handle(Request("HEAD", "/created-addresses/7"))
-    _assert_json(head, 201, get.body)
+    _assert_json(head, 201, get.text())
 
 
 def test_text_results_keep_no_default_fields() raises:
@@ -1174,12 +1174,12 @@ def test_non_json_bodies_are_unchanged_and_uncapped() raises:
     var r = client.post("/notes", over)
     assert_equal(r.status, 200)
     assert_equal(r.body.byte_length(), _MAX_BODY_BYTES + 1)
-    assert_equal(client.post("/notes", "{").body, "{")
-    assert_equal(_post(app, "/notes", "hi", "text/plain").body, "hi")
-    assert_equal(_post(app, "/notes", "hi").body, "hi")
-    assert_equal(client.post("/notes/4", over).body, "4:1048577")
+    assert_equal(client.post("/notes", "{").text(), "{")
+    assert_equal(_post(app, "/notes", "hi", "text/plain").text(), "hi")
+    assert_equal(_post(app, "/notes", "hi").text(), "hi")
+    assert_equal(client.post("/notes/4", over).text(), "4:1048577")
     assert_equal(client.post("/notes/x", "hi").status, 400)
-    assert_equal(client.post("/staff-notes", over).body, "100:1048577")
+    assert_equal(client.post("/staff-notes", over).text(), "100:1048577")
     _assert_fixed(client.post("/notes", "fail"), 400, "Bad Request")
     _assert_fixed(client.post("/staff-notes", "fail"), 400, "Bad Request")
 

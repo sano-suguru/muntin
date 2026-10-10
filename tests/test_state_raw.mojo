@@ -111,12 +111,17 @@ struct Echoed(Movable, ToResponse):
         return Response.text("typed " + self.text, status=201)
 
 
-def _fields(req: Request) -> String:
-    """The request as the handler received it: method, path, query, body,
-    then each header field in order."""
-    var out = req.method + "|" + req.path + "|" + req.query + "|" + req.body
+def _fields(req: Request) -> List[UInt8]:
+    """The request as the handler received it: method, path, query, body
+    bytes, then each header field in order."""
+    var out = List(
+        String(req.method + "|" + req.path + "|" + req.query + "|").as_bytes()
+    )
+    out.extend(Span(req.body))
+    var tail = String()
     for i in range(len(req.headers)):
-        out += "|" + req.headers.name(i) + "=" + req.headers.value(i)
+        tail += "|" + req.headers.name(i) + "=" + req.headers.value(i)
+    out.extend(Span(tail.as_bytes()))
     return out^
 
 
@@ -133,15 +138,19 @@ def _header_list(h: Headers) -> String:
 def echo(keys: State[Keys], req: Request) -> Response:
     # The state and the request in the same call: "<secret>|<fields>".
     keys[].count()
-    return Response.text(keys[].secret + "|" + _fields(req), status=202)
+    var out = List(String(keys[].secret + "|").as_bytes())
+    out.extend(Span(_fields(req)))
+    return Response(202, out^)
 
 
 def take_body(keys: State[Keys], var req: Request) -> Response:
     """Owns the request and moves its body into the response."""
     keys[].count()
     var body = req.body^
-    req.body = "taken"
-    return Response.text(keys[].secret + " " + body^, status=201)
+    req.body = List[UInt8]()
+    var out = List(String(keys[].secret + " ").as_bytes())
+    out.extend(Span(body))
+    return Response(201, out^)
 
 
 def signed(keys: State[Keys], req: Request) raises BadSignature -> Response:
@@ -153,7 +162,9 @@ def signed(keys: State[Keys], req: Request) raises BadSignature -> Response:
         raise BadSignature("missing")
     if sig.value() != keys[].secret:
         raise BadSignature(sig.value())
-    var resp = Response.text("ok " + req.body, status=200)
+    var out = List(String("ok ").as_bytes())
+    out.extend(Span(req.body))
+    var resp = Response(200, out^)
     try:
         resp.headers.add("X-Request-Id", "42")
         resp.headers.add("Set-Cookie", "a=1")
@@ -186,13 +197,13 @@ def handles(keys: State[Keys], req: Request) -> Response:
 
 
 def handles_raising(keys: State[Keys], req: Request) raises -> Response:
-    if req.body == "raise":
+    if req.text() == "raise":
         raise Error("count " + String(keys._shared.count()))
     return Response.text(String(keys._shared.count()))
 
 
-def track(tracked: State[Tracked], req: Request) -> Response:
-    return Response.text(String(tracked[].drops[]) + " " + req.body)
+def track(tracked: State[Tracked], req: Request) raises -> Response:
+    return Response.text(String(tracked[].drops[]) + " " + req.text())
 
 
 def later(keys: State[Keys], req: Request) -> Response:
@@ -202,8 +213,8 @@ def later(keys: State[Keys], req: Request) -> Response:
 # Stateless and typed handlers registered on the same apps.
 
 
-def plain_raw(req: Request) -> Response:
-    return Response.text("plain raw " + req.body)
+def plain_raw(req: Request) raises -> Response:
+    return Response.text("plain raw " + req.text())
 
 
 def typed_get() -> String:
@@ -278,24 +289,28 @@ def test_get_and_post_receive_the_whole_request_and_the_state() raises:
             var sent = Request("POST", "/hook" + q, body, _headers())
             var r = app.handle(sent)
             assert_equal(r.status, 202, q)
-            assert_equal(r.body, "sha256=k|" + _fields(sent), q)
+            assert_equal(
+                r.text(), "sha256=k|" + String(from_utf8=Span(_fields(sent))), q
+            )
             n += 1
         var g = Request("GET", "/hook" + q, "", _headers())
         var rg = app.handle(g)
         assert_equal(rg.status, 202, q)
-        assert_equal(rg.body, "sha256=k|" + _fields(g), q)
+        assert_equal(
+            rg.text(), "sha256=k|" + String(from_utf8=Span(_fields(g))), q
+        )
         n += 1
     # The field values themselves, not only their round trip.
     var exact = app.handle(Request("POST", "/hook?id=1&id=2", "b", _headers()))
     assert_equal(
-        exact.body,
+        exact.text(),
         (
             "sha256=k|POST|/hook|id=1&id=2|b|X-B=2|Content-Type=text/plain;"
             " charset=utf-8|x-b=|X-Odd=a:b\tc"
         ),
     )
     var get = app.handle(Request("GET", "/hook?a?b", "ignored?"))
-    assert_equal(get.body, "sha256=k|GET|/hook|a?b|ignored?")
+    assert_equal(get.text(), "sha256=k|GET|/hook|a?b|ignored?")
     assert_equal(_calls(keys), n + 2)
 
 
@@ -307,12 +322,12 @@ def test_borrowed_and_owned_requests_register() raises:
     var sent = Request("POST", "/take?k=v", "moved", _headers())
     var r = app.handle(sent)
     assert_equal(r.status, 201)
-    assert_equal(r.body, "sha256=k moved")
+    assert_equal(r.text(), "sha256=k moved")
     # The handler owned a rebuilt request; the caller's is untouched.
-    assert_equal(sent.body, "moved")
+    assert_equal(sent.text(), "moved")
     assert_equal(sent.query, "k=v")
     assert_equal(len(sent.headers), 4)
-    assert_equal(app.handle(Request("GET", "/take", "g")).body, "sha256=k g")
+    assert_equal(app.handle(Request("GET", "/take", "g")).text(), "sha256=k g")
     assert_equal(_calls(keys), 2)
 
 
@@ -324,7 +339,7 @@ def test_explicit_function_value_registers() raises:
     app.get["/value"](f, keys)
     var r = app.handle(Request("POST", "/value?q", "v"))
     assert_equal(r.status, 202)
-    assert_equal(r.body, "sha256=k|POST|/value|q|v")
+    assert_equal(r.text(), "sha256=k|POST|/value|q|v")
     assert_equal(app.handle(Request("GET", "/value")).status, 202)
 
 
@@ -360,7 +375,7 @@ def test_response_status_body_and_headers_survive() raises:
     h.add("X-Signature", "sha256=k")
     var ok = app.handle(Request("POST", "/signed", "data", h^))
     assert_equal(ok.status, 200)
-    assert_equal(ok.body, "ok data")
+    assert_equal(ok.text(), "ok data")
     assert_equal(
         _header_list(ok.headers),
         "X-Request-Id=42;Set-Cookie=a=1;Set-Cookie=b=2;X-Empty=;",
@@ -368,7 +383,7 @@ def test_response_status_body_and_headers_survive() raises:
     # A returned 400 is the handler's own response, not a Muntin 400.
     var refused = app.handle(Request("GET", "/refuse?why"))
     assert_equal(refused.status, 400)
-    assert_equal(refused.body, "refused why")
+    assert_equal(refused.text(), "refused why")
     assert_equal(len(refused.headers), 0)
     assert_equal(_calls(keys), 2)
 
@@ -383,20 +398,20 @@ def test_errors_use_the_m2_model() raises:
     # `raises BadSignature`: its own response, decided from the state.
     var missing = app.handle(Request("POST", "/signed", "data"))
     assert_equal(missing.status, 401)
-    assert_equal(missing.body, "bad signature: missing")
+    assert_equal(missing.text(), "bad signature: missing")
     var h = Headers()
     h.add("x-signature", "sha256=forged")
     var forged = app.handle(Request("GET", "/signed", "", h^))
     assert_equal(forged.status, 401)
-    assert_equal(forged.body, "bad signature: sha256=forged")
+    assert_equal(forged.text(), "bad signature: sha256=forged")
     assert_equal(len(forged.headers), 0)
     # Bare `raises` and an application type without `ToErrorResponse`: the
     # fixed 500, without the error's text.
     for req in [Request("POST", "/fail"), Request("GET", "/unmapped")]:
         var r = app.handle(req)
         assert_equal(r.status, 500, req.path)
-        assert_equal(r.body, "Internal Server Error", req.path)
-        assert_false("secret" in r.body)
+        assert_equal(r.text(), "Internal Server Error", req.path)
+        assert_false("secret" in r.text())
         assert_equal(len(r.headers), 0)
     assert_equal(_calls(keys), 4)
 
@@ -416,7 +431,7 @@ def test_routes_run_only_after_route_selection() raises:
         var r = app.handle(row[0])
         var label = row[0].method + " " + row[0].path
         assert_equal(r.status, 405, label)
-        assert_equal(r.body, "Method Not Allowed", label)
+        assert_equal(r.text(), "Method Not Allowed", label)
         assert_equal(len(r.headers.get_all("Allow")), 1, label)
         assert_equal(r.headers.get_all("Allow")[0], row[1], label)
     for req in [
@@ -428,7 +443,7 @@ def test_routes_run_only_after_route_selection() raises:
     ]:
         var r = app.handle(req)
         assert_equal(r.status, 404, req.method + " " + req.path)
-        assert_equal(r.body, "Not Found")
+        assert_equal(r.text(), "Not Found")
     assert_equal(_calls(keys), 0)
 
 
@@ -447,11 +462,11 @@ def test_first_registration_wins() raises:
     post.post["/d"](later, keys)
     post.post["/e"](stateful_post, keys)
     post.post["/e"](later, keys)
-    assert_equal(post.handle(Request("POST", "/a", "x")).body, "plain raw x")
-    assert_equal(post.handle(Request("POST", "/b", "x")).body, "stateful raw")
-    assert_equal(post.handle(Request("POST", "/c", "")).body, "stateful raw")
-    assert_equal(post.handle(Request("POST", "/d", "x")).body, "typed post x")
-    assert_equal(post.handle(Request("POST", "/e", "x")).body, "typed x")
+    assert_equal(post.handle(Request("POST", "/a", "x")).text(), "plain raw x")
+    assert_equal(post.handle(Request("POST", "/b", "x")).text(), "stateful raw")
+    assert_equal(post.handle(Request("POST", "/c", "")).text(), "stateful raw")
+    assert_equal(post.handle(Request("POST", "/d", "x")).text(), "typed post x")
+    assert_equal(post.handle(Request("POST", "/e", "x")).text(), "typed x")
     # A typed route's 400 does not fall through to a later raw route.
     assert_equal(post.handle(Request("POST", "/d", "")).status, 400)
     assert_equal(post.handle(Request("POST", "/e", "")).status, 400)
@@ -467,12 +482,12 @@ def test_first_registration_wins() raises:
     get.get["/d"](later, keys)
     get.get["/e?{id}"](stateful_get, keys)
     get.get["/e"](later, keys)
-    assert_equal(get.handle(Request("GET", "/a")).body, "plain raw ")
-    assert_equal(get.handle(Request("GET", "/b")).body, "stateful raw")
-    assert_equal(get.handle(Request("GET", "/c")).body, "stateful raw")
-    assert_equal(get.handle(Request("GET", "/d")).body, "typed get")
+    assert_equal(get.handle(Request("GET", "/a")).text(), "plain raw ")
+    assert_equal(get.handle(Request("GET", "/b")).text(), "stateful raw")
+    assert_equal(get.handle(Request("GET", "/c")).text(), "stateful raw")
+    assert_equal(get.handle(Request("GET", "/d")).text(), "typed get")
     assert_equal(get.handle(Request("GET", "/e")).status, 400)
-    assert_equal(get.handle(Request("GET", "/e?id=3")).body, "sha256=k 3")
+    assert_equal(get.handle(Request("GET", "/e?id=3")).text(), "sha256=k 3")
 
 
 def test_handles_change_at_registration_and_drop_only() raises:
@@ -492,8 +507,8 @@ def test_handles_change_at_registration_and_drop_only() raises:
     app.get["/fail"](fail, keys)
     assert_equal(_handles(keys), 7)  # one per registration, both methods
     var client = TestClient(app)
-    assert_equal(client.get("/handles").body, "7")
-    assert_equal(client.post("/handles", "").body, "7")
+    assert_equal(client.get("/handles").text(), "7")
+    assert_equal(client.post("/handles", "").text(), "7")
     for _ in range(5):
         _ = client.get("/hook?x")
         _ = client.post("/hook", "b")
@@ -516,10 +531,10 @@ def test_state_survives_app_moves_and_is_dropped_once() raises:
     _ = tracked^  # the app now holds the only handles
     assert_equal(drops[], 0)
     var moved = app^
-    assert_equal(TestClient(moved).post("/track", "a").body, "0 a")
+    assert_equal(TestClient(moved).post("/track", "a").text(), "0 a")
     var again = moved^
-    assert_equal(TestClient(again).post("/track", "b").body, "0 b")
-    assert_equal(TestClient(again).get("/track").body, "0 ")
+    assert_equal(TestClient(again).post("/track", "b").text(), "0 b")
+    assert_equal(TestClient(again).get("/track").text(), "0 ")
     assert_equal(drops[], 0)
     _ = again^
     assert_equal(drops[], 1)
@@ -574,21 +589,21 @@ def test_existing_routes_are_unchanged_beside_stateful_raw() raises:
     app.get["/raw"](plain_raw)
     app.get["/keys/{id}"](stateful_get, keys)
     app.post["/keys"](stateful_post, keys)
-    assert_equal(app.handle(Request("GET", "/plain")).body, "typed get")
+    assert_equal(app.handle(Request("GET", "/plain")).text(), "typed get")
     assert_equal(
-        app.handle(Request("POST", "/plain", "n")).body, "typed post n"
+        app.handle(Request("POST", "/plain", "n")).text(), "typed post n"
     )
     assert_equal(app.handle(Request("POST", "/plain", "")).status, 400)
-    assert_equal(app.handle(Request("POST", "/raw", "r")).body, "plain raw r")
-    assert_equal(app.handle(Request("GET", "/raw")).body, "plain raw ")
-    assert_equal(app.handle(Request("GET", "/keys/4")).body, "sha256=k 4")
+    assert_equal(app.handle(Request("POST", "/raw", "r")).text(), "plain raw r")
+    assert_equal(app.handle(Request("GET", "/raw")).text(), "plain raw ")
+    assert_equal(app.handle(Request("GET", "/keys/4")).text(), "sha256=k 4")
     assert_equal(app.handle(Request("GET", "/keys/x")).status, 400)
     var typed = app.handle(Request("POST", "/keys", "n"))
     assert_equal(typed.status, 201)
-    assert_equal(typed.body, "typed n")
+    assert_equal(typed.text(), "typed n")
     # Typed routes without a carrier still receive no header strings (M3-005).
     var with_fields = app.handle(Request("GET", "/keys/4", "", _headers()))
-    assert_equal(with_fields.body, "sha256=k 4")
+    assert_equal(with_fields.text(), "sha256=k 4")
     assert_equal(_from_body_calls(), 3)
     assert_equal(_calls(keys), 3)
 
@@ -619,14 +634,14 @@ def test_dx_section_8_stateful_raw_example() raises:
     h.add("X-Signature", "sha256=valid")
     var ok = app.handle(Request("POST", "/webhook", "", h^))
     assert_equal(ok.status, 200)
-    assert_equal(ok.body, "ok")
+    assert_equal(ok.text(), "ok")
     assert_equal(_header_list(ok.headers), "X-Request-Id=42;")
     var unsigned = TestClient(app).post("/webhook", "")
     assert_equal(unsigned.status, 401)
-    assert_equal(unsigned.body, "unsigned")
+    assert_equal(unsigned.text(), "unsigned")
     var get = TestClient(app).get("/webhook")
     assert_equal(get.status, 405)
-    assert_equal(get.body, "Method Not Allowed")
+    assert_equal(get.text(), "Method Not Allowed")
     assert_equal(_header_list(get.headers), "Allow=POST;")
 
 

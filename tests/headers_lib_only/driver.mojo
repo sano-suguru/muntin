@@ -16,10 +16,15 @@ def main() raises:
     h.add("X-Signature", "sha256=abc")
     var boxed = box_raw(signature)
     if (
-        boxed.invoke(raw_args(HRequest("POST", "/hook", "", h^))).body
+        boxed.invoke(
+            raw_args(HRequest("POST", "/hook", "", h^)), List[UInt8]()
+        ).text()
         != "sha256=abc"
     ):
         raise Error("signature header did not reach the handler")
-    if boxed.invoke(raw_args(HRequest("POST", "/hook"))).status != 401:
+    if (
+        boxed.invoke(raw_args(HRequest("POST", "/hook")), List[UInt8]()).status
+        != 401
+    ):
         raise Error("absent header was not None")
     print("ok")

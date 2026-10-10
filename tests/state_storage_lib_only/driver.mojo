@@ -19,7 +19,7 @@ def main() raises:
     var config = State(Config("muntin"))
     var boxed = box_handler(name_of, config)
     var copy = config.copy()
-    if boxed.invoke(List[String]()).body != "muntin":
+    if boxed.invoke(List[String](), List[UInt8]()).text() != "muntin":
         raise Error("boxed handler did not read the state")
     if config._shared.count() != 3:
         raise Error("expected three handles")

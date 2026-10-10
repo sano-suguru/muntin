@@ -72,7 +72,9 @@ def _bad_request() -> Response:
 
 
 def _call_int(
-    handler: def(Int) raises thin -> String, raw: List[String]
+    handler: def(Int) raises thin -> String,
+    raw: List[String],
+    bytes: List[UInt8],
 ) raises -> Response:
     """Slot 0: a route value."""
     var id: Int
@@ -86,7 +88,9 @@ def _call_int(
 def _call_body[
     B: Movable & Deinitable
 ](
-    handler: def(var B) raises thin -> String, raw: List[String]
+    handler: def(var B) raises thin -> String,
+    raw: List[String],
+    bytes: List[UInt8],
 ) raises -> Response:
     """Slot 0: the body."""
     comptime assert conforms_to(B, FromBody)
@@ -101,7 +105,9 @@ def _call_body[
 def _call_int_body[
     B: Movable & Deinitable
 ](
-    handler: def(Int, var B) raises thin -> String, raw: List[String]
+    handler: def(Int, var B) raises thin -> String,
+    raw: List[String],
+    bytes: List[UInt8],
 ) raises -> Response:
     """Slot 0: a route value; slot 1: the body."""
     comptime assert conforms_to(B, FromBody)
@@ -267,12 +273,16 @@ struct ExtractApp(Movable):
             if route.body:
                 # One copy of the owned body String; the box's raw-input type
                 # (`List[String]`) is unchanged.
-                raw.append(request.body)
+                # The spike carries the body as text: one that is not UTF-8 is 400.
+                try:
+                    raw.append(request.text())
+                except:
+                    return _bad_request()
             # Conversion and the call. Adapters answer 400 for a value that
             # does not convert, so a raise here came from the handler. 500 is
             # a spike placeholder for the future application-error model.
             try:
-                return route.handler.invoke(raw)
+                return route.handler.invoke(raw, List[UInt8]())
             except:
                 return Response.text("Handler Error", status=500)
         return Response.text("Not Found", status=404)
@@ -312,7 +322,7 @@ struct _Decoded[B: Movable & Deinitable](Movable):
 
 def _call_decoded[
     B: Movable & Deinitable
-](pair: _Decoded[B], raw: List[String]) raises -> Response:
+](pair: _Decoded[B], raw: List[String], bytes: List[UInt8]) raises -> Response:
     return Response.text(pair.handler(pair.decode(raw[0])))
 
 

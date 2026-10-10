@@ -184,14 +184,14 @@ def _expect(
 ) raises:
     var response = _send(app, method, target)
     assert_equal(response.status, status, method + " " + target)
-    assert_equal(response.body, body, method + " " + target)
+    assert_equal(response.text(), body, method + " " + target)
     assert_equal(len(response.headers.get_all("Allow")), 0)
 
 
 def _expect_404(app: App, method: String, target: String) raises:
     var response = _send(app, method, target)
     assert_equal(response.status, 404, method + " " + target)
-    assert_equal(response.body, "Not Found")
+    assert_equal(response.text(), "Not Found")
     assert_equal(len(response.headers), 0)
 
 
@@ -220,7 +220,7 @@ def _expect_405(app: App, method: String, target: String, allow: String) raises:
     var response = _send(app, method, target)
     var request = method + " " + target
     assert_equal(response.status, 405, request)
-    assert_equal(response.body, "Method Not Allowed", request)
+    assert_equal(response.text(), "Method Not Allowed", request)
     assert_equal(len(response.headers), 1, request)
     var allows = response.headers.get_all("Allow")
     assert_equal(len(allows), 1, request)

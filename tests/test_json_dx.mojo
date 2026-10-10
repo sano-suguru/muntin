@@ -98,7 +98,7 @@ def test_dx_json_examples() raises:
     headers.add("Content-Type", "application/json")
     var r = client.post("/users", '{"name":"Ada","age":36}', headers=headers^)
     assert_equal(r.status, 200)
-    assert_equal(r.body, '{"id":1,"name":"Ada"}')
+    assert_equal(r.text(), '{"id":1,"name":"Ada"}')
     assert_equal(len(r.headers), 1)
     assert_equal(r.headers.get("content-type").value(), "application/json")
     var direct = app.handle(
@@ -119,7 +119,7 @@ def test_dx_json_examples() raises:
             "/users/4",
             '{"name":"Bo","age":1,"nickname":null}',
             headers=_content_type("application/json"),
-        ).body,
+        ).text(),
         '{"id":4,"name":"Bo"}',
     )
     assert_equal(
@@ -140,20 +140,20 @@ def test_dx_json_examples() raises:
         TestClient(app).post("/users", ok),
     ]:
         assert_equal(r415.status, 415)
-        assert_equal(r415.body, "Unsupported Media Type")
+        assert_equal(r415.text(), "Unsupported Media Type")
     # A body over 1 MiB.
     var big = ok + String(" ") * (1_048_576 - ok.byte_length() + 1)
     var r413 = _post(app, "/users", big, "application/json")
     assert_equal(r413.status, 413)
-    assert_equal(r413.body, "Content Too Large")
+    assert_equal(r413.text(), "Content Too Large")
     # Malformed JSON, a missing member, a wrong kind.
     for bad in ['{"name":', '{"name":"Ada"}', '{"name":"Ada","age":"36"}']:
         var r400 = _post(app, "/users", bad, "application/json")
         assert_equal(r400.status, 400)
-        assert_equal(r400.body, "Bad Request")
+        assert_equal(r400.text(), "Bad Request")
     var c = TestClient(app).get("/create")
     assert_equal(c.status, 201)
-    assert_equal(c.body, '{"id":7,"name":"Ada"}')
+    assert_equal(c.text(), '{"id":7,"name":"Ada"}')
     assert_equal(
         c.headers.get("content-type").value(), "application/problem+json"
     )
@@ -163,7 +163,7 @@ def test_dx_json_examples() raises:
         headers=_content_type("application/json"),
     )
     assert_equal(a.status, 201)
-    assert_equal(a.body, '{"id":2,"name":"Bo"}')
+    assert_equal(a.text(), '{"id":2,"name":"Bo"}')
     assert_equal(len(a.headers), 1)
     assert_equal(a.headers.get("content-type").value(), "application/json")
 

@@ -13,7 +13,7 @@ struct Db(Movable):
 
 
 def h(mut db: State[Db], req: Request) -> Response:
-    return Response.text(req.body)
+    return Response(200, req.body.copy())
 
 
 def main():

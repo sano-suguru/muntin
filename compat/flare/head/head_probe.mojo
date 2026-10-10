@@ -130,12 +130,12 @@ struct HeadAsGet(Handler):
         var answer: Response
         try:
             var r = to_muntin_request(request)
-            answer = self.app.handle(Request(method, target, r.body))
+            answer = self.app.handle(Request(method, target, r.body.copy()))
         except:
             answer = Response.text("Bad Request", status=400)
-        var length = answer.body.byte_length()
+        var length = len(answer.body)
         if empty or declared:
-            answer.body = ""
+            answer.body = List[UInt8]()
         var out = to_flare_response(answer)
         try:
             if declared:

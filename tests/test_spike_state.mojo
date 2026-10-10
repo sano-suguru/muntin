@@ -138,17 +138,17 @@ def rename_user_typed(users: State[Users], id: Int, body: NewUser) -> User:
     return User(id, body.name)
 
 
-def audit(users: State[Users], req: Request) -> Response:
+def audit(users: State[Users], req: Request) raises -> Response:
     users[].count()
     return Response.text(
-        req.method + " " + req.path + "?" + req.query + " " + req.body,
+        req.method + " " + req.path + "?" + req.query + " " + req.text(),
         status=202,
     )
 
 
-def audit_owned(users: State[Users], var req: Request) -> Response:
+def audit_owned(users: State[Users], var req: Request) raises -> Response:
     users[].count()
-    return Response.text(req.body^, status=201)
+    return Response.text(req.text(), status=201)
 
 
 def handles(users: State[Users]) -> String:
@@ -179,8 +179,8 @@ def plain_create(body: NewUser) -> User:
     return User(0, body.name)
 
 
-def plain_raw(req: Request) -> Response:
-    return Response.text("raw " + req.body)
+def plain_raw(req: Request) raises -> Response:
+    return Response.text("raw " + req.text())
 
 
 def _users() -> State[Users]:
@@ -212,10 +212,10 @@ def test_get_shapes_and_results() raises:
     app.get["/first"](first_user, users)
     app.get["/users/{id}"](get_user, users)
     app.get["/typed?{id}"](get_user_typed, users)
-    assert_equal(_get(app, "/count").body, "2")
-    assert_equal(_get(app, "/first").body, "0:ada")
-    assert_equal(_get(app, "/users/1").body, "bob")
-    assert_equal(_get(app, "/typed?id=1").body, "1:bob")
+    assert_equal(_get(app, "/count").text(), "2")
+    assert_equal(_get(app, "/first").text(), "0:ada")
+    assert_equal(_get(app, "/users/1").text(), "bob")
+    assert_equal(_get(app, "/typed?id=1").text(), "1:bob")
     assert_equal(_calls(users), 4)
 
 
@@ -244,10 +244,10 @@ def test_post_shapes_bind_state_route_value_body_in_order() raises:
     app.post["/typed"](create_user_typed, users)
     app.post["/users/{id}"](rename_user, users)
     app.post["/renamed?{id}"](rename_user_typed, users)
-    assert_equal(_post(app, "/users", "name=cy").body, "created cy after 2")
-    assert_equal(_post(app, "/typed", "name=cy").body, "2:cy")
-    assert_equal(_post(app, "/users/0", "name=cy").body, "ada -> cy")
-    assert_equal(_post(app, "/renamed?id=7", "name=cy").body, "7:cy")
+    assert_equal(_post(app, "/users", "name=cy").text(), "created cy after 2")
+    assert_equal(_post(app, "/typed", "name=cy").text(), "2:cy")
+    assert_equal(_post(app, "/users/0", "name=cy").text(), "ada -> cy")
+    assert_equal(_post(app, "/renamed?id=7", "name=cy").text(), "7:cy")
     assert_equal(_calls(users), 4)
 
 
@@ -260,11 +260,11 @@ def test_errors_use_the_m2_model() raises:
     app.post["/users/{id}"](rename_user, users)
     var missing = _get(app, "/users/9")
     assert_equal(missing.status, 404)
-    assert_equal(missing.body, "no user 9")
-    assert_equal(_get(app, "/typed/9").body, "no user 9")
+    assert_equal(missing.text(), "no user 9")
+    assert_equal(_get(app, "/typed/9").text(), "no user 9")
     var failed = _get(app, "/check/1")
     assert_equal(failed.status, 500)
-    assert_equal(failed.body, "Internal Server Error")
+    assert_equal(failed.text(), "Internal Server Error")
     assert_equal(_post(app, "/users/9", "name=cy").status, 404)
     assert_equal(_calls(users), 4)
 
@@ -277,11 +277,11 @@ def test_raw_handlers_take_state_then_the_request() raises:
     app.post["/owned"](audit_owned, users)
     var got = _get(app, "/audit?x=1")
     assert_equal(got.status, 202)
-    assert_equal(got.body, "GET /audit?x=1 ")
-    assert_equal(_post(app, "/audit", "b").body, "POST /audit? b")
+    assert_equal(got.text(), "GET /audit?x=1 ")
+    assert_equal(_post(app, "/audit", "b").text(), "POST /audit? b")
     var owned = _post(app, "/owned?id=abc", "raw body")
     assert_equal(owned.status, 201)
-    assert_equal(owned.body, "raw body")
+    assert_equal(owned.text(), "raw body")
     assert_equal(_calls(users), 3)
 
 
@@ -296,11 +296,11 @@ def test_stateless_m2_shapes_resolve_as_before() raises:
     app.post["/plain"](plain_create)
     app.post["/raw"](plain_raw)
     app.get["/users/{id}"](get_user, users)
-    assert_equal(_get(app, "/hello").body, "hello")
-    assert_equal(_get(app, "/plain/3").body, "plain 3")
-    assert_equal(_post(app, "/plain", "name=cy").body, "0:cy")
-    assert_equal(_post(app, "/raw", "x").body, "raw x")
-    assert_equal(_get(app, "/users/0").body, "ada")
+    assert_equal(_get(app, "/hello").text(), "hello")
+    assert_equal(_get(app, "/plain/3").text(), "plain 3")
+    assert_equal(_post(app, "/plain", "name=cy").text(), "0:cy")
+    assert_equal(_post(app, "/raw", "x").text(), "raw x")
+    assert_equal(_get(app, "/users/0").text(), "ada")
     assert_equal(_calls(users), 1)
 
 
@@ -315,7 +315,7 @@ def test_several_state_types_and_one_shared_value() raises:
     app.get["/users/{id}"](get_user, users)
     app.get["/count"](count_users, users)
     app.get["/greet/{id}"](greet, greeting)
-    assert_equal(_get(app, "/greet/5").body, "hi 5")
+    assert_equal(_get(app, "/greet/5").text(), "hi 5")
     _ = _get(app, "/users/0")
     _ = _get(app, "/count")
     # Both routes counted into the application's own handle: one value.
@@ -335,7 +335,7 @@ def test_handles_are_copied_at_registration_only() raises:
     assert_equal(users._shared.count(), 4)
     # Inside a request the count is the same: the handler borrows the
     # route's handle.
-    assert_equal(_get(app, "/handles").body, "4")
+    assert_equal(_get(app, "/handles").text(), "4")
     for _ in range(5):
         _ = _get(app, "/users/0")
         _ = _post(app, "/users", "name=cy")
@@ -353,9 +353,9 @@ def test_state_survives_app_moves_and_is_dropped_once() raises:
     _ = tracked^  # the app now holds the only handle
     assert_equal(drops[], 0)
     var moved = app^
-    assert_equal(_get(moved, "/track").body, "0")
+    assert_equal(_get(moved, "/track").text(), "0")
     var again = moved^
-    assert_equal(_get(again, "/track").body, "0")
+    assert_equal(_get(again, "/track").text(), "0")
     assert_equal(drops[], 0)
     _ = again^
     assert_equal(drops[], 1)

@@ -409,10 +409,15 @@ struct Unsigned(Movable, ToErrorResponse):
 
 def webhook(req: Request) raises Unsigned -> Response:
     """A raw handler: the whole request, no typed extraction (M2-015)."""
-    if not req.body.startswith("signed"):
+    var text: String
+    try:
+        text = req.text()
+    except:
+        raise Unsigned(req.query)
+    if not text.startswith("signed"):
         raise Unsigned(req.query)
     return Response.text(
-        req.method + "|" + req.path + "|" + req.query + "|" + req.body,
+        req.method + "|" + req.path + "|" + req.query + "|" + text,
         status=202,
     )
 
@@ -493,6 +498,11 @@ def keyed(signer: State[Signer], req: Request) raises Unsigned -> Response:
     var sig = req.headers.get("x-signature")
     if not sig or sig.value() != signer[].secret:
         raise Unsigned(req.query)
+    var text: String
+    try:
+        text = req.text()
+    except:
+        raise Unsigned(req.query)
     var resp = Response.text(
         signer[].secret
         + "|"
@@ -502,7 +512,7 @@ def keyed(signer: State[Signer], req: Request) raises Unsigned -> Response:
         + "|"
         + req.query
         + "|"
-        + req.body
+        + text
         + "|"
         + String(len(req.headers.get_all("x-a"))),
         status=202,
@@ -529,10 +539,10 @@ def delete_note(id: Int) -> String:
     return "deleted " + String(id)
 
 
-def purge(req: Request) -> Response:
+def purge(req: Request) raises -> Response:
     """A raw `delete` handler: a `DELETE` body reaches only a raw handler."""
     return Response.text(
-        req.method + "|" + req.path + "|" + req.query + "|" + req.body,
+        req.method + "|" + req.path + "|" + req.query + "|" + req.text(),
         status=202,
     )
 
@@ -682,7 +692,7 @@ def test_get_hello_over_localhost_matches_test_client() raises:
         var app = hello_app()
         var expected = TestClient(app).get("/hello")
         assert_equal(response.status, expected.status)
-        assert_equal(response.text(), expected.body)
+        assert_equal(response.text(), expected.text())
 
         # A constant response that skipped App.handle would also say "hello";
         # an unregistered path must reach the router and come back 404.
@@ -840,7 +850,7 @@ def test_typed_route_over_localhost_matches_test_client() raises:
 
             var local = in_memory.get(path)
             assert_equal(response.status, local.status, path)
-            assert_equal(response.text(), local.body, path)
+            assert_equal(response.text(), local.text(), path)
             _same_allow(response.headers.get_all("allow"), local, path)
             if want[1] == 405:
                 assert_equal(response.headers.get("allow"), "POST", path)
@@ -1022,7 +1032,7 @@ def test_typed_route_over_localhost_matches_test_client() raises:
 
             var local = in_memory.post(path, body)
             assert_equal(response.status, local.status, path + " " + body)
-            assert_equal(response.text(), local.body, path + " " + body)
+            assert_equal(response.text(), local.text(), path + " " + body)
             _same_allow(response.headers.get_all("allow"), local, path)
             if want[2] == 405:
                 assert_equal(response.headers.get("allow"), "GET, HEAD", path)
@@ -1121,7 +1131,7 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             else:
                 local = in_memory.delete(path)
             assert_equal(response.status, local.status, at)
-            assert_equal(response.text(), local.body, at)
+            assert_equal(response.text(), local.text(), at)
             _same_allow(response.headers.get_all("allow"), local, at)
             if want[3] == 405:
                 assert_equal(
@@ -1146,7 +1156,7 @@ def test_typed_route_over_localhost_matches_test_client() raises:
         var local_unknown = app.handle(Request("FOO", "/notes/7"))
         assert_equal(local_unknown.status, 405)
         assert_equal(unknown.status, local_unknown.status)
-        assert_equal(unknown.text(), local_unknown.body)
+        assert_equal(unknown.text(), local_unknown.text())
         _same_allow(unknown.headers.get_all("allow"), local_unknown, "FOO")
         assert_equal(unknown.headers.get("allow"), "PUT, PATCH, DELETE")
     finally:
@@ -1180,7 +1190,7 @@ def test_headers_over_localhost_match_app_handle() raises:
         var local = app.handle(Request("POST", "/signed", "b", mh^))
         assert_equal(resp.status, 202)
         assert_equal(resp.status, local.status)
-        assert_equal(resp.text(), local.body)
+        assert_equal(resp.text(), local.text())
         assert_equal(resp.text(), "sha256=abc|2")
         assert_equal(resp.headers.get("x-request-id"), "42")
         assert_equal(len(resp.headers.get_all("set-cookie")), 2)
@@ -1267,7 +1277,7 @@ def test_stateful_raw_over_localhost_matches_app_handle() raises:
             print("observed:", method, "/keyed", resp.status, repr(resp.text()))
             assert_equal(resp.status, 202, method)
             assert_equal(resp.status, local.status, method)
-            assert_equal(resp.text(), local.body, method)
+            assert_equal(resp.text(), local.text(), method)
             assert_equal(
                 resp.text(),
                 "sha256=k|" + method + "|/keyed|id=x&id=2|" + body + "|2",
@@ -1303,7 +1313,7 @@ def test_stateful_raw_over_localhost_matches_app_handle() raises:
             assert_equal(unsigned.status, 401, method)
             assert_equal(unsigned.text(), "unsigned k", method)
             assert_equal(unsigned.status, local_unsigned.status, method)
-            assert_equal(unsigned.text(), local_unsigned.body, method)
+            assert_equal(unsigned.text(), local_unsigned.text(), method)
             assert_equal(len(local_unsigned.headers), 0)
             var forged = FlareRequest(method, base + "/keyed", List[UInt8]())
             forged.headers.append("X-Signature", "sha256=forged")
@@ -1313,7 +1323,7 @@ def test_stateful_raw_over_localhost_matches_app_handle() raises:
             var local_forged = app.handle(Request(method, "/keyed", "", fh^))
             assert_equal(forged_resp.status, 401, method)
             assert_equal(forged_resp.status, local_forged.status, method)
-            assert_equal(forged_resp.text(), local_forged.body, method)
+            assert_equal(forged_resp.text(), local_forged.text(), method)
         # The route is GET and POST only: another method on its path is 405
         # with `App.handle`'s `Allow`, and no other path reaches it.
         var put = client.send(
@@ -1322,7 +1332,7 @@ def test_stateful_raw_over_localhost_matches_app_handle() raises:
         var local_put = app.handle(Request("PUT", "/keyed"))
         assert_equal(put.status, 405)
         assert_equal(put.status, local_put.status)
-        assert_equal(put.text(), local_put.body)
+        assert_equal(put.text(), local_put.text())
         _same_allow(put.headers.get_all("allow"), local_put, "PUT /keyed")
         assert_equal(put.headers.get("allow"), "GET, HEAD, POST")
         assert_equal(client.get(base + "/keyed/x").status, 404)
@@ -1355,15 +1365,30 @@ def h2_request(
     return (got[0].copy(), String(from_utf8_lossy=Span(got[1])), got[2])
 
 
+def _halves(body: List[UInt8]) -> List[List[UInt8]]:
+    """`body` in two pieces, the first half and the rest; one piece for a
+    single byte and none when empty."""
+    var out = List[List[UInt8]]()
+    var mid = len(body) // 2
+    if mid > 0:
+        out.append(List(Span(body)[:mid]))
+    if len(body) > mid:
+        out.append(List(Span(body)[mid:]))
+    return out^
+
+
 def h2_exchange(
     port: Int,
     method: String,
     path: String,
     fields: List[Tuple[String, String]],
     body: List[UInt8],
+    split: Bool = False,
 ) raises -> Tuple[List[HpackHeader], List[UInt8], Int]:
     """As `h2_request`, with `body` sent in one DATA frame after the HEADERS
-    frame (none when empty) and the response body returned as bytes."""
+    frame (none when empty) and the response body returned as bytes. With
+    `split`, the body goes out in two DATA frames (`_halves`), only the last
+    ending the stream."""
     var wire = List(H2_PREFACE.as_bytes())
     wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
     var end = FrameFlags.END_STREAM() if len(body) == 0 else UInt8(0)
@@ -1377,14 +1402,15 @@ def h2_exchange(
             )
         )
     )
+    var pieces = _halves(body) if split else [body.copy()]
     if len(body) > 0:
-        wire.extend(
-            Span(
-                _h2_frame(
-                    FrameType.DATA(), FrameFlags.END_STREAM(), 1, body.copy()
-                )
+        for i in range(len(pieces)):
+            var flags = FrameFlags.END_STREAM() if i == len(
+                pieces
+            ) - 1 else UInt8(0)
+            wire.extend(
+                Span(_h2_frame(FrameType.DATA(), flags, 1, pieces[i].copy()))
             )
-        )
     return _h2_answers(port, [wire^], 1)[0].copy()
 
 
@@ -1673,7 +1699,7 @@ def test_headers_over_h2c_follow_the_same_rules() raises:
             + ";",
         )
         assert_equal(_h2_fields(mismatch[0]), ":status=405;allow=GET, HEAD;")
-        assert_equal(mismatch[1], local_mismatch.body)
+        assert_equal(mismatch[1], local_mismatch.text())
         assert_true(mismatch[2] > 0)
         var head_form = h2_request(child.port, "HEAD", "/form", none)
         var local_form = app.handle(Request("HEAD", "/form"))
@@ -1863,7 +1889,7 @@ def test_json_over_localhost_matches_app_handle() raises:
             print("observed: POST", label, resp.status, repr(resp.text()))
             assert_equal(resp.status, c[3], label)
             assert_equal(resp.status, local.status, label)
-            assert_equal(resp.text(), local.body, label)
+            assert_equal(resp.text(), local.text(), label)
             if c[4]:
                 assert_equal(
                     resp.headers.get("content-type"), "application/json"
@@ -1928,7 +1954,7 @@ def test_with_headers_over_localhost_matches_app_handle() raises:
             )
             assert_equal(resp.status, c[2], label)
             assert_equal(resp.status, local.status, label)
-            assert_equal(resp.text(), local.body, label)
+            assert_equal(resp.text(), local.text(), label)
             if c[2] == 200:
                 # The fields in order, with their casing, over the wire.
                 assert_equal(resp.text(), '{"hello":"Ada X-A=1 x-a=2"}')
@@ -1966,7 +1992,7 @@ def test_get_headers_over_localhost_match_app_handle() raises:
             print("observed: GET", label, resp.status, repr(resp.text()))
             assert_equal(resp.status, c[2], label)
             assert_equal(resp.status, local.status, label)
-            assert_equal(resp.text(), local.body, label)
+            assert_equal(resp.text(), local.text(), label)
             if c[2] == 200:
                 # The fields in order, with their casing, over the wire.
                 assert_equal(resp.text(), "note 7 X-A=1 x-a=2")
@@ -1997,14 +2023,15 @@ def _octets(values: List[Int]) -> List[UInt8]:
 def body_bytes(req: Request) raises -> Response:
     """Answers with the hex of the body bytes it received, which the wire
     cannot alter, and their count in a field."""
-    var r = Response.text(_hex(req.body.as_bytes()))
-    r.headers.add("X-Body-Length", String(req.body.byte_length()))
+    var r = Response.text(_hex(Span(req.body)))
+    r.headers.add("X-Body-Length", String(len(req.body)))
     return r^
 
 
 def body_echo(req: Request) -> Response:
-    """Answers with the body it received, unchanged."""
-    return Response.text(req.body)
+    """Answers with the body bytes it received, unchanged and unread: the
+    raw byte echo (M3-040)."""
+    return Response(200, req.body.copy())
 
 
 def marked(var request: Request, var next: Next) raises -> Response:
@@ -2031,19 +2058,34 @@ def h1_exchange(
     path: String,
     fields: List[Tuple[String, String]],
     body: List[UInt8],
+    chunked: Bool = False,
 ) raises -> Tuple[String, String, List[UInt8]]:
     """One HTTP/1.1 request with `Content-Length`, `Connection: close`,
     `fields` and `body`: the response's status line, its header lines
     (`\\r\\n`-separated, `Date` removed) and every byte after the blank
-    line."""
+    line. With `chunked`, the body goes out with `Transfer-Encoding:
+    chunked` instead, in two chunks (the first half, then the rest; one
+    chunk for a single byte, none when empty)."""
     var head = String(method, " ", path, " HTTP/1.1\r\nHost: localhost\r\n")
     for f in fields:
         head += f[0] + ": " + f[1] + "\r\n"
-    head += String(
-        "Content-Length: ", len(body), "\r\nConnection: close\r\n\r\n"
-    )
-    var wire = List(head.as_bytes())
-    wire.extend(Span(body))
+    var wire: List[UInt8]
+    if chunked:
+        head += "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        wire = List(head.as_bytes())
+        for piece in _halves(body):
+            wire.extend(
+                Span(String(hex(len(piece))[byte=2:], "\r\n").as_bytes())
+            )
+            wire.extend(Span(piece))
+            wire.extend(Span("\r\n".as_bytes()))
+        wire.extend(Span("0\r\n\r\n".as_bytes()))
+    else:
+        head += String(
+            "Content-Length: ", len(body), "\r\nConnection: close\r\n\r\n"
+        )
+        wire = List(head.as_bytes())
+        wire.extend(Span(body))
     var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     stream.set_recv_timeout(TIMEOUT_MS)
     stream.write_all(Span[UInt8, _](wire))
@@ -2096,20 +2138,43 @@ def _same_bytes(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
     return True
 
 
-def test_request_body_bytes_over_http1_and_h2c() raises:
-    """Every request body reaches `App.handle` byte for byte, or is answered
-    400 by the adapter before it, over HTTP/1.1 and h2c (M3-038)."""
+def _every_byte() -> List[UInt8]:
+    """An arbitrary binary payload: every byte value, 0x00 to 0xFF, twice,
+    the second time in reverse."""
+    var out = List[UInt8]()
+    for i in range(256):
+        out.append(UInt8(i))
+    for i in range(256):
+        out.append(UInt8(255 - i))
+    return out^
+
+
+def _bracketed(body: List[UInt8]) -> List[UInt8]:
+    var out = List("[".as_bytes())
+    out.extend(Span(body))
+    out.append(UInt8(ord("]")))
+    return out^
+
+
+def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
+    """Every request body reaches `App.handle` byte for byte and a raw
+    handler sends any bytes back unchanged, over HTTP/1.1 (`Content-Length`
+    and chunked) and h2c (one DATA frame and two); a typed text body that is
+    not UTF-8 is `App.handle`'s 400 (M3-040). Every comparison is by length
+    and byte by byte."""
     # Well-formed UTF-8: a U+FFFD the client sent and NUL included.
-    var kept: List[Tuple[String, List[UInt8]]] = [
+    var text: List[Tuple[String, List[UInt8]]] = [
         (String("ascii"), List("hello".as_bytes())),
-        (String("utf8"), List("hé✓".as_bytes())),
+        (String("japanese"), List("こんにちは、世界".as_bytes())),
         (String("fffd"), _octets([0x61, 0xEF, 0xBF, 0xBD, 0x62])),
         (String("nul"), _octets([0x61, 0x00, 0x62, 0x00])),
+        (String("x00"), _octets([0x00])),
         (String("empty"), List[UInt8]()),
         (String("octets_utf8"), _octets([0x00, 0x01, 0x7F, 0x0A])),
     ]
-    # Not UTF-8: each one changed by a lossy conversion.
-    var refused: List[Tuple[String, List[UInt8]]] = [
+    # Not UTF-8: each one changed by a lossy conversion, and since M3-040
+    # carried exactly to a raw handler.
+    var binary: List[Tuple[String, List[UInt8]]] = [
         (String("x80"), _octets([0x80])),
         (String("xff"), _octets([0xFF])),
         (String("truncated"), _octets([0xE3, 0x81])),
@@ -2120,7 +2185,13 @@ def test_request_body_bytes_over_http1_and_h2c() raises:
             String("png"),
             _octets([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
         ),
+        (String("every_byte"), _every_byte()),
     ]
+    var cases = List[Tuple[String, List[UInt8], Bool]]()
+    for c in text:
+        cases.append((c[0], c[1].copy(), True))
+    for c in binary:
+        cases.append((c[0], c[1].copy(), False))
     var octets: List[Tuple[String, String]] = [
         (String("content-type"), String("application/octet-stream"))
     ]
@@ -2128,112 +2199,138 @@ def test_request_body_bytes_over_http1_and_h2c() raises:
         (String("content-type"), String("application/json"))
     ]
     var app = bodies_app()
+    var client = TestClient(app)
     var child = _serve_in_child(bodies_app())
     try:
-        for c in kept:
-            var name = c[0]
+        for c in cases:
             ref body = c[1]
-            var text = String(from_utf8=Span(body))
-            var local = app.handle(Request("POST", "/bytes", text))
-            assert_equal(local.body, _hex(Span(body)), name)
-            # The bytes App.handle received, through the raw route.
-            var h1 = h1_exchange(child.port, "POST", "/bytes", octets, body)
+            var utf8 = c[2]
+            # In memory: the raw echo through middleware and TestClient.
+            var local = client.post("/echo-raw", body.copy())
+            assert_equal(local.status, 200, c[0])
+            assert_equal(len(local.body), len(body), c[0])
+            assert_true(_same_bytes(Span(local.body), Span(body)), c[0])
+            var seen = client.post("/bytes", body.copy())
+            assert_equal(seen.text(), _hex(Span(body)), c[0])
+            for transport in range(4):
+                var name = String(c[0], " via ")
+                var status: String
+                var head: String
+                var got: List[UInt8]
+                var bytes_seen: String
+                var typed_status: String
+                var typed: List[UInt8]
+                if transport < 2:
+                    var chunked = transport == 1
+                    name += "HTTP/1.1 chunked" if chunked else "HTTP/1.1"
+                    var e = h1_exchange(
+                        child.port, "POST", "/echo-raw", octets, body, chunked
+                    )
+                    status = e[0]
+                    head = e[1]
+                    got = e[2].copy()
+                    var b = h1_exchange(
+                        child.port, "POST", "/bytes", octets, body, chunked
+                    )
+                    bytes_seen = String(from_utf8=Span(b[2]))
+                    var t = h1_exchange(
+                        child.port, "POST", "/echo", octets, body, chunked
+                    )
+                    typed_status = t[0]
+                    typed = t[2].copy()
+                    assert_equal(status, "HTTP/1.1 200 OK", name)
+                    # No `Content-Type`: the adapter adds none for bytes.
+                    assert_equal(
+                        head,
+                        String(
+                            "X-Seen: 1;Content-Length: ",
+                            len(body),
+                            ";Connection: close;",
+                        ),
+                        name,
+                    )
+                    if utf8:
+                        assert_equal(typed_status, "HTTP/1.1 200 OK", name)
+                    else:
+                        assert_equal(
+                            typed_status, "HTTP/1.1 400 Bad Request", name
+                        )
+                        assert_equal(
+                            t[1],
+                            "X-Seen: 1;Content-Length: 11;Connection: close;",
+                            name,
+                        )
+                else:
+                    var split = transport == 3
+                    name += "h2c two DATA frames" if split else "h2c"
+                    var e = h2_exchange(
+                        child.port, "POST", "/echo-raw", octets, body, split
+                    )
+                    assert_equal(
+                        _h2_fields(e[0]), ":status=200;x-seen=1;", name
+                    )
+                    got = e[1].copy()
+                    var b = h2_exchange(
+                        child.port, "POST", "/bytes", octets, body, split
+                    )
+                    bytes_seen = String(from_utf8=Span(b[1]))
+                    var t = h2_exchange(
+                        child.port, "POST", "/echo", octets, body, split
+                    )
+                    typed = t[1].copy()
+                    if utf8:
+                        assert_equal(t[0][0].value, "200", name)
+                    else:
+                        assert_equal(
+                            _h2_fields(t[0]), ":status=400;x-seen=1;", name
+                        )
+                # The response body is the request body, byte for byte.
+                assert_equal(len(got), len(body), name)
+                assert_true(_same_bytes(Span(got), Span(body)), name)
+                # The bytes App.handle received, as hex the wire cannot alter.
+                assert_equal(bytes_seen, _hex(Span(body)), name)
+                if utf8:
+                    assert_true(
+                        _same_bytes(Span(typed), Span(_bracketed(body))), name
+                    )
+                else:
+                    assert_equal(
+                        String(from_utf8=Span(typed)), "Bad Request", name
+                    )
             print(
-                "observed HTTP/1.1 /bytes",
-                name + ":",
-                h1[0],
-                h1[1],
-                String(from_utf8=Span(h1[2])),
-            )
-            assert_equal(h1[0], "HTTP/1.1 200 OK", name)
-            assert_equal(String(from_utf8=Span(h1[2])), local.body, name)
-            assert_equal(
-                h1[1],
-                String(
-                    "X-Body-Length: ",
-                    len(body),
-                    ";X-Seen: 1;Content-Length: ",
-                    local.body.byte_length(),
-                    ";Connection: close;",
+                "observed",
+                c[0] + ":",
+                len(body),
+                (
+                    "bytes echoed exactly over HTTP/1.1 (Content-Length,"
+                    " chunked) and h2c (one and two DATA frames); typed text"
                 ),
-                name,
+                "200" if utf8 else "400",
             )
-            var h2 = h2_exchange(child.port, "POST", "/bytes", octets, body)
-            print(
-                "observed h2c /bytes",
-                name + ":",
-                _h2_fields(h2[0]),
-                String(from_utf8=Span(h2[1])),
-            )
-            assert_equal(h2[0][0].value, "200", name)
-            assert_equal(String(from_utf8=Span(h2[1])), local.body, name)
+            # App.handle's 405 and 404, through the middleware, whatever the
+            # body; `HEAD` on a `GET` route under the HEAD rule.
+            var h1 = h1_exchange(child.port, "POST", "/hello", octets, body)
+            assert_equal(h1[0], "HTTP/1.1 405 Method Not Allowed", c[0])
             assert_equal(
-                _h2_field(h2[0], "x-body-length"), String(len(body)), name
+                h1[1],
+                (
+                    "Allow: GET, HEAD;X-Seen: 1;Content-Length: 18;Connection:"
+                    " close;"
+                ),
+                c[0],
             )
-            assert_equal(_h2_field(h2[0], "x-seen"), "1", name)
-            # The response body goes out as the handler's bytes.
-            var e1 = h1_exchange(child.port, "POST", "/echo-raw", octets, body)
-            assert_equal(e1[0], "HTTP/1.1 200 OK", name)
-            assert_true(_same_bytes(Span(e1[2]), Span(body)), name)
-            var e2 = h2_exchange(child.port, "POST", "/echo-raw", octets, body)
-            assert_equal(e2[0][0].value, "200", name)
-            assert_true(_same_bytes(Span(e2[1]), Span(body)), name)
-            # A typed FromBody route receives the same text.
-            var bracketed = List("[".as_bytes())
-            bracketed.extend(Span(body))
-            bracketed.append(UInt8(ord("]")))
-            var t1 = h1_exchange(child.port, "POST", "/echo", octets, body)
-            assert_equal(t1[0], "HTTP/1.1 200 OK", name)
-            assert_true(_same_bytes(Span(t1[2]), Span(bracketed)), name)
-            var t2 = h2_exchange(child.port, "POST", "/echo", octets, body)
-            assert_equal(t2[0][0].value, "200", name)
-            assert_true(_same_bytes(Span(t2[1]), Span(bracketed)), name)
-        for c in refused:
-            var name = c[0]
-            ref body = c[1]
-            # A route, a path only GET matches (405 in App.handle) and a path
-            # no route matches (404): the adapter answers 400 first, and the
-            # middleware does not run.
-            for target in ["/bytes", "/echo", "/hello", "/missing"]:
-                var h1 = h1_exchange(child.port, "POST", target, octets, body)
-                print(
-                    "observed HTTP/1.1",
-                    target,
-                    name + ":",
-                    h1[0],
-                    h1[1],
-                    String(from_utf8_lossy=Span(h1[2])),
-                )
-                assert_equal(h1[0], "HTTP/1.1 400 Bad Request", name)
-                assert_equal(
-                    h1[1], "Content-Length: 11;Connection: close;", name
-                )
-                assert_equal(String(from_utf8=Span(h1[2])), "Bad Request", name)
-                var h2 = h2_exchange(child.port, "POST", target, octets, body)
-                print(
-                    "observed h2c",
-                    target,
-                    name + ":",
-                    _h2_fields(h2[0]),
-                    String(from_utf8_lossy=Span(h2[1])),
-                )
-                assert_equal(_h2_fields(h2[0]), ":status=400;", name)
-                assert_equal(String(from_utf8=Span(h2[1])), "Bad Request", name)
-            # `HEAD` with such a body: the adapter's 400 under the HEAD rule.
+            var h2 = h2_exchange(child.port, "POST", "/missing", octets, body)
+            assert_equal(_h2_fields(h2[0]), ":status=404;x-seen=1;", c[0])
             var hh = h2_exchange(child.port, "HEAD", "/hello", octets, body)
             assert_equal(
-                _h2_fields(hh[0]), ":status=400;content-length=11;", name
+                _h2_fields(hh[0]),
+                ":status=200;x-seen=1;content-length=5;",
+                c[0],
             )
-            assert_equal(hh[2], 0, name)
-        # A well-formed body on a path only GET matches is App.handle's 405.
-        var allowed = h2_exchange(
-            child.port, "POST", "/hello", octets, List("x".as_bytes())
-        )
-        assert_equal(allowed[0][0].value, "405")
-        assert_equal(_h2_field(allowed[0], "allow"), "GET, HEAD")
-        assert_equal(_h2_field(allowed[0], "x-seen"), "1")
+            assert_equal(len(hh[1]), 0, c[0])
         # JSON: a sent U+FFFD is a value; a byte that is not UTF-8 inside a
-        # JSON string is 400 before parsing, where it parsed as U+FFFD.
+        # JSON string is App.handle's 400 before parsing (through the
+        # middleware), never a U+FFFD.
         var sent_fffd = List('{"name":"'.as_bytes())
         sent_fffd.extend(Span(_octets([0xEF, 0xBF, 0xBD])))
         sent_fffd.extend(Span(List('"}'.as_bytes())))
@@ -2246,23 +2343,22 @@ def test_request_body_bytes_over_http1_and_h2c() raises:
         var j2 = h2_exchange(child.port, "POST", "/greet", json, sent_fffd)
         assert_equal(String(from_utf8=Span(j2[1])), '{"hello":"�"}')
         var b1 = h1_exchange(child.port, "POST", "/greet", json, bad_json)
-        print(
-            "observed HTTP/1.1 /greet 0xFF:",
-            b1[0],
-            b1[1],
-            String(from_utf8_lossy=Span(b1[2])),
-        )
+        print("observed HTTP/1.1 /greet 0xFF:", b1[0], b1[1])
         assert_equal(b1[0], "HTTP/1.1 400 Bad Request")
-        # The adapter's 400, not App.handle's: no middleware field.
-        assert_equal(b1[1], "Content-Length: 11;Connection: close;")
+        assert_equal(b1[1], "X-Seen: 1;Content-Length: 11;Connection: close;")
         assert_equal(String(from_utf8=Span(b1[2])), "Bad Request")
-        var b2 = h2_exchange(child.port, "POST", "/greet", json, bad_json)
-        print(
-            "observed h2c /greet 0xFF:",
-            _h2_fields(b2[0]),
-            String(from_utf8_lossy=Span(b2[1])),
+        var b2 = h2_exchange(child.port, "POST", "/greet", json, bad_json, True)
+        assert_equal(_h2_fields(b2[0]), ":status=400;x-seen=1;")
+        # The same Server still answers after every exchange above.
+        var after = h2_exchange(
+            child.port,
+            "GET",
+            "/hello",
+            List[Tuple[String, String]](),
+            List[UInt8](),
         )
-        assert_equal(_h2_fields(b2[0]), ":status=400;")
+        assert_equal(after[0][0].value, "200")
+        assert_equal(String(from_utf8=Span(after[1])), "hello")
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
@@ -2390,9 +2486,7 @@ def test_request_target_and_method_bytes_over_h2c_and_http1() raises:
             assert_equal(
                 _h2_field(answers[i][0], ":status"), String(local.status), at
             )
-            assert_true(
-                _same_bytes(Span(answers[i][1]), local.body.as_bytes()), at
-            )
+            assert_true(_same_bytes(Span(answers[i][1]), Span(local.body)), at)
             assert_equal(_h2_field(answers[i][0], "x-seen"), "1", at)
             var allow = local.headers.get("allow")
             var want = allow.value() if allow else String("<none>")

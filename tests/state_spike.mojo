@@ -77,7 +77,9 @@ def _converted[R: ToResponse](var result: R) -> Response:
 
 def _call_none[
     E: Deinitable, R: Movable & Deinitable, respond: _Respond[R]
-](handler: def() thin raises E -> R, args: List[String]) -> Response:
+](
+    handler: def() thin raises E -> R, args: List[String], bytes: List[UInt8]
+) -> Response:
     var result: R
     try:
         result = handler()
@@ -88,7 +90,9 @@ def _call_none[
 
 def _call_int[
     E: Deinitable, R: Movable & Deinitable, respond: _Respond[R]
-](handler: def(Int) thin raises E -> R, args: List[String]) -> Response:
+](
+    handler: def(Int) thin raises E -> R, args: List[String], bytes: List[UInt8]
+) -> Response:
     """Answers 400 itself, without calling `handler`, if the one argument is
     not an integer."""
     var id: Int
@@ -109,7 +113,11 @@ def _call_body[
     E: Deinitable,
     R: Movable & Deinitable,
     respond: _Respond[R],
-](handler: def(var B) thin raises E -> R, args: List[String]) -> Response:
+](
+    handler: def(var B) thin raises E -> R,
+    args: List[String],
+    bytes: List[UInt8],
+) -> Response:
     """Converts the one argument, the request body, and moves the value
     into `handler`: an ordinary body with `B.from_body`; a `WithHeaders`
     carrier, after its fields are rebuilt, through `B._from_parts`, which
@@ -134,14 +142,14 @@ def _call_body[
     """
     comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
     comptime if conforms_to(B, _JsonBody):
-        var status = _json_status[B](args, 0)
+        var status = _json_status[B](args, 1, args[0].byte_length())
         if status != 0:
             return _json_answer(status)
     var body: B
     comptime if conforms_to(B, _HeaderCarrier):
         var fields: Headers
         try:
-            fields = _carrier_fields[B](args, 0)
+            fields = _carrier_fields[B](args, 1)
         except:
             return _internal_error()  # only the `_fields` gap gets here
         try:
@@ -167,7 +175,11 @@ def _call_int_body[
     E: Deinitable,
     R: Movable & Deinitable,
     respond: _Respond[R],
-](handler: def(Int, var B) thin raises E -> R, args: List[String]) -> Response:
+](
+    handler: def(Int, var B) thin raises E -> R,
+    args: List[String],
+    bytes: List[UInt8],
+) -> Response:
     """Converts the route value (`args[0]`) as `_call_int` does, then the
     body (`args[1]`) as `_call_body` does, and calls `handler` with both, in
     that order.
@@ -184,14 +196,14 @@ def _call_int_body[
     except:
         return _bad_request()
     comptime if conforms_to(B, _JsonBody):
-        var status = _json_status[B](args, 1)
+        var status = _json_status[B](args, 2, args[1].byte_length())
         if status != 0:
             return _json_answer(status)
     var body: B
     comptime if conforms_to(B, _HeaderCarrier):
         var fields: Headers
         try:
-            fields = _carrier_fields[B](args, 1)
+            fields = _carrier_fields[B](args, 2)
         except:
             return _internal_error()  # only the `_fields` gap gets here
         try:
@@ -217,6 +229,7 @@ def _call_raw[
 ](
     handler: def(var Request) thin raises E -> Response,
     args: List[String],
+    bytes: List[UInt8],
 ) -> Response:
     """Rebuilds the matched `Request` (`_raw_request`) and moves it into
     `handler`; no typed extraction runs, so this adapter answers no 400 of
@@ -226,7 +239,13 @@ def _call_raw[
     """
     var request: Request
     try:
-        request = _raw_request(args)
+        # The spike carries the body as text at `args[3]`; production
+        # passes its bytes beside the other raw arguments (M3-040).
+        var rest = List[String]()
+        for k in range(len(args)):
+            if k != 3:
+                rest.append(args[k])
+        request = _raw_request(rest, List(args[3].as_bytes()))
     except:
         return _internal_error()
     var result: Response
@@ -290,7 +309,9 @@ def _call_state_none[
     R: Movable & Deinitable,
     respond: def(var R) thin -> Response,
 ](
-    bound: _Bound[def(State[S]) thin raises E -> R, S], args: List[String]
+    bound: _Bound[def(State[S]) thin raises E -> R, S],
+    args: List[String],
+    bytes: List[UInt8],
 ) -> Response:
     var result: R
     try:
@@ -308,6 +329,7 @@ def _call_state_int[
 ](
     bound: _Bound[def(State[S], Int) thin raises E -> R, S],
     args: List[String],
+    bytes: List[UInt8],
 ) -> Response:
     var id: Int
     try:
@@ -331,6 +353,7 @@ def _call_state_body[
 ](
     bound: _Bound[def(State[S], var B) thin raises E -> R, S],
     args: List[String],
+    bytes: List[UInt8],
 ) -> Response:
     comptime assert conforms_to(B, FromBody)
     var body: B
@@ -355,6 +378,7 @@ def _call_state_int_body[
 ](
     bound: _Bound[def(State[S], Int, var B) thin raises E -> R, S],
     args: List[String],
+    bytes: List[UInt8],
 ) -> Response:
     comptime assert conforms_to(B, FromBody)
     var id: Int
@@ -380,6 +404,7 @@ def _call_state_raw[
 ](
     bound: _Bound[def(State[S], var Request) thin raises E -> Response, S],
     args: List[String],
+    bytes: List[UInt8],
 ) -> Response:
     var target = args[1]
     if args[2].byte_length() > 0:
@@ -1060,7 +1085,11 @@ struct StateApp(Movable):
                 args.append(request.method)
                 args.append(request.path)
                 args.append(request.query)
-                args.append(request.body)
+                # The spike carries the body as text: one that is not UTF-8 is 400.
+                try:
+                    args.append(request.text())
+                except:
+                    return Response.text("Bad Request", status=400)
             else:
                 if route.query_key:
                     try:
@@ -1072,12 +1101,16 @@ struct StateApp(Movable):
                     except:
                         return _bad_request()
                 if route.body:
-                    args.append(request.body)
+                    # The spike carries the body as text: one that is not UTF-8 is 400.
+                    try:
+                        args.append(request.text())
+                    except:
+                        return Response.text("Bad Request", status=400)
             # No adapter raises: each answers its own 400s and turns a
             # handler error into a response. A raise here is a server fault,
             # never a client error.
             try:
-                return route.handler.invoke(args)
+                return route.handler.invoke(args, List[UInt8]())
             except:
                 return _internal_error()
         return Response.text("Not Found", status=404)

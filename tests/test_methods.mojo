@@ -101,9 +101,9 @@ def carrier(input: WithHeaders[Note]) -> String:
     return String("w ", input.body.text, " ", len(input.headers.get_all("x-a")))
 
 
-def raw(req: Request) -> Response:
+def raw(req: Request) raises -> Response:
     return Response.text(
-        req.method + "|" + req.path + "|" + req.query + "|" + req.body,
+        req.method + "|" + req.path + "|" + req.query + "|" + req.text(),
         status=202,
     )
 
@@ -116,8 +116,8 @@ def state_value_body(db: State[Db], id: Int, body: Note) -> String:
     return String(db[].name, " ", id, " ", body.text)
 
 
-def state_raw(db: State[Db], req: Request) -> Response:
-    return Response.text(db[].name + " " + req.method + "|" + req.body)
+def state_raw(db: State[Db], req: Request) raises -> Response:
+    return Response.text(db[].name + " " + req.method + "|" + req.text())
 
 
 def converted(body: Note) -> Created:
@@ -655,8 +655,8 @@ def remove_user(id: Int, headers: Headers) raises Unauthorized -> String:
     return String("removed ", id)
 
 
-def purge(req: Request) -> Response:  # raw: reads a DELETE body
-    return Response.text("purged " + req.path + " [" + req.body + "]")
+def purge(req: Request) raises -> Response:  # raw: reads a DELETE body
+    return Response.text("purged " + req.path + " [" + req.text() + "]")
 
 
 def test_dx_example() raises:

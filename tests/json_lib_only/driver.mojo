@@ -40,8 +40,8 @@ def main() raises:
     var r = model_post(
         bump, Request("POST", "/p", '{"x":1,"label":"a\\"b"}', h^)
     )
-    if r.status != 200 or r.body != '{"x":2,"label":"a\\"b"}':
-        raise Error("round trip failed: " + String(r.status) + " " + r.body)
+    if r.status != 200 or r.text() != '{"x":2,"label":"a\\"b"}':
+        raise Error("round trip failed: " + String(r.status) + " " + r.text())
     if r.headers.get("content-type").value() != "application/json":
         raise Error("missing Content-Type")
     if model_post(bump, Request("POST", "/p", '{"x":1}')).status != 415:

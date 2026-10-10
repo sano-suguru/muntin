@@ -641,7 +641,11 @@ struct ScopedApp(Movable):
                 args.append(request.method)
                 args.append(request.path)
                 args.append(request.query)
-                args.append(request.body)
+                # The spike carries the body as text: one that is not UTF-8 is 400.
+                try:
+                    args.append(request.text())
+                except:
+                    return Response.text("Bad Request", status=400)
             else:
                 if route.query_key:
                     try:
@@ -653,12 +657,16 @@ struct ScopedApp(Movable):
                     except:
                         return _bad_request()
                 if route.body:
-                    args.append(request.body)
+                    # The spike carries the body as text: one that is not UTF-8 is 400.
+                    try:
+                        args.append(request.text())
+                    except:
+                        return Response.text("Bad Request", status=400)
             # No adapter raises: each answers its own 400s and turns a
             # handler error into a response. A raise here is a server fault,
             # never a client error.
             try:
-                return route.handler.invoke(args)
+                return route.handler.invoke(args, List[UInt8]())
             except:
                 return _internal_error()
         return Response.text("Not Found", status=404)

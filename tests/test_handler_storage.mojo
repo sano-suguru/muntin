@@ -16,7 +16,9 @@ struct _Counted(Movable):
     var live: ArcPointer[Int]
 
 
-def _call_counted(c: _Counted, args: List[String]) raises -> Response:
+def _call_counted(
+    c: _Counted, args: List[String], bytes: List[UInt8]
+) raises -> Response:
     return Response.text(String(c.live.count()))
 
 
@@ -27,10 +29,10 @@ def test_erased_owns_exactly_one_value() raises:
     var live = ArcPointer(0)
     var a = _Erased.__init__[call=_call_counted](_Counted(live))
     assert_equal(live.count(), 2)
-    assert_equal(a.invoke([]).text(), "2")
+    assert_equal(a.invoke([], List[UInt8]()).text(), "2")
     var b = a^
     assert_equal(live.count(), 2)
-    assert_equal(b.invoke([]).text(), "2")
+    assert_equal(b.invoke([], List[UInt8]()).text(), "2")
     _ = b^
     assert_equal(live.count(), 1)
 
@@ -46,14 +48,16 @@ def test_erased_survives_list_growth_and_list_move() raises:
     var moved = boxes^
     assert_equal(live.count(), 101)
     for i in range(len(moved)):
-        assert_equal(moved[i].invoke([]).text(), "101")
+        assert_equal(moved[i].invoke([], List[UInt8]()).text(), "101")
     _ = moved.pop()
     assert_equal(live.count(), 100)
     _ = moved^
     assert_equal(live.count(), 1)
 
 
-def _echo(c: _Counted, args: List[String]) raises -> Response:
+def _echo(
+    c: _Counted, args: List[String], bytes: List[UInt8]
+) raises -> Response:
     if len(args) != 1:
         raise Error("expected one argument")
     return Response.text(args[0])
@@ -62,10 +66,10 @@ def _echo(c: _Counted, args: List[String]) raises -> Response:
 def test_erased_passes_args_and_propagates_raises() raises:
     var live = ArcPointer(0)
     var e = _Erased.__init__[call=_echo](_Counted(live))
-    assert_equal(e.invoke(["x"]).text(), "x")
+    assert_equal(e.invoke(["x"], List[UInt8]()).text(), "x")
     var raised = False
     try:
-        _ = e.invoke([])
+        _ = e.invoke([], List[UInt8]())
     except:
         raised = True
     assert_equal(raised, True)
@@ -148,12 +152,18 @@ def test_app_routes_hold_erased_handlers() raises:
     # Production routes store `_Erased` boxes (this does not build against a
     # Variant), and each box carries the adapter for its own shape.
     var app = _app()
-    assert_equal(app._routes[0].handler.invoke([]).text(), "hello")
-    assert_equal(app._routes[1].handler.invoke(["042"]).text(), "42")
-    assert_equal(app._routes[2].handler.invoke(["-3"]).text(), "items -3")
+    assert_equal(
+        app._routes[0].handler.invoke([], List[UInt8]()).text(), "hello"
+    )
+    assert_equal(
+        app._routes[1].handler.invoke(["042"], List[UInt8]()).text(), "42"
+    )
+    assert_equal(
+        app._routes[2].handler.invoke(["-3"], List[UInt8]()).text(), "items -3"
+    )
     # A bad value is answered 400 by the adapter itself (M2-011): no
     # adapter raises out of `invoke`.
-    var bad = app._routes[1].handler.invoke(["4_2"])
+    var bad = app._routes[1].handler.invoke(["4_2"], List[UInt8]())
     assert_equal(bad.status, 400)
     assert_equal(bad.text(), "Bad Request")
 

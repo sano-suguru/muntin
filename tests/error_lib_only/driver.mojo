@@ -32,7 +32,7 @@ def find(id: Int) raises Missing -> String:
     return "found"
 
 
-def main():
+def main() raises:
     var app = ErrorApp()
     app.get["/hello"](hello)
     app.get["/fail/{id}"](fail)
@@ -44,12 +44,12 @@ def main():
     var plain = app.handle(Request("GET", "/hello"))
     if (
         ok.status != 200
-        or ok.body != "found"
+        or ok.text() != "found"
         or missing.status != 500
-        or missing.body != "Internal Server Error"
+        or missing.text() != "Internal Server Error"
         or failed.status != 500
         or bad.status != 400
-        or plain.body != "hello"
+        or plain.text() != "hello"
     ):
         print("unexpected response")
         abort()

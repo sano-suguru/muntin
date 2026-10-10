@@ -11,7 +11,7 @@ def hello() -> String:
 
 
 def _hello_trampoline(
-    handler: def() thin -> String, args: List[String]
+    handler: def() thin -> String, args: List[String], bytes: List[UInt8]
 ) -> Response:
     """A local adapter for `hello`'s shape: the fixture needs a box, not
     production's adapters."""
@@ -21,5 +21,5 @@ def _hello_trampoline(
 def main() raises:
     var a = _Erased.__init__[call=_hello_trampoline](hello)
     var b = a.copy()
-    _ = a.invoke([])
-    _ = b.invoke([])
+    _ = a.invoke([], List[UInt8]())
+    _ = b.invoke([], List[UInt8]())

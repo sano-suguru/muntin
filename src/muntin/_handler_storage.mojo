@@ -86,8 +86,11 @@ from .http import Response
 
 comptime _Box = MutOpaquePointer[MutUntrackedOrigin]
 
-comptime _Call[F: AnyType] = def(F, List[String]) raises thin -> Response
-"""Calls a stored `F` with the raw argument strings of a matched route.
+comptime _Call[F: AnyType] = def(
+    F, List[String], List[UInt8]
+) raises thin -> Response
+"""Calls a stored `F` with the raw argument strings of a matched route and
+the request's body bytes, both borrowed and passed through unread (M3-040).
 No adapter raises (each answers its own 400s and turns a handler error into
 a response), so a raise out of `invoke` is a server fault."""
 
@@ -100,8 +103,8 @@ def _unsafe_erase[F: Movable & Deinitable](var owner: OwnedPointer[F]) -> _Box:
 
 def _unsafe_invoke_box[
     F: Movable & Deinitable, //, call: _Call[F]
-](box: _Box, args: List[String]) raises -> Response:
-    return call(box.unsafe_bitcast[F]()[], args)
+](box: _Box, args: List[String], bytes: List[UInt8]) raises -> Response:
+    return call(box.unsafe_bitcast[F]()[], args, bytes)
 
 
 def _unsafe_drop_box[F: Movable & Deinitable](box: _Box):
@@ -112,7 +115,7 @@ def _unsafe_drop_box[F: Movable & Deinitable](box: _Box):
 struct _Header(Movable):
     """A boxed value and the two functions instantiated for its type."""
 
-    var _invoke: def(_Box, List[String]) raises thin -> Response
+    var _invoke: def(_Box, List[String], List[UInt8]) raises thin -> Response
     var _drop: def(_Box) thin
     var _value: _Box
 
@@ -144,10 +147,11 @@ struct _Erased(Movable):
         header[]._drop(header[]._value)
         _ = OwnedPointer[_Header](unsafe_from_raw_pointer=header)
 
-    def invoke(self, args: List[String]) raises -> Response:
-        """Calls the boxed value with `args`; raises if `call` does."""
+    def invoke(self, args: List[String], bytes: List[UInt8]) raises -> Response:
+        """Calls the boxed value with `args` and `bytes`; raises if `call`
+        does."""
         ref header = self._header.unsafe_ptr()[]
-        return header._invoke(header._value, args)
+        return header._invoke(header._value, args, bytes)
 
 
 struct _SharedHeader[S: Movable & Deinitable](Movable):

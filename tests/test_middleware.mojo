@@ -35,9 +35,9 @@ def boom() raises -> String:
     raise Error("handler detail")
 
 
-def echo(var request: Request) -> Response:
+def echo(var request: Request) raises -> Response:
     return Response.text(
-        request.method + " " + request.path + " " + request.body
+        request.method + " " + request.path + " " + request.text()
     )
 
 
@@ -105,7 +105,9 @@ def _send(app: App, request: Request) -> Response:
     if request.method == "HEAD":
         return client.head(target, headers=request.headers.copy())
     if request.method == "POST":
-        return client.post(target, request.body, headers=request.headers.copy())
+        return client.post(
+            target, request.body.copy(), headers=request.headers.copy()
+        )
     return app.handle(request)
 
 
@@ -228,7 +230,7 @@ def drop_allow(var request: Request, var next: Next) raises -> Response:
     """Answers a 405 without `Allow`."""
     var response = next^.run(request^)
     if response.status == 405:
-        return Response(405, response.body)
+        return Response(405, response.body.copy())
     return response^
 
 
@@ -243,15 +245,15 @@ def test_the_dx_example_as_written() raises:
     var client = TestClient(app)
     var r = client.get("/hello")
     assert_equal(r.status, 200)
-    assert_equal(r.body, "hello")
+    assert_equal(r.text(), "hello")
     assert_equal(_fields(r), "X-Trace: 1; ")
     r = client.get("/missing")
     assert_equal(r.status, 404)
-    assert_equal(r.body, "Not Found")
+    assert_equal(r.text(), "Not Found")
     assert_equal(_fields(r), "X-Trace: 1; ")
     r = client.post("/hello", "")
     assert_equal(r.status, 405)
-    assert_equal(r.body, "Method Not Allowed")
+    assert_equal(r.text(), "Method Not Allowed")
     assert_equal(_fields(r), "Allow: GET, HEAD; X-Trace: 1; ")
 
 
@@ -279,7 +281,7 @@ def test_no_middleware_keeps_the_routes_answers() raises:
     for i in range(len(r)):
         var got = _send(app, r[i])
         assert_equal(got.status, want[i][0], r[i].path)
-        assert_equal(got.body, want[i][1], r[i].path)
+        assert_equal(got.text(), want[i][1], r[i].path)
         assert_equal(_fields(got), want[i][2], r[i].path)
 
 
@@ -316,7 +318,7 @@ def test_middleware_sees_every_request() raises:
             request.method + " " + request.path,
         )
     var head = _send(app, Request("HEAD", "/hello"))
-    assert_equal(head.body, "hello")
+    assert_equal(head.text(), "hello")
     assert_equal(_field(head, "X-Seen"), "HEAD")
     var not_allowed = _send(app, Request("POST", "/hello"))
     assert_equal(not_allowed.status, 405)
@@ -329,7 +331,7 @@ def test_order_is_registration_order_outermost_first() raises:
     app.use(trail_a)
     app.use(trail_b)
     var r = TestClient(app).get("/trail")
-    assert_equal(r.body, "a,b")
+    assert_equal(r.text(), "a,b")
     assert_equal(",".join(r.headers.get_all("X-Back")), "b,a")
 
 
@@ -364,16 +366,16 @@ def test_short_circuit_runs_nothing_after_it() raises:
     var client = TestClient(app)
     var r = client.get("/blocked")
     assert_equal(r.status, 403)
-    assert_equal(r.body, "Forbidden")
+    assert_equal(r.text(), "Forbidden")
     # The outer middleware ran; the inner one and the handler did not.
     assert_equal(_fields(r), "X-Seen: GET; ")
     assert_equal(counter[].n[], 0)
     # A path no route matches is answered by the middleware too.
     var nowhere = client.get("/nowhere")
     assert_equal(nowhere.status, 403)
-    assert_equal(nowhere.body, "Forbidden")
+    assert_equal(nowhere.text(), "Forbidden")
     var reached = client.get("/counted")
-    assert_equal(reached.body, "reached")
+    assert_equal(reached.text(), "reached")
     assert_equal(_fields(reached), "X-Inner: 1; X-Seen: GET; ")
     assert_equal(counter[].n[], 1)
 
@@ -386,7 +388,7 @@ def test_request_and_response_can_be_changed() raises:
     app.use(tagged["v2"])
     var r = TestClient(app).get("/old")
     assert_equal(r.status, 200)
-    assert_equal(r.body, "hello")
+    assert_equal(r.text(), "hello")
     assert_equal(",".join(r.headers.get_all("X-Tag")), "v2,v1")
     assert_equal(TestClient(_app(counter)).get("/old").status, 404)
 
@@ -397,7 +399,7 @@ def test_a_body_reaches_the_route_through_middleware() raises:
     app.use(trail_a)
     var r = TestClient(app).post("/echo", "payload")
     assert_equal(r.status, 200)
-    assert_equal(r.body, "POST /echo payload")
+    assert_equal(r.text(), "POST /echo payload")
     assert_equal(_field(r, "X-Back"), "a")
 
 
@@ -407,7 +409,7 @@ def test_a_raise_before_the_rest_is_the_fixed_500() raises:
     app.use(fail_before)
     var r = TestClient(app).get("/counted")
     assert_equal(r.status, 500)
-    assert_equal(r.body, "Internal Server Error")
+    assert_equal(r.text(), "Internal Server Error")
     assert_equal(len(r.headers), 0)
     assert_equal(counter[].n[], 0)
 
@@ -418,7 +420,7 @@ def test_a_raise_after_the_rest_is_the_fixed_500() raises:
     app.use(fail_after)
     var r = TestClient(app).get("/counted")
     assert_equal(r.status, 500)
-    assert_equal(r.body, "Internal Server Error")
+    assert_equal(r.text(), "Internal Server Error")
     assert_equal(len(r.headers), 0)
     assert_equal(counter[].n[], 1)
 
@@ -432,7 +434,7 @@ def test_a_raise_is_answered_at_the_failing_middleware() raises:
     before.use(fail_before)
     var r = TestClient(before).get("/counted")
     assert_equal(r.status, 500)
-    assert_equal(r.body, "Internal Server Error")
+    assert_equal(r.text(), "Internal Server Error")
     assert_equal(_fields(r), "X-Seen: GET; ")
     assert_equal(counter[].n[], 0)
     var after = _app(counter)
@@ -440,7 +442,7 @@ def test_a_raise_is_answered_at_the_failing_middleware() raises:
     after.use(fail_after)
     r = TestClient(after).get("/counted")
     assert_equal(r.status, 500)
-    assert_equal(r.body, "Internal Server Error")
+    assert_equal(r.text(), "Internal Server Error")
     assert_equal(_fields(r), "X-Seen: GET; ")
     assert_equal(counter[].n[], 1)
 
@@ -453,7 +455,7 @@ def test_no_error_text_reaches_the_client() raises:
     for target in ["/counted", "/boom", "/missing"]:
         var r = TestClient(app).get(target)
         assert_equal(r.status, 500, target)
-        assert_false("detail" in r.body, target)
+        assert_false("detail" in r.text(), target)
         assert_false("detail" in _fields(r), target)
 
 
@@ -463,7 +465,7 @@ def test_two_middleware_running_the_rest_reach_the_route_once() raises:
     app.use(passthrough)
     app.use(stamp)
     var r = TestClient(app).get("/counted")
-    assert_equal(r.body, "reached")
+    assert_equal(r.text(), "reached")
     assert_equal(counter[].n[], 1)
 
 
@@ -474,12 +476,12 @@ def test_borrowing_and_non_raising_middleware_register() raises:
     app.use(not_raising)
     var r = TestClient(app).get("/hello")
     assert_equal(r.status, 299)
-    assert_equal(r.body, "hello")
+    assert_equal(r.text(), "hello")
     assert_equal(_field(r, "X-Borrowed"), "/hello")
     # The function type is public: a value of it registers too.
     var m: Middleware = passthrough
     app.use(m)
-    assert_equal(TestClient(app).get("/users/7").body, "user 7")
+    assert_equal(TestClient(app).get("/users/7").text(), "user 7")
 
 
 def test_a_middleware_answers_a_404_itself() raises:
@@ -488,8 +490,8 @@ def test_a_middleware_answers_a_404_itself() raises:
     app.use(own_404)
     var r = TestClient(app).get("/missing")
     assert_equal(r.status, 404)
-    assert_equal(r.body, "no such page")
-    assert_equal(TestClient(app).get("/hello").body, "hello")
+    assert_equal(r.text(), "no such page")
+    assert_equal(TestClient(app).get("/hello").text(), "hello")
 
 
 def test_a_middleware_changes_or_drops_allow_on_a_405() raises:
@@ -505,7 +507,7 @@ def test_a_middleware_changes_or_drops_allow_on_a_405() raises:
     dropped.use(drop_allow)
     r = TestClient(dropped).post("/hello", "")
     assert_equal(r.status, 405)
-    assert_equal(r.body, "Method Not Allowed")
+    assert_equal(r.text(), "Method Not Allowed")
     assert_equal(len(r.headers), 0)
 
 
@@ -517,7 +519,7 @@ def test_middleware_survives_moving_the_app() raises:
     var held = List[App]()
     held.append(moved^)
     var r = TestClient(held[0]).get("/hello")
-    assert_equal(r.body, "hello")
+    assert_equal(r.text(), "hello")
     assert_equal(_field(r, "X-Seen"), "GET")
 
 

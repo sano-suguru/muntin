@@ -36,8 +36,8 @@ def boom() raises -> String:
     raise Error("internal detail")
 
 
-def echo(var request: Request) -> Response:
-    return Response.text(request.method + " " + request.body)
+def echo(var request: Request) raises -> Response:
+    return Response.text(request.method + " " + request.text())
 
 
 def trail(var request: Request) -> Response:
@@ -281,7 +281,7 @@ def test_order_is_registration_order_outermost_first() raises:
     f.use(trail_a)
     f.use(trail_b)
     var r = f.handle(Request("GET", "/trail"))
-    assert_equal(r.body, "a,b")
+    assert_equal(r.text(), "a,b")
     assert_equal(",".join(r.headers.get_all("X-Back")), "b,a")
 
 
@@ -304,8 +304,8 @@ def test_use_after_routes_is_the_same_chain() raises:
 def _blocked_then_reached(app: MwApp) raises:
     var r = app.handle(Request("GET", "/blocked"))
     assert_equal(r.status, 403)
-    assert_equal(r.body, "Forbidden")
-    assert_equal(app.handle(Request("GET", "/counted")).body, "reached")
+    assert_equal(r.text(), "Forbidden")
+    assert_equal(app.handle(Request("GET", "/counted")).text(), "reached")
 
 
 def test_short_circuit_skips_the_rest() raises:
@@ -329,7 +329,7 @@ def test_request_and_response_can_be_changed() raises:
     f.use(tagged["v1"])
     var r = f.handle(Request("GET", "/old"))
     assert_equal(r.status, 200)
-    assert_equal(r.body, "hello")
+    assert_equal(r.text(), "hello")
     assert_equal(r.headers.get("X-Tag").or_else("<none>"), "v1")
 
 
@@ -341,11 +341,11 @@ def test_a_raise_in_middleware_is_the_fixed_500() raises:
     after.use(fail_after)
     var r = before.handle(Request("GET", "/counted"))
     assert_equal(r.status, 500)
-    assert_equal(r.body, "Internal Server Error")
+    assert_equal(r.text(), "Internal Server Error")
     assert_equal(counter[].n[], 0)
     r = after.handle(Request("GET", "/counted"))
     assert_equal(r.status, 500)
-    assert_equal(r.body, "Internal Server Error")
+    assert_equal(r.text(), "Internal Server Error")
     assert_equal(counter[].n[], 1)
 
 
@@ -358,7 +358,7 @@ def test_a_raise_is_answered_at_the_failing_middleware() raises:
     f.use(fail_before)
     var r = f.handle(Request("GET", "/counted"))
     assert_equal(r.status, 500)
-    assert_equal(r.body, "Internal Server Error")
+    assert_equal(r.text(), "Internal Server Error")
     assert_equal(r.headers.get("X-Seen").or_else("<none>"), "GET")
     assert_equal(counter[].n[], 0)
 
@@ -401,7 +401,7 @@ def test_a_middleware_value_is_dropped_once_and_survives_moves() raises:
     assert_equal(drops[], 0)
     var moved = a^
     var again = moved^
-    assert_equal(again.handle(Request("GET", "/hello")).body, "hello")
+    assert_equal(again.handle(Request("GET", "/hello")).text(), "hello")
     assert_equal(drops[], 0)
     _ = again^
     assert_equal(drops[], 1)

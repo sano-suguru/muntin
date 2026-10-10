@@ -8,7 +8,7 @@ from raw_spike import RawApp
 
 
 def h(req: Request) -> String:
-    return req.body
+    return req.path
 
 
 def main():

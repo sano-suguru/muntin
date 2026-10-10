@@ -216,7 +216,9 @@ def raw_args(request: HRequest) -> List[String]:
 
 
 def _call_raw_h(
-    handler: def(var HRequest) thin -> HResponse, args: List[String]
+    handler: def(var HRequest) thin -> HResponse,
+    args: List[String],
+    bytes: List[UInt8],
 ) raises -> Response:
     """`_call_raw` rebuilding the headers too. The `HResponse` is carried
     back as status and body plus its fields in the body, so the test can

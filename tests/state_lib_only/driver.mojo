@@ -58,11 +58,11 @@ def put(inv: State[Inventory], id: Int, body: Item) -> Count:
     return Count(id + len(inv[].items))
 
 
-def raw(inv: State[Inventory], req: Request) -> Response:
-    return Response.text(req.body + String(len(inv[].items)))
+def raw(inv: State[Inventory], req: Request) raises -> Response:
+    return Response.text(req.text() + String(len(inv[].items)))
 
 
-def main():
+def main() raises:
     var items = List[String]()
     items.append("a")
     var inv = State(Inventory(items^))
@@ -80,11 +80,11 @@ def main():
     var bad = app.handle(Request("POST", "/items", ""))
     if (
         s.status != 201
-        or s.body != "1"
-        or i.body != "a"
-        or a.body != "b/1"
-        or p.body != "3"
-        or r.body != "n1"
+        or s.text() != "1"
+        or i.text() != "a"
+        or a.text() != "b/1"
+        or p.text() != "3"
+        or r.text() != "n1"
         or bad.status != 400
     ):
         print("unexpected response")
@@ -105,6 +105,6 @@ def main():
     var b1 = app.handle(Request("POST", "/items/2", "b"))
     var b2 = scoped.handle(Request("POST", "/items/2", "b"))
     var r2 = scoped.handle(Request("POST", "/raw", "n"))
-    if b1.body != b2.body or r2.body != "n1":
+    if b1.body != b2.body or r2.text() != "n1":
         print("A1 and A2 differ")
         abort()

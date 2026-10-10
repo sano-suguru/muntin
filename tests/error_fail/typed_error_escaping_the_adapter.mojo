@@ -4,7 +4,7 @@
 # not convert to it, so a typed error cannot reach `App.handle`'s `except`.
 # The adapter that knows `E` must catch it and choose the response itself;
 # that is where the handler-error 500 is decided.
-# Expected diagnostic (checked by scripts/check.sh): value passed to 'call' cannot be converted from 'def _call_escaping(handler: def() raises NotFound thin -> String, args: List[String]) raises NotFound thin -> Response'
+# Expected diagnostic (checked by scripts/check.sh): value passed to 'call' cannot be converted from 'def _call_escaping(handler: def() raises NotFound thin -> String, args: List[String], bytes: List[UInt8]) raises NotFound thin -> Response'
 
 from muntin import Response
 from muntin._handler_storage import _Erased
@@ -18,7 +18,9 @@ struct NotFound(Movable):
 def _call_escaping[
     E: Deinitable
 ](
-    handler: def() thin raises E -> String, args: List[String]
+    handler: def() thin raises E -> String,
+    args: List[String],
+    bytes: List[UInt8],
 ) raises E -> Response:
     return Response.text(handler())
 

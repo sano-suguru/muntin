@@ -46,7 +46,7 @@ def save_note(body: Draft) -> Note:
     return Note(body.text)
 
 
-def main():
+def main() raises:
     var app = ResponseApp()
     app.get["/hello"](hello)
     app.get["/notes/{id}"](get_note)
@@ -56,10 +56,10 @@ def main():
     var plain = app.handle(Request("GET", "/hello"))
     if (
         got.status != 202
-        or got.body != "note 1"
+        or got.text() != "note 1"
         or saved.status != 202
-        or saved.body != "x"
-        or plain.body != "hello"
+        or saved.text() != "x"
+        or plain.text() != "hello"
     ):
         print("unexpected response")
         abort()

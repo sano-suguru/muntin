@@ -201,7 +201,7 @@ def _expect(
 ) raises:
     var response = app.handle(Request(method, target, request_body))
     assert_equal(response.status, status, method + " " + target)
-    assert_equal(response.body, body, method + " " + target)
+    assert_equal(response.text(), body, method + " " + target)
 
 
 def _expect_counts(from_body: Int, handler: Int, conversions: Int) raises:
@@ -262,9 +262,9 @@ def test_handler_error_text_never_reaches_the_client() raises:
     var app = make_app()
     var response = app.handle(Request("GET", "/fail"))
     assert_equal(response.status, 500)
-    assert_false("hunter2" in response.body)
+    assert_false("hunter2" in response.text())
     response = app.handle(Request("POST", "/store", "boom"))
-    assert_false("users_pkey" in response.body)
+    assert_false("users_pkey" in response.text())
 
 
 def test_500_depends_on_the_step_not_the_message() raises:
@@ -356,7 +356,7 @@ def test_typed_error_reaches_the_catch_boundary_with_its_type() raises:
     assert_false(conforms_to(NotFound, Copyable))
     var gone = catch_converting(fail_gone)
     assert_equal(gone.status, 410)
-    assert_equal(gone.body, "gone 9")
+    assert_equal(gone.text(), "gone 9")
     var plain = catch_converting(fail_none_typed)
     assert_equal(plain.status, 500)
 

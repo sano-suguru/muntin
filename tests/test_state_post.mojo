@@ -259,15 +259,15 @@ def test_post_shapes_and_results() raises:
     var client = TestClient(app)
     var added = client.post("/add", "name=cy")
     assert_equal(added.status, 200)
-    assert_equal(added.body, "ada adds cy")
+    assert_equal(added.text(), "ada adds cy")
     var created = client.post("/users", "name=cy")
     assert_equal(created.status, 201)
-    assert_equal(created.body, "2:cy")
-    assert_equal(client.post("/rename/1", "name=cy").body, "bob -> cy")
-    assert_equal(client.post("/rename?id=01", "name=cy").body, "bob -> cy")
+    assert_equal(created.text(), "2:cy")
+    assert_equal(client.post("/rename/1", "name=cy").text(), "bob -> cy")
+    assert_equal(client.post("/rename?id=01", "name=cy").text(), "bob -> cy")
     var replaced = client.post("/users/0", "name=cy")
     assert_equal(replaced.status, 201)
-    assert_equal(replaced.body, "0:ada/cy")
+    assert_equal(replaced.text(), "0:ada/cy")
     assert_equal(_calls(users), 5)
     assert_equal(_from_body_calls(), 5)
 
@@ -279,10 +279,10 @@ def test_state_route_value_and_body_reach_their_parameters() raises:
     app.post["/notes/{id}"](annotate, users)
     app.post["/notes?{id}"](annotate, users)
     var client = TestClient(app)
-    assert_equal(client.post("/notes/5", "7").body, "users 2 id 5 note 7")
-    assert_equal(client.post("/notes/-05", "").body, "users 2 id -5 note ")
+    assert_equal(client.post("/notes/5", "7").text(), "users 2 id 5 note 7")
+    assert_equal(client.post("/notes/-05", "").text(), "users 2 id -5 note ")
     assert_equal(
-        client.post("/notes?id=3", "x=1").body, "users 2 id 3 note x=1"
+        client.post("/notes?id=3", "x=1").text(), "users 2 id 3 note x=1"
     )
     assert_equal(_calls(users), 3)
 
@@ -300,7 +300,7 @@ def test_bad_body_is_400_before_the_handler() raises:
         for body in ["", "name=", "ada"]:
             var got = client.post(target, body)
             assert_equal(got.status, 400, target)
-            assert_equal(got.body, "Bad Request", target)
+            assert_equal(got.text(), "Bad Request", target)
     assert_equal(_calls(users), 0)
     assert_equal(_from_body_calls(), 12)
 
@@ -326,14 +326,14 @@ def test_bad_route_value_is_400_before_the_body() raises:
     ]:
         var got = client.post(target, "name=cy")
         assert_equal(got.status, 400, target)
-        assert_equal(got.body, "Bad Request", target)
+        assert_equal(got.text(), "Bad Request", target)
     for target in ["/missing", "/users", "/users/1/x", "/rename/1/x"]:
         var got = client.post(target, "name=cy")
         assert_equal(got.status, 404, target)
-        assert_equal(got.body, "Not Found", target)
+        assert_equal(got.text(), "Not Found", target)
     var get = client.get("/users/1")
     assert_equal(get.status, 405)
-    assert_equal(get.body, "Method Not Allowed")
+    assert_equal(get.text(), "Method Not Allowed")
     assert_equal(len(get.headers.get_all("Allow")), 1)
     assert_equal(get.headers.get_all("Allow")[0], "POST")
     assert_equal(_calls(users), 0)
@@ -352,15 +352,15 @@ def test_errors_use_the_m2_model() raises:
     var client = TestClient(app)
     var missing = client.post("/rename/9", "name=cy")
     assert_equal(missing.status, 404)
-    assert_equal(missing.body, "no user 9")
+    assert_equal(missing.text(), "no user 9")
     var typed = client.post("/users/9", "name=cy")
     assert_equal(typed.status, 404)
-    assert_equal(typed.body, "no user 9")
-    assert_equal(client.post("/missing", "name=cy").body, "no user 9")
+    assert_equal(typed.text(), "no user 9")
+    assert_equal(client.post("/missing", "name=cy").text(), "no user 9")
     for target in ["/reject", "/fail/1"]:
         var failed = client.post(target, "name=cy")
         assert_equal(failed.status, 500, target)
-        assert_equal(failed.body, "Internal Server Error", target)
+        assert_equal(failed.text(), "Internal Server Error", target)
     assert_equal(_calls(users), 5)
 
 
@@ -375,9 +375,9 @@ def test_first_registration_wins() raises:
     app.post["/plain"](plain_create)
     app.post["/plain"](later, users)
     var client = TestClient(app)
-    assert_equal(client.post("/add", "name=cy").body, "ada adds cy")
-    assert_equal(client.post("/later", "name=cy").body, "later")
-    assert_equal(client.post("/plain", "name=cy").body, "plain cy")
+    assert_equal(client.post("/add", "name=cy").text(), "ada adds cy")
+    assert_equal(client.post("/later", "name=cy").text(), "later")
+    assert_equal(client.post("/plain", "name=cy").text(), "plain cy")
 
 
 def test_stateless_post_shapes_resolve_as_before() raises:
@@ -389,11 +389,11 @@ def test_stateless_post_shapes_resolve_as_before() raises:
     app.post["/plain/{id}"](plain_update)
     app.post["/users/{id}"](replace_user, users)
     var client = TestClient(app)
-    assert_equal(client.post("/plain", "name=cy").body, "plain cy")
-    assert_equal(client.post("/plain/3", "name=cy").body, "plain 3 cy")
+    assert_equal(client.post("/plain", "name=cy").text(), "plain cy")
+    assert_equal(client.post("/plain/3", "name=cy").text(), "plain 3 cy")
     assert_equal(client.post("/plain", "cy").status, 400)
     assert_equal(client.post("/plain/x", "name=cy").status, 400)
-    assert_equal(client.post("/users/0", "name=cy").body, "0:ada/cy")
+    assert_equal(client.post("/users/0", "name=cy").text(), "0:ada/cy")
     assert_equal(_calls(users), 1)
 
 
@@ -416,10 +416,10 @@ def test_handles_change_at_registration_and_drop_only() raises:
     app.post["/typed/{id}"](handles_typed_at, users)
     assert_equal(_handles(users), 9)  # one per registration, every overload
     var client = TestClient(app)
-    assert_equal(client.post("/handles", "").body, "9")
-    assert_equal(client.post("/handles/1", "").body, "9")
-    assert_equal(client.post("/typed", "t").body, "9:t")
-    assert_equal(client.post("/typed/1", "t").body, "9:t")
+    assert_equal(client.post("/handles", "").text(), "9")
+    assert_equal(client.post("/handles/1", "").text(), "9")
+    assert_equal(client.post("/typed", "t").text(), "9:t")
+    assert_equal(client.post("/typed/1", "t").text(), "9:t")
     for _ in range(5):
         _ = client.post("/users/0", "name=cy")
         _ = client.post("/users/9", "name=cy")
@@ -444,9 +444,9 @@ def test_state_survives_app_moves_and_is_dropped_once() raises:
     _ = tracked^  # the app now holds the only handle
     assert_equal(drops[], 0)
     var moved = app^
-    assert_equal(TestClient(moved).post("/track", "a").body, "0 a")
+    assert_equal(TestClient(moved).post("/track", "a").text(), "0 a")
     var again = moved^
-    assert_equal(TestClient(again).post("/track", "b").body, "0 b")
+    assert_equal(TestClient(again).post("/track", "b").text(), "0 b")
     assert_equal(drops[], 0)
     _ = again^
     assert_equal(drops[], 1)
@@ -458,10 +458,10 @@ def test_test_client_before_and_after_an_app_move() raises:
     var app = App()
     app.post["/users/{id}"](replace_user, users)
     var before = TestClient(app)
-    assert_equal(before.post("/users/0", "name=cy").body, "0:ada/cy")
+    assert_equal(before.post("/users/0", "name=cy").text(), "0:ada/cy")
     var moved = app^
     var after = TestClient(moved)
-    assert_equal(after.post("/users/1", "name=cy").body, "1:bob/cy")
+    assert_equal(after.post("/users/1", "name=cy").text(), "1:bob/cy")
     assert_equal(after.post("/users/9", "name=cy").status, 404)
     assert_equal(after.post("/users/x", "name=cy").status, 400)
     assert_equal(after.post("/users/1", "cy").status, 400)
@@ -486,7 +486,7 @@ def test_request_headers_take_no_part() raises:
     )
     var without = app.handle(Request("POST", "/users/1", "name=cy"))
     assert_equal(with_fields.status, 201)
-    assert_equal(with_fields.body, "1:bob/cy")
+    assert_equal(with_fields.text(), "1:bob/cy")
     assert_equal(with_fields.body, without.body)
     assert_equal(len(with_fields.headers), 0)
     assert_equal(_calls(users), 2)
@@ -508,8 +508,8 @@ def test_dx_section_8_post_example() raises:
     var app = App()
     app.post["/users/{id}"](update_user, users)
     var client = TestClient(app)
-    assert_equal(client.post("/users/1", "name=bo").body, "1:bob as bo")
-    assert_equal(client.post("/users/9", "name=bo").body, "no user 9")
+    assert_equal(client.post("/users/1", "name=bo").text(), "1:bob as bo")
+    assert_equal(client.post("/users/9", "name=bo").text(), "no user 9")
     assert_equal(client.post("/users/x", "name=bo").status, 400)
 
 

@@ -77,11 +77,11 @@ struct Unmapped(Movable):
 # Raw handlers.
 
 
-def _fields(req: Request) -> String:
-    return req.method + "|" + req.path + "|" + req.query + "|" + req.body
+def _fields(req: Request) raises -> String:
+    return req.method + "|" + req.path + "|" + req.query + "|" + req.text()
 
 
-def echo(req: Request) -> Response:
+def echo(req: Request) raises -> Response:
     _bump(HANDLER)
     return Response.text(_fields(req), status=202)
 
@@ -89,19 +89,21 @@ def echo(req: Request) -> Response:
 def take_body(var req: Request) -> Response:
     """Owns the request and moves its body into the response."""
     _bump(HANDLER)
-    return Response.text(req.body^, status=201)
+    var body = req.body^
+    req.body = List[UInt8]()
+    return Response(201, body^)
 
 
 def verify(req: Request) raises -> Response:
     _bump(HANDLER)
-    if req.body != "signed":
+    if req.text() != "signed":
         raise Error("secret key mismatch")
     return Response.text("verified")
 
 
 def verify_typed(req: Request) raises BadSignature -> Response:
     _bump(HANDLER)
-    if req.body != "signed":
+    if Span(req.body) != "signed".as_bytes():
         raise BadSignature("unsigned")
     return Response.text("verified")
 
@@ -188,9 +190,9 @@ def test_raw_handlers_receive_the_whole_request() raises:
         var sent = Request("POST", t, " payload?\n")
         var r = app.handle(sent)
         assert_equal(r.status, 202)
-        assert_equal(r.body, _fields(sent))
+        assert_equal(r.text(), _fields(sent))
     var g = Request("GET", "/raw?id=abc")
-    assert_equal(app.handle(g).body, _fields(g))
+    assert_equal(app.handle(g).text(), _fields(g))
     assert_equal(_count(HANDLER), 5)
 
 
@@ -198,7 +200,7 @@ def test_borrowed_and_owned_requests_register() raises:
     var app = _app()
     var r = app.handle(Request("POST", "/take", "moved"))
     assert_equal(r.status, 201)
-    assert_equal(r.body, "moved")
+    assert_equal(r.text(), "moved")
 
 
 def test_raw_routes_run_no_typed_extraction() raises:
@@ -225,44 +227,44 @@ def test_raw_raise_is_the_fixed_500() raises:
     var app = _app()
     var r = app.handle(Request("POST", "/verify", "forged"))
     assert_equal(r.status, 500)
-    assert_equal(r.body, "Internal Server Error")
+    assert_equal(r.text(), "Internal Server Error")
     assert_equal(app.handle(Request("POST", "/verify", "signed")).status, 200)
     var u = app.handle(Request("POST", "/verify_unmapped"))
     assert_equal(u.status, 500)
-    assert_equal(u.body, "Internal Server Error")
+    assert_equal(u.text(), "Internal Server Error")
 
 
 def test_raw_raise_uses_to_error_response() raises:
     var app = _app()
     var r = app.handle(Request("POST", "/verify_typed", "forged"))
     assert_equal(r.status, 401)
-    assert_equal(r.body, "bad signature: unsigned")
+    assert_equal(r.text(), "bad signature: unsigned")
     var ok = app.handle(Request("POST", "/verify_typed", "signed"))
     assert_equal(ok.status, 200)
-    assert_equal(ok.body, "verified")
+    assert_equal(ok.text(), "verified")
 
 
 def test_typed_shapes_are_unchanged_beside_raw() raises:
     _reset()
     var app = _app()
-    assert_equal(app.handle(Request("GET", "/hello")).body, "hello")
-    assert_equal(app.handle(Request("GET", "/static")).body, "static")
+    assert_equal(app.handle(Request("GET", "/hello")).text(), "hello")
+    assert_equal(app.handle(Request("GET", "/static")).text(), "static")
     assert_equal(app.handle(Request("GET", "/teapot")).status, 418)
-    assert_equal(app.handle(Request("GET", "/users/7")).body, "User(7)")
+    assert_equal(app.handle(Request("GET", "/users/7")).text(), "User(7)")
     assert_equal(app.handle(Request("GET", "/users/x")).status, 400)
-    assert_equal(app.handle(Request("GET", "/items?id=3")).body, "id 3")
+    assert_equal(app.handle(Request("GET", "/items?id=3")).text(), "id 3")
     assert_equal(
-        app.handle(Request("POST", "/users", "ann")).body, "created ann"
+        app.handle(Request("POST", "/users", "ann")).text(), "created ann"
     )
     assert_equal(app.handle(Request("POST", "/users", "")).status, 400)
     # A typed body handler returning `Response` still reaches the generic
     # body overload: `Name` is not `Request`, so no raw overload is viable.
     var made = app.handle(Request("POST", "/made", "bob"))
     assert_equal(made.status, 201)
-    assert_equal(made.body, "made bob")
-    assert_equal(app.handle(Request("POST", "/users/4", "cy")).body, "4 cy")
+    assert_equal(made.text(), "made bob")
+    assert_equal(app.handle(Request("POST", "/users/4", "cy")).text(), "4 cy")
     var p = app.handle(Request("POST", "/profiles?id=9", "dee"))
-    assert_equal(p.body, "User(9)")
+    assert_equal(p.text(), "User(9)")
     assert_equal(_count(FROM_BODY), 5)
     assert_equal(_count(HANDLER), 2)
 
@@ -271,11 +273,11 @@ def test_first_registered_route_wins_across_kinds() raises:
     var raw_first = RawApp()
     raw_first.post["/same"](first)
     raw_first.post["/same"](typed_first)
-    assert_equal(raw_first.handle(Request("POST", "/same", "x")).body, "raw")
+    assert_equal(raw_first.handle(Request("POST", "/same", "x")).text(), "raw")
     var typed = RawApp()
     typed.post["/same"](typed_first)
     typed.post["/same"](first)
-    assert_equal(typed.handle(Request("POST", "/same", "x")).body, "typed")
+    assert_equal(typed.handle(Request("POST", "/same", "x")).text(), "typed")
     # The typed route still answers its own 400; a matched route never
     # falls through to a later one.
     assert_equal(typed.handle(Request("POST", "/same", "")).status, 400)

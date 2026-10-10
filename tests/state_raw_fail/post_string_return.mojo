@@ -14,7 +14,7 @@ struct Db(Movable):
 
 
 def h(db: State[Db], req: Request) -> String:
-    return req.body
+    return req.path
 
 
 def main():

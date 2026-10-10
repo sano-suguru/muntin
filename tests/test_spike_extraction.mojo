@@ -97,33 +97,33 @@ def test_body_slot_builds_app_type_without_library_naming_it() raises:
     app.post["/users"](create_user)
     var ok = _post(app, "/users", "name=Ada")
     assert_equal(ok.status, 200)
-    assert_equal(ok.body, "created Ada")
+    assert_equal(ok.text(), "created Ada")
     # Conversion failure: 400, and the handler (which returns 200) never ran.
     for bad in ["", "Ada", "name="]:
         var r = _post(app, "/users", bad)
         assert_equal(r.status, 400)
-        assert_equal(r.body, "Bad Request")
+        assert_equal(r.text(), "Bad Request")
     assert_equal(app.handle(Request("GET", "/users", "name=Ada")).status, 404)
 
 
 def test_owned_parameter_receives_moved_body() raises:
     var app = ExtractApp()
     app.post["/users"](store_user)
-    assert_equal(_post(app, "/users", "name=Grace").body, "stored Grace")
+    assert_equal(_post(app, "/users", "name=Grace").text(), "stored Grace")
 
 
 def test_route_value_and_body_compose_by_position() raises:
     var app = ExtractApp()
     app.post["/users/{id}"](update_user)
     app.post["/teams?{id}"](update_user)  # same adapter, other source
-    assert_equal(_post(app, "/users/7", "name=Bob").body, "7:Bob")
-    assert_equal(_post(app, "/teams?id=8", "name=Eve").body, "8:Eve")
+    assert_equal(_post(app, "/users/7", "name=Bob").text(), "7:Bob")
+    assert_equal(_post(app, "/teams?id=8", "name=Eve").text(), "8:Eve")
     assert_equal(_post(app, "/users/x", "name=Bob").status, 400)
     assert_equal(_post(app, "/users/7", "Bob").status, 400)
     assert_equal(_post(app, "/teams", "name=Eve").status, 400)
     assert_equal(_post(app, "/teams?id=1&id=2", "name=Eve").status, 400)
     app.post["/rename/{id}"](rename_team)
-    assert_equal(_post(app, "/rename/4", "core").body, "team 4 is CORE")
+    assert_equal(_post(app, "/rename/4", "core").text(), "team 4 is CORE")
     assert_equal(_post(app, "/rename/4", "").status, 400)
 
 
@@ -131,9 +131,9 @@ def test_route_value_without_body_is_unaffected() raises:
     var app = ExtractApp()
     app.post["/items/{id}"](get_item)
     app.post["/users"](create_user)
-    assert_equal(_post(app, "/items/5", "name=ignored").body, "item 5")
+    assert_equal(_post(app, "/items/5", "name=ignored").text(), "item 5")
     assert_equal(_post(app, "/items/x", "").status, 400)
-    assert_equal(_post(app, "/users", "name=Lin").body, "created Lin")
+    assert_equal(_post(app, "/users", "name=Lin").text(), "created Lin")
 
 
 def test_handler_failure_is_not_an_extraction_failure() raises:
@@ -152,8 +152,8 @@ def test_request_body_is_borrowed_not_consumed() raises:
     app.post["/users"](create_user)
     var request = Request("POST", "/users", "name=Ada")
     _ = app.handle(request)
-    assert_equal(request.body, "name=Ada")
-    assert_equal(app.handle(request).body, "created Ada")
+    assert_equal(request.text(), "name=Ada")
+    assert_equal(app.handle(request).text(), "created Ada")
 
 
 def test_app_moves_with_body_routes() raises:
@@ -161,8 +161,8 @@ def test_app_moves_with_body_routes() raises:
     app.post["/users"](create_user)
     app.post["/users/{id}"](update_user)
     var moved = app^
-    assert_equal(_post(moved, "/users", "name=Ada").body, "created Ada")
-    assert_equal(_post(moved, "/users/3", "name=Ada").body, "3:Ada")
+    assert_equal(_post(moved, "/users", "name=Ada").text(), "created Ada")
+    assert_equal(_post(moved, "/users/3", "name=Ada").text(), "3:Ada")
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +184,8 @@ def test_wrapper_alternative_compiles() raises:
 def test_decoder_alternative_fits_the_unchanged_box() raises:
     var boxed = box_with_decoder(create_user, decode_user)
     var raw: List[String] = ["Ada"]
-    assert_equal(boxed.invoke(raw).body, "created decoded Ada")
-    assert_equal(boxed.invoke(raw).status, 200)
+    assert_equal(boxed.invoke(raw, List[UInt8]()).text(), "created decoded Ada")
+    assert_equal(boxed.invoke(raw, List[UInt8]()).status, 200)
 
 
 def main() raises:

@@ -45,6 +45,18 @@ struct TestClient[origin: Origin[mut=False]]:
         `headers=h.copy()`); none are sent by default."""
         return self._app[].handle(Request("POST", target, body, headers^))
 
+    def post(
+        self,
+        target: String,
+        var body: List[UInt8],
+        *,
+        var headers: Headers = Headers(),
+    ) -> Response:
+        """Sends `POST target` with the bytes `body`, moved into the `Request`
+        as given (pass `body^` or `body.copy()`), whatever they are; as the
+        text `post` otherwise (M3-040)."""
+        return self._app[].handle(Request("POST", target, body^, headers^))
+
     def put(
         self,
         target: String,
@@ -55,6 +67,18 @@ struct TestClient[origin: Origin[mut=False]]:
         """Sends `PUT target` with `body`, as `post` sends `POST`."""
         return self._app[].handle(Request("PUT", target, body, headers^))
 
+    def put(
+        self,
+        target: String,
+        var body: List[UInt8],
+        *,
+        var headers: Headers = Headers(),
+    ) -> Response:
+        """Sends `PUT target` with the bytes `body`, moved into the `Request`
+        as given (pass `body^` or `body.copy()`), whatever they are; as the
+        text `put` otherwise (M3-040)."""
+        return self._app[].handle(Request("PUT", target, body^, headers^))
+
     def patch(
         self,
         target: String,
@@ -64,6 +88,18 @@ struct TestClient[origin: Origin[mut=False]]:
     ) -> Response:
         """Sends `PATCH target` with `body`, as `post` sends `POST`."""
         return self._app[].handle(Request("PATCH", target, body, headers^))
+
+    def patch(
+        self,
+        target: String,
+        var body: List[UInt8],
+        *,
+        var headers: Headers = Headers(),
+    ) -> Response:
+        """Sends `PATCH target` with the bytes `body`, moved into the `Request`
+        as given (pass `body^` or `body.copy()`), whatever they are; as the
+        text `patch` otherwise (M3-040)."""
+        return self._app[].handle(Request("PATCH", target, body^, headers^))
 
     def delete(
         self, target: String, *, var headers: Headers = Headers()
