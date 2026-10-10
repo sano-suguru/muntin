@@ -687,6 +687,8 @@ def test_middleware_rejects_before_from_bytes() raises:
     # The trade-off: the middleware answers before Muntin's 404 and 405.
     assert_equal(client.post("/missing", List[UInt8]()).status, 401)
     assert_equal(client.get("/post/r").status, 401)
+    var signed_get = client.get("/post/r", headers=_h("X-Signature", "s1"))
+    assert_equal(signed_get.status, 405)
     var sig = _h("X-Signature", "s1")
     assert_equal(
         client.post("/missing", List[UInt8](), headers=sig^).status, 404

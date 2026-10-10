@@ -2535,8 +2535,8 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                 "200" if utf8 else "400",
                 (
                     "; typed FromBytes 200 with the same bytes, alone and in"
-                    " WithHeaders with every field in order (X-Sig, empty"
-                    " x-empty, x-sig; casing kept over HTTP/1.1)"
+                    " WithHeaders with every field in order (Content-Type,"
+                    " X-Sig, empty x-empty, x-sig; casing kept over HTTP/1.1)"
                 ),
             )
             # App.handle's 405 and 404, through the middleware, whatever the
