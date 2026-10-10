@@ -481,6 +481,11 @@ def test_dx_example() raises:
     )
     assert_equal(empty.status, 400)
     assert_equal(empty.text(), "Bad Request")
+    # The conversion runs before the handler reads the field: unsigned and
+    # empty is the conversion's 400, not the handler's 401.
+    var unsigned_empty = client.put("/objects/a", List[UInt8]())
+    assert_equal(unsigned_empty.status, 400)
+    assert_equal(unsigned_empty.text(), "Bad Request")
     var get = client.get("/objects/a")
     assert_equal(get.status, 405)
     assert_equal(get.text(), "Method Not Allowed")
@@ -649,6 +654,43 @@ def test_404_405_and_head_convert_nothing() raises:
     assert_equal(wrong.status, 405)
     assert_equal(_count(FROM_BYTES_CALLS), 0)
     assert_equal(_count(HANDLER_CALLS), 0)
+
+
+def require_signature(var request: Request, var next: Next) raises -> Response:
+    """Answers 401 before routing and conversion when `X-Signature` is
+    missing; passes every other request on unchanged."""
+    if not request.headers.get("x-signature"):
+        return Response.text("missing signature", status=401)
+    return next^.run(request^)
+
+
+def test_middleware_rejects_before_from_bytes() raises:
+    """A check that must run before a costly conversion goes in middleware:
+    an unsigned request is answered without `from_bytes` or the handler, and,
+    since middleware runs before routing, ahead of 404 and 405 too."""
+    var app = carrier_app()
+    app.use(require_signature)
+    var client = TestClient(app)
+    for body in _bodies():
+        _reset()
+        var unsigned = client.post("/post/r", body.copy(), headers=_sent())
+        assert_equal(unsigned.status, 401)
+        assert_equal(unsigned.text(), "missing signature")
+        assert_equal(_count(FROM_BYTES_CALLS), 0)
+        assert_equal(_count(HANDLER_CALLS), 0)
+        var h = _sent()
+        h.add("X-Signature", "s1")
+        var signed = client.post("/post/r", body.copy(), headers=h^)
+        assert_equal(signed.status, 200)
+        assert_equal(_count(FROM_BYTES_CALLS), 1)
+        assert_equal(_count(HANDLER_CALLS), 1)
+    # The trade-off: the middleware answers before Muntin's 404 and 405.
+    assert_equal(client.post("/missing", List[UInt8]()).status, 401)
+    assert_equal(client.get("/post/r").status, 401)
+    var sig = _h("X-Signature", "s1")
+    assert_equal(
+        client.post("/missing", List[UInt8](), headers=sig^).status, 404
+    )
 
 
 def replace(var request: Request, var next: Next) raises -> Response:

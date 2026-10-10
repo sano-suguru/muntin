@@ -4,10 +4,12 @@
 trait _FromBodyOrBytes(Deinitable, Movable):
     """What `FromBody` and `FromBytes` share, and nothing more: the bound of
     `WithHeaders[B]` (M3-042), so a carrier holds a body with either
-    conversion and a type with neither is rejected where the carrier is
-    declared. Private; an application conforms to `FromBody` or
-    `FromBytes`, never to this alone (registration rejects such a body as
-    one of no conversion)."""
+    conversion and an ordinary type with neither is rejected where the
+    carrier is declared. It is a private marker, not a closed set: Mojo
+    1.1.0 does not stop a type conforming to it directly, and such a type
+    passes the declaration; `_kind` rejects it at registration as a body of
+    no conversion, so `_kind` is the final check. An application conforms
+    to `FromBody` or `FromBytes`, never to this alone."""
 
     pass
 

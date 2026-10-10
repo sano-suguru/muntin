@@ -210,10 +210,12 @@ for the `PUT`), through the middleware: a typed body that is not UTF-8 is no
 longer a 400 when its type is a `FromBytes`.
 
 M3-042 adds the stateful `PATCH /typed-bytes-fields/{id}`, whose body is
-`WithHeaders[Payload]`: sent with a repeated `x-sig` field and an empty
-`x-empty` field, every body above reaches the same handler with those fields
-over each transport, and the handler's answer (the fields it read, then the
-bytes in brackets) is compared byte for byte.
+`WithHeaders[Payload]`: sent with `Content-Type`, `X-Sig: a`, an empty
+`x-empty` and `x-sig: b`, every body above reaches the same handler over
+each transport, and the handler's answer (every `content-type` and `x-`
+field the carrier holds, in order with its name's casing, then the bytes in
+brackets) is compared byte for byte: the names keep their casing over
+HTTP/1.1, and h2c sends and expects them lowercase (RFC 9113).
 
 M3-039 serves `targets_app()` (`marked`, `GET /hello`, `GET /names/{name}`
 and `GET /items?{limit}`) and sends methods and targets whose bytes are not
@@ -2097,15 +2099,17 @@ def typed_bytes_fields(
     tag: State[Tag], id: Int, input: WithHeaders[Payload]
 ) -> Response:
     """A typed binary body with the header fields (M3-042): the state's tag,
-    the route value, every `x-sig` value in order, `x-empty` and the
-    `content-type`, then the bytes `Payload.from_bytes` received, in
-    brackets."""
-    var sigs = input.headers.get_all("x-sig")
-    var head = String(tag[].tag, " ", id, " sig=")
-    for i in range(len(sigs)):
-        head += ("," if i > 0 else "") + sigs[i]
-    head += " empty=<" + input.headers.get("x-empty").or_else("none") + ">"
-    head += " type=" + input.headers.get("content-type").or_else("none") + "|"
+    the route value, then every `content-type` and `x-` field as the
+    carrier holds it, in order, with its name's casing and its value
+    (`name=<value>;`; the transport's own fields are left out), then the
+    bytes `Payload.from_bytes` received, in brackets."""
+    var head = String(tag[].tag, " ", id, " ")
+    for i in range(len(input.headers)):
+        var name = input.headers.name(i)
+        var lower = name.lower()
+        if lower == "content-type" or lower.startswith("x-"):
+            head += name + "=<" + input.headers.value(i) + ">;"
+    head += "|"
     var out = List(head.as_bytes())
     out.extend(Span(_bracketed(input.body.data)))
     return Response(200, out^)
@@ -2280,15 +2284,31 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
     var json: List[Tuple[String, String]] = [
         (String("content-type"), String("application/json"))
     ]
-    # A repeated field and an empty value beside the body (M3-042).
+    # A repeated field, an empty value and mixed name casing beside the
+    # body (M3-042). HTTP/1.1 and the in-memory client keep each name's
+    # casing; HTTP/2 field names are lowercase on the wire (RFC 9113), so
+    # h2c sends and expects them lowercase. Either way the carrier must hold
+    # every field in the order sent.
     var signed: List[Tuple[String, String]] = [
-        (String("content-type"), String("application/octet-stream")),
-        (String("x-sig"), String("a")),
+        (String("Content-Type"), String("application/octet-stream")),
+        (String("X-Sig"), String("a")),
         (String("x-empty"), String("")),
         (String("x-sig"), String("b")),
     ]
+    var signed_h2 = List[Tuple[String, String]]()
+    for f in signed:
+        signed_h2.append((f[0].lower(), f[1]))
     var fields_want = List(
-        "f 7 sig=a,b empty=<> type=application/octet-stream|".as_bytes()
+        String(
+            "f 7 Content-Type=<application/octet-stream>;X-Sig=<a>;",
+            "x-empty=<>;x-sig=<b>;|",
+        ).as_bytes()
+    )
+    var fields_want_h2 = List(
+        String(
+            "f 7 content-type=<application/octet-stream>;x-sig=<a>;",
+            "x-empty=<>;x-sig=<b>;|",
+        ).as_bytes()
     )
     var app = bodies_app()
     var client = TestClient(app)
@@ -2459,7 +2479,7 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                         child.port,
                         "PATCH",
                         "/typed-bytes-fields/7",
-                        signed,
+                        signed_h2,
                         body,
                         split,
                     )
@@ -2485,8 +2505,12 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                 var put_want = List("t 7".as_bytes())
                 put_want.extend(Span(_bracketed(body)))
                 assert_true(_same_bytes(Span(bytes_put), Span(put_want)), name)
-                # The fields and the same bytes reached one typed handler.
-                var fields_expected = fields_want.copy()
+                # The fields, in order with their casing, and the same bytes
+                # reached one typed handler.
+                var fields_expected = (
+                    fields_want.copy() if transport
+                    < 2 else fields_want_h2.copy()
+                )
                 fields_expected.extend(Span(_bracketed(body)))
                 assert_equal(len(bytes_fields), len(fields_expected), name)
                 assert_true(
@@ -2511,7 +2535,8 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                 "200" if utf8 else "400",
                 (
                     "; typed FromBytes 200 with the same bytes, alone and in"
-                    " WithHeaders with x-sig a,b and an empty x-empty"
+                    " WithHeaders with every field in order (X-Sig, empty"
+                    " x-empty, x-sig; casing kept over HTTP/1.1)"
                 ),
             )
             # App.handle's 405 and 404, through the middleware, whatever the
