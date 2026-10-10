@@ -129,6 +129,8 @@ comptime SENT_FIELDS = "X-Sig=<a>;x-sig=<b>;Empty=<>;Content-Type=<x/y>;"
 
 
 struct Upload(FromBytes):
+    comptime max_bytes = 8 << 20  # a longer body is 413, before from_bytes
+
     var data: List[UInt8]
 
     def __init__(out self, var data: List[UInt8]):
@@ -163,6 +165,8 @@ def put_object(
 struct Blob(FromBytes):
     """Keeps every byte it receives; move-only (no `Copyable`)."""
 
+    comptime max_bytes = Int.MAX
+
     var data: List[UInt8]
 
     def __init__(out self, var data: List[UInt8]):
@@ -179,6 +183,8 @@ struct Blob(FromBytes):
 
 struct Signed(FromBytes):
     """Accepts a body that starts with 0xFF 0x00; raises on anything else."""
+
+    comptime max_bytes = Int.MAX
 
     var payload: List[UInt8]
 
@@ -200,6 +206,8 @@ struct Signed(FromBytes):
 struct Pinned(FromBytes):
     """Records the address of the bytes it receives, to show they are
     `Request.body` itself, not a copy."""
+
+    comptime max_bytes = Int.MAX
 
     var n: Int
 

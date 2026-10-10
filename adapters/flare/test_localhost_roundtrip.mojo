@@ -2078,6 +2078,8 @@ def blob(req: Request) -> Response:
 struct Payload(FromBytes):
     """A typed binary body (M3-041): keeps every byte it receives."""
 
+    comptime max_bytes = Int.MAX
+
     var data: List[UInt8]
 
     def __init__(out self, var data: List[UInt8]):

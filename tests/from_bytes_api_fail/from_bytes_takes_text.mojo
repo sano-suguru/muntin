@@ -7,6 +7,8 @@ from muntin import FromBytes
 
 
 struct Payload(FromBytes):
+    comptime max_bytes = Int.MAX
+
     var text: String
 
     def __init__(out self, text: String):

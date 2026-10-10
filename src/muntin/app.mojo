@@ -159,8 +159,9 @@ from .state import State
 # keeps the order above; its arity check allows only name and value pairs after
 # the verdict, and every other JSON body keeps the exact arity. Muntin chooses
 # no status for the fields the handler reads and gives them no meaning; the
-# `Content-Type` verdict for a `Json[T]` body (415) and the rebuild failure
-# (500) still answer before the handler.
+# `Content-Type` verdict for a `Json[T]` body (415), a bytes body's limit
+# (413, M3-043, before the rebuild) and the rebuild failure (500) still
+# answer before the handler.
 #
 # Bytes bodies (M3-041): a `FromBytes` type is a body slot too (`_kind`), on
 # every shape that takes a `FromBody`, and `_slot` passes it the request's
@@ -170,6 +171,13 @@ from .state import State
 # carrier does and no `Content-Type` verdict. A type that conforms to both
 # `FromBody` and `FromBytes` is rejected by the rules, alone or in a carrier,
 # so a body always has exactly one conversion.
+#
+# Bytes body limits (M3-043): every `FromBytes` type declares
+# `comptime max_bytes`; `_slot` answers a longer body 413 before
+# `from_bytes`, after the route values, and in a carrier (through
+# `_HeaderCarrier._max_bytes`) after the JSON steps and before the field
+# rebuild. The length is the body `invoke` passes, after middleware; a
+# negative limit is rejected at registration (`_kind`).
 #
 # Header slots (M3-016): on `get` and `delete`, `Headers` is a slot kind by
 # exact type equality (no trait, so no application type is one), accepted
@@ -521,6 +529,9 @@ def _slot[
     or `from_bytes` on them unread), a failure being the same 400. A `FromBytes` body (M3-041) is converted with
     `A.from_bytes(body)`, the borrowed bytes unread and uncopied by Muntin
     (400 if it raises); the rules reject a type that is also a `FromBody`.
+    A `FromBytes` body longer than its type's `max_bytes`, bare or carried
+    (`A._max_bytes()`, checked before the rebuild), is 413 before any of
+    that (M3-043).
 
     `A` is refined here rather than bounded: forwarding a handler with an
     explicit body type to a callee that requires `FromBody` fails on Mojo
@@ -1272,7 +1283,8 @@ struct App(Movable):
         UTF-8 before `from_body` (400 if they are not, M3-040). A type
         conforming to `FromBytes` instead receives the body's bytes,
         whatever they are and unread, in `from_bytes` (400 if it raises,
-        M3-041), alone or in a carrier; a type conforming to both traits is
+        M3-041; 413 first when they are longer than its `max_bytes`,
+        M3-043), alone or in a carrier; a type conforming to both traits is
         rejected. The body may be
         declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
@@ -1524,7 +1536,8 @@ struct App(Movable):
         UTF-8 before `from_body` (400 if they are not, M3-040). A type
         conforming to `FromBytes` instead receives the body's bytes,
         whatever they are and unread, in `from_bytes` (400 if it raises,
-        M3-041), alone or in a carrier; a type conforming to both traits is
+        M3-041; 413 first when they are longer than its `max_bytes`,
+        M3-043), alone or in a carrier; a type conforming to both traits is
         rejected. The body may be
         declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
@@ -1778,7 +1791,8 @@ struct App(Movable):
         UTF-8 before `from_body` (400 if they are not, M3-040). A type
         conforming to `FromBytes` instead receives the body's bytes,
         whatever they are and unread, in `from_bytes` (400 if it raises,
-        M3-041), alone or in a carrier; a type conforming to both traits is
+        M3-041; 413 first when they are longer than its `max_bytes`,
+        M3-043), alone or in a carrier; a type conforming to both traits is
         rejected. The body may be
         declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
@@ -2285,9 +2299,10 @@ struct App(Movable):
         carrier or its last slot is `Headers` (`_Route.headers`). A text
         body route's adapter reads the body bytes as UTF-8 in its body slot
         (`_slot`), converts the text and answers 400 itself if either fails;
-        a `FromBytes` body route's adapter, bare or in a carrier, passes the
-        bytes to `from_bytes` unread and answers 400 if it raises (M3-041,
-        M3-042).
+        a `FromBytes` body route's adapter, bare or in a carrier, answers
+        413 when they are longer than the type's `max_bytes` (M3-043), then
+        passes them to `from_bytes` unread and answers 400 if it raises
+        (M3-041, M3-042).
         A JSON body route (`_Route.json`) also receives the request's
         `Content-Type` verdict after its route values, for the body slot's
         415 step. A carrier route then receives each header field's name

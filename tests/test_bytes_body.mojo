@@ -101,6 +101,8 @@ def _prefixed(prefix: String, body: List[UInt8]) -> List[UInt8]:
 
 
 struct Image(FromBytes):
+    comptime max_bytes = 1 << 20  # a longer body is 413, before from_bytes
+
     var data: List[UInt8]
 
     def __init__(out self, var data: List[UInt8]):
@@ -124,6 +126,8 @@ def upload(image: Image) -> String:  # `var image: Image` also works
 struct Blob(FromBytes):
     """Keeps every byte it receives; move-only (no `Copyable`)."""
 
+    comptime max_bytes = Int.MAX
+
     var data: List[UInt8]
 
     def __init__(out self, var data: List[UInt8]):
@@ -142,6 +146,8 @@ struct Blob(FromBytes):
 struct Size(FromBytes):
     """Reads the bytes without keeping them, and does not raise."""
 
+    comptime max_bytes = Int.MAX
+
     var n: Int
     var sum: Int
 
@@ -155,6 +161,8 @@ struct Size(FromBytes):
 
 struct Signed(FromBytes):
     """Accepts a body that starts with 0xFF 0x00; raises on anything else."""
+
+    comptime max_bytes = Int.MAX
 
     var payload: List[UInt8]
 
@@ -176,6 +184,8 @@ struct Signed(FromBytes):
 struct Pinned(FromBytes):
     """Records the address of the bytes it receives, to show they are
     `Request.body` itself, not a copy."""
+
+    comptime max_bytes = Int.MAX
 
     var n: Int
 

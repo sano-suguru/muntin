@@ -1,8 +1,8 @@
-# Typed binary request body size limits (M3-043): a `FromBytes` type
+# Typed binary request body size limits (M3-043): every `FromBytes` type
 # declares `comptime max_bytes`, and a body longer than that, bare or inside
 # `WithHeaders[B]`, is 413 before `from_bytes` and the handler, after the
-# route values and before the carrier's field rebuild. A type that declares
-# nothing has no Muntin limit. Every comparison of bytes is by length and
+# route values and before the carrier's field rebuild. `Int.MAX` is no
+# limit; a refining trait may give a default. Every comparison of bytes is by length and
 # byte by byte. Must-not-build counterparts: tests/bytes_limit_api_fail.
 
 from std.os import getenv, setenv, unsetenv
@@ -154,7 +154,7 @@ def set_avatar(id: Int, avatar: Avatar) -> String:
     return String(id, ": ", len(avatar.data), " bytes")
 
 
-struct Upload[limit: Int](FromBytes):
+struct Blob[limit: Int](FromBytes):
     comptime max_bytes = Self.limit  # one type, a limit per route
 
     var data: List[UInt8]
@@ -167,12 +167,12 @@ struct Upload[limit: Int](FromBytes):
         return Self(body.copy())
 
 
-def put_object(key: String, input: WithHeaders[Upload[1 << 20]]) -> String:
+def put_blob(key: String, input: WithHeaders[Blob[1 << 20]]) -> String:
     var kind = input.headers.get("content-type").or_else("unknown")
     return String(key, ": ", len(input.body.data), " bytes, ", kind)
 
 
-def put_icon(key: String, input: WithHeaders[Upload[4096]]) -> String:
+def put_icon(key: String, input: WithHeaders[Blob[4096]]) -> String:
     return String(key, ": ", len(input.body.data), " byte icon")
 
 
@@ -196,7 +196,9 @@ struct Capped(FromBytes):
 
 
 struct Free(FromBytes):
-    """Declares no limit."""
+    """Declares `Int.MAX`, which no body exceeds: no limit."""
+
+    comptime max_bytes = Int.MAX
 
     var n: Int
 
@@ -209,10 +211,31 @@ struct Free(FromBytes):
         return Self(len(body))
 
 
-struct Misspelled(FromBytes):
-    """`max_byte` is not `max_bytes`: an extra member, so no limit."""
+trait SmallUpload(FromBytes):
+    """An application family of bytes bodies: a refining trait gives
+    `max_bytes` a default its types inherit."""
 
-    comptime max_byte = 4
+    comptime max_bytes: Int = 16
+
+
+struct Icon(SmallUpload):
+    """Inherits `SmallUpload`'s 16."""
+
+    var n: Int
+
+    def __init__(out self, n: Int):
+        self.n = n
+
+    @staticmethod
+    def from_bytes(body: List[UInt8]) raises -> Self:
+        _bump(FROM_BYTES_CALLS)
+        return Self(len(body))
+
+
+struct Banner(SmallUpload):
+    """Overrides `SmallUpload`'s default."""
+
+    comptime max_bytes = 32
 
     var n: Int
 
@@ -229,22 +252,6 @@ struct Zero(FromBytes):
     """Accepts only the empty body."""
 
     comptime max_bytes = 0
-
-    var n: Int
-
-    def __init__(out self, n: Int):
-        self.n = n
-
-    @staticmethod
-    def from_bytes(body: List[UInt8]) raises -> Self:
-        _bump(FROM_BYTES_CALLS)
-        return Self(len(body))
-
-
-struct Largest(FromBytes):
-    """Declares the largest `Int`, which no body exceeds."""
-
-    comptime max_bytes = Int.MAX
 
     var n: Int
 
@@ -402,9 +409,14 @@ def free_carrier(input: WithHeaders[Free]) -> String:
     return String(input.body.n)
 
 
-def misspelled(m: Misspelled) -> String:
+def icon(i: Icon) -> String:
     _bump(HANDLER_CALLS)
-    return String(m.n)
+    return String(i.n)
+
+
+def banner(input: WithHeaders[Banner]) -> String:
+    _bump(HANDLER_CALLS)
+    return String(input.body.n)
 
 
 def zero(z: Zero) -> String:
@@ -415,11 +427,6 @@ def zero(z: Zero) -> String:
 def zero_carrier(input: WithHeaders[Zero]) -> String:
     _bump(HANDLER_CALLS)
     return String(input.body.n)
-
-
-def largest(l: Largest) -> String:
-    _bump(HANDLER_CALLS)
-    return String(l.n)
 
 
 def strict(s: Strict) -> String:
@@ -535,10 +542,10 @@ def limit_app() -> App:
     app.post["/opt/c?{tag}"](c_optional)
     app.post["/free"](free)
     app.post["/free/c"](free_carrier)
-    app.post["/misspelled"](misspelled)
+    app.post["/icon"](icon)
+    app.post["/banner"](banner)
     app.post["/zero"](zero)
     app.post["/zero/c"](zero_carrier)
-    app.post["/largest"](largest)
     app.post["/strict"](strict)
     app.post["/strict/c"](strict_carrier)
     app.post["/note"](note)
@@ -585,7 +592,7 @@ def _assert_413(r: Response, what: String) raises:
 def test_dx_examples() raises:
     var app = App()
     app.put["/users/{id}/avatar"](set_avatar)
-    app.put["/objects/{key}"](put_object)
+    app.put["/blobs/{key}"](put_blob)
     app.put["/icons/{key}"](put_icon)
     var client = TestClient(app)
     var at = client.put("/users/7/avatar", _filled(64 * 1024))
@@ -597,11 +604,9 @@ def test_dx_examples() raises:
     assert_equal(client.put("/users/x/avatar", _filled(70000)).status, 400)
     assert_equal(client.put("/users/7/avatar", List[UInt8]()).status, 400)
     var png = _h("Content-Type", "image/png")
-    var big = client.put("/objects/a.png", _filled(1 << 20), headers=png^)
+    var big = client.put("/blobs/a.png", _filled(1 << 20), headers=png^)
     assert_equal(big.text(), "a.png: 1048576 bytes, image/png")
-    assert_equal(
-        client.put("/objects/a.png", _filled((1 << 20) + 1)).status, 413
-    )
+    assert_equal(client.put("/blobs/a.png", _filled((1 << 20) + 1)).status, 413)
     assert_equal(
         client.put("/icons/i", _filled(4096)).text(), "i: 4096 byte icon"
     )
@@ -671,20 +676,36 @@ def test_a_zero_limit_accepts_only_the_empty_body() raises:
         )
 
 
-def test_no_declared_limit_and_the_largest_int_are_unlimited() raises:
+def test_the_largest_int_is_no_limit() raises:
     assert_equal(Free.max_bytes, Int.MAX)
-    assert_equal(Largest.max_bytes, Int.MAX)
     assert_equal(Capped.max_bytes, LIMIT)
-    assert_equal(Upload[7].max_bytes, 7)
+    assert_equal(Blob[7].max_bytes, 7)
     var app = limit_app()
     var client = TestClient(app)
     var big = _filled(2 << 20)
-    for target in ["/free", "/free/c", "/largest", "/misspelled"]:
+    for target in ["/free", "/free/c"]:
         _reset()
         var r = client.post(target, big.copy(), headers=_sent())
         assert_equal(r.status, 200, target)
         assert_equal(r.text(), String(2 << 20), target)
         assert_equal(_count(FROM_BYTES_CALLS), 1, target)
+
+
+def test_a_refining_trait_gives_a_family_default() raises:
+    assert_equal(Icon.max_bytes, 16)
+    assert_equal(Banner.max_bytes, 32)
+    var app = limit_app()
+    var client = TestClient(app)
+    var limits: List[Tuple[String, Int]] = [
+        (String("/icon"), 16),
+        (String("/banner"), 32),
+    ]
+    for c in limits:
+        _reset()
+        var at = client.post(c[0], _filled(c[1]), headers=_sent())
+        assert_equal(at.text(), String(c[1]), c[0])
+        _reset()
+        _assert_413(client.post(c[0], _filled(c[1] + 1), headers=_sent()), c[0])
 
 
 def test_a_bad_route_value_is_400_before_the_limit() raises:

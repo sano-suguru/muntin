@@ -685,9 +685,9 @@ app.post["/users/{id}"](replace_user)    # route value, then body
 - `body.value^` does not compile (`field 'body.value...' destroyed out of the middle of a value`); `body^.take()` on a `var body` moves the whole value out (a move-only `T` works). As for any Mojo 1.1.0 struct, moving one field out of that value needs a `deinit` method on the type; otherwise copy the field.
 - `Json[T]` requires `T: FromJson` as a body and `T: ToJson` as a result; otherwise the registration fails (`its type must conform to FromBody or FromBytes`; for the result, `no matching method` with the `where` clause's `violated constraint`).
 - The RFC 8259 grammar, strictly, with Muntin's limits: comments, trailing commas, leading zeros, `NaN`, duplicate member names, a byte order mark, lone surrogates and nesting deeper than 64 are 400. Extra members are ignored. `int()` takes integer literals that fit `Int`, exactly. `float()` goes through Mojo 1.1.0's `atof`: long literals (`100000000000000000000000`) raise (400), and some values come back 1 ulp off (`-2.7546748226290886e+20`, `123456789012345678`); `String(Float64)` in the writer likewise does not always print text that reads back to the same double. Known toolchain gaps, pinned in `tests/test_json.mojo`; read exact values with `int()`.
-- Order on a JSON body route, each step before the next runs: no matching route 404 or 405; a missing, duplicated or invalid query value 400; an invalid path value 400; the `Content-Type` 415; the size 413; a body that is not UTF-8 400; malformed JSON or a `from_json` raise 400; then the handler. Every shape that takes a `FromBody` body takes `Json[T]` (body only or `Int` then body, stateless or stateful, either result policy). Other body types keep their rules: no `Content-Type` required and no Muntin cap.
+- Order on a JSON body route, each step before the next runs: no matching route 404 or 405; a missing, duplicated or invalid query value 400; an invalid path value 400; the `Content-Type` 415; the size 413; a body that is not UTF-8 400; malformed JSON or a `from_json` raise 400; then the handler. Every shape that takes a `FromBody` body takes `Json[T]` (body only or `Int` then body, stateless or stateful, either result policy). Other body types keep their rules: no `Content-Type` required; a `FromBody` type has no Muntin cap, and a `FromBytes` type's is its `max_bytes` ("Body size limits", below).
 - A body that is not well-formed UTF-8 is 400 before parsing (section 4), so the codec parses only the bytes the client sent: a U+FFFD the client sent in a string is a character, and a byte that is not UTF-8 is never parsed as one.
-- JSON bodies are capped at 1 MiB (fixed; 413 above it, and `Json[T].from_body` raises on a larger body in a raw handler). Parsing is linear apart from a sort of each object's member names (duplicates); member lookup (`get`, `value[name]`) scans the object's members, so reading k fields of an m-member object costs O(k·m). At the cap parsing adds at most about 29 MB of memory (measured: 1 MiB of `[0,0,...]`; 1 MiB of typical records adds about 5 MB). Other body types have no Muntin cap.
+- JSON bodies are capped at 1 MiB (fixed; 413 above it, and `Json[T].from_body` raises on a larger body in a raw handler). Parsing is linear apart from a sort of each object's member names (duplicates); member lookup (`get`, `value[name]`) scans the object's members, so reading k fields of an m-member object costs O(k·m). At the cap parsing adds at most about 29 MB of memory (measured: 1 MiB of `[0,0,...]`; 1 MiB of typical records adds about 5 MB). A `FromBody` type has no Muntin cap; a `FromBytes` type's is its own `max_bytes` ("Body size limits", below).
 - A test reaches a JSON body route through `TestClient` by sending the field (section 10):
 
   ```mojo
@@ -752,6 +752,8 @@ from muntin import App, FromBytes
 
 
 struct Image(FromBytes):
+    comptime max_bytes = 1 << 20  # a longer body is 413, before from_bytes
+
     var data: List[UInt8]
 
     def __init__(out self, var data: List[UInt8]):
@@ -775,9 +777,9 @@ app.post["/upload"](upload)
 # GET /upload                                    -> 405 "Method Not Allowed", Allow: POST  (from_bytes not called)
 ```
 
-- `FromBytes` is a public Muntin trait refining `Deinitable & Movable` with one requirement, `@staticmethod def from_bytes(body: List[UInt8]) raises -> Self`; a non-raising `from_bytes` conforms too. The application type conforms in its own module, as for `FromBody`, and may be move-only.
+- `FromBytes` is a public Muntin trait refining `Deinitable & Movable` with two requirements: `comptime max_bytes: Int`, the longest body the type accepts (since M3-043; "Body size limits", below), and `@staticmethod def from_bytes(body: List[UInt8]) raises -> Self`; a non-raising `from_bytes` conforms too. The application type conforms in its own module, as for `FromBody`, and may be move-only.
 - `from_bytes` receives `Request.body` itself (the same buffer, `tests/test_bytes_body.mojo` checks its address), borrowed and read-only: the request's bytes exactly as the backend received them, or as middleware replaced them (section 7), with no UTF-8 check, no text conversion and no copy by Muntin. A type that keeps them copies them (`body.copy()`); keeping them without the copy (`cannot be implicitly copied`), changing them (`invalid use of mutating method on rvalue`), or declaring them `var` or as a `String` (`does not implement all requirements for 'FromBytes'`) does not compile.
-- Every shape that takes a `FromBody` body takes a `FromBytes` body, with the same order: on `app.post`, `app.put` and `app.patch`, `def(B)`, `def(V, B)` and `def(V, V, B)` with `V` a route value, stateless or with `State` first, either result policy. 404 or 405 first, then each route value (a bad one is 400 and `from_bytes` is not called), then, when the type declares a limit, the body's length (413, "Body size limits", below), then `from_bytes` (a raise is 400 and the handler is not called), then the handler. There is no `Content-Type` rule, and a type that declares no `max_bytes` has no Muntin limit (Flare's own 10 MiB default still applies over the wire).
+- Every shape that takes a `FromBody` body takes a `FromBytes` body, with the same order: on `app.post`, `app.put` and `app.patch`, `def(B)`, `def(V, B)` and `def(V, V, B)` with `V` a route value, stateless or with `State` first, either result policy. 404 or 405 first, then each route value (a bad one is 400 and `from_bytes` is not called), then the body's length against the type's `max_bytes` (413, "Body size limits", below), then `from_bytes` (a raise is 400 and the handler is not called), then the handler. There is no `Content-Type` rule; `comptime max_bytes = Int.MAX` is no Muntin limit (Flare's own 10 MiB default still applies over the wire).
 - A type conforms to one of `FromBody` and `FromBytes`: one conforming to both is rejected at registration, alone or inside `WithHeaders` (`constraint failed: the request body's type conforms to both FromBody and FromBytes; a body type conforms to one of them`, which for a carrier means the carried type), and is still a body for the other rules (on `app.get`, `a get handler takes no request body`). A `FromBytes` body on `app.get` or `app.delete` is `a get handler takes no request body` (`a delete handler ...`), and before a route value or beside another body `a post handler takes one request body, as its last parameter`. `List[UInt8]` itself is not a body (`its type must conform to FromBody or FromBytes`): the application names its own type.
 - A `FromBytes` body with the request's header fields is `WithHeaders[B]` around it (below). Text bodies, `Json[T]` and raw handlers answer exactly as before.
 - A test sends bytes with `TestClient`'s bytes overloads (section 10): `client.post("/upload", png^)`.
@@ -789,6 +791,8 @@ from muntin import App, FromBytes, Response, ToErrorResponse, WithHeaders
 
 
 struct Upload(FromBytes):
+    comptime max_bytes = 8 << 20  # a longer body is 413, before from_bytes
+
     var data: List[UInt8]
 
     def __init__(out self, var data: List[UInt8]):
@@ -827,11 +831,11 @@ app.put["/objects/{key}"](put_object)
 ```
 
 - `input.body` is converted by `from_bytes` exactly as a bare `FromBytes` body: it receives `Request.body` itself (`tests/test_bytes_headers_body.mojo` checks the address inside the carrier too), borrowed, as the backend received it or as middleware replaced it, with no UTF-8 check, no text conversion and no copy by Muntin. `input.headers` is the request's `Headers` with the carrier's rules above: every field in order, with its casing, repeated names and empty values; Muntin gives the fields no meaning and adds no `Content-Type` rule. The carried type's `max_bytes` applies as it does to a bare body ("Body size limits", below).
-- Order: 404 or 405, each route value (a bad one is 400; neither the fields nor the body are touched), the carried type's limit (413, when it declares one; neither the fields nor the body are touched), the field rebuild (the fixed 500 for the `_fields` gap only; `from_bytes` is not called), `from_bytes` (a raise is 400 and the handler is not called), the handler. The carrier is never a JSON body, so no 415 and no JSON 413 applies.
+- Order: 404 or 405, each route value (a bad one is 400; neither the fields nor the body are touched), the carried type's limit (413; neither the fields nor the body are touched), the field rebuild (the fixed 500 for the `_fields` gap only; `from_bytes` is not called), `from_bytes` (a raise is 400 and the handler is not called), the handler. The carrier is never a JSON body, so no 415 and no JSON 413 applies.
 - A field the handler checks is read after the conversion: `from_bytes` runs on every request the route selects, signed or not, before `put_object` can answer 401, and an unsigned request with a body `from_bytes` rejects gets that 400, not the 401. When the conversion is costly (decoding, decompressing, copying a large body) or must not see unauthenticated input, check the field first in middleware (section 7), which answers before routing and conversion, or in a raw handler (section 9), which converts only when it chooses. Middleware runs before routing, so it also answers ahead of Muntin's 404 and 405 (`tests/test_bytes_headers_body.mojo`, `test_middleware_rejects_before_from_bytes`): scope its check by `request.path` and `request.method` when that matters.
 - Every shape and method that takes a body takes it: `def(B)`, `def(V, B)` and `def(V, V, B)` on `app.post`, `app.put` and `app.patch`, stateless or with `State` first, either result policy; `input^.take_body()` moves the `FromBytes` value out. The rejections are the carrier's and the body's: on `app.get` or `app.delete` `a get handler takes no request body` (`a delete handler ...`), before a route value or beside another body `a post handler takes one request body, as its last parameter` (with the method's name), `mut input` matches no overload, `input.body^` is `field 'input.body.data' destroyed out of the middle of a value` (naming the moved field), and a carried type conforming to both traits is `constraint failed: the request body's type conforms to both FromBody and FromBytes; a body type conforms to one of them`.
 
-Body size limits, status: **production** (M3-043); proven by `tests/test_bytes_limit.mojo` (which registers these examples verbatim and checks the answers below), `tests/bytes_limit_api_fail/` (via `./scripts/check.sh`) and, over real loopback connections through Flare (HTTP/1.1 with `Content-Length` and chunked, cleartext HTTP/2 in one and two DATA frames), `adapters/flare/test_localhost_roundtrip.mojo`. A `FromBytes` type declares the longest body it accepts, in bytes, as `comptime max_bytes`; a longer body is 413 before `from_bytes`, bare or inside `WithHeaders[B]`, and registration is unchanged:
+Body size limits, status: **production** (M3-043); proven by `tests/test_bytes_limit.mojo` (which registers these examples verbatim and checks the answers below), `tests/bytes_limit_api_fail/` (via `./scripts/check.sh`) and, over real loopback connections through Flare (HTTP/1.1 with `Content-Length` and chunked, cleartext HTTP/2 in one and two DATA frames), `adapters/flare/test_localhost_roundtrip.mojo`. Every `FromBytes` type declares the longest body it accepts, in bytes, as `comptime max_bytes`; a longer body is 413 before `from_bytes`, bare or inside `WithHeaders[B]`, and registration is unchanged:
 
 ```mojo
 from muntin import App, FromBytes, WithHeaders
@@ -863,10 +867,10 @@ app.put["/users/{id}/avatar"](set_avatar)
 # PUT /users/7/avatar  empty         -> 400 "Bad Request"  (from_bytes raised)
 ```
 
-One type with a different limit per route is a type parameter; the carrier reads the carried type's limit:
+One type with a different limit per route is a type parameter, and a family of types can share a default through a trait refining `FromBytes` (`trait SmallUpload(FromBytes): comptime max_bytes: Int = 16`, which a conforming type inherits or overrides); the carrier reads the carried type's limit:
 
 ```mojo
-struct Upload[limit: Int](FromBytes):
+struct Blob[limit: Int](FromBytes):
     comptime max_bytes = Self.limit  # one type, a limit per route
 
     var data: List[UInt8]
@@ -879,28 +883,28 @@ struct Upload[limit: Int](FromBytes):
         return Self(body.copy())
 
 
-def put_object(key: String, input: WithHeaders[Upload[1 << 20]]) -> String:
+def put_blob(key: String, input: WithHeaders[Blob[1 << 20]]) -> String:
     var kind = input.headers.get("content-type").or_else("unknown")
     return String(key, ": ", len(input.body.data), " bytes, ", kind)
 
 
-def put_icon(key: String, input: WithHeaders[Upload[4096]]) -> String:
+def put_icon(key: String, input: WithHeaders[Blob[4096]]) -> String:
     return String(key, ": ", len(input.body.data), " byte icon")
 
 
-app.put["/objects/{key}"](put_object)
+app.put["/blobs/{key}"](put_blob)
 app.put["/icons/{key}"](put_icon)
-# PUT /objects/a.png  Content-Type: image/png  1,048,576 bytes -> 200 "a.png: 1048576 bytes, image/png"
-# PUT /objects/a.png  1,048,577 bytes                          -> 413 "Content Too Large"
+# PUT /blobs/a.png  Content-Type: image/png  1,048,576 bytes -> 200 "a.png: 1048576 bytes, image/png"
+# PUT /blobs/a.png  1,048,577 bytes                          -> 413 "Content Too Large"
 # PUT /icons/i  4,096 bytes -> 200 "i: 4096 byte icon";  4,097 bytes -> 413
 ```
 
-- `max_bytes` is a `comptime` member of `FromBytes` with the default `Int.MAX`, which no body exceeds: a type that declares none has no Muntin limit, as before. A body of at most `max_bytes` bytes is accepted, one byte more is 413 `Content Too Large` (the same answer as a JSON body over 1 MiB, with no field), and `0` accepts only the empty body. Within the limit nothing changes: every body reaches `from_bytes` byte for byte, borrowed, and a raise is 400.
+- `max_bytes` is a required `comptime` member of `FromBytes`, with no default: a type that declares none, or misspells it (`max_byte`), does not conform (`required member 'max_bytes' is not specified`), so a forgotten limit fails at the declaration instead of leaving the body unlimited. `Int.MAX`, which no body exceeds, is no limit: `comptime max_bytes = Int.MAX` keeps M3-041's behavior. A body of at most `max_bytes` bytes is accepted, one byte more is 413 `Content Too Large` (the same answer as a JSON body over 1 MiB, with no field), and `0` accepts only the empty body. Within the limit nothing changes: every body reaches `from_bytes` byte for byte, borrowed, and a raise is 400.
 - Order, bare or carried: 404 or 405 (nothing measured or converted), each route value (a bad one is 400 whatever the body's length), the limit (413; neither `from_bytes` nor the handler runs, and in a carrier the fields are not rebuilt), the carrier's field rebuild (the fixed 500 for the `_fields` gap only), `from_bytes` (400 on a raise), the handler. A body over the limit that `from_bytes` would also reject is 413.
-- It measures `Request.body` as the route receives it, after middleware (section 7): a middleware that replaces a long body with a short one gets it accepted, and one that lengthens a body can get it refused. Nothing is copied or read to measure it.
-- A type declares it once, in its own declaration, as an `Int`: a negative value is rejected at registration (`constraint failed: the request body's max_bytes is negative; a FromBytes type's max_bytes is a byte count, 0 or more`, alone or in a carrier), a second declaration is `invalid redefinition of 'max_bytes'`, another type (`comptime max_bytes: UInt = 1024`) is `comptime member 'max_bytes' type 'UInt' does not conform to trait's required type 'Int'`, and an application trait refining `FromBytes` cannot give it another default (`trait member 'max_bytes' has conflicting default implementations in FromBytes and Small; you must implement it manually`). There is no `App`-wide or per-registration limit and no way to change one at run time; a route-specific limit is a type parameter, as `Upload[limit]` above.
-- Only a `FromBytes` type's `max_bytes` is a limit. The same member on a `FromBody` type is an ordinary member Muntin does not read, and a misspelled one (`max_byte`) is an extra member the compiler accepts, leaving the type unlimited; neither is rejected (`tests/test_bytes_limit.mojo` sends each such route 2 MiB): text bodies have no Muntin limit, `Json[T]` keeps its fixed 1 MiB step, and raw handlers measure `req.body` themselves.
-- Muntin and the backend: Muntin checks the limit in `App.handle`, after the backend has received and buffered the whole body. It bounds what reaches `from_bytes` and the handler; it does not bound the memory a request takes to receive, stop a client sending, stream, or refuse a body before authentication. Those are the backend's: over Flare a body over its `max_body_size` (10 MiB by default) is refused by Flare before the adapter and before any middleware (over HTTP/1.1, a declared `Content-Length` above it is Flare's own 413, without the application's middleware fields). A body within Flare's limit and over the type's is Muntin's 413, through middleware, on every transport (the loopback test tells them apart by a middleware field). A Muntin limit above the backend's is never reached.
+- It measures `Request.body` as the route receives it, after middleware (section 7): a middleware that replaces a long body with a short one gets it accepted, and one that lengthens a body can get it refused.
+- A type declares it once, in its own declaration, as an `Int`: a negative value is rejected at registration (`constraint failed: the request body's max_bytes is negative; a FromBytes type's max_bytes is a byte count, 0 or more`, alone or in a carrier), a second declaration is `invalid redefinition of 'max_bytes'`, another type (`comptime max_bytes: UInt = 1024`) is `comptime member 'max_bytes' type 'UInt' does not conform to trait's required type 'Int'`. A trait refining `FromBytes` may give it a default, which a conforming type may override. There is no `App`-wide or per-registration limit and no way to change one at run time; a route-specific limit is a type parameter, as `Blob[limit]` above.
+- Only a `FromBytes` type's `max_bytes` is a limit. The same member on a `FromBody` type is an ordinary member Muntin does not read and the compiler does not reject (`tests/test_bytes_limit.mojo` sends such a route 2 MiB): text bodies have no Muntin limit, `Json[T]` keeps its fixed 1 MiB step, and raw handlers measure `req.body` themselves.
+- Muntin and the backend: Muntin checks the limit in `App.handle`, after the backend has received and buffered the whole body. It bounds what reaches `from_bytes` and the handler; it does not bound the memory a request takes to receive, stop a client sending, stream, or refuse a body before authentication. Those are the backend's: over Flare a body over its `max_body_size` (10 MiB by default) never reaches the adapter; the loopback test measures one case, an HTTP/1.1 `Content-Length` above it, which is Flare's own 413 without the application's middleware fields (Flare's handling of other transports is its own and not measured here). A body within Flare's limit and over the type's is Muntin's 413, through middleware, over HTTP/1.1 (`Content-Length`, chunked) and h2c (one and two DATA frames), which the loopback test tells apart from Flare's by a middleware field. A Muntin limit above the backend's is never reached.
 
 ## 5. Typed responses
 
