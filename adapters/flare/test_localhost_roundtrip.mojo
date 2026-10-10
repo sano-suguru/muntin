@@ -1458,12 +1458,13 @@ def _h2_block(
 def _h2_answers(
     port: Int, chunks: List[List[UInt8]], streams: Int
 ) raises -> List[Tuple[List[HpackHeader], List[UInt8], Int]]:
-    """Writes `chunks[0]` on a new connection, then each next chunk when a
-    stream has ended, and reads until streams 1, 3, ... (`streams` of them)
-    have each ended: per stream, the response's decoded header fields, its
-    body and the number of DATA frames it came in (an empty DATA frame
-    counts). A GOAWAY, an RST_STREAM on one of them or a close before they
-    end raises."""
+    """Writes `chunks[0]` on a new connection and reads until streams 1, 3,
+    ... (`streams` of them) have each ended. With one chunk, every request is
+    in it and is sent at once (`h2_streams`); with one chunk per request,
+    each next chunk is written only when a stream has ended (`h2_in_turn`).
+    Per stream: the response's decoded header fields, its body and the
+    number of DATA frames it came in (an empty DATA frame counts). A GOAWAY,
+    an RST_STREAM on one of them or a close before they end raises."""
     var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     stream.set_recv_timeout(TIMEOUT_MS)
     stream.write_all(Span[UInt8, _](chunks[0]))
