@@ -2,7 +2,7 @@
 # text conversion is FromBody.from_body.
 # docs/history/architecture-decisions.md, "Typed binary request bodies decision
 # (M3-041)".
-# Expected diagnostic (checked by scripts/check.sh): 'Payload' does not implement all requirements for 'FromBytes'
+# Expected diagnostic (checked by scripts/check.sh): no 'from_bytes' candidates have type 'def(body: List[UInt8]) raises thin -> Payload'
 from muntin import FromBytes
 
 

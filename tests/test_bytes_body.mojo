@@ -431,8 +431,9 @@ def test_from_bytes_borrows_request_body_itself() raises:
     assert_equal(getenv(SEEN_AT), String(Int(req.body.unsafe_ptr())))
 
 
-def test_no_muntin_cap_on_a_bytes_body() raises:
-    # One byte over the JSON cap (1 MiB): only `Json[T]` has a Muntin cap.
+def test_int_max_is_no_muntin_cap_on_a_bytes_body() raises:
+    # One byte over the JSON cap (1 MiB): a type declaring `max_bytes =
+    # Int.MAX` has no Muntin cap (M3-043); the JSON cap is `Json[T]`'s.
     var app = bytes_app()
     var big = List[UInt8](length=1_048_577, fill=UInt8(0xFF))
     big[0] = 0x00
