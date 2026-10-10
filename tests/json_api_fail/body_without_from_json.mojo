@@ -2,7 +2,7 @@
 # conforms to `FromJson` (conditional conformance); otherwise the existing
 # `post` overloads reject it as not a `FromBody`, at the registration, with
 # the existing message.
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody or FromBytes
 from muntin import App, Json, JsonWriter, ToJson
 
 

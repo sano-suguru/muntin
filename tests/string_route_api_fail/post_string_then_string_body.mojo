@@ -4,7 +4,7 @@
 # does. Decision:
 # docs/history/architecture-decisions.md, "Route-value decoding and String
 # route values decision (M3-018)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's last parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's last parameter is the request body; its type must conform to FromBody or FromBytes
 from muntin import App
 
 

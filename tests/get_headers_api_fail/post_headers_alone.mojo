@@ -3,7 +3,7 @@
 # production's existing body-type rule, which M3-016 keeps for every `Headers`
 # shape on `post`. Decision: docs/history/architecture-decisions.md, "Typed get
 # header access decision (M3-016)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody or FromBytes
 from muntin import App, Headers
 
 

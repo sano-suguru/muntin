@@ -201,6 +201,14 @@ and `HEAD` are `App.handle`'s, through the middleware; the JSON route parses
 a sent U+FFFD and answers a `0xFF` 400; a binary `GET` answer and its `HEAD`
 length go out exactly; and the same `Server` answers afterwards.
 
+M3-041 adds two typed binary routes to `bodies_app()`: `POST /typed-bytes`,
+whose body is a `FromBytes` type (`Payload`), and the stateful
+`PUT /typed-bytes/{id}`, a `State`, a route value and the same body. Every
+body above, UTF-8 or not, reaches `Payload.from_bytes` byte for byte over
+each transport and comes back in brackets (after the state's tag and the id
+for the `PUT`), through the middleware: a typed body that is not UTF-8 is no
+longer a 400 when its type is a `FromBytes`.
+
 M3-039 serves `targets_app()` (`marked`, `GET /hello`, `GET /names/{name}`
 and `GET /items?{limit}`) and sends methods and targets whose bytes are not
 UTF-8 over h2c, where Flare v0.12.0 passes them to the adapter, with the raw
@@ -241,6 +249,7 @@ from muntin import (
     App,
     Headers,
     FromBody,
+    FromBytes,
     FromJson,
     Json,
     JsonValue,
@@ -2048,6 +2057,36 @@ def blob(req: Request) -> Response:
     return Response(200, _octets([0xFF, 0x00, 0x80]))
 
 
+struct Payload(FromBytes):
+    """A typed binary body (M3-041): keeps every byte it receives."""
+
+    var data: List[UInt8]
+
+    def __init__(out self, var data: List[UInt8]):
+        self.data = data^
+
+    @staticmethod
+    def from_bytes(body: List[UInt8]) raises -> Self:
+        return Self(body.copy())
+
+
+def typed_bytes(payload: Payload) -> Response:
+    """Answers the bytes `Payload.from_bytes` received, in brackets."""
+    return Response(200, _bracketed(payload.data))
+
+
+@fieldwise_init
+struct Tag(Movable):
+    var tag: String
+
+
+def typed_bytes_put(tag: State[Tag], id: Int, payload: Payload) -> Response:
+    """`typed_bytes` after the state's tag and the route value."""
+    var out = List(String(tag[].tag, " ", id).as_bytes())
+    out.extend(Span(_bracketed(payload.data)))
+    return Response(200, out^)
+
+
 def marked(var request: Request, var next: Next) raises -> Response:
     """Adds `X-Seen: 1` to every answer `App.handle` gives."""
     var response = next^.run(request^)
@@ -2065,6 +2104,8 @@ def bodies_app() -> App:
     app.post["/greet"](greet)
     app.get["/blob"](blob)
     app.post["/upload"](upload)
+    app.post["/typed-bytes"](typed_bytes)
+    app.put["/typed-bytes/{id}"](typed_bytes_put, State(Tag("t")))
     return app^
 
 
@@ -2236,6 +2277,8 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                 var bytes_seen: String
                 var typed_status: String
                 var typed: List[UInt8]
+                var bytes_body: List[UInt8]
+                var bytes_put: List[UInt8]
                 if transport < 2:
                     var chunked = transport == 1
                     name += "HTTP/1.1 chunked" if chunked else "HTTP/1.1"
@@ -2254,6 +2297,44 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                     )
                     typed_status = t[0]
                     typed = t[2].copy()
+                    var y = h1_exchange(
+                        child.port,
+                        "POST",
+                        "/typed-bytes",
+                        octets,
+                        body,
+                        chunked,
+                    )
+                    assert_equal(y[0], "HTTP/1.1 200 OK", name)
+                    assert_equal(
+                        y[1],
+                        String(
+                            "X-Seen: 1;Content-Length: ",
+                            len(body) + 2,
+                            ";Connection: close;",
+                        ),
+                        name,
+                    )
+                    bytes_body = y[2].copy()
+                    var yp = h1_exchange(
+                        child.port,
+                        "PUT",
+                        "/typed-bytes/7",
+                        octets,
+                        body,
+                        chunked,
+                    )
+                    assert_equal(yp[0], "HTTP/1.1 200 OK", name)
+                    assert_equal(
+                        yp[1],
+                        String(
+                            "X-Seen: 1;Content-Length: ",
+                            len(body) + 5,
+                            ";Connection: close;",
+                        ),
+                        name,
+                    )
+                    bytes_put = yp[2].copy()
                     assert_equal(status, "HTTP/1.1 200 OK", name)
                     # No `Content-Type`: the adapter adds none for bytes.
                     assert_equal(
@@ -2294,6 +2375,20 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                         child.port, "POST", "/echo", octets, body, split
                     )
                     typed = t[1].copy()
+                    var y = h2_exchange(
+                        child.port, "POST", "/typed-bytes", octets, body, split
+                    )
+                    assert_equal(
+                        _h2_fields(y[0]), ":status=200;x-seen=1;", name
+                    )
+                    bytes_body = y[1].copy()
+                    var yp = h2_exchange(
+                        child.port, "PUT", "/typed-bytes/7", octets, body, split
+                    )
+                    assert_equal(
+                        _h2_fields(yp[0]), ":status=200;x-seen=1;", name
+                    )
+                    bytes_put = yp[1].copy()
                     if utf8:
                         assert_equal(t[0][0].value, "200", name)
                     else:
@@ -2305,6 +2400,13 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                 assert_true(_same_bytes(Span(got), Span(body)), name)
                 # The bytes App.handle received, as hex the wire cannot alter.
                 assert_equal(bytes_seen, _hex(Span(body)), name)
+                # The bytes `Payload.from_bytes` received, UTF-8 or not.
+                assert_true(
+                    _same_bytes(Span(bytes_body), Span(_bracketed(body))), name
+                )
+                var put_want = List("t 7".as_bytes())
+                put_want.extend(Span(_bracketed(body)))
+                assert_true(_same_bytes(Span(bytes_put), Span(put_want)), name)
                 if utf8:
                     assert_true(
                         _same_bytes(Span(typed), Span(_bracketed(body))), name
@@ -2322,6 +2424,7 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                     " chunked) and h2c (one and two DATA frames); typed text"
                 ),
                 "200" if utf8 else "400",
+                "; typed FromBytes 200 with the same bytes",
             )
             # App.handle's 405 and 404, through the middleware, whatever the
             # body; `HEAD` on a `GET` route under the HEAD rule.

@@ -1,6 +1,6 @@
 # Must not compile: an application type used as the request body without
 # conforming to FromBody. Muntin's registration owns the message.
-# Expected diagnostic (checked by scripts/check.sh): the handler's parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): the handler's parameter is the request body; its type must conform to FromBody or FromBytes
 
 from muntin import App, FromBody, Request, Response
 

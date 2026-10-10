@@ -1,6 +1,6 @@
 # Must not compile: a stateful POST handler whose body type does not conform
 # to FromBody (M3-006).
-# Expected diagnostic (checked by scripts/check.sh): the handler's last parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): the handler's last parameter is the request body; its type must conform to FromBody or FromBytes
 from muntin import App, FromBody, State
 
 

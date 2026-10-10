@@ -2,7 +2,7 @@
 # and an `Optional` is no `FromBody`: the body message, unchanged by M3-025.
 # Decision: docs/history/architecture-decisions.md, "Optional query values
 # decision (M3-024)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody or FromBytes
 from muntin import App
 
 

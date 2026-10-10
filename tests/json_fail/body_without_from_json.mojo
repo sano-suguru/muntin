@@ -1,7 +1,7 @@
 # Must not compile (M3-008): `Json[T]` is a body only when `T` conforms to
 # `FromJson` (conditional conformance); otherwise the existing `post`
 # overloads reject it as not a `FromBody`, at the registration.
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's parameter is the request body; its type must conform to FromBody or FromBytes
 from muntin import App
 from json_spike import Json, JsonWriter, ToJson
 

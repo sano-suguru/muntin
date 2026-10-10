@@ -1,7 +1,7 @@
 # Must not compile: the ToResponse twin of
 # post_int_body_without_from_body.mojo repeats its body check and message
 # (M2-009).
-# Expected diagnostic (checked by scripts/check.sh): the handler's last parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): the handler's last parameter is the request body; its type must conform to FromBody or FromBytes
 
 from muntin import App, Response, ToResponse
 

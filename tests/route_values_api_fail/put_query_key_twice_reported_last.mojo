@@ -3,7 +3,7 @@
 # shape every other rule accepts, so no existing message changes. Decision:
 # docs/history/architecture-decisions.md, "Several route values decision
 # (M3-022)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody or FromBytes
 from muntin import App
 
 

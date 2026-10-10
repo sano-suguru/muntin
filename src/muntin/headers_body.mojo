@@ -3,11 +3,12 @@
 `WithHeaders[B]` carries the request's header fields beside a body in the
 existing body slot of `App.post` (docs/history/architecture-decisions.md, "Typed header access
 decision (M3-012)"). It is not itself a `FromBody`: the body slot in
-`app.mojo` accepts `FromBody` or the private `_HeaderCarrier`, so a body
-alone never produces a carrier without the request's fields.
+`app.mojo` accepts `FromBody`, `FromBytes` (M3-041) or the private
+`_HeaderCarrier`, so a body alone never produces a carrier without the
+request's fields. A carrier's body is text only (`B: FromBody`).
 """
 
-from .body import FromBody
+from .body import FromBody, FromBytes
 from .http import Headers
 from .json import _JsonBody
 
@@ -21,6 +22,14 @@ trait _HeaderCarrier(Deinitable, Movable):
     def _from_parts(body: String, var headers: Headers) raises -> Self:
         """Builds the carrier from the request body and the rebuilt fields;
         raises only when the body's `from_body` raises."""
+        ...
+
+    @staticmethod
+    def _two_conversions() -> Bool:
+        """Whether the carried body type also conforms to `FromBytes`
+        (M3-041), so `_kind` rejects the carrier as it rejects such a body
+        alone: a carrier converts with `from_body`, and Muntin never picks
+        one of two conversions silently."""
         ...
 
 
@@ -49,7 +58,9 @@ struct WithHeaders[B: FromBody](
 
     `WithHeaders` is accepted in the body slot but is not a `FromBody`, so a
     generic `B: FromBody` does not accept it. Building one by hand takes an
-    explicit `Headers`: `WithHeaders(body^, headers^)`.
+    explicit `Headers`: `WithHeaders(body^, headers^)`. Its body is text: a
+    `FromBytes` is not a `B`, and a `B` that also conforms to `FromBytes` is
+    rejected at registration, as such a body alone is (M3-041).
     """
 
     var headers: Headers
@@ -70,3 +81,7 @@ struct WithHeaders[B: FromBody](
     @staticmethod
     def _from_parts(body: String, var headers: Headers) raises -> Self:
         return Self(Self.B.from_body(body), headers^)
+
+    @staticmethod
+    def _two_conversions() -> Bool:
+        return conforms_to(Self.B, FromBytes)
