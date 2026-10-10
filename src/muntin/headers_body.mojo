@@ -42,9 +42,10 @@ struct WithHeaders[B: FromBody](
     handler's error type to choose. Two existing checks still answer before
     the handler: a `Json[T]` body's `Content-Type` verdict (415), and the
     rebuild of a field an in-memory `Headers` holds invalidly (the fixed
-    500). `input.body` is converted by `B.from_body` as a bare body would be (a
-    raise is 400 before the handler), and a `WithHeaders[Json[T]]` body keeps
-    the JSON `Content-Type` (415) and size (413) steps.
+    500). `input.body` is converted by `B.from_body` as a bare body would be
+    (bytes that are not UTF-8, or a raise, are 400 before the handler), and a
+    `WithHeaders[Json[T]]` body keeps the JSON `Content-Type` (415) and size
+    (413) steps.
 
     `WithHeaders` is accepted in the body slot but is not a `FromBody`, so a
     generic `B: FromBody` does not accept it. Building one by hand takes an

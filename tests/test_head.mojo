@@ -210,7 +210,7 @@ def _same_as_get(
     var get = app.handle(Request("GET", target, "", headers.copy()))
     var head = app.handle(Request("HEAD", target, "", headers.copy()))
     assert_equal(get.status, status, target)
-    assert_equal(get.body, body, target)
+    assert_equal(get.text(), body, target)
     assert_equal(head.status, get.status, target)
     assert_equal(head.body, get.body, target)
     assert_equal(_dump(head.headers), _dump(get.headers), target)
@@ -261,7 +261,7 @@ def test_head_bad_request_calls_no_handler() raises:
     ]:
         var head = app.handle(Request("HEAD", target, "", _h("X-A", "1")))
         assert_equal(head.status, 400, target)
-        assert_equal(head.body, "Bad Request", target)
+        assert_equal(head.text(), "Bad Request", target)
     assert_equal(calls[].n[], 0)
     _same_as_get(app, "/users/abc", 400, "Bad Request")
 
@@ -290,20 +290,20 @@ def test_head_only_reaches_get_routes() raises:
     ]:
         var r = app.handle(Request("HEAD", row[0], "x"))
         assert_equal(r.status, 405, row[0])
-        assert_equal(r.body, "Method Not Allowed", row[0])
+        assert_equal(r.text(), "Method Not Allowed", row[0])
         assert_equal(len(r.headers.get_all("Allow")), 1, row[0])
         assert_equal(r.headers.get_all("Allow")[0], row[1], row[0])
     # No route at all.
     for target in ["/missing", "/users"]:
         var r = app.handle(Request("HEAD", target, "x"))
         assert_equal(r.status, 404, target)
-        assert_equal(r.body, "Not Found", target)
+        assert_equal(r.text(), "Not Found", target)
     # Only the exact token maps; every other method stays byte for byte.
     for method in ["head", "Head", "HEAD ", "OPTIONS"]:
         for target in ["/hello", "/users/7", "/report"]:
             var r = app.handle(Request(method, target))
             assert_equal(r.status, 405, String(method, " ", target))
-            assert_equal(r.body, "Method Not Allowed")
+            assert_equal(r.text(), "Method Not Allowed")
             assert_equal(len(r.headers.get_all("Allow")), 1)
             assert_equal(r.headers.get_all("Allow")[0], "GET, HEAD")
 
@@ -335,7 +335,7 @@ def test_first_registration_wins_and_never_falls_through() raises:
     _same_as_get(app, "/a/1", 200, "first 1")
     _same_as_get(app, "/b/2", 200, "first 2")
     _same_as_get(app, "/c/x", 400, "Bad Request")
-    assert_equal(app.handle(Request("DELETE", "/b/2")).body, "removed 2")
+    assert_equal(app.handle(Request("DELETE", "/b/2")).text(), "removed 2")
 
 
 # docs/DX.md, "`HEAD`" in "Proven vs. target status", as written there.
@@ -363,17 +363,17 @@ def test_dx_example() raises:
     _same_as_get(app, "/report", 200, "report")
     var missing = app.handle(Request("HEAD", "/missing"))
     assert_equal(missing.status, 404)
-    assert_equal(missing.body, "Not Found")
+    assert_equal(missing.text(), "Not Found")
     for row in [
         (app.handle(Request("HEAD", "/cache/1")), "DELETE"),
         (app.handle(Request("head", "/users/7")), "GET, HEAD"),
         (app.handle(Request("OPTIONS", "/users/7")), "GET, HEAD"),
     ]:
         assert_equal(row[0].status, 405)
-        assert_equal(row[0].body, "Method Not Allowed")
+        assert_equal(row[0].text(), "Method Not Allowed")
         assert_equal(len(row[0].headers.get_all("Allow")), 1)
         assert_equal(row[0].headers.get_all("Allow")[0], row[1])
-    assert_equal(app.handle(Request("DELETE", "/cache/1")).body, "dropped 1")
+    assert_equal(app.handle(Request("DELETE", "/cache/1")).text(), "dropped 1")
 
     var head = TestClient(app).head("/users/7")
     assert_equal(head.status, 200)

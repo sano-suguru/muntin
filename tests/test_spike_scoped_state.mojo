@@ -125,11 +125,19 @@ def rename_user_typed(users: State[Users], id: Int, body: NewUser) -> User:
     return User(id, body.name)
 
 
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
+
+
 def audit(users: State[Users], req: Request) -> Response:
     users[].count()
-    return Response.text(
-        req.method + " " + req.path + "?" + req.query + " " + req.body,
-        status=202,
+    return Response(
+        202,
+        _spliced(req.method + " " + req.path + "?" + req.query + " ", req.body),
     )
 
 
@@ -159,7 +167,7 @@ def plain_create(body: NewUser) -> User:
 
 
 def plain_raw(req: Request) -> Response:
-    return Response.text("raw " + req.body)
+    return Response(200, _spliced("raw ", req.body))
 
 
 def _users() -> State[Users]:
@@ -195,15 +203,15 @@ def test_every_shape_through_one_registrar() raises:
     api.post["/renamed?{id}"](rename_user_typed)
     api.get["/audit"](audit)
     api.post["/audit"](audit)
-    assert_equal(_get(app, "/count").body, "2")
-    assert_equal(_get(app, "/first").body, "0:ada")
-    assert_equal(_get(app, "/users/1").body, "bob")
-    assert_equal(_get(app, "/typed?id=1").body, "1:bob")
-    assert_equal(_post(app, "/users", "name=cy").body, "created cy after 2")
-    assert_equal(_post(app, "/created", "name=cy").body, "2:cy")
-    assert_equal(_post(app, "/users/0", "name=cy").body, "ada -> cy")
-    assert_equal(_post(app, "/renamed?id=7", "name=cy").body, "7:cy")
-    assert_equal(_get(app, "/audit?x=1").body, "GET /audit?x=1 ")
+    assert_equal(_get(app, "/count").text(), "2")
+    assert_equal(_get(app, "/first").text(), "0:ada")
+    assert_equal(_get(app, "/users/1").text(), "bob")
+    assert_equal(_get(app, "/typed?id=1").text(), "1:bob")
+    assert_equal(_post(app, "/users", "name=cy").text(), "created cy after 2")
+    assert_equal(_post(app, "/created", "name=cy").text(), "2:cy")
+    assert_equal(_post(app, "/users/0", "name=cy").text(), "ada -> cy")
+    assert_equal(_post(app, "/renamed?id=7", "name=cy").text(), "7:cy")
+    assert_equal(_get(app, "/audit?x=1").text(), "GET /audit?x=1 ")
     assert_equal(_post(app, "/audit", "b").status, 202)
     assert_equal(_calls(users), 10)
 
@@ -220,10 +228,10 @@ def test_request_failures_and_errors_use_the_m2_model() raises:
     assert_equal(_post(app, "/users/1", "nope").status, 400)
     assert_equal(_get(app, "/missing").status, 404)
     assert_equal(_calls(users), 0)
-    assert_equal(_get(app, "/users/9").body, "no user 9")
+    assert_equal(_get(app, "/users/9").text(), "no user 9")
     var failed = _get(app, "/check/1")
     assert_equal(failed.status, 500)
-    assert_equal(failed.body, "Internal Server Error")
+    assert_equal(failed.text(), "Internal Server Error")
     assert_equal(_calls(users), 2)
 
 
@@ -237,11 +245,11 @@ def test_chained_temporary_and_interleaved_stateless_routes() raises:
     app.get["/plain/{id}"](plain_user)
     app.post["/plain"](plain_create)
     app.post["/raw"](plain_raw)
-    assert_equal(_get(app, "/hello").body, "hello")
-    assert_equal(_get(app, "/users/0").body, "ada")
-    assert_equal(_get(app, "/plain/3").body, "plain 3")
-    assert_equal(_post(app, "/plain", "name=cy").body, "0:cy")
-    assert_equal(_post(app, "/raw", "x").body, "raw x")
+    assert_equal(_get(app, "/hello").text(), "hello")
+    assert_equal(_get(app, "/users/0").text(), "ada")
+    assert_equal(_get(app, "/plain/3").text(), "plain 3")
+    assert_equal(_post(app, "/plain", "name=cy").text(), "0:cy")
+    assert_equal(_post(app, "/raw", "x").text(), "raw x")
 
 
 def test_several_state_types_and_one_shared_value() raises:
@@ -251,7 +259,7 @@ def test_several_state_types_and_one_shared_value() raises:
     var api = app.with_state(users)
     api.get["/users/{id}"](get_user)
     api.get["/count"](count_users)
-    assert_equal(_get(app, "/greet/5").body, "hi 5")
+    assert_equal(_get(app, "/greet/5").text(), "hi 5")
     _ = _get(app, "/users/0")
     _ = _get(app, "/count")
     assert_equal(_calls(users), 2)
@@ -268,7 +276,7 @@ def test_handles_registrar_copy_is_released_and_requests_borrow() raises:
     api.get["/handles"](handles)
     _ = api^  # the registrar's copy goes with it
     assert_equal(users._shared.count(), 3)  # the application's + two routes
-    assert_equal(_get(app, "/handles").body, "3")
+    assert_equal(_get(app, "/handles").text(), "3")
     for _ in range(5):
         _ = _get(app, "/users/0")
         assert_equal(users._shared.count(), 3)
@@ -282,9 +290,9 @@ def test_state_survives_app_moves_and_is_dropped_once() raises:
     app.with_state(State(Tracked(drops))).get["/track"](track)
     assert_equal(drops[], 0)
     var moved = app^  # the registrar is gone, so the app may move
-    assert_equal(_get(moved, "/track").body, "0")
+    assert_equal(_get(moved, "/track").text(), "0")
     var again = moved^
-    assert_equal(_get(again, "/track").body, "0")
+    assert_equal(_get(again, "/track").text(), "0")
     _ = again^
     assert_equal(drops[], 1)
 

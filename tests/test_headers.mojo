@@ -177,7 +177,7 @@ def test_raw_handler_reads_and_writes_headers() raises:
     h.add("x-a", "2")
     var got = app.handle(Request("POST", "/hook", "data", h^))
     assert_equal(got.status, 202)
-    assert_equal(got.body, "sha256=abc 2")
+    assert_equal(got.text(), "sha256=abc 2")
     assert_equal(
         _fields(got.headers),
         "X-Request-Id=42;Set-Cookie=a=1;Set-Cookie=b=2;X-Empty=;",
@@ -196,7 +196,7 @@ def test_raw_transport_keeps_every_field() raises:
     h.add("x-b", "")
     h.add("X-Odd", "a:b\tc")
     var got = app.handle(Request("GET", "/echo?k=v", "", h^))
-    assert_equal(got.body, "GET /echo?k=v")
+    assert_equal(got.text(), "GET /echo?k=v")
     assert_equal(
         _fields(got.headers),
         "X-B=2;Content-Type=text/plain; charset=utf-8;x-b=;X-Odd=a:b\tc;",
@@ -211,11 +211,11 @@ def test_typed_routes_and_string_results_set_no_headers() raises:
     var h = Headers()
     h.add("X-A", "1")
     var typed = app.handle(Request("GET", "/items/3", "", h^))
-    assert_equal(typed.body, "typed 3")
+    assert_equal(typed.text(), "typed 3")
     assert_equal(len(typed.headers), 0)
     var client = TestClient(app)
     var got = client.get("/hello")
-    assert_equal(got.body, "hello")
+    assert_equal(got.text(), "hello")
     assert_equal(len(got.headers), 0)
     assert_equal(len(client.get("/missing").headers), 0)
     assert_equal(len(client.get("/items/x").headers), 0)
@@ -234,7 +234,7 @@ def test_invalid_header_is_a_handler_error() raises:
     app.get["/inject"](inject)
     var got = TestClient(app).get("/inject")
     assert_equal(got.status, 500)
-    assert_equal(got.body, "Internal Server Error")
+    assert_equal(got.text(), "Internal Server Error")
     assert_equal(len(got.headers), 0)
 
 
@@ -257,11 +257,11 @@ def test_dx_section_9_headers_example() raises:
     h.add("X-Signature", "sha256=valid")
     var ok = app.handle(Request("POST", "/webhook", "", h^))
     assert_equal(ok.status, 200)
-    assert_equal(ok.body, "ok")
+    assert_equal(ok.text(), "ok")
     assert_equal(ok.headers.get("x-request-id").value(), "42")
     var unsigned = app.handle(Request("POST", "/webhook"))
     assert_equal(unsigned.status, 401)
-    assert_equal(unsigned.body, "unsigned")
+    assert_equal(unsigned.text(), "unsigned")
 
 
 def main() raises:

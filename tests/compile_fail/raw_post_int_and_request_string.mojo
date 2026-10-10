@@ -6,7 +6,7 @@ from muntin import App, Request
 
 
 def h(id: Int, req: Request) -> String:
-    return req.body
+    return req.path
 
 
 def main():

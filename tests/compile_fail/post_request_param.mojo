@@ -8,7 +8,7 @@ from muntin import App, Request
 
 
 def h(request: Request) -> String:
-    return request.body
+    return request.path
 
 
 def main():

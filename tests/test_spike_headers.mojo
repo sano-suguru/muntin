@@ -130,18 +130,18 @@ def test_raw_transport_is_lossless_through_erased() raises:
     h.add("X-Odd", "a:b\tc")
     var boxed = box_raw(echo)
     var got = boxed.invoke(
-        raw_args(HRequest("POST", "/hook?k=v", "data", h.copy()))
+        raw_args(HRequest("POST", "/hook?k=v", "data", h.copy())), List[UInt8]()
     )
     assert_equal(got.status, 202)
     assert_equal(
-        got.body,
+        got.text(),
         (
             "POST /hook?k=v data|X-B=2|Content-Type=text/plain;"
             " charset=utf-8|x-b=|X-Odd=a:b\tc"
         ),
     )
-    var none = boxed.invoke(raw_args(HRequest("GET", "/hook")))
-    assert_equal(none.body, "GET /hook? ")
+    var none = boxed.invoke(raw_args(HRequest("GET", "/hook")), List[UInt8]())
+    assert_equal(none.text(), "GET /hook? ")
     assert_equal(len(raw_args(HRequest("GET", "/hook", "", h^))), 4 + 2 * 4)
 
 

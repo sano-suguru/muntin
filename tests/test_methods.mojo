@@ -101,10 +101,18 @@ def carrier(input: WithHeaders[Note]) -> String:
     return String("w ", input.body.text, " ", len(input.headers.get_all("x-a")))
 
 
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
+
+
 def raw(req: Request) -> Response:
-    return Response.text(
-        req.method + "|" + req.path + "|" + req.query + "|" + req.body,
-        status=202,
+    return Response(
+        202,
+        _spliced(req.method + "|" + req.path + "|" + req.query + "|", req.body),
     )
 
 
@@ -117,7 +125,7 @@ def state_value_body(db: State[Db], id: Int, body: Note) -> String:
 
 
 def state_raw(db: State[Db], req: Request) -> Response:
-    return Response.text(db[].name + " " + req.method + "|" + req.body)
+    return Response(200, _spliced(db[].name + " " + req.method + "|", req.body))
 
 
 def converted(body: Note) -> Created:
@@ -655,8 +663,8 @@ def remove_user(id: Int, headers: Headers) raises Unauthorized -> String:
     return String("removed ", id)
 
 
-def purge(req: Request) -> Response:  # raw: reads a DELETE body
-    return Response.text("purged " + req.path + " [" + req.body + "]")
+def purge(req: Request) raises -> Response:  # raw: reads a DELETE body as text
+    return Response.text("purged " + req.path + " [" + req.text() + "]")
 
 
 def test_dx_example() raises:

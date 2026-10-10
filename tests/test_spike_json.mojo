@@ -322,15 +322,15 @@ def test_production_app_accepts_json_through_existing_overloads() raises:
     _reset()
     var r = client.post("/users", BODY)
     assert_equal(r.status, 200)
-    assert_equal(r.body, USER)
+    assert_equal(r.text(), USER)
     assert_equal(len(r.headers), 1)
     assert_equal(r.headers.name(0), "Content-Type")
     assert_equal(r.headers.value(0), "application/json")
     var u = client.post("/users/9", BODY)
     assert_equal(u.status, 200)
-    assert_true(u.body.startswith('{"id":9,'))
-    assert_equal(client.get("/users/5").body, '{"city":"Paris","zip":5}')
-    assert_equal(client.get("/staff/3").body, '{"city":"Oslo","zip":3}')
+    assert_true(u.text().startswith('{"id":9,'))
+    assert_equal(client.get("/users/5").text(), '{"city":"Paris","zip":5}')
+    assert_equal(client.get("/staff/3").text(), '{"city":"Oslo","zip":3}')
     assert_equal(_count(HANDLER), 2)
 
 
@@ -409,7 +409,7 @@ def test_malformed_json_is_400_before_the_handler() raises:
         _reset()
         var r = client.post("/users", s)
         assert_equal(r.status, 400, s)
-        assert_equal(r.body, "Bad Request")
+        assert_equal(r.text(), "Bad Request")
         assert_equal(len(r.headers), 0)
         assert_equal(_count(HANDLER), 0)
 
@@ -547,7 +547,7 @@ def test_serialization_failure_is_not_a_handler_error() raises:
         _reset()
         var r = client.get(target)
         assert_equal(r.status, 500, target)
-        assert_equal(r.body, "Internal Server Error")
+        assert_equal(r.text(), "Internal Server Error")
         assert_equal(len(r.headers), 0)
         assert_equal(_count(ERROR_CONVERSIONS), 0)
     _reset()
@@ -556,7 +556,7 @@ def test_serialization_failure_is_not_a_handler_error() raises:
     assert_equal(e.status, 418)
     assert_equal(_count(ERROR_CONVERSIONS), 1)
     _reset()
-    assert_equal(client.get("/measure/2").body, '{"value":1.5}')
+    assert_equal(client.get("/measure/2").text(), '{"value":1.5}')
 
 
 def test_move_only_body_and_result() raises:
@@ -564,14 +564,14 @@ def test_move_only_body_and_result() raises:
     var client = TestClient(app)
     var r = client.post("/tokens", '{"secret":"s3"}')
     assert_equal(r.status, 200)
-    assert_equal(r.body, '{"secret":"s3"}')
+    assert_equal(r.text(), '{"secret":"s3"}')
 
 
 def test_explicit_response_override() raises:
     var app = json_app()
     var r = TestClient(app).get("/created")
     assert_equal(r.status, 201)
-    assert_equal(r.body, '{"city":"Rome","zip":7}')
+    assert_equal(r.text(), '{"city":"Rome","zip":7}')
     assert_equal(len(r.headers), 1)
     assert_equal(
         r.headers.get("content-type").value(), "application/problem+json"
@@ -653,7 +653,7 @@ def test_selected_order_on_the_adapter_mirror() raises:
         model_post(
             create_user_model,
             Request("POST", "/users", "{", _json_headers("text/plain")),
-        ).body,
+        ).text(),
         "Unsupported Media Type",
     )
     assert_equal(
@@ -673,7 +673,7 @@ def test_selected_order_on_the_adapter_mirror() raises:
         ),
     )
     assert_equal(ok.status, 200)
-    assert_equal(ok.body, USER)
+    assert_equal(ok.text(), USER)
     assert_equal(_count(HANDLER), 1)
     assert_equal(
         model_post_int(
@@ -696,7 +696,7 @@ def test_selected_order_on_the_adapter_mirror() raises:
         200,
     )
     # A non-JSON body type is unchanged: no Content-Type is required.
-    assert_equal(model_post(note, Request("POST", "/n", "hi")).body, "hi")
+    assert_equal(model_post(note, Request("POST", "/n", "hi")).text(), "hi")
 
 
 def test_body_size_cap() raises:
@@ -721,7 +721,7 @@ def test_body_size_cap() raises:
         create_user_model, Request("POST", "/users", over, _json_headers())
     )
     assert_equal(big.status, 413)
-    assert_equal(big.body, "Content Too Large")
+    assert_equal(big.text(), "Content Too Large")
     assert_equal(len(big.headers), 0)
     assert_equal(
         model_post(

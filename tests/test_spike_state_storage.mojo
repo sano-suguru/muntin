@@ -113,8 +113,8 @@ def test_requests_borrow_the_boxed_handle() raises:
     var named = box_handler(first_name, users)
     assert_equal(_count(users), 3)
     for _ in range(5):
-        assert_equal(counted.invoke(List[String]()).body, "3")
-        assert_equal(named.invoke(List[String]()).body, "ada")
+        assert_equal(counted.invoke(List[String](), List[UInt8]()).text(), "3")
+        assert_equal(named.invoke(List[String](), List[UInt8]()).text(), "ada")
         assert_equal(_count(users), 3)
     _ = counted^
     _ = named^

@@ -43,7 +43,7 @@ def late(request: Request, var response: Response) raises -> Response:
 
 def _check(app: MwApp, expected: String) raises:
     var r = app.handle(Request("GET", "/hello"))
-    if r.body != "hello" or r.headers.get("X-Driver").or_else("") != expected:
+    if r.text() != "hello" or r.headers.get("X-Driver").or_else("") != expected:
         abort("unexpected answer for " + expected)
 
 

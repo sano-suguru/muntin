@@ -175,7 +175,7 @@ def _expect(
         target, "Ada"
     ) if method == "POST" else client.get(target)
     assert_equal(response.status, status, method + " " + target)
-    assert_equal(response.body, body, method + " " + target)
+    assert_equal(response.text(), body, method + " " + target)
 
 
 def test_result_types_are_application_defined() raises:
@@ -240,7 +240,7 @@ def test_rejected_requests_run_neither_handler_nor_conversion() raises:
     _expect(app, "GET", "/search?id=1&id=2", 400, "Bad Request")
     var empty = TestClient(app).post("/users", "")
     assert_equal(empty.status, 400)
-    assert_equal(empty.body, "Bad Request")
+    assert_equal(empty.text(), "Bad Request")
     _expect(app, "GET", "/missing", 404, "Not Found")
     _expect(app, "POST", "/first", 405, "Method Not Allowed")
     _expect(app, "GET", "/teams", 405, "Method Not Allowed")
@@ -275,7 +275,7 @@ def test_backend_seam_converts_the_same_way() raises:
     var app = response_app()
     var response = app.handle(Request("GET", "/users/8"))
     assert_equal(response.status, 200)
-    assert_equal(response.body, "User(8, Ada)")
+    assert_equal(response.text(), "User(8, Ada)")
 
 
 def main() raises:

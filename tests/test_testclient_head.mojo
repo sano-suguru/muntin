@@ -66,14 +66,26 @@ def logged(calls: State[Calls], var req: Request) -> Response:
     return Response.text("logged")
 
 
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
+
+
 def echo(var req: Request) -> Response:
     """Raw: answers with the method, path, query and every field in order,
     each value in angle brackets."""
-    var out = req.method + " " + req.path + " ?" + req.query + " [" + req.body
-    out += "]"
+    var out = String("]")
     for i in range(len(req.headers)):
         out += " " + req.headers.name(i) + "=<" + req.headers.value(i) + ">"
-    return Response.text(out)
+    return Response(
+        200,
+        _spliced(
+            req.method + " " + req.path + " ?" + req.query + " [", req.body, out
+        ),
+    )
 
 
 def report(req: Request) raises -> Response:
@@ -181,7 +193,7 @@ def _expect(
     fields, sent after it (so a handler runs twice)."""
     var got = TestClient(app).head(target, headers=headers.copy())
     assert_equal(got.status, status, target)
-    assert_equal(got.body, body, target)
+    assert_equal(got.text(), body, target)
     assert_equal(_fields(got), fields, target)
     _same(got, app.handle(Request("HEAD", target, "", headers.copy())), target)
     return got^
@@ -232,18 +244,18 @@ def test_head_sends_head() raises:
     var client = TestClient(app)
     var r = client.head("/logged")
     assert_equal(r.status, 200)
-    assert_equal(r.body, "logged")
+    assert_equal(r.text(), "logged")
     assert_equal(calls[].methods[], "HEAD;")
     _ = client.get("/logged")
     assert_equal(calls[].methods[], "HEAD;GET;")
-    assert_equal(client.head("/echo").body, "HEAD /echo ? []")
+    assert_equal(client.head("/echo").text(), "HEAD /echo ? []")
 
 
 def test_head_keeps_a_body_that_differs_from_get() raises:
     var app = _app(State(Calls()))
     var client = TestClient(app)
     _ = _expect(app, "/differs", 200, "head body", "")
-    assert_equal(client.get("/differs").body, "get body")
+    assert_equal(client.get("/differs").text(), "get body")
 
 
 def test_head_equals_get_on_typed_routes() raises:
@@ -257,7 +269,7 @@ def test_head_equals_get_on_typed_routes() raises:
         client.get("/h/1", headers=h.copy()),
         "/h/1",
     )
-    assert_equal(client.head("/users/7").body, "user 7")
+    assert_equal(client.head("/users/7").text(), "user 7")
 
 
 def test_head_applies_no_status_rule_and_adds_no_length() raises:
@@ -277,22 +289,22 @@ def test_head_sends_the_given_fields_and_splits_the_target() raises:
     var app = _app(State(Calls()))
     var client = TestClient(app)
     # None by default; the target split at its first `?`, query undecoded.
-    assert_equal(client.head("/echo").body, "HEAD /echo ? []")
+    assert_equal(client.head("/echo").text(), "HEAD /echo ? []")
     assert_equal(
-        client.head("/echo?a=%41&b=?").body, "HEAD /echo ?a=%41&b=? []"
+        client.head("/echo?a=%41&b=?").text(), "HEAD /echo ?a=%41&b=? []"
     )
     # In order, with their casing, repeats and an empty value.
     var h = _h("X-A", "1", "Set-Cookie", "a=1", "x-a", "2", "X-Empty", "")
     var want = "HEAD /echo ?q=1 [] X-A=<1> Set-Cookie=<a=1> x-a=<2> X-Empty=<>"
     _ = _expect(app, "/echo?q=1", 200, want, "", h)
     # `.copy()` leaves `h` usable; `^` moves it.
-    assert_equal(client.head("/echo?q=1", headers=h.copy()).body, want)
+    assert_equal(client.head("/echo?q=1", headers=h.copy()).text(), want)
     assert_equal(len(h), 4)
-    assert_equal(client.head("/echo?q=1", headers=h^).body, want)
+    assert_equal(client.head("/echo?q=1", headers=h^).text(), want)
     # A typed `Headers` slot receives them too.
     var slot = _h("X-B", "2")
-    assert_equal(client.head("/h/9", headers=slot^).body, "9 X-B=2")
-    assert_equal(client.head("/h/9").body, "9")
+    assert_equal(client.head("/h/9", headers=slot^).text(), "9 X-B=2")
+    assert_equal(client.head("/h/9").text(), "9")
 
 
 # Middleware.
@@ -360,7 +372,7 @@ def test_every_method_sends_its_own_method() raises:
     ]
     for row in rows:
         assert_equal(row[0].status, 200, row[1])
-        assert_equal(row[0].body, row[1] + " X-A=<1>")
+        assert_equal(row[0].text(), row[1] + " X-A=<1>")
         assert_true(len(row[0].headers) == 0, row[1])
 
 

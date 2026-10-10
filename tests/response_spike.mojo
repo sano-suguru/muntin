@@ -80,13 +80,15 @@ def _bad_request() -> Response:
 
 def _call_none[
     R: Movable & Deinitable, respond: _Respond[R]
-](handler: def() thin -> R, args: List[String]) -> Response:
+](handler: def() thin -> R, args: List[String], bytes: List[UInt8]) -> Response:
     return respond(handler())
 
 
 def _call_int[
     R: Movable & Deinitable, respond: _Respond[R]
-](handler: def(Int) thin -> R, args: List[String]) raises -> Response:
+](
+    handler: def(Int) thin -> R, args: List[String], bytes: List[UInt8]
+) raises -> Response:
     """Raises, without calling `handler`, if the argument is not an
     integer (the contract of production's `_call_int` until M3-015)."""
     return respond(handler(_parse_int(args[0])))
@@ -94,7 +96,9 @@ def _call_int[
 
 def _call_body[
     B: Movable & Deinitable, R: Movable & Deinitable, respond: _Respond[R]
-](handler: def(var B) thin -> R, args: List[String]) -> Response:
+](
+    handler: def(var B) thin -> R, args: List[String], bytes: List[UInt8]
+) -> Response:
     """Converts the body with `B.from_body` (400 itself on a raise, handler
     not called), then moves the value in (the contract of production's
     `_call_body` until M3-015)."""
@@ -258,8 +262,12 @@ struct ResponseApp(Movable):
                         raise Error("missing query key")
                     args.append(value.value())
                 if route.body:
-                    args.append(request.body)
-                return route.handler.invoke(args)
+                    # The spike carries the body as text: one that is not UTF-8 is 400.
+                    try:
+                        args.append(request.text())
+                    except:
+                        return Response.text("Bad Request", status=400)
+                return route.handler.invoke(args, List[UInt8]())
             except:
                 return _bad_request()
         return Response.text("Not Found", status=404)
@@ -282,5 +290,7 @@ struct _Converted[R: Movable & Deinitable](Movable):
 
 def _call_converted[
     R: Movable & Deinitable
-](pair: _Converted[R], args: List[String]) raises -> Response:
+](
+    pair: _Converted[R], args: List[String], bytes: List[UInt8]
+) raises -> Response:
     return pair.convert(pair.handler(_parse_int(args[0])))

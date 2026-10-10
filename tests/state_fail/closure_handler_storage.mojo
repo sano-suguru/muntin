@@ -4,13 +4,15 @@
 # it does not convert to the thin trampoline `_Call[F]` that the unchanged
 # `_Erased` stores. Using closures would change `_Call`/`_Erased` and every
 # M2 registration signature (thin function types) (M3-001).
-# Expected diagnostic (checked by scripts/check.sh): capturing thin -> Response' to 'def(F, List[String]) raises thin -> Response'
+# Expected diagnostic (checked by scripts/check.sh): capturing thin -> Response' to 'def(F, List[String], List[UInt8]) raises thin -> Response'
 
 from muntin import Response
 from muntin._handler_storage import _Erased
 
 
-def _call[F: def() -> String](f: F, args: List[String]) raises -> Response:
+def _call[
+    F: def() -> String
+](f: F, args: List[String], bytes: List[UInt8]) raises -> Response:
     return Response.text(f())
 
 
@@ -25,4 +27,4 @@ def main() raises:
         return greeting
 
     var box = register(hello^)
-    print(box.invoke(List[String]()).body)
+    print(len(box.invoke(List[String](), List[UInt8]()).body))

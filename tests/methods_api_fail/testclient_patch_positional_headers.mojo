@@ -1,7 +1,9 @@
 # Must not compile: `TestClient.patch`'s header fields are keyword-only, as on
 # `get` and `post` (M3-011); a positional `Headers` is rejected. Decision:
 # docs/history/architecture-decisions.md, "HTTP methods decision (M3-020)".
-# Expected diagnostic (checked by scripts/check.sh): invalid call to 'patch': unexpected argument
+# Since M3-040 `patch` has a text and a bytes overload, so the compiler reports
+# `no matching method in call to 'patch'` with each candidate's reason.
+# Expected diagnostic (checked by scripts/check.sh): no matching method in call to 'patch'
 from muntin import App, Headers
 from muntin.testing import TestClient
 

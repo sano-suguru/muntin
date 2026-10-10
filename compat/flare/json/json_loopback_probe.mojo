@@ -19,9 +19,10 @@ seam does to the fields and bytes the JSON contract relies on:
   the request);
 - invalid UTF-8 in a body reached Muntin already replaced by U+FFFD (the
   M2-016 fact), so the codec never saw the invalid bytes and a JSON string
-  holding them parsed. M3-038 re-pinned this observation: the adapter now
-  answers such a body 400 before `App.handle`, and a U+FFFD the client sent
-  still parses.
+  holding them parsed. M3-038 re-pinned this observation: the adapter
+  answered such a body 400 before `App.handle`. Since M3-040 the body
+  reaches `App.handle` as bytes and the JSON body slot answers it 400 before
+  parsing (never a U+FFFD); a U+FFFD the client sent still parses.
 """
 
 from std.ffi import c_uint, external_call
@@ -129,7 +130,7 @@ def test_json_fields_and_bytes_over_loopback() raises:
         h.add("Content-Type", ct)
         var local = app.handle(Request("POST", "/greet", body, h^))
         assert_equal(resp.status, 200)
-        assert_equal(resp.text(), local.body)
+        assert_equal(resp.text(), local.text())
         assert_equal(resp.text(), '{"hello":"Adé \\"😀\\" é"}')
         assert_equal(resp.headers.get("content-type"), "application/json")
         assert_equal(
@@ -143,9 +144,10 @@ def test_json_fields_and_bytes_over_loopback() raises:
             bad.status, app.handle(Request("POST", "/greet", '{"name":')).status
         )
         assert_false(bad.headers.contains("content-type"))
-        # Invalid UTF-8 is the adapter's 400 before App.handle (M3-038; it
-        # arrived replaced and parsed before), and a U+FFFD the client sent
-        # is a value.
+        # Invalid UTF-8 is App.handle's 400 before parsing (M3-040; the
+        # adapter's 400 under M3-038, and it arrived replaced and parsed
+        # before that), equal to App.handle's answer to the same bytes, and a
+        # U+FFFD the client sent is a value.
         var raw = List[UInt8]('{"name":"'.as_bytes())
         raw.append(0xFF)
         for b in '"}'.as_bytes():
@@ -155,6 +157,15 @@ def test_json_fields_and_bytes_over_loopback() raises:
         var refused = client.send(req)
         assert_equal(refused.status, 400)
         assert_equal(refused.text(), "Bad Request")
+        var bad_bytes = List[UInt8]('{"name":"'.as_bytes())
+        bad_bytes.append(0xFF)
+        for b in '"}'.as_bytes():
+            bad_bytes.append(b)
+        var jh = Headers()
+        jh.add("Content-Type", "application/json")
+        var direct = app.handle(Request("POST", "/greet", bad_bytes^, jh^))
+        assert_equal(direct.status, 400)
+        assert_equal(direct.text(), refused.text())
         var sent = FlareRequest(
             "POST", base + "/greet", List('{"name":"�"}'.as_bytes())
         )

@@ -9,7 +9,7 @@ from muntin import App, Request, Response
 
 
 def h(var req: Request) -> Response:
-    return Response.text(req.body)
+    return Response(200, req.body.copy())
 
 
 def main():

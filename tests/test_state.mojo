@@ -179,11 +179,11 @@ def test_get_shapes_and_results() raises:
     var client = TestClient(app)
     var count = client.get("/count")
     assert_equal(count.status, 200)
-    assert_equal(count.body, "2")
-    assert_equal(client.get("/first").body, "0:ada")
-    assert_equal(client.get("/names/1").body, "bob")
-    assert_equal(client.get("/users/1").body, "1:bob")
-    assert_equal(client.get("/typed?id=1").body, "1:bob")
+    assert_equal(count.text(), "2")
+    assert_equal(client.get("/first").text(), "0:ada")
+    assert_equal(client.get("/names/1").text(), "bob")
+    assert_equal(client.get("/users/1").text(), "1:bob")
+    assert_equal(client.get("/typed?id=1").text(), "1:bob")
     assert_equal(_calls(users), 5)
 
 
@@ -195,10 +195,10 @@ def test_int_is_converted_from_path_and_query() raises:
     app.get["/ids/{id}"](echo_id, users)
     app.get["/ids?{id}"](echo_id, users)
     var client = TestClient(app)
-    assert_equal(client.get("/ids/042").body, "id 42")
-    assert_equal(client.get("/ids/-7").body, "id -7")
-    assert_equal(client.get("/ids?id=042").body, "id 42")
-    assert_equal(client.get("/ids?x=1&id=9").body, "id 9")
+    assert_equal(client.get("/ids/042").text(), "id 42")
+    assert_equal(client.get("/ids/-7").text(), "id -7")
+    assert_equal(client.get("/ids?id=042").text(), "id 42")
+    assert_equal(client.get("/ids?x=1&id=9").text(), "id 9")
     assert_equal(_calls(users), 4)
 
 
@@ -221,14 +221,14 @@ def test_request_failures_do_not_call_the_handler() raises:
     ]:
         var got = client.get(target)
         assert_equal(got.status, 400, target)
-        assert_equal(got.body, "Bad Request", target)
+        assert_equal(got.text(), "Bad Request", target)
     for target in ["/missing", "/users", "/users/1/x", "/count/1"]:
         var got = client.get(target)
         assert_equal(got.status, 404, target)
-        assert_equal(got.body, "Not Found", target)
+        assert_equal(got.text(), "Not Found", target)
     var post = client.post("/count", "")
     assert_equal(post.status, 405)
-    assert_equal(post.body, "Method Not Allowed")
+    assert_equal(post.text(), "Method Not Allowed")
     assert_equal(len(post.headers.get_all("Allow")), 1)
     assert_equal(post.headers.get_all("Allow")[0], "GET, HEAD")
     assert_equal(_calls(users), 0)
@@ -245,15 +245,15 @@ def test_errors_use_the_m2_model() raises:
     var client = TestClient(app)
     var missing = client.get("/names/9")
     assert_equal(missing.status, 404)
-    assert_equal(missing.body, "no user 9")
+    assert_equal(missing.text(), "no user 9")
     var typed = client.get("/users/9")
     assert_equal(typed.status, 404)
-    assert_equal(typed.body, "no user 9")
-    assert_equal(client.get("/first").body, "no user 0")
+    assert_equal(typed.text(), "no user 9")
+    assert_equal(client.get("/first").text(), "no user 0")
     for target in ["/check/1", "/check"]:
         var failed = client.get(target)
         assert_equal(failed.status, 500, target)
-        assert_equal(failed.body, "Internal Server Error", target)
+        assert_equal(failed.text(), "Internal Server Error", target)
     assert_equal(_calls(users), 5)
 
 
@@ -265,8 +265,8 @@ def test_first_registration_wins() raises:
     app.get["/later"](later, users)
     app.get["/later"](count_users, users)
     var client = TestClient(app)
-    assert_equal(client.get("/count").body, "2")
-    assert_equal(client.get("/later").body, "later")
+    assert_equal(client.get("/count").text(), "2")
+    assert_equal(client.get("/later").text(), "later")
 
 
 def test_stateless_m2_shapes_resolve_as_before() raises:
@@ -277,9 +277,9 @@ def test_stateless_m2_shapes_resolve_as_before() raises:
     app.get["/plain/{id}"](plain_user)
     app.get["/users/{id}"](get_user, users)
     var client = TestClient(app)
-    assert_equal(client.get("/hello").body, "hello")
-    assert_equal(client.get("/plain/3").body, "plain 3")
-    assert_equal(client.get("/users/0").body, "0:ada")
+    assert_equal(client.get("/hello").text(), "hello")
+    assert_equal(client.get("/plain/3").text(), "plain 3")
+    assert_equal(client.get("/users/0").text(), "0:ada")
     assert_equal(_calls(users), 1)
 
 
@@ -294,7 +294,7 @@ def test_several_state_types_and_one_shared_value() raises:
     app.get["/count"](count_users, users)
     app.get["/greet/{id}"](greet, greeting)
     var client = TestClient(app)
-    assert_equal(client.get("/greet/5").body, "hi 5")
+    assert_equal(client.get("/greet/5").text(), "hi 5")
     _ = client.get("/users/0")
     _ = client.get("/count")
     assert_equal(_calls(users), 2)
@@ -315,8 +315,8 @@ def test_handles_change_at_registration_and_drop_only() raises:
     app.get["/handles/{id}"](handles_at, users)
     assert_equal(_handles(users), 5)
     var client = TestClient(app)
-    assert_equal(client.get("/handles").body, "5")
-    assert_equal(client.get("/handles/1").body, "5")
+    assert_equal(client.get("/handles").text(), "5")
+    assert_equal(client.get("/handles/1").text(), "5")
     for _ in range(5):
         _ = client.get("/users/0")
         _ = client.get("/users/9")
@@ -336,9 +336,9 @@ def test_state_survives_app_moves_and_is_dropped_once() raises:
     _ = tracked^  # the app now holds the only handle
     assert_equal(drops[], 0)
     var moved = app^
-    assert_equal(TestClient(moved).get("/track").body, "0")
+    assert_equal(TestClient(moved).get("/track").text(), "0")
     var again = moved^
-    assert_equal(TestClient(again).get("/track").body, "0")
+    assert_equal(TestClient(again).get("/track").text(), "0")
     assert_equal(drops[], 0)
     _ = again^
     assert_equal(drops[], 1)
@@ -352,11 +352,11 @@ def test_test_client_before_and_after_an_app_move() raises:
     var app = App()
     app.get["/users/{id}"](get_user, users)
     var before = TestClient(app)
-    assert_equal(before.get("/users/0").body, "0:ada")
-    assert_equal(before.get("/users/1").body, "1:bob")
+    assert_equal(before.get("/users/0").text(), "0:ada")
+    assert_equal(before.get("/users/1").text(), "1:bob")
     var moved = app^
     var after = TestClient(moved)
-    assert_equal(after.get("/users/0").body, "0:ada")
+    assert_equal(after.get("/users/0").text(), "0:ada")
     assert_equal(after.get("/users/9").status, 404)
     assert_equal(_handles(users), 2)  # the moved App still holds its copy
     assert_equal(after.get("/users/x").status, 400)
@@ -400,9 +400,9 @@ def test_dx_section_8_example() raises:
     app.get["/hello"](hello)
     app.get["/users/{id}"](find_user, users)
     var client = TestClient(app)
-    assert_equal(client.get("/hello").body, "hello")
-    assert_equal(client.get("/users/0").body, "0:ada")
-    assert_equal(client.get("/users/1").body, "no user 1")
+    assert_equal(client.get("/hello").text(), "hello")
+    assert_equal(client.get("/users/0").text(), "0:ada")
+    assert_equal(client.get("/users/1").text(), "no user 1")
 
 
 def main() raises:

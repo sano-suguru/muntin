@@ -7,7 +7,7 @@ from raw_spike import RawApp
 
 
 def h(req: Request, n: Int) -> Response:
-    return Response.text(req.body)
+    return Response(200, req.body.copy())
 
 
 def main():

@@ -8,7 +8,7 @@ def hello() -> String:
     return "hello"
 
 
-def main():
+def main() raises:
     var app = App()
     app.get["/hello"](hello)
 

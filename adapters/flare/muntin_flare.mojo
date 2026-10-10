@@ -20,14 +20,15 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   runs first. Muntin's `Request` then splits path from query, exactly as
   for the in-memory backend. The adapter does not split, parse or decode
   the query, and does not use Flare's query helpers.
-- request body (M3-038, decided in docs/history/architecture-decisions.md
-  "Request body bytes decision (M3-038)"): Flare's raw body bytes copied
-  into a `String` only when they are well-formed UTF-8, so `Request.body`
-  holds exactly the bytes received (a U+FFFD the client sent and NUL
-  included). A body that is not UTF-8 cannot be represented: the answer is
-  400 before `App.handle`, as for a header field. Flare's `Request.text()`
-  is not used: it replaces such bytes with U+FFFD, which a handler could
-  not tell from a U+FFFD the client sent.
+- request body (M3-040, decided in docs/history/architecture-decisions.md
+  "Binary request and response bodies decision (M3-040)", which replaced
+  M3-038's refusal): Flare's raw body bytes copied into `Request.body`,
+  whatever they are, so it holds exactly the bytes received (a U+FFFD the
+  client sent, NUL and bytes that are not UTF-8 included); nothing is
+  validated or refused here. A typed text body that is not UTF-8 is
+  `App.handle`'s 400, after routing and middleware. Flare's
+  `Request.text()` is not used: it replaces bytes that are not UTF-8 with
+  U+FFFD.
 - request headers: every field, in order and casing, rebuilt from Flare's
   public `HeaderMap.encode_to` (Flare has no public field iterator) and
   verified against Flare's by-name view: the parsed count is `len()`, and
@@ -40,7 +41,8 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   check or `Headers.add` (a control byte, a non-token name, a value that
   is not UTF-8) cannot be represented: the answer is 400.
 - version and peer: dropped.
-- response: status, body bytes and header fields copied; reason left unset,
+- response: status, body bytes (whatever they are; M3-040) and header
+  fields copied; no `Content-Type` is added or changed; reason left unset,
   so Flare's default applies. Header fields go out in order, except those
   the backend owns or that are connection-specific (`Content-Length`,
   `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`,
@@ -157,17 +159,17 @@ def to_muntin_headers(request: FlareRequest) raises -> Headers:
 
 def to_muntin_request(request: FlareRequest) raises -> Request:
     """Exactly the request's method, target, body and fields, or a raise
-    when they cannot be represented. `String(from_utf8=)` keeps well-formed
-    UTF-8 byte for byte and raises on anything else. The method and target
-    are checked through their byte spans before `Request` splits the
-    target, because a slice of a `String` that is not UTF-8 can abort
-    (M3-039). The body is built from Flare's raw bytes, never
-    `Request.text()`, which replaces bytes that are not UTF-8 with U+FFFD
-    (M3-038)."""
+    when the method, target or fields cannot be represented.
+    `String(from_utf8=)` keeps well-formed UTF-8 byte for byte and raises on
+    anything else. The method and target are checked through their byte
+    spans before `Request` splits the target, because a slice of a `String`
+    that is not UTF-8 can abort (M3-039). The body is a copy of Flare's raw
+    bytes, whatever they are, never `Request.text()`, which replaces bytes
+    that are not UTF-8 with U+FFFD (M3-040)."""
     return Request(
         String(from_utf8=request.method.as_bytes()),
         String(from_utf8=request.url.as_bytes()),
-        String(from_utf8=Span(request.body)),
+        request.body.copy(),
         to_muntin_headers(request),
     )
 
@@ -193,9 +195,7 @@ def _internal_error() -> FlareResponse:
 
 
 def to_flare_response(response: Response) -> FlareResponse:
-    var out = FlareResponse(
-        status=response.status, body=List(response.body.as_bytes())
-    )
+    var out = FlareResponse(status=response.status, body=response.body.copy())
     var nominated = List[String]()
     for value in response.headers.get_all("connection"):
         for token in value.split(","):

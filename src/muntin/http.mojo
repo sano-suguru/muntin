@@ -153,6 +153,12 @@ struct Request(Copyable, Movable):
     target as received and never split it themselves, so every backend gets
     the same rule.
 
+    `body` is the request body's bytes exactly as the backend received them
+    (empty when there is none), whatever they are: the one representation of
+    the body (docs/history/architecture-decisions.md, "Binary request and
+    response bodies decision (M3-040)"). `text()` reads them as UTF-8 and
+    raises when they are not; nothing replaces a byte.
+
     `headers` are the request's header fields as the backend received them
     (empty when built without any); a raw handler reads them, typed
     handlers do not (docs/history/architecture-decisions.md, "Headers decision (M3-002)").
@@ -161,7 +167,7 @@ struct Request(Copyable, Movable):
     var method: String
     var path: String
     var query: String
-    var body: String
+    var body: List[UInt8]
     var headers: Headers
 
     def __init__(
@@ -171,8 +177,20 @@ struct Request(Copyable, Movable):
         body: String = "",
         var headers: Headers = Headers(),
     ):
-        """Splits `target` at its first `?` and takes `headers` by move
-        (pass `headers^` or `headers.copy()`)."""
+        """Splits `target` at its first `?`, copies the bytes of the text
+        `body` and takes `headers` by move (pass `headers^` or
+        `headers.copy()`)."""
+        self = Request(method, target, List(body.as_bytes()), headers^)
+
+    def __init__(
+        out self,
+        method: String,
+        target: String,
+        var body: List[UInt8],
+        var headers: Headers = Headers(),
+    ):
+        """Splits `target` at its first `?` and takes the body's bytes and
+        `headers` by move (pass `body^` or `body.copy()`)."""
         self.method = method
         var mark = target.find("?")
         if mark < 0:
@@ -181,8 +199,13 @@ struct Request(Copyable, Movable):
         else:
             self.path = String(target[byte=:mark])
             self.query = String(target[byte = mark + 1 :])
-        self.body = body
+        self.body = body^
         self.headers = headers^
+
+    def text(self) raises -> String:
+        """The body as text: a copy of its bytes when they are well-formed
+        UTF-8. Raises when they are not; no byte is replaced."""
+        return String(from_utf8=Span(self.body))
 
 
 trait ToResponse(Deinitable, Movable):
@@ -234,18 +257,30 @@ trait ToErrorResponse(Deinitable):
 struct Response(Copyable, Movable, ToResponse):
     """An application-level HTTP response, independent of any transport.
 
-    `headers` start empty; Muntin adds none by default (no `Content-Type`).
-    A backend writes them in order, except the fields it owns or that are
-    connection-specific (docs/history/architecture-decisions.md, "Headers decision (M3-002)").
+    `body` is the response body's bytes, sent as they are: text built with
+    `Response(status, text)` or `Response.text` is its UTF-8 bytes, and
+    `Response(status, bytes^)` sends any bytes (M3-040). `text()` reads them
+    back as UTF-8 and raises when they are not.
+
+    `headers` start empty; Muntin adds none by default (no `Content-Type`,
+    for text or bytes). A backend writes them in order, except the fields it
+    owns or that are connection-specific
+    (docs/history/architecture-decisions.md, "Headers decision (M3-002)").
     """
 
     var status: Int
-    var body: String
+    var body: List[UInt8]
     var headers: Headers
 
     def __init__(out self, status: Int, body: String):
+        """A response whose body is the bytes of the text `body`."""
+        self = Response(status, List(body.as_bytes()))
+
+    def __init__(out self, status: Int, var body: List[UInt8]):
+        """A response whose body is `body`'s bytes, taken by move (pass
+        `body^` or `body.copy()`)."""
         self.status = status
-        self.body = body
+        self.body = body^
         self.headers = Headers()
 
     @staticmethod
@@ -253,9 +288,10 @@ struct Response(Copyable, Movable, ToResponse):
         """Builds a plain-text response."""
         return Response(status, body)
 
-    def text(self) -> String:
-        """Returns the response body as text."""
-        return self.body
+    def text(self) raises -> String:
+        """The body as text: a copy of its bytes when they are well-formed
+        UTF-8. Raises when they are not; no byte is replaced."""
+        return String(from_utf8=Span(self.body))
 
     def to_response(var self) -> Response:
         """Returns this response unchanged, by move: a handler declared

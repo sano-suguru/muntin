@@ -130,7 +130,7 @@ struct _BoundSpike[S: Movable & Deinitable](Movable):
 
 def _call_bound[
     S: Movable & Deinitable
-](bound: _BoundSpike[S], args: List[String]) -> Response:
+](bound: _BoundSpike[S], args: List[String], bytes: List[UInt8]) -> Response:
     return Response.text(bound.handler(bound.state))
 
 

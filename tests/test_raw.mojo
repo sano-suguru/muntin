@@ -88,21 +88,26 @@ struct Unmapped(Movable):
 # Raw handlers.
 
 
-def _fields(req: Request) -> String:
-    return req.method + "|" + req.path + "|" + req.query + "|" + req.body
+def _fields(req: Request) -> List[UInt8]:
+    """The request's parts, then its body bytes, unread."""
+    var out = List(
+        String(req.method + "|" + req.path + "|" + req.query + "|").as_bytes()
+    )
+    out.extend(Span(req.body))
+    return out^
 
 
 def echo(req: Request) -> Response:
     _bump(HANDLER)
-    return Response.text(_fields(req), status=202)
+    return Response(202, _fields(req))
 
 
 def take_body(var req: Request) -> Response:
     """Owns the request and moves its body into the response."""
     _bump(HANDLER)
     var body = req.body^
-    req.body = "taken"
-    return Response.text(body^, status=201)
+    req.body = List[UInt8]()
+    return Response(201, body^)
 
 
 def reject(req: Request) -> Response:
@@ -113,21 +118,21 @@ def reject(req: Request) -> Response:
 
 def verify(req: Request) raises -> Response:
     _bump(HANDLER)
-    if req.body != "signed":
+    if req.text() != "signed":
         raise Error("secret key mismatch")
     return Response.text("verified")
 
 
 def verify_typed(req: Request) raises BadSignature -> Response:
     _bump(HANDLER)
-    if req.body != "signed":
+    if Span(req.body) != "signed".as_bytes():
         raise BadSignature("unsigned")
     return Response.text("verified")
 
 
 def parse(req: Request) raises Malformed -> Response:
     _bump(HANDLER)
-    if req.body != "ok":
+    if Span(req.body) != "ok".as_bytes():
         raise Malformed()
     return Response.text("parsed")
 
@@ -139,7 +144,7 @@ def verify_unmapped(req: Request) raises Unmapped -> Response:
 
 def webhook(req: Request) -> Response:
     """The docs/DX.md section 9 example, verbatim."""
-    if req.body != "signed":
+    if Span(req.body) != "signed".as_bytes():  # application code decides
         return Response.text("unsigned", status=401)
     return Response.text("ok")
 
@@ -258,16 +263,16 @@ def test_dx_section_9_example() raises:
     var client = TestClient(app)
     var ok = client.post("/webhook", "signed")
     assert_equal(ok.status, 200)
-    assert_equal(ok.body, "ok")
+    assert_equal(ok.text(), "ok")
     var unsigned = client.post("/webhook", "forged")
     assert_equal(unsigned.status, 401)
-    assert_equal(unsigned.body, "unsigned")
+    assert_equal(unsigned.text(), "unsigned")
     var query = client.post("/webhook?id=abc", "forged")
     assert_equal(query.status, 401)
-    assert_equal(query.body, "unsigned")
+    assert_equal(query.text(), "unsigned")
     var get = client.get("/webhook")
     assert_equal(get.status, 405)
-    assert_equal(get.body, "Method Not Allowed")
+    assert_equal(get.text(), "Method Not Allowed")
     assert_equal(len(get.headers.get_all("Allow")), 1)
     assert_equal(get.headers.get_all("Allow")[0], "POST")
     assert_equal(client.post("/webhook/x", "signed").status, 404)
@@ -292,9 +297,9 @@ def test_raw_get_and_post_receive_the_whole_request() raises:
         n += 1
     # The field values themselves, not only their round trip.
     var exact = app.handle(Request("POST", "/webhook?id=1&id=2", ""))
-    assert_equal(exact.body, "POST|/webhook|id=1&id=2|")
+    assert_equal(exact.text(), "POST|/webhook|id=1&id=2|")
     var get = app.handle(Request("GET", "/raw?a?b", "ignored?"))
-    assert_equal(get.body, "GET|/raw|a?b|ignored?")
+    assert_equal(get.text(), "GET|/raw|a?b|ignored?")
     assert_equal(_count(HANDLER), n + 2)
 
 
@@ -304,9 +309,9 @@ def test_borrowed_and_owned_requests_register() raises:
     var sent = Request("POST", "/take?k=v", "moved")
     var r = app.handle(sent)
     assert_equal(r.status, 201)
-    assert_equal(r.body, "moved")
+    assert_equal(r.text(), "moved")
     # The handler owned a rebuilt request; the caller's is untouched.
-    assert_equal(sent.body, "moved")
+    assert_equal(sent.text(), "moved")
     assert_equal(sent.query, "k=v")
     assert_equal(app.handle(Request("POST", "/webhook", "b")).status, 202)
     assert_equal(_count(HANDLER), 2)
@@ -318,7 +323,7 @@ def test_explicit_function_value_registers() raises:
     app.post["/value"](f)
     var r = app.handle(Request("POST", "/value?q", "v"))
     assert_equal(r.status, 202)
-    assert_equal(r.body, "POST|/value|q|v")
+    assert_equal(r.text(), "POST|/value|q|v")
 
 
 def test_raw_routes_run_no_typed_extraction() raises:
@@ -345,13 +350,13 @@ def test_raw_handler_chooses_any_status() raises:
     var app = _app()
     var r = app.handle(Request("GET", "/reject?why"))
     assert_equal(r.status, 400)
-    assert_equal(r.body, "rejected why")
+    assert_equal(r.text(), "rejected why")
     var p = app.handle(Request("GET", "/parse", "nope"))
     assert_equal(p.status, 400)
-    assert_equal(p.body, "malformed payload")
+    assert_equal(p.text(), "malformed payload")
     var ok = app.handle(Request("GET", "/parse", "ok"))
     assert_equal(ok.status, 200)
-    assert_equal(ok.body, "parsed")
+    assert_equal(ok.text(), "parsed")
     assert_equal(_count(HANDLER), 3)
 
 
@@ -368,7 +373,7 @@ def test_raw_routes_run_only_after_route_selection() raises:
         var r = app.handle(row[0])
         var label = row[0].method + " " + row[0].path
         assert_equal(r.status, 405, label)
-        assert_equal(r.body, "Method Not Allowed", label)
+        assert_equal(r.text(), "Method Not Allowed", label)
         assert_equal(len(r.headers.get_all("Allow")), 1, label)
         assert_equal(r.headers.get_all("Allow")[0], row[1], label)
     for req in [
@@ -379,7 +384,7 @@ def test_raw_routes_run_only_after_route_selection() raises:
     ]:
         var r = app.handle(req)
         assert_equal(r.status, 404, req.method + " " + req.path)
-        assert_equal(r.body, "Not Found")
+        assert_equal(r.text(), "Not Found")
     assert_equal(_count(HANDLER), 0)
 
 
@@ -388,12 +393,12 @@ def test_raw_raise_is_the_fixed_500() raises:
     var app = _app()
     var r = app.handle(Request("POST", "/verify", "forged"))
     assert_equal(r.status, 500)
-    assert_equal(r.body, "Internal Server Error")
-    assert_false("secret" in r.body)
+    assert_equal(r.text(), "Internal Server Error")
+    assert_false("secret" in r.text())
     assert_equal(app.handle(Request("POST", "/verify", "signed")).status, 200)
     var u = app.handle(Request("POST", "/verify_unmapped"))
     assert_equal(u.status, 500)
-    assert_equal(u.body, "Internal Server Error")
+    assert_equal(u.text(), "Internal Server Error")
     assert_equal(_count(HANDLER), 3)
 
 
@@ -401,39 +406,39 @@ def test_raw_raise_uses_to_error_response() raises:
     var app = _app()
     var r = app.handle(Request("POST", "/verify_typed", "forged"))
     assert_equal(r.status, 401)
-    assert_equal(r.body, "bad signature: unsigned")
+    assert_equal(r.text(), "bad signature: unsigned")
     var ok = app.handle(Request("POST", "/verify_typed", "signed"))
     assert_equal(ok.status, 200)
-    assert_equal(ok.body, "verified")
+    assert_equal(ok.text(), "verified")
 
 
 def test_typed_shapes_are_unchanged_beside_raw() raises:
     _reset()
     var app = _app()
-    assert_equal(app.handle(Request("GET", "/hello")).body, "hello")
-    assert_equal(app.handle(Request("GET", "/static")).body, "static")
+    assert_equal(app.handle(Request("GET", "/hello")).text(), "hello")
+    assert_equal(app.handle(Request("GET", "/static")).text(), "static")
     assert_equal(app.handle(Request("GET", "/teapot")).status, 418)
-    assert_equal(app.handle(Request("GET", "/users/7")).body, "User(7)")
+    assert_equal(app.handle(Request("GET", "/users/7")).text(), "User(7)")
     assert_equal(app.handle(Request("GET", "/users/x")).status, 400)
-    assert_equal(app.handle(Request("GET", "/items?id=3")).body, "id 3")
+    assert_equal(app.handle(Request("GET", "/items?id=3")).text(), "id 3")
     assert_equal(app.handle(Request("GET", "/items?id=1&id=2")).status, 400)
-    assert_equal(app.handle(Request("GET", "/find/4")).body, "found 4")
+    assert_equal(app.handle(Request("GET", "/find/4")).text(), "found 4")
     var err = app.handle(Request("GET", "/find/0"))
     assert_equal(err.status, 500)
-    assert_equal(err.body, "Internal Server Error")
+    assert_equal(err.text(), "Internal Server Error")
     assert_equal(
-        app.handle(Request("POST", "/users", "ann")).body, "created ann"
+        app.handle(Request("POST", "/users", "ann")).text(), "created ann"
     )
     assert_equal(app.handle(Request("POST", "/users", "")).status, 400)
     # A typed body handler returning `Response` still reaches the generic
     # body overload: `Name` is not `Request`, so no raw overload is viable.
     var made = app.handle(Request("POST", "/made", "bob"))
     assert_equal(made.status, 201)
-    assert_equal(made.body, "made bob")
-    assert_equal(app.handle(Request("POST", "/users/4", "cy")).body, "4 cy")
+    assert_equal(made.text(), "made bob")
+    assert_equal(app.handle(Request("POST", "/users/4", "cy")).text(), "4 cy")
     assert_equal(app.handle(Request("POST", "/users/x", "cy")).status, 400)
     var p = app.handle(Request("POST", "/profiles?id=9", "dee"))
-    assert_equal(p.body, "User(9)")
+    assert_equal(p.text(), "User(9)")
     # `/users/x` answers 400 before `from_body`.
     assert_equal(_count(FROM_BODY), 5)
     assert_equal(_count(TYPED), 11)
@@ -444,33 +449,37 @@ def test_first_registered_route_wins_across_kinds() raises:
     var raw_post = App()
     raw_post.post["/same"](raw_first)
     raw_post.post["/same"](typed_first)
-    assert_equal(raw_post.handle(Request("POST", "/same", "x")).body, "raw")
-    assert_equal(raw_post.handle(Request("POST", "/same", "")).body, "raw")
+    assert_equal(raw_post.handle(Request("POST", "/same", "x")).text(), "raw")
+    assert_equal(raw_post.handle(Request("POST", "/same", "")).text(), "raw")
     var typed_post = App()
     typed_post.post["/same"](typed_first)
     typed_post.post["/same"](raw_first)
-    assert_equal(typed_post.handle(Request("POST", "/same", "x")).body, "typed")
+    assert_equal(
+        typed_post.handle(Request("POST", "/same", "x")).text(), "typed"
+    )
     # The typed route answers its own 400; a matched route never falls
     # through to a later one.
     var bad = typed_post.handle(Request("POST", "/same", ""))
     assert_equal(bad.status, 400)
-    assert_equal(bad.body, "Bad Request")
+    assert_equal(bad.text(), "Bad Request")
 
     var raw_get = App()
     raw_get.get["/same"](raw_first)
     raw_get.get["/same"](typed_get_first)
-    assert_equal(raw_get.handle(Request("GET", "/same")).body, "raw")
+    assert_equal(raw_get.handle(Request("GET", "/same")).text(), "raw")
     var typed_get = App()
     typed_get.get["/same"](typed_get_first)
     typed_get.get["/same"](raw_first)
-    assert_equal(typed_get.handle(Request("GET", "/same")).body, "typed")
+    assert_equal(typed_get.handle(Request("GET", "/same")).text(), "typed")
 
     # A typed query route registered first keeps its 400 on the raw path.
     var query_first = App()
     query_first.get["/same?{id}"](get_text)
     query_first.get["/same"](raw_first)
     assert_equal(query_first.handle(Request("GET", "/same")).status, 400)
-    assert_equal(query_first.handle(Request("GET", "/same?id=2")).body, "id 2")
+    assert_equal(
+        query_first.handle(Request("GET", "/same?id=2")).text(), "id 2"
+    )
 
 
 def test_test_client_equals_handle() raises:
@@ -496,7 +505,7 @@ def test_test_client_equals_handle() raises:
         var local = client.post(p[0], p[1])
         assert_equal(local.status, direct.status, p[0])
         assert_equal(local.body, direct.body, p[0])
-    assert_equal(client.post("/webhook?a", "b").body, "POST|/webhook|a|b")
+    assert_equal(client.post("/webhook?a", "b").text(), "POST|/webhook|a|b")
 
 
 def main() raises:

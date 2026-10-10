@@ -53,7 +53,8 @@ if grep -nE '^[[:space:]]*(from|import)[[:space:]]' "$storage" |
 fi
 
 # Request data reaches handler storage only as the adapters' raw argument
-# strings: body conversion and request handling stay in app.mojo (M2-006).
+# strings and the body bytes it passes through unread (M3-040): body
+# conversion and request handling stay in app.mojo (M2-006).
 if grep -nE 'FromBody|from_body|Request|\.body\b' "$storage"; then
     echo "error: $storage handles request or body data; keep it in the adapters" >&2
     status=1

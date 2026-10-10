@@ -91,17 +91,18 @@ from .state import State
 # The handler and its adapter are stored together in an `_Erased` box
 # (`_handler_storage.mojo`), so dispatch is one call whatever the shape.
 # Where a route value comes from (path segment or query key) is route data,
-# not part of the shape. Whether a route takes the request body is route
-# data too (`_Route.body`): `App.handle` appends the body as the last raw
-# argument, after the route values if there are any.
+# not part of the shape. The request body never travels in the raw argument
+# strings: `invoke` passes the request's body bytes beside them, borrowed
+# (M3-040), and only a body slot or a raw `Request` slot reads them.
 #
 # Raw handlers (M2-014): `Request` is a slot kind, so a raw handler selects the
 # arity-1 overload (after `State[S]` in the stateful family) like any one-slot
 # handler, and its rule requires `Response` as the result and no placeholder. A
-# raw route (`_Route.raw`) gets the request's method, path, query and body as
-# its first four raw arguments, then each header field's name and value (M3-002,
-# R1), and nothing else runs; `_raw_request` rebuilds the `Request`, headers
-# included, and the adapter moves it into the handler. A typed route gets header
+# raw route (`_Route.raw`) gets the request's method, path and query as its
+# first three raw arguments, then each header field's name and value (M3-002,
+# R1), and nothing else runs; `_raw_request` rebuilds the `Request` from them
+# and a copy of the body bytes (M3-040), and the adapter moves it into the
+# handler. A typed route gets header
 # strings only when its body is a `WithHeaders[B]` carrier or its last slot is
 # `Headers` (below).
 #
@@ -129,25 +130,27 @@ from .state import State
 # JSON bodies (M3-008): `Json[T]` is an ordinary `FromBody` body slot; a route
 # whose body conforms to the private marker `_JsonBody` sets `_Route.json`.
 # `FromBody.from_body` sees only the body, so the request `Content-Type` is
-# decided in `App.handle`, which appends a verdict after the body for a JSON
-# route only (`"1"` when the request has exactly one `application/json` field,
-# else empty; other routes' arguments are unchanged). The body slot, for a JSON
-# body only, answers 415 unless the arguments end with the verdict `"1"` at the
-# expected position (an exact arity check, so a body can never stand in for a
-# missing verdict), then 413 when the body is over 1 MiB, after the route value
-# and before `from_body`. Order on a JSON body route: 404 or 405, query or
-# capture 400 (`App.handle`), `Int` 400, 415, 413, JSON 400 (`from_body`),
-# handler.
+# decided in `App.handle`, which appends a verdict at the body's position for
+# a JSON route only (`"1"` when the request has exactly one `application/json`
+# field, else empty; other routes' arguments are unchanged). The body slot, for
+# a JSON body only, answers 415 unless the arguments end with the verdict `"1"`
+# at the expected position (an exact arity check), then 413 when the body is
+# over 1 MiB, after the route value and before `from_body`. Every body slot
+# then reads the body bytes as UTF-8 (`_body_text`, M3-040): bytes that are not
+# are 400, as a `from_body` raise is. Order on a JSON body route: 404 or 405,
+# query or capture 400 (`App.handle`), `Int` 400, 415, 413, UTF-8 400, JSON 400
+# (`from_body`), handler.
 #
 # Header carriers (M3-012): `WithHeaders[B]` (`headers_body.mojo`) is a body
 # slot without being a `FromBody`: `_kind` accepts `FromBody` or the private
 # marker `_HeaderCarrier`, and the route sets `_Route.headers` for a carrier.
 # For such a route, `App.handle` appends each request header field's name
-# and value after the body and the JSON verdict (the R1 transport raw routes
-# use). The body slot then rebuilds the fields into a `Headers`
+# and value after the route values and the JSON verdict (the R1 transport raw
+# routes use). The body slot then rebuilds the fields into a `Headers`
 # (`_carrier_fields`; a failure, which only the M3-002 `_fields` gap can cause,
-# is the fixed 500) and builds the carrier with `B._from_parts`, which converts
-# the body with the inner `from_body` (a raise: 400). The carrier forwards
+# is the fixed 500), reads the body as UTF-8 (400 if it is not) and builds the
+# carrier with `B._from_parts`, which converts the text with the inner
+# `from_body` (a raise: 400). The carrier forwards
 # `_JsonBody` exactly when its body does, so a `WithHeaders[Json[T]]` route
 # keeps the order above; its arity check allows only name and value pairs after
 # the verdict, and every other JSON body keeps the exact arity. Muntin chooses
@@ -356,16 +359,19 @@ comptime _GUARD_DRIFT = "registration rule check and guard disagree"
 """The guard's `else`: `_admits` rejected a shape `_check` accepted."""
 
 
-def _json_status[B: AnyType](args: List[String], body_at: Int) -> Int:
+def _json_status[
+    B: AnyType
+](args: List[String], body_at: Int, body_length: Int) -> Int:
     """For a JSON body (`_JsonBody`): 0 when the body may be converted,
     else the status to answer, 415 or 413, without parsing.
 
-    The `Content-Type` verdict follows the body (`args[body_at + 1]`) and
-    must be `"1"`. For any other JSON body the arguments end there (an exact
-    arity check, so a body can never stand in for a missing verdict); a
+    The `Content-Type` verdict is at the body's position (`args[body_at]`;
+    the body itself travels as bytes, M3-040) and must be `"1"`. For any
+    other JSON body the arguments end there (an exact arity check); a
     carrier route (`_HeaderCarrier`) allows only header name and value pairs
-    after it, an even count. Then a body over 1 MiB is 413."""
-    var verdict = body_at + 1
+    after it, an even count. Then a body over 1 MiB (`body_length` bytes) is
+    413."""
+    var verdict = body_at
     if len(args) <= verdict or args[verdict] != "1":
         return 415
     comptime if conforms_to(B, _HeaderCarrier):
@@ -374,7 +380,7 @@ def _json_status[B: AnyType](args: List[String], body_at: Int) -> Int:
     else:
         if len(args) != verdict + 1:
             return 415
-    if args[body_at].byte_length() > _MAX_BODY_BYTES:
+    if body_length > _MAX_BODY_BYTES:
         return 413
     return 0
 
@@ -390,11 +396,11 @@ def _carrier_fields[
     B: AnyType
 ](args: List[String], body_at: Int) raises -> Headers:
     """Rebuilds a carrier route's header fields from the name and value
-    pairs after the body (and after the verdict, for a JSON body), in
-    order. `Headers.add` validates each field again: fields that came from
-    a `Headers` pass, so only the M3-002 `_fields` gap can make this raise,
-    and the adapters answer that with the fixed 500, never 400."""
-    var i = body_at + 1
+    pairs from the body's position on (after the verdict, for a JSON body),
+    in order. `Headers.add` validates each field again: fields that came
+    from a `Headers` pass, so only the M3-002 `_fields` gap can make this
+    raise, and the adapters answer that with the fixed 500, never 400."""
+    var i = body_at
     comptime if conforms_to(B, _JsonBody):
         i += 1
     var headers = Headers()
@@ -404,10 +410,11 @@ def _carrier_fields[
     return headers^
 
 
-def _raw_request(args: List[String]) raises -> Request:
-    """Rebuilds a raw route's `Request` from its method, path, query and
-    body (`args[0]` to `args[3]`) and its header fields (name and value
-    pairs from `args[4]` on, in order).
+def _raw_request(args: List[String], body: List[UInt8]) raises -> Request:
+    """Rebuilds a raw route's `Request` from its method, path and query
+    (`args[0]` to `args[2]`), its header fields (name and value pairs from
+    `args[3]` on, in order) and a copy of the request's body bytes, which
+    no step reads or converts (M3-040).
 
     `Request` splits its target at the first `?`, so the path never
     contains one, and `path + "?" + query` splits back into the same
@@ -419,11 +426,11 @@ def _raw_request(args: List[String]) raises -> Request:
     if args[2].byte_length() > 0:
         target += "?" + args[2]
     var headers = Headers()
-    var i = 4
+    var i = 3
     while i + 1 < len(args):
         headers.add(args[i], args[i + 1])
         i += 2
-    return Request(args[0], target, args[3], headers^)
+    return Request(args[0], target, body.copy(), headers^)
 
 
 def _header_slot(args: List[String], at: Int) raises -> Headers:
@@ -437,6 +444,14 @@ def _header_slot(args: List[String], at: Int) raises -> Headers:
         headers.add(args[i], args[i + 1])
         i += 2
     return headers^
+
+
+def _body_text(body: List[UInt8]) raises -> String:
+    """The text a body slot converts: a copy of the body bytes when they are
+    well-formed UTF-8 (M3-040). Raises when they are not, and the slot
+    answers 400, as for a `from_body` raise; no byte is replaced, so a typed
+    body never receives a U+FFFD the client did not send."""
+    return String(from_utf8=Span(body))
 
 
 def _as[T: Movable, A: Movable](var value: T) -> A:
@@ -477,21 +492,24 @@ def _rejected(r: _Reject) -> Response:
 
 def _slot[
     A: Movable & Deinitable, at: Int
-](args: List[String]) raises _Reject -> A:
+](args: List[String], body: List[UInt8]) raises _Reject -> A:
     """Converts the request slot of type `A` whose raw argument is
-    `args[at]`, already decoded if it is a route value (`App.handle`). An
+    `args[at]`, already decoded if it is a route value (`App.handle`); a
+    body slot reads `body`, the request's bytes, instead (M3-040). An
     `Int` route value is parsed (`_parse_int`; 400 if invalid); a `String`
     route value is a copy of the decoded text. An `Optional[Int]` or
     `Optional[String]` is `None` for `""`, which `App.handle` passes for an
     absent or empty optional value (M3-025), and otherwise converts as the
     required slot of its type. A raw `Request` is rebuilt
-    from all the arguments (`_raw_request`; a failure is the fixed 500). A
-    `Headers` slot is rebuilt from the field pairs from `args[at]` on
-    (`_header_slot`; a failure is the fixed 500). A body is converted with
+    from all the arguments and the body bytes (`_raw_request`; a failure is
+    the fixed 500). A `Headers` slot is rebuilt from the field pairs from
+    `args[at]` on (`_header_slot`; a failure is the fixed 500). A body is
+    read as UTF-8 (`_body_text`; 400 if it is not) and converted with
     `A.from_body` (400 if it raises); for a JSON body (`_JsonBody`) the 415
     and 413 steps run first (`_json_status`); a `WithHeaders` carrier has
-    its header fields rebuilt (the fixed 500 on failure) and is built
-    through `A._from_parts`, whose inner `from_body` raise is the same 400.
+    its header fields rebuilt (the fixed 500 on failure), then its body read
+    as UTF-8, and is built through `A._from_parts`, whose inner `from_body`
+    raise is the same 400.
 
     `A` is refined here rather than bounded: forwarding a handler with an
     explicit body type to a callee that requires `FromBody` fails on Mojo
@@ -517,7 +535,7 @@ def _slot[
         return _as[Optional[String], A](args[at].copy())
     elif A == Request:
         try:
-            return _as[Request, A](_raw_request(args))
+            return _as[Request, A](_raw_request(args, body))
         except:
             raise _Reject(500)
     elif A == Headers:
@@ -530,7 +548,7 @@ def _slot[
             A, _HeaderCarrier
         )
         comptime if conforms_to(A, _JsonBody):
-            var status = _json_status[A](args, at)
+            var status = _json_status[A](args, at, len(body))
             if status != 0:
                 raise _Reject(status)
         comptime if conforms_to(A, _HeaderCarrier):
@@ -540,13 +558,13 @@ def _slot[
             except:
                 raise _Reject(500)  # only the `_fields` gap gets here
             try:
-                return A._from_parts(args[at], fields^)
+                return A._from_parts(_body_text(body), fields^)
             except:
                 raise _Reject(400)
         else:
             comptime assert conforms_to(A, FromBody)
             try:
-                return A.from_body(args[at])
+                return A.from_body(_body_text(body))
             except:
                 raise _Reject(400)
 
@@ -574,7 +592,9 @@ def _respond[R: Movable & Deinitable](var result: R) -> Response:
 
 def _call_0[
     E: Deinitable, R: Movable & Deinitable
-](handler: def() thin raises E -> R, args: List[String]) -> Response:
+](
+    handler: def() thin raises E -> R, args: List[String], body: List[UInt8]
+) -> Response:
     var result: R
     try:
         result = handler()
@@ -585,12 +605,16 @@ def _call_0[
 
 def _call_1[
     A: Movable & Deinitable, E: Deinitable, R: Movable & Deinitable
-](handler: def(var A) thin raises E -> R, args: List[String]) -> Response:
+](
+    handler: def(var A) thin raises E -> R,
+    args: List[String],
+    body: List[UInt8],
+) -> Response:
     """Converts the one slot (`_slot`) and moves it into `handler`; a
     failure answers without calling it."""
     var a: A
     try:
-        a = _slot[A, 0](args)
+        a = _slot[A, 0](args, body)
     except r:
         return _rejected(r)
     var result: R
@@ -607,15 +631,17 @@ def _call_2[
     E: Deinitable,
     R: Movable & Deinitable,
 ](
-    handler: def(var A, var B) thin raises E -> R, args: List[String]
+    handler: def(var A, var B) thin raises E -> R,
+    args: List[String],
+    body: List[UInt8],
 ) -> Response:
     """Converts the two slots in order, so a bad route value answers before
     the body is converted, and moves both into `handler`."""
     var a: A
     var b: B
     try:
-        a = _slot[A, 0](args)
-        b = _slot[B, 1](args)
+        a = _slot[A, 0](args, body)
+        b = _slot[B, 1](args, body)
     except r:
         return _rejected(r)
     var result: R
@@ -633,7 +659,9 @@ def _call_3[
     E: Deinitable,
     R: Movable & Deinitable,
 ](
-    handler: def(var A, var B, var C) thin raises E -> R, args: List[String]
+    handler: def(var A, var B, var C) thin raises E -> R,
+    args: List[String],
+    body: List[UInt8],
 ) -> Response:
     """Converts the three slots in order, so a bad route value answers
     before the next value, the body or the `Headers` is converted, and
@@ -642,9 +670,9 @@ def _call_3[
     var b: B
     var c: C
     try:
-        a = _slot[A, 0](args)
-        b = _slot[B, 1](args)
-        c = _slot[C, 2](args)
+        a = _slot[A, 0](args, body)
+        b = _slot[B, 1](args, body)
+        c = _slot[C, 2](args, body)
     except r:
         return _rejected(r)
     var result: R
@@ -672,7 +700,9 @@ struct _Bound[H: Movable & Deinitable, S: Movable & Deinitable](Movable):
 def _call_state_0[
     S: Movable & Deinitable, E: Deinitable, R: Movable & Deinitable
 ](
-    bound: _Bound[def(State[S]) thin raises E -> R, S], args: List[String]
+    bound: _Bound[def(State[S]) thin raises E -> R, S],
+    args: List[String],
+    body: List[UInt8],
 ) -> Response:
     """`_call_0` with the route's state handle passed first, by borrow."""
     var result: R
@@ -691,11 +721,12 @@ def _call_state_1[
 ](
     bound: _Bound[def(State[S], var A) thin raises E -> R, S],
     args: List[String],
+    body: List[UInt8],
 ) -> Response:
     """`_call_1` with the route's state handle passed first, by borrow."""
     var a: A
     try:
-        a = _slot[A, 0](args)
+        a = _slot[A, 0](args, body)
     except r:
         return _rejected(r)
     var result: R
@@ -715,13 +746,14 @@ def _call_state_2[
 ](
     bound: _Bound[def(State[S], var A, var B) thin raises E -> R, S],
     args: List[String],
+    body: List[UInt8],
 ) -> Response:
     """`_call_2` with the route's state handle passed first, by borrow."""
     var a: A
     var b: B
     try:
-        a = _slot[A, 0](args)
-        b = _slot[B, 1](args)
+        a = _slot[A, 0](args, body)
+        b = _slot[B, 1](args, body)
     except r:
         return _rejected(r)
     var result: R
@@ -742,15 +774,16 @@ def _call_state_3[
 ](
     bound: _Bound[def(State[S], var A, var B, var C) thin raises E -> R, S],
     args: List[String],
+    body: List[UInt8],
 ) -> Response:
     """`_call_3` with the route's state handle passed first, by borrow."""
     var a: A
     var b: B
     var c: C
     try:
-        a = _slot[A, 0](args)
-        b = _slot[B, 1](args)
-        c = _slot[C, 2](args)
+        a = _slot[A, 0](args, body)
+        b = _slot[B, 1](args, body)
+        c = _slot[C, 2](args, body)
     except r:
         return _rejected(r)
     var result: R
@@ -765,10 +798,9 @@ def _route[
     A: AnyType, B: AnyType, C: AnyType
 ](method: String, path: StaticString, var handler: _Erased) -> _Route:
     """The route for an accepted handler whose request slots have types `A`,
-    `B` and `C` (`_NoSlot` where there is none): a body route, JSON or
-    carrier when its body is such a body, raw when its slot is the
-    `Request`, and a route that receives the header fields for a carrier or
-    a `Headers` slot. A body, a `Headers` or a `Request` slot is always the
+    `B` and `C` (`_NoSlot` where there is none): a JSON route when its body
+    is a `Json[T]`, raw when its slot is the `Request`, and a route that
+    receives the header fields for a carrier or a `Headers` slot. A body, a `Headers` or a `Request` slot is always the
     last one, so the flags read every slot. Each query key whose value binds
     an `Optional` slot is marked optional (M3-025): route values come first,
     so the value at position `j` binds query key `j - paths`."""
@@ -776,7 +808,6 @@ def _route[
         method,
         path,
         handler^,
-        body=_kind[A]() == _BODY or _kind[B]() == _BODY or _kind[C]() == _BODY,
         json=conforms_to(A, _JsonBody)
         or conforms_to(B, _JsonBody)
         or conforms_to(C, _JsonBody),
@@ -808,23 +839,22 @@ struct _Route(Movable):
     """For each of `query_keys`, whether its value binds an `Optional` slot
     (M3-025): `App.handle` then passes an absent key or an empty value on
     as `""` instead of answering 400. All `False` until `_route` sets them."""
-    var body: Bool
-    """Whether the handler's last argument is the request body."""
     var json: Bool
-    """Whether that body is a `Json[T]` (`_JsonBody`): `App.handle` then
-    appends the request's `Content-Type` verdict after the body, and the
-    adapter answers 415 and 413 before `from_body` (M3-009)."""
+    """Whether the handler's body is a `Json[T]` (`_JsonBody`): `App.handle`
+    then appends the request's `Content-Type` verdict at the body's
+    position, and the adapter answers 415 and 413 before `from_body`
+    (M3-009)."""
     var headers: Bool
     """Whether the handler receives the request's header fields: its body
     is a `WithHeaders[B]` carrier (`_HeaderCarrier`, M3-013) or its last
     slot is `Headers` (M3-016). `App.handle` then appends each field's name
-    and value after the body and any verdict, or, on a `Headers` route,
-    after its route values if it has any, and the adapter rebuilds the
-    fields into the carrier or the `Headers` slot."""
+    and value after the route values and any verdict, and the adapter
+    rebuilds the fields into the carrier or the `Headers` slot."""
     var raw: Bool
     """Whether the handler receives the whole request (a `Request`
-    slot): its raw arguments are the request's method, path, query and
-    body, then each header field's name and value."""
+    slot): its raw arguments are the request's method, path and query,
+    then each header field's name and value; the body comes as bytes
+    beside them (M3-040)."""
     var handler: _Erased
 
     def __init__(
@@ -832,7 +862,6 @@ struct _Route(Movable):
         method: String,
         route: StaticString,
         var handler: _Erased,
-        body: Bool = False,
         json: Bool = False,
         headers: Bool = False,
         raw: Bool = False,
@@ -841,7 +870,6 @@ struct _Route(Movable):
         route-literal grammar's primitives (`_registration_rules.mojo`); the
         literal is well formed (checked at registration)."""
         self.method = method
-        self.body = body
         self.json = json
         self.headers = headers
         self.raw = raw
@@ -1215,7 +1243,9 @@ struct App(Movable):
         request's header fields, for which Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. The body may be declared `body: B` or
+        413 when it is over 1 MiB. Every body's bytes are read as UTF-8
+        before `from_body` (400 if they are not, M3-040). The body may be
+        declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
         handled as for `get` on `def()`; this holds for every body shape,
@@ -1460,7 +1490,9 @@ struct App(Movable):
         request's header fields, for which Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. The body may be declared `body: B` or
+        413 when it is over 1 MiB. Every body's bytes are read as UTF-8
+        before `from_body` (400 if they are not, M3-040). The body may be
+        declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
         handled as for `get` on `def()`; this holds for every body shape,
@@ -1707,7 +1739,9 @@ struct App(Movable):
         request's header fields, for which Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. The body may be declared `body: B` or
+        413 when it is over 1 MiB. Every body's bytes are read as UTF-8
+        before `from_body` (400 if they are not, M3-040). The body may be
+        declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
         handled as for `get` on `def()`; this holds for every body shape,
@@ -2190,7 +2224,7 @@ struct App(Movable):
         network adapters) delivers requests through this method. With no
         middleware registered, the routes answer the borrowed request
         directly (`_dispatch`). Otherwise the request is copied once, its
-        body included, and passed to the first middleware; each `Next.run`
+        body bytes included, and passed to the first middleware; each `Next.run`
         passes it on to the next one, and the last one's to the routes
         (`_run`, M3-034). What follows is the routes' answer.
 
@@ -2200,22 +2234,23 @@ struct App(Movable):
         route and runs the `GET` route's steps: a typed handler receives the
         same arguments as for the `GET`, a raw handler the `HEAD` request
         itself. The answer keeps its body; keeping the content off the wire
-        is the backend's (M3-026). A raw route
-        receives `request.method`, `path`, `query` and `body`, then each
+        is the backend's (M3-026). Every route receives `request.body`, the
+        body bytes, borrowed beside its raw arguments; nothing here reads or
+        converts them (M3-040). A raw route
+        receives `request.method`, `path` and `query`, then each
         header field's name and value, as its raw arguments, and nothing else
         runs (no query gathering, no conversion); the adapter's `Request`
-        slot rebuilds the `Request` (`_raw_request`). A typed
+        slot rebuilds the `Request` with a copy of the body bytes
+        (`_raw_request`). A typed
         route receives no headers unless its body is a `WithHeaders[B]`
         carrier or its last slot is `Headers` (`_Route.headers`). A body
-        route receives
-        `request.body` as its last raw argument, after its route values if
-        it has any; its adapter's body slot (`_slot`) converts it and answers
-        400 itself if that fails. A JSON body route (`_Route.json`) also
-        receives the request's `Content-Type` verdict after the body, for
-        the body slot's 415 step. A carrier route then
-        receives each header field's name and value, in order, after the
-        body and any verdict; a `Headers` route, after its route values if
-        it has any.
+        route's adapter reads the body bytes as UTF-8 in its body slot
+        (`_slot`), converts the text and answers 400 itself if either fails.
+        A JSON body route (`_Route.json`) also receives the request's
+        `Content-Type` verdict after its route values, for the body slot's
+        415 step. A carrier route then receives each header field's name
+        and value, in order, after its route values and any verdict; a
+        `Headers` route, after its route values if it has any.
 
         A typed route's route values are percent-decoded once here, after
         matching on the raw path and before any conversion (`_decode_value`):
@@ -2273,7 +2308,6 @@ struct App(Movable):
                 args.append(request.method)
                 args.append(request.path)
                 args.append(request.query)
-                args.append(request.body)
                 for h in range(len(request.headers)):
                     args.append(request.headers.name(h))
                     args.append(request.headers.value(h))
@@ -2300,8 +2334,6 @@ struct App(Movable):
                             args.append(_decode_value(raw.value(), query=True))
                 except:
                     return _bad_request()
-                if route.body:
-                    args.append(request.body)
                 if route.json:
                     args.append(
                         "1" if _json_content_type(request.headers) else ""
@@ -2314,7 +2346,7 @@ struct App(Movable):
             # handler error into a response. A raise here is a server fault,
             # never a client error.
             try:
-                return route.handler.invoke(args)
+                return route.handler.invoke(args, request.body)
             except:
                 return _internal_error()
         # No route selected: 405 when some route matches the path (M3-030).

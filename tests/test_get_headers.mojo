@@ -214,8 +214,8 @@ def test_fields_in_order_with_casing_repeats_and_empty() raises:
     var app = _app(prefix)
     var r = _get(app, "/all", _h("X-A", "1", "x-a", "2", "E", "", "B", "3"))
     assert_equal(r.status, 200)
-    assert_equal(r.body, "X-A=1;x-a=2;E=;B=3;")
-    assert_equal(_get(app, "/all", Headers()).body, "")
+    assert_equal(r.text(), "X-A=1;x-a=2;E=;B=3;")
+    assert_equal(_get(app, "/all", Headers()).text(), "")
 
 
 def test_owned_slot_is_a_fresh_value() raises:
@@ -223,7 +223,7 @@ def test_owned_slot_is_a_fresh_value() raises:
     var app = _app(prefix)
     var req = Request("GET", "/owned", "", _h("A", "1"))
     var r = app.handle(req)
-    assert_equal(r.body, "A=1;X-Mine=1;")
+    assert_equal(r.text(), "A=1;X-Mine=1;")
     assert_equal(len(req.headers), 1)  # the request's fields are untouched
 
 
@@ -231,14 +231,14 @@ def test_missing_field_is_the_handlers_status() raises:
     var prefix = State(Prefix("p:"))
     var app = _app(prefix)
     assert_equal(_get(app, "/me", Headers()).status, 401)
-    assert_equal(_get(app, "/me", _h("Authorization", "t")).body, "me t")
+    assert_equal(_get(app, "/me", _h("Authorization", "t")).text(), "me t")
 
 
 def test_route_value_then_headers() raises:
     var prefix = State(Prefix("p:"))
     var app = _app(prefix)
-    assert_equal(_get(app, "/p/7", _h("A", "1")).body, "7 A=1;")
-    assert_equal(_get(app, "/q?id=8", _h("A", "1")).body, "8 A=1;")
+    assert_equal(_get(app, "/p/7", _h("A", "1")).text(), "7 A=1;")
+    assert_equal(_get(app, "/q?id=8", _h("A", "1")).text(), "8 A=1;")
     assert_equal(_get(app, "/p/x", _h("A", "1")).status, 400)
     assert_equal(_get(app, "/q", _h("A", "1")).status, 400)
     assert_equal(_get(app, "/q?id=1&id=2", _h("A", "1")).status, 400)
@@ -249,8 +249,8 @@ def test_results_and_raises() raises:
     var app = _app(prefix)
     var c = _get(app, "/count", _h("A", "1", "B", "2"))
     assert_equal(c.status, 201)
-    assert_equal(c.body, "count 2")
-    assert_equal(_get(app, "/static", Headers()).body, "static")
+    assert_equal(c.text(), "count 2")
+    assert_equal(_get(app, "/static", Headers()).text(), "static")
     assert_equal(_get(app, "/raise", Headers()).status, 500)
 
 
@@ -258,8 +258,8 @@ def test_state_composes() raises:
     var prefix = State(Prefix("p:"))
     var app = _app(prefix)
     var before = prefix._shared.count()
-    assert_equal(_get(app, "/st", _h("A", "1")).body, "p:A=1;")
-    assert_equal(_get(app, "/st/3", _h("A", "1")).body, "p:3 A=1;")
+    assert_equal(_get(app, "/st", _h("A", "1")).text(), "p:A=1;")
+    assert_equal(_get(app, "/st/3", _h("A", "1")).text(), "p:3 A=1;")
     assert_equal(_get(app, "/st/x", _h("A", "1")).status, 400)
     assert_equal(prefix._shared.count(), before)
     _ = app^  # keep the routes' handles alive past the read (ASAP)
@@ -279,25 +279,25 @@ def test_gap_field_is_the_fixed_500_after_the_route_value() raises:
     # A route without a Headers slot never rebuilds the fields.
     var h = Headers()
     h._fields.append(_Field("Bad Name", "v"))
-    assert_equal(_get(app, "/plain/4", h^).body, "plain 4")
+    assert_equal(_get(app, "/plain/4", h^).text(), "plain 4")
 
 
 def test_other_routes_unchanged_with_fields_present() raises:
     var prefix = State(Prefix("p:"))
     var app = _app(prefix)
-    assert_equal(_get(app, "/plain/4", _h("A", "1")).body, "plain 4")
-    assert_equal(_get(app, "/raw", _h("A", "1", "B", "2")).body, "raw 2")
+    assert_equal(_get(app, "/plain/4", _h("A", "1")).text(), "plain 4")
+    assert_equal(_get(app, "/raw", _h("A", "1", "B", "2")).text(), "raw 2")
     var r = app.handle(Request("POST", "/n/2", "hi", _h("A", "1")))
-    assert_equal(r.body, "2 hi A=1;")
+    assert_equal(r.text(), "2 hi A=1;")
 
 
 def test_testclient_headers() raises:
     var prefix = State(Prefix("p:"))
     var app = _app(prefix)
     var client = TestClient(app)
-    assert_equal(client.get("/all", headers=_h("X", "y")).body, "X=y;")
-    assert_equal(client.get("/all").body, "")
-    assert_equal(client.get("/p/2", headers=_h("X", "y")).body, "2 X=y;")
+    assert_equal(client.get("/all", headers=_h("X", "y")).text(), "X=y;")
+    assert_equal(client.get("/all").text(), "")
+    assert_equal(client.get("/p/2", headers=_h("X", "y")).text(), "2 X=y;")
     assert_equal(client.get("/missing").status, 404)
 
 
@@ -307,8 +307,8 @@ def test_first_registration_wins() raises:
     app.get["/a/{id}"](by_id)
     app.get["/b/{id}"](by_id)
     app.get["/b/{id}"](plain_id)
-    assert_equal(_get(app, "/a/1", _h("A", "1")).body, "plain 1")
-    assert_equal(_get(app, "/b/1", _h("A", "1")).body, "1 A=1;")
+    assert_equal(_get(app, "/a/1", _h("A", "1")).text(), "plain 1")
+    assert_equal(_get(app, "/b/1", _h("A", "1")).text(), "1 A=1;")
 
 
 def test_generic_and_typed_forwarding() raises:
@@ -319,11 +319,11 @@ def test_generic_and_typed_forwarding() raises:
     fwd_typed(app, all_fields)
     var typed: def(var Headers) thin raises Never -> String = all_fields
     app.get["/typed"](typed)
-    assert_equal(_get(app, "/fwd", _h("A", "1")).body, "A=1;")
-    assert_equal(_get(app, "/fwd/5", _h("A", "1")).body, "5 A=1;")
-    assert_equal(_get(app, "/fwd-state", _h("A", "1")).body, "s:A=1;")
-    assert_equal(_get(app, "/fwd-typed", _h("A", "1")).body, "A=1;")
-    assert_equal(_get(app, "/typed", _h("A", "1")).body, "A=1;")
+    assert_equal(_get(app, "/fwd", _h("A", "1")).text(), "A=1;")
+    assert_equal(_get(app, "/fwd/5", _h("A", "1")).text(), "5 A=1;")
+    assert_equal(_get(app, "/fwd-state", _h("A", "1")).text(), "s:A=1;")
+    assert_equal(_get(app, "/fwd-typed", _h("A", "1")).text(), "A=1;")
+    assert_equal(_get(app, "/typed", _h("A", "1")).text(), "A=1;")
 
 
 def test_dx_example() raises:
@@ -337,21 +337,21 @@ def test_dx_example() raises:
     var client = TestClient(app)
     var ok = client.get("/me", headers=_h("Authorization", "t1"))
     assert_equal(ok.status, 200)
-    assert_equal(ok.body, "me t1")
+    assert_equal(ok.text(), "me t1")
     var missing = client.get("/me")
     assert_equal(missing.status, 401)
-    assert_equal(missing.body, "Unauthorized")
+    assert_equal(missing.text(), "Unauthorized")
     var traced = client.get(
         "/notes/3", headers=_h("X-Trace", "a", "x-trace", "b")
     )
     assert_equal(traced.status, 200)
-    assert_equal(traced.body, "3 traces=2")
+    assert_equal(traced.text(), "3 traces=2")
     var bad = client.get("/notes/x")
     assert_equal(bad.status, 400)
-    assert_equal(bad.body, "Bad Request")
+    assert_equal(bad.text(), "Bad Request")
     var mine = client.get("/private/3", headers=_h("Authorization", "t1"))
     assert_equal(mine.status, 200)
-    assert_equal(mine.body, "private 3")
+    assert_equal(mine.text(), "private 3")
     assert_equal(
         client.get("/private/3", headers=_h("Authorization", "t2")).status, 401
     )

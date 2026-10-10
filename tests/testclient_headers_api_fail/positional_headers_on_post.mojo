@@ -1,6 +1,8 @@
 # Must not compile (M3-011): `post`'s header fields are keyword-only, as on
 # `get`; a positional third argument is rejected.
-# Expected diagnostic (checked by scripts/check.sh): invalid call to 'post': unexpected argument
+# Since M3-040 `post` has a text and a bytes overload, so the compiler reports
+# `no matching method in call to 'post'` with each candidate's reason.
+# Expected diagnostic (checked by scripts/check.sh): no matching method in call to 'post'
 from muntin import App, Headers
 from muntin.testing import TestClient
 

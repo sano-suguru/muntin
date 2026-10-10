@@ -21,7 +21,7 @@ struct Echo(Movable, ToResponse):
 
 
 def h(db: State[Db], req: Request) -> Echo:
-    return Echo(req.body)
+    return Echo(req.path)
 
 
 def main():

@@ -796,11 +796,11 @@ def model_post[
     comptime if conforms_to(B, _JsonBody):
         if not json_content_type(request.headers):
             return _unsupported_media_type()
-        if request.body.byte_length() > MAX_BODY_BYTES:
+        if len(request.body) > MAX_BODY_BYTES:
             return _content_too_large()
     var body: B
     try:
-        body = B.from_body(request.body)
+        body = B.from_body(request.text())
     except:
         return Response.text("Bad Request", status=400)
     try:
@@ -827,11 +827,11 @@ def model_post_int[
     comptime if conforms_to(B, _JsonBody):
         if not json_content_type(request.headers):
             return _unsupported_media_type()
-        if request.body.byte_length() > MAX_BODY_BYTES:
+        if len(request.body) > MAX_BODY_BYTES:
             return _content_too_large()
     var body: B
     try:
-        body = B.from_body(request.body)
+        body = B.from_body(request.text())
     except:
         return Response.text("Bad Request", status=400)
     try:

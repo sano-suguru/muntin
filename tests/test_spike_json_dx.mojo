@@ -66,10 +66,10 @@ def test_dx_json_examples() raises:
     var client = TestClient(app)
     var r = client.post("/users", '{"name":"Ada","age":36}')
     assert_equal(r.status, 200)
-    assert_equal(r.body, '{"id":1,"name":"Ada"}')
+    assert_equal(r.text(), '{"id":1,"name":"Ada"}')
     assert_equal(r.headers.get("content-type").value(), "application/json")
     assert_equal(
-        client.post("/users/4", '{"name":"Bo","age":1,"nickname":null}').body,
+        client.post("/users/4", '{"name":"Bo","age":1,"nickname":null}').text(),
         '{"id":4,"name":"Bo"}',
     )
     assert_equal(client.post("/users", '{"name":"Ada"}').status, 400)

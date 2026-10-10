@@ -29,9 +29,9 @@ def edit_note(id: Int, var body: Note) -> String:
     return String(id) + body.text
 
 
-def main():
+def main() raises:
     var app = ExtractApp()
     app.post["/notes"](add_note)
     app.post["/notes/{id}"](edit_note)
-    if app.handle(Request("POST", "/notes/1", "x")).body != "1x":
+    if app.handle(Request("POST", "/notes/1", "x")).text() != "1x":
         print("unexpected response")

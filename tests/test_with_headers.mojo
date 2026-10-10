@@ -237,15 +237,23 @@ def plain_json_state(
     return Json(Named(id, p[].text + body.value.name))
 
 
+def _spliced(head: String, body: List[UInt8], tail: String = "") -> List[UInt8]:
+    """`head`'s bytes, the body bytes unread, then `tail`'s bytes."""
+    var out = List(head.as_bytes())
+    out.extend(Span(body))
+    out.extend(Span(tail.as_bytes()))
+    return out^
+
+
 def raw(req: Request) -> Response:
-    return Response.text(
-        "raw " + req.method + " " + req.body + _fields(req.headers)
+    return Response(
+        200, _spliced("raw " + req.method + " ", req.body, _fields(req.headers))
     )
 
 
 def state_raw(p: State[Prefix], req: Request) -> Response:
-    return Response.text(
-        "state_raw " + p[].text + req.body + _fields(req.headers)
+    return Response(
+        200, _spliced("state_raw " + p[].text, req.body, _fields(req.headers))
     )
 
 
@@ -347,7 +355,7 @@ def test_every_body_overload_reads_fields_in_order_with_casing_and_repeats() rai
             ),
         )
         assert_equal(r.status, 200, shape.tag)
-        assert_equal(r.body, want, shape.tag)
+        assert_equal(r.text(), want, shape.tag)
         var direct = _post(
             app,
             shape.target,
@@ -368,11 +376,11 @@ def test_absent_and_empty_fields_are_left_to_the_handler() raises:
         # No field: an empty `Headers`, and the handler still runs.
         var r = client.post(shape.target, "hi")
         assert_equal(r.status, 200, shape.tag)
-        assert_equal(r.body, _expected(shape, count, "hi", ""), shape.tag)
+        assert_equal(r.text(), _expected(shape, count, "hi", ""), shape.tag)
         # An empty value is a value.
         r = client.post(shape.target, "hi", headers=_h("X-Empty", ""))
         assert_equal(
-            r.body, _expected(shape, count, "hi", " X-Empty=<>"), shape.tag
+            r.text(), _expected(shape, count, "hi", " X-Empty=<>"), shape.tag
         )
     _ = prefix^  # the test's handle lives until here (ASAP destruction)
 
@@ -386,7 +394,7 @@ def test_a_missing_field_gets_the_handlers_status() raises:
     for target in ["/j", "/j/5", "/jq?id=5", "/jst", "/jst/5", "/jstq?id=5"]:
         var r = _post(app, target, ok, _h("Content-Type", "application/json"))
         assert_equal(r.status, 401, target)
-        assert_equal(r.body, "Unauthorized", target)
+        assert_equal(r.text(), "Unauthorized", target)
         r = _post(
             app,
             target,
@@ -402,7 +410,7 @@ def test_body_conversion_failure_is_400_with_fields_present() raises:
     for shape in _shapes():
         var r = _post(app, shape.target, "bad", _h("X-API-Key", "k1"))
         assert_equal(r.status, 400, shape.tag)
-        assert_equal(r.body, "Bad Request", shape.tag)
+        assert_equal(r.text(), "Bad Request", shape.tag)
 
 
 def test_the_route_value_is_converted_first() raises:
@@ -422,7 +430,7 @@ def test_the_route_value_is_converted_first() raises:
             assert_equal(r.status, 400, target)
     # Then the body: the route value reaches the handler first.
     assert_equal(
-        _post(app, "/s/-3", "hi", _h("X-A", "1")).body,
+        _post(app, "/s/-3", "hi", _h("X-A", "1")).text(),
         "s_int_body -3 hi X-A=<1>",
     )
 
@@ -439,7 +447,7 @@ def test_state_composes_and_requests_do_not_touch_the_reference_count() raises:
             var r = client.post(shape.target, "hi", headers=_h("A", "b"))
             # The count read inside the handler is the count between requests.
             assert_equal(
-                r.body, _expected(shape, between, "hi", " A=<b>"), shape.tag
+                r.text(), _expected(shape, between, "hi", " A=<b>"), shape.tag
             )
             assert_equal(_count(prefix), between, shape.tag)
 
@@ -508,10 +516,10 @@ def test_json_inside_the_carrier_keeps_the_full_order() raises:
         )
         assert_equal(r.status, 200, target)
     var r = _post(app, "/j/5", ok, _h("Content-Type", ct, "Authorization", "t"))
-    assert_equal(r.body, '{"id":5,"name":"Ada"}')
+    assert_equal(r.text(), '{"id":5,"name":"Ada"}')
     assert_equal(r.headers.get("content-type").value(), "application/json")
     r = _post(app, "/jst", ok, _h("Content-Type", ct, "Authorization", "t"))
-    assert_equal(r.body, '{"id":0,"name":"p:Ada"}')
+    assert_equal(r.text(), '{"id":0,"name":"p:Ada"}')
     r = _post(
         app,
         "/jstq?id=5",
@@ -523,7 +531,7 @@ def test_json_inside_the_carrier_keeps_the_full_order() raises:
             "t",
         ),
     )
-    assert_equal(r.body, "p:5 Ada")
+    assert_equal(r.text(), "p:5 Ada")
 
 
 def test_routes_without_a_carrier_are_unchanged_with_fields_present() raises:
@@ -538,19 +546,19 @@ def test_routes_without_a_carrier_are_unchanged_with_fields_present() raises:
         app, "/plain-json", '{"name":"Ada"}', _h("Content-Type", ct, "X-A", "1")
     )
     assert_equal(r.status, 200)
-    assert_equal(r.body, '{"id":0,"name":"Ada"}')
+    assert_equal(r.text(), '{"id":0,"name":"Ada"}')
     r = _post(
         app,
         "/plain-json/4",
         '{"name":"Ada"}',
         _h("X-A", "1", "Content-Type", ct, "x-a", "2"),
     )
-    assert_equal(r.body, '{"id":4,"name":"p:Ada"}')
+    assert_equal(r.text(), '{"id":4,"name":"p:Ada"}')
     assert_equal(
-        client.post("/plain", "hi", headers=_h("X-A", "1")).body, "plain hi"
+        client.post("/plain", "hi", headers=_h("X-A", "1")).text(), "plain hi"
     )
     assert_equal(
-        client.post("/plain/3", "hi", headers=_h("X-A", "1")).body,
+        client.post("/plain/3", "hi", headers=_h("X-A", "1")).text(),
         "plain_int 3 hi",
     )
     assert_equal(
@@ -558,15 +566,17 @@ def test_routes_without_a_carrier_are_unchanged_with_fields_present() raises:
     )
     # Raw routes still get the whole request, fields included.
     assert_equal(
-        client.post("/raw", "b", headers=_h("X-A", "1", "x-a", "2")).body,
+        client.post("/raw", "b", headers=_h("X-A", "1", "x-a", "2")).text(),
         "raw POST b" + fields,
     )
     assert_equal(
-        client.get("/raw", headers=_h("X-A", "1", "x-a", "2")).body,
+        client.get("/raw", headers=_h("X-A", "1", "x-a", "2")).text(),
         "raw GET " + fields,
     )
     assert_equal(
-        client.post("/state-raw", "b", headers=_h("X-A", "1", "x-a", "2")).body,
+        client.post(
+            "/state-raw", "b", headers=_h("X-A", "1", "x-a", "2")
+        ).text(),
         "state_raw p:b" + fields,
     )
 
@@ -584,14 +594,17 @@ def test_first_registration_wins() raises:
     app.post["/d"](raw)
     var client = TestClient(app)
     assert_equal(
-        client.post("/a", "hi", headers=_h("X", "1")).body, "s_body hi X=<1>"
+        client.post("/a", "hi", headers=_h("X", "1")).text(), "s_body hi X=<1>"
     )
-    assert_equal(client.post("/b", "hi", headers=_h("X", "1")).body, "plain hi")
     assert_equal(
-        client.post("/c", "hi", headers=_h("X", "1")).body, "raw POST hi X=<1>"
+        client.post("/b", "hi", headers=_h("X", "1")).text(), "plain hi"
+    )
+    assert_equal(
+        client.post("/c", "hi", headers=_h("X", "1")).text(),
+        "raw POST hi X=<1>",
     )
     var want = "st_r_body p:" + _count(prefix) + " hi X=<1>"
-    assert_equal(client.post("/d", "hi", headers=_h("X", "1")).body, want)
+    assert_equal(client.post("/d", "hi", headers=_h("X", "1")).text(), want)
     _ = prefix^  # the test's handle lives until here (ASAP destruction)
 
 
@@ -608,12 +621,27 @@ def test_invalid_in_memory_fields_are_the_fixed_500() raises:
             h._fields.append(_Field("X-Inject", "a\r\nSet-Cookie: evil=1"))
             var r = _post(app, shape.target, body, h^)
             assert_equal(r.status, 500, shape.tag)
-            assert_equal(r.body, "Internal Server Error", shape.tag)
+            assert_equal(r.text(), "Internal Server Error", shape.tag)
     var ok = String('{"name":"Ada"}')
     for target in ["/j", "/j/5", "/jst", "/jst/5"]:
         var h = _h("Content-Type", "application/json")
         h._fields.append(_Field("Bad Name", "v"))
         assert_equal(_post(app, target, ok, h^).status, 500, target)
+    # The rebuild also runs before the body's UTF-8 read (M3-040): bytes
+    # that are not UTF-8 beside such a field are the fixed 500, not 400.
+    for shape in _shapes():
+        var h = Headers()
+        h._fields.append(_Field("Bad Name", "v"))
+        var bytes: List[UInt8] = [0xFF]
+        var r = app.handle(Request("POST", shape.target, bytes^, h^))
+        assert_equal(r.status, 500, shape.tag)
+    for target in ["/j", "/j/5", "/jst", "/jst/5"]:
+        var h = _h("Content-Type", "application/json")
+        h._fields.append(_Field("Bad Name", "v"))
+        var bytes: List[UInt8] = [0xFF]
+        assert_equal(
+            app.handle(Request("POST", target, bytes^, h^)).status, 500, target
+        )
     # The rebuild runs after the route value and the JSON steps: an
     # invalid route value is still 400, a JSON body without its
     # `Content-Type` 415, and one over the cap 413.
@@ -632,7 +660,7 @@ def test_invalid_in_memory_fields_are_the_fixed_500() raises:
     # A route without a carrier never rebuilds the fields.
     var h = Headers()
     h._fields.append(_Field("Bad Name", "v"))
-    assert_equal(_post(app, "/plain", "hi", h^).body, "plain hi")
+    assert_equal(_post(app, "/plain", "hi", h^).text(), "plain hi")
 
 
 def test_unmatched_path_is_404_and_unmatched_method_405() raises:
@@ -641,7 +669,7 @@ def test_unmatched_path_is_404_and_unmatched_method_405() raises:
     assert_equal(_post(app, "/nope", "hi", _h("X-A", "1")).status, 404)
     var get = app.handle(Request("GET", "/s"))
     assert_equal(get.status, 405)
-    assert_equal(get.body, "Method Not Allowed")
+    assert_equal(get.text(), "Method Not Allowed")
     assert_equal(len(get.headers.get_all("Allow")), 1)
     assert_equal(get.headers.get_all("Allow")[0], "POST")
 
@@ -694,11 +722,11 @@ def test_raw_slot_adapter_function_on_production_app() raises:
     app.get["/count"](state_headers_of[me_state], prefix)
     var client = TestClient(app)
     assert_equal(
-        client.get("/me", headers=_h("Authorization", "t")).body, "me t"
+        client.get("/me", headers=_h("Authorization", "t")).text(), "me t"
     )
     assert_equal(client.get("/me").status, 401)
     assert_equal(
-        client.get("/count", headers=_h("A", "1", "B", "2")).body, "p:2"
+        client.get("/count", headers=_h("A", "1", "B", "2")).text(), "p:2"
     )
 
 
@@ -775,7 +803,7 @@ def test_dx_typed_header_access_example() raises:
         ),
     )
     assert_equal(r.status, 200)
-    assert_equal(r.body, '{"id":1,"name":"Ada"}')
+    assert_equal(r.text(), '{"id":1,"name":"Ada"}')
     r = client.post(
         "/users",
         body,
@@ -797,7 +825,7 @@ def test_dx_typed_header_access_example() raises:
     r = client.post(
         "/notes/3", "hi", headers=_h("X-Trace", "a", "x-trace", "b")
     )
-    assert_equal(r.body, "3 hi traces=2")
+    assert_equal(r.text(), "3 hi traces=2")
     assert_true(client.post("/notes/x", "hi").status == 400)
 
 

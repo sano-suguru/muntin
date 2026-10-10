@@ -16,7 +16,7 @@ struct Echo(Movable, ToResponse):
 
 
 def h(req: Request) -> Echo:
-    return Echo(req.body)
+    return Echo(req.path)
 
 
 def main():
