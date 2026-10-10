@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-M3-043 (typed binary request body size limits, a `FromBytes` type's `comptime max_bytes`: [Typed binary request body size limits decision (M3-043)](docs/history/architecture-decisions.md#typed-binary-request-body-size-limits-decision-m3-043), decided and implemented in one item) is implemented on this branch and complete when its pull request merges. Next: no item is named next. Choose one coherent item from `docs/SPEC.md`, "Remaining candidates"; make it a decision item only if it opens a new design question (`docs/DEVELOPMENT.md` section 2). Blockers: none.
+M3-043 (typed binary request body size limits, every `FromBytes` type's required `comptime max_bytes`: [Typed binary request body size limits decision (M3-043)](docs/history/architecture-decisions.md#typed-binary-request-body-size-limits-decision-m3-043), decided and implemented in one item) is implemented on this branch and complete when its pull request merges. Next: no item is named next. Choose one coherent item from `docs/SPEC.md`, "Remaining candidates"; make it a decision item only if it opens a new design question (`docs/DEVELOPMENT.md` section 2). Blockers: none.
 
 ## Easy to miss
 
