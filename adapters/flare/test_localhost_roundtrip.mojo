@@ -209,6 +209,14 @@ each transport and comes back in brackets (after the state's tag and the id
 for the `PUT`), through the middleware: a typed body that is not UTF-8 is no
 longer a 400 when its type is a `FromBytes`.
 
+M3-042 adds the stateful `PATCH /typed-bytes-fields/{id}`, whose body is
+`WithHeaders[Payload]`: sent with `Content-Type`, `X-Sig: a`, an empty
+`x-empty` and `x-sig: b`, every body above reaches the same handler over
+each transport, and the handler's answer (every `content-type` and `x-`
+field the carrier holds, in order with its name's casing, then the bytes in
+brackets) is compared byte for byte: the names keep their casing over
+HTTP/1.1, and h2c sends and expects them lowercase (RFC 9113).
+
 M3-039 serves `targets_app()` (`marked`, `GET /hello`, `GET /names/{name}`
 and `GET /items?{limit}`) and sends methods and targets whose bytes are not
 UTF-8 over h2c, where Flare v0.12.0 passes them to the adapter, with the raw
@@ -2087,6 +2095,26 @@ def typed_bytes_put(tag: State[Tag], id: Int, payload: Payload) -> Response:
     return Response(200, out^)
 
 
+def typed_bytes_fields(
+    tag: State[Tag], id: Int, input: WithHeaders[Payload]
+) -> Response:
+    """A typed binary body with the header fields (M3-042): the state's tag,
+    the route value, then every `content-type` and `x-` field as the
+    carrier holds it, in order, with its name's casing and its value
+    (`name=<value>;`; the transport's own fields are left out), then the
+    bytes `Payload.from_bytes` received, in brackets."""
+    var head = String(tag[].tag, " ", id, " ")
+    for i in range(len(input.headers)):
+        var name = input.headers.name(i)
+        var lower = name.lower()
+        if lower == "content-type" or lower.startswith("x-"):
+            head += name + "=<" + input.headers.value(i) + ">;"
+    head += "|"
+    var out = List(head.as_bytes())
+    out.extend(Span(_bracketed(input.body.data)))
+    return Response(200, out^)
+
+
 def marked(var request: Request, var next: Next) raises -> Response:
     """Adds `X-Seen: 1` to every answer `App.handle` gives."""
     var response = next^.run(request^)
@@ -2106,6 +2134,7 @@ def bodies_app() -> App:
     app.post["/upload"](upload)
     app.post["/typed-bytes"](typed_bytes)
     app.put["/typed-bytes/{id}"](typed_bytes_put, State(Tag("t")))
+    app.patch["/typed-bytes-fields/{id}"](typed_bytes_fields, State(Tag("f")))
     return app^
 
 
@@ -2255,6 +2284,32 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
     var json: List[Tuple[String, String]] = [
         (String("content-type"), String("application/json"))
     ]
+    # A repeated field, an empty value and mixed name casing beside the
+    # body (M3-042). HTTP/1.1 and the in-memory client keep each name's
+    # casing; HTTP/2 field names are lowercase on the wire (RFC 9113), so
+    # h2c sends and expects them lowercase. Either way the carrier must hold
+    # every field in the order sent.
+    var signed: List[Tuple[String, String]] = [
+        (String("Content-Type"), String("application/octet-stream")),
+        (String("X-Sig"), String("a")),
+        (String("x-empty"), String("")),
+        (String("x-sig"), String("b")),
+    ]
+    var signed_h2 = List[Tuple[String, String]]()
+    for f in signed:
+        signed_h2.append((f[0].lower(), f[1]))
+    var fields_want = List(
+        String(
+            "f 7 Content-Type=<application/octet-stream>;X-Sig=<a>;",
+            "x-empty=<>;x-sig=<b>;|",
+        ).as_bytes()
+    )
+    var fields_want_h2 = List(
+        String(
+            "f 7 content-type=<application/octet-stream>;x-sig=<a>;",
+            "x-empty=<>;x-sig=<b>;|",
+        ).as_bytes()
+    )
     var app = bodies_app()
     var client = TestClient(app)
     var child = _serve_in_child(bodies_app())
@@ -2269,6 +2324,17 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
             assert_true(_same_bytes(Span(local.body), Span(body)), c[0])
             var seen = client.post("/bytes", body.copy())
             assert_equal(seen.text(), _hex(Span(body)), c[0])
+            var signed_h = Headers()
+            for f in signed:
+                signed_h.add(f[0], f[1])
+            var local_fields = client.patch(
+                "/typed-bytes-fields/7", body.copy(), headers=signed_h^
+            )
+            var local_want = fields_want.copy()
+            local_want.extend(Span(_bracketed(body)))
+            assert_true(
+                _same_bytes(Span(local_fields.body), Span(local_want)), c[0]
+            )
             for transport in range(4):
                 var name = String(c[0], " via ")
                 var status: String
@@ -2279,6 +2345,7 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                 var typed: List[UInt8]
                 var bytes_body: List[UInt8]
                 var bytes_put: List[UInt8]
+                var bytes_fields: List[UInt8]
                 if transport < 2:
                     var chunked = transport == 1
                     name += "HTTP/1.1 chunked" if chunked else "HTTP/1.1"
@@ -2335,6 +2402,25 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                         name,
                     )
                     bytes_put = yp[2].copy()
+                    var yf = h1_exchange(
+                        child.port,
+                        "PATCH",
+                        "/typed-bytes-fields/7",
+                        signed,
+                        body,
+                        chunked,
+                    )
+                    assert_equal(yf[0], "HTTP/1.1 200 OK", name)
+                    assert_equal(
+                        yf[1],
+                        String(
+                            "X-Seen: 1;Content-Length: ",
+                            len(fields_want) + len(body) + 2,
+                            ";Connection: close;",
+                        ),
+                        name,
+                    )
+                    bytes_fields = yf[2].copy()
                     assert_equal(status, "HTTP/1.1 200 OK", name)
                     # No `Content-Type`: the adapter adds none for bytes.
                     assert_equal(
@@ -2389,6 +2475,18 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                         _h2_fields(yp[0]), ":status=200;x-seen=1;", name
                     )
                     bytes_put = yp[1].copy()
+                    var yf = h2_exchange(
+                        child.port,
+                        "PATCH",
+                        "/typed-bytes-fields/7",
+                        signed_h2,
+                        body,
+                        split,
+                    )
+                    assert_equal(
+                        _h2_fields(yf[0]), ":status=200;x-seen=1;", name
+                    )
+                    bytes_fields = yf[1].copy()
                     if utf8:
                         assert_equal(t[0][0].value, "200", name)
                     else:
@@ -2407,6 +2505,17 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                 var put_want = List("t 7".as_bytes())
                 put_want.extend(Span(_bracketed(body)))
                 assert_true(_same_bytes(Span(bytes_put), Span(put_want)), name)
+                # The fields, in order with their casing, and the same bytes
+                # reached one typed handler.
+                var fields_expected = (
+                    fields_want.copy() if transport
+                    < 2 else fields_want_h2.copy()
+                )
+                fields_expected.extend(Span(_bracketed(body)))
+                assert_equal(len(bytes_fields), len(fields_expected), name)
+                assert_true(
+                    _same_bytes(Span(bytes_fields), Span(fields_expected)), name
+                )
                 if utf8:
                     assert_true(
                         _same_bytes(Span(typed), Span(_bracketed(body))), name
@@ -2424,7 +2533,11 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
                     " chunked) and h2c (one and two DATA frames); typed text"
                 ),
                 "200" if utf8 else "400",
-                "; typed FromBytes 200 with the same bytes",
+                (
+                    "; typed FromBytes 200 with the same bytes, alone and in"
+                    " WithHeaders with every field in order (Content-Type,"
+                    " X-Sig, empty x-empty, x-sig; casing kept over HTTP/1.1)"
+                ),
             )
             # App.handle's 405 and 404, through the middleware, whatever the
             # body; `HEAD` on a `GET` route under the HEAD rule.

@@ -161,10 +161,12 @@ def _kind[A: AnyType]() -> Int:
     """The kind of a request slot of type `A`, from its type alone: type
     equality (exact here, as these types carry no origin) for the types
     that cannot conform to a Muntin trait, `conforms_to` for the rest. A
-    body is a `FromBody`, a `FromBytes` (M3-041) or a carrier; a type that
-    is both a `FromBody` and a `FromBytes` is a body with two conversions
-    (`_TWO_BODIES`), which the rules reject wherever a body is, and so is a
-    carrier around one (`_HeaderCarrier._two_conversions`)."""
+    body is a `FromBody`, a `FromBytes` (M3-041) or a carrier around exactly
+    one of them (M3-042); a type that is both a `FromBody` and a `FromBytes`
+    is a body with two conversions (`_TWO_BODIES`), which the rules reject
+    wherever a body is, and so is a carrier around one
+    (`_HeaderCarrier._conversions`). A carrier around a type with neither
+    conversion (one conforming only to the private bound) is `_OTHER`."""
     comptime if A == _NoSlot:
         return _ABSENT
     elif A == Int:
@@ -184,7 +186,10 @@ def _kind[A: AnyType]() -> Int:
     elif conforms_to(A, FromBody) and conforms_to(A, FromBytes):
         return _TWO_BODIES
     elif conforms_to(A, _HeaderCarrier):
-        return _TWO_BODIES if A._two_conversions() else _BODY
+        var conversions = A._conversions()
+        if conversions == 2:
+            return _TWO_BODIES
+        return _BODY if conversions == 1 else _OTHER
     elif conforms_to(A, FromBody) or conforms_to(A, FromBytes):
         return _BODY
     else:

@@ -1,8 +1,9 @@
 # Must not compile: `Json[T]` is a body only when `T: FromJson`, also inside the
-# carrier, so the handler's signature is rejected where it is declared (M3-013;
+# carrier, so the handler's signature is rejected where it is declared, with
+# the carrier's private bound `_FromBodyOrBytes` named (M3-042; M3-013;
 # docs/history/architecture-decisions.md, "Typed header access decision
 # (M3-012)").
-# Expected diagnostic (checked by scripts/check.sh): 'WithHeaders' parameter 'B' has 'FromBody' type, but value has type 'AnyStruct[Json[In]]'
+# Expected diagnostic (checked by scripts/check.sh): 'WithHeaders' parameter 'B' has '_FromBodyOrBytes' type, but value has type 'AnyStruct[Json[In]]'
 
 from muntin import Json, WithHeaders
 
