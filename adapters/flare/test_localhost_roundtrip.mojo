@@ -1411,6 +1411,61 @@ def h2_streams(
     return _h2_answers(port, wire, len(requests))
 
 
+def h2_in_turn(
+    port: Int, requests: List[Tuple[String, String]]
+) raises -> List[Tuple[List[HpackHeader], List[UInt8], Int]]:
+    """As `h2_streams`, but each request is sent only after the response
+    to the one before it has ended, on the same connection: a request
+    reaches the server after it answered the previous one."""
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.set_recv_timeout(TIMEOUT_MS)
+    var start = List(H2_PREFACE.as_bytes())
+    start.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
+    stream.write_all(Span[UInt8, _](start))
+    var none = List[Tuple[String, String]]()
+    var decoder = HpackDecoder()
+    var acc = List[UInt8]()
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    var pos = 0
+    var out = List[Tuple[List[HpackHeader], List[UInt8], Int]]()
+    for i in range(len(requests)):
+        var sid = 2 * i + 1
+        var frame = _h2_frame(
+            FrameType.HEADERS(),
+            FrameFlags.END_HEADERS() | FrameFlags.END_STREAM(),
+            sid,
+            _h2_block(requests[i][0], requests[i][1], none),
+        )
+        stream.write_all(Span[UInt8, _](frame))
+        out.append((List[HpackHeader](), List[UInt8](), 0))
+        var ended = False
+        while not ended:
+            var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
+            if not maybe:
+                var n = stream.read(buf.unsafe_ptr(), len(buf))
+                if n == 0:
+                    raise Error("connection closed before the response ended")
+                for k in range(n):
+                    acc.append(buf[k])
+                continue
+            var f = maybe.value().copy()
+            pos += 9 + f.header.length
+            if f.header.type.value == FrameType.GOAWAY().value:
+                raise Error("GOAWAY")
+            if f.header.stream_id != sid:
+                continue
+            if f.header.type.value == FrameType.HEADERS().value:
+                out[i][0] = decoder.decode(Span[UInt8, _](f.payload))
+            elif f.header.type.value == FrameType.DATA().value:
+                out[i][1].extend(Span[UInt8, _](f.payload))
+                out[i][2] += 1
+            elif f.header.type.value == FrameType.RST_STREAM().value:
+                raise Error("RST_STREAM")
+            ended = f.header.flags.has(FrameFlags.END_STREAM())
+    return out^
+
+
 def _h2_block(
     method: String, path: String, fields: List[Tuple[String, String]]
 ) -> List[UInt8]:
@@ -2253,6 +2308,19 @@ def _running(pid: Int) -> Bool:
     return Int(external_call["waitpid", c_int](c_int(pid), 0, c_int(1))) == 0
 
 
+def _bad_then_hello(
+    got: List[Tuple[List[HpackHeader], List[UInt8], Int]], at: String
+) raises:
+    """Stream 1 is the adapter's 400 and stream 3 the well-formed `GET
+    /hello`'s answer, through the middleware."""
+    assert_equal(_h2_field(got[0][0], ":status"), "400", at)
+    assert_equal(String(from_utf8=Span(got[0][1])), "Bad Request", at)
+    assert_equal(_h2_field(got[0][0], "x-seen"), "<none>", at)
+    assert_equal(_h2_field(got[1][0], ":status"), "200", at)
+    assert_equal(String(from_utf8=Span(got[1][1])), "hello", at)
+    assert_equal(_h2_field(got[1][0], "x-seen"), "1", at)
+
+
 def test_request_target_and_method_bytes_over_h2c_and_http1() raises:
     """A method or target that is not UTF-8 is the adapter's 400 before
     `App.handle`, and the `Server` keeps serving (M3-039)."""
@@ -2295,14 +2363,10 @@ def test_request_target_and_method_bytes_over_h2c_and_http1() raises:
             var at = String("method ", _hex(b[0].as_bytes()), " target ")
             at += _hex(b[1].as_bytes())
             # The request, then a well-formed one on the next stream of the
-            # same connection.
-            var got = h2_streams(child.port, [b, (get, hello_path)])
-            assert_equal(_h2_field(got[0][0], ":status"), "400", at)
-            assert_equal(String(from_utf8=Span(got[0][1])), "Bad Request", at)
-            assert_equal(_h2_field(got[0][0], "x-seen"), "<none>", at)
-            assert_equal(_h2_field(got[1][0], ":status"), "200", at)
-            assert_equal(String(from_utf8=Span(got[1][1])), "hello", at)
-            assert_equal(_h2_field(got[1][0], "x-seen"), "1", at)
+            # same connection: both sent at once, and the well-formed one
+            # sent only after the 400 has been read.
+            _bad_then_hello(h2_streams(child.port, [b, (get, hello_path)]), at)
+            _bad_then_hello(h2_in_turn(child.port, [b, (get, hello_path)]), at)
             # A new connection to the same `Server`.
             var again = h2_request(
                 child.port, get, hello_path, List[Tuple[String, String]]()
