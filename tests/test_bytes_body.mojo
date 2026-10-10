@@ -108,6 +108,7 @@ struct Image(FromBytes):
 
     @staticmethod
     def from_bytes(body: List[UInt8]) raises -> Self:
+        # A sketch, not a PNG validator: only the length and two bytes.
         if len(body) < 8 or body[0] != 0x89 or body[1] != 0x50:
             raise Error("not a PNG")  # 400, upload not called
         return Self(body.copy())  # the bytes are borrowed: keep a copy
@@ -350,11 +351,15 @@ def test_every_body_reaches_from_bytes_byte_for_byte() raises:
             # Muntin adds no field.
             assert_equal(len(r.headers), 0)
         # A text request whose bytes are this body's reaches the same bytes.
+        # Only the conversion is guarded: a body that is not UTF-8 has no
+        # `String`, and an assertion failure must not be swallowed.
+        var text: Optional[String] = None
         try:
-            var text = String(from_utf8=Span(body))
-            _assert_same(client.post("/blob", text).body, body, "text")
+            text = String(from_utf8=Span(body))
         except:
-            pass  # not UTF-8: no `String` holds it
+            pass
+        if text:
+            _assert_same(client.post("/blob", text.value()).body, body, "text")
         var s = client.post("/size", body.copy())
         var sum = 0
         for b in body:
