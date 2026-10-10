@@ -7,11 +7,14 @@
 # accepts silently, and the type inherits the family's limit: here 16, not
 # the 4096 the type meant. The route registers with that limit.
 #
-# If this file stops building, see which part failed. The misspelled member
-# rejected, or the inherited value no longer the family's: Mojo now checks
-# member names against the traits, and the record's limited guarantee for
-# refining traits can be widened. The registration rejected: re-read
-# `_kind`'s handling of a limited type.
+# If this file stops building, see which part failed. `Banner` no longer
+# conforms (the misspelled member rejected): Mojo now checks member names
+# against the traits, and the record's limited guarantee for refining traits
+# can be widened. The assert fails (the value is no longer the family's):
+# Mojo no longer inherits a refining trait's default, which breaks the
+# family-default contract (docs/DX.md, `test_bytes_limit.mojo`'s refining
+# trait test) and its advice. The registration rejected: re-read `_kind`'s
+# handling of a limited type.
 from muntin import App, FromBytes
 
 

@@ -173,7 +173,7 @@ from .state import State
 # so a body always has exactly one conversion.
 #
 # Bytes body limits (M3-043): every `FromBytes` type declares
-# `comptime max_bytes`; `_slot` answers a longer body 413 before
+# `comptime max_bytes` or inherits a refining trait's default; `_slot` answers a longer body 413 before
 # `from_bytes`, after the route values, and in a carrier (through
 # `_HeaderCarrier._max_bytes`) after the JSON steps and before the field
 # rebuild. The length is the body `invoke` passes, after middleware; a

@@ -61,10 +61,10 @@ trait FromBytes(_FromBodyOrBytes):
     longer one 413 `Content Too Large` without calling `from_bytes` or the
     handler, after the route values and, in a carrier, before the field
     rebuild. It is not a precondition of `from_bytes` itself: a direct call
-    is not limited. A type conforming to `FromBytes` directly must declare
-    it, so a missing or misspelled limit does not compile there; under a
-    refining trait's default a misspelled override compiles and inherits
-    the default. `Int.MAX`, which no body exceeds, is no limit. A negative
+    is not limited. A type whose traits give `max_bytes` no default must
+    declare it, so a missing or misspelled limit does not compile there;
+    under a refining trait's default a misspelled override compiles and
+    inherits the default. `Int.MAX`, which no body exceeds, is no limit. A negative
     value is rejected at registration. It measures
     the body `App.handle` holds after middleware, which the backend has
     already received in full: it is not a receive limit, which is the
@@ -72,9 +72,10 @@ trait FromBytes(_FromBodyOrBytes):
     """
 
     comptime max_bytes: Int
-    """The longest body the type accepts, in bytes (0 or more): a type
-    declares `comptime max_bytes = 64 * 1024` once (or a refining trait
-    gives a default); `Int.MAX` is no limit."""
+    """The longest body Muntin passes to `from_bytes` on a typed route, in
+    bytes (0 or more): a type declares `comptime max_bytes = 64 * 1024`
+    once (or inherits a refining trait's default); `Int.MAX` is no
+    limit."""
 
     @staticmethod
     def from_bytes(body: List[UInt8]) raises -> Self:
