@@ -339,7 +339,9 @@ def _unsupported_media_type() -> Response:
 
 
 def _content_too_large() -> Response:
-    """A JSON body route's answer to a body over 1 MiB (M3-009)."""
+    """A JSON body route's answer to a body over 1 MiB (M3-009), and a
+    `FromBytes` body route's to a body over its type's `max_bytes`, bare or
+    carried (M3-043)."""
     return Response.text("Content Too Large", status=413)
 
 
@@ -399,7 +401,8 @@ def _json_status[
 
 
 def _json_answer(status: Int) -> Response:
-    """The response for a nonzero `_json_status`."""
+    """The response for a nonzero `_json_status`, and for a `FromBytes`
+    body's 413 (M3-043)."""
     if status == 415:
         return _unsupported_media_type()
     return _content_too_large()
@@ -552,7 +555,10 @@ def _slot[
         except:
             raise _Reject(500)  # only the `_fields` gap gets here
     elif conforms_to(A, FromBytes):
-        # The bytes as received, borrowed: no UTF-8 read, no copy (M3-041).
+        # The type's limit first (M3-043), then the bytes as received,
+        # borrowed: no UTF-8 read, no copy (M3-041).
+        if len(body) > A.max_bytes:
+            raise _Reject(413)
         try:
             return A.from_bytes(body)
         except:
@@ -566,6 +572,10 @@ def _slot[
             if status != 0:
                 raise _Reject(status)
         comptime if conforms_to(A, _HeaderCarrier):
+            # The carried `FromBytes` type's limit, before the rebuild
+            # (M3-043); `Int.MAX`, no limit, for a text body.
+            if len(body) > A._max_bytes():
+                raise _Reject(413)
             var fields: Headers
             try:
                 fields = _carrier_fields[A](args, at)

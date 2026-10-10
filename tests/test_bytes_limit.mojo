@@ -92,7 +92,7 @@ def _over() -> List[List[UInt8]]:
     far more."""
     var one_more = _every_byte()
     one_more.append(0x00)
-    return [one_more^, _filled(LIMIT + 2), _filled(1 << 20)]
+    return [one_more^, _filled(LIMIT + 2), _filled(64 * 1024)]
 
 
 def _assert_same(got: List[UInt8], want: List[UInt8], what: String) raises:
@@ -260,6 +260,11 @@ struct Strict(FromBytes):
 
 
 struct Note(FromBody):
+    """A text body. Its `max_bytes` is an ordinary member, not a limit:
+    only a `FromBytes` type's is one (M3-043)."""
+
+    comptime max_bytes = 4
+
     var n: Int
 
     def __init__(out self, n: Int):
@@ -645,6 +650,10 @@ def test_a_zero_limit_accepts_only_the_empty_body() raises:
 
 
 def test_no_declared_limit_and_the_largest_int_are_unlimited() raises:
+    assert_equal(Free.max_bytes, Int.MAX)
+    assert_equal(Largest.max_bytes, Int.MAX)
+    assert_equal(Capped.max_bytes, LIMIT)
+    assert_equal(Upload[7].max_bytes, 7)
     var app = limit_app()
     var client = TestClient(app)
     var big = _filled(2 << 20)
@@ -816,6 +825,7 @@ def test_text_json_raw_and_unlimited_routes_are_unchanged() raises:
     var app = limit_app()
     var client = TestClient(app)
     var big = _filled(2 << 20, 0x61)
+    # A text body has no Muntin limit, whatever members its type declares.
     assert_equal(client.post("/note", big.copy()).text(), String(2 << 20))
     assert_equal(client.post("/note", _octets([0xFF])).status, 400)
     assert_equal(client.post("/raw", big.copy()).text(), String(2 << 20))

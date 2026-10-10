@@ -217,6 +217,16 @@ field the carrier holds, in order with its name's casing, then the bytes in
 brackets) is compared byte for byte: the names keep their casing over
 HTTP/1.1, and h2c sends and expects them lowercase (RFC 9113).
 
+M3-043 adds `POST /limited` and the stateful `PATCH /limited-fields/{id}`,
+a bare `FromBytes` type and `WithHeaders` around it whose `max_bytes` is
+16, far below Flare's 10 MiB `max_body_size`. Over each transport a body of
+0 and of exactly 16 bytes (every byte value it can hold) reaches
+`from_bytes` byte for byte, and one of 17 or 4096 bytes is 413 `Content Too
+Large` carrying the middleware's `X-Seen`, which only an answer from
+`App.handle` has: the 413 is Muntin's, not Flare's. A `Content-Length` over
+Flare's own limit is Flare's 413, without `X-Seen`. After each refusal the
+same `Server` answers a valid request.
+
 M3-039 serves `targets_app()` (`marked`, `GET /hello`, `GET /names/{name}`
 and `GET /items?{limit}`) and sends methods and targets whose bytes are not
 UTF-8 over h2c, where Flare v0.12.0 passes them to the adapter, with the raw
@@ -2115,6 +2125,41 @@ def typed_bytes_fields(
     return Response(200, out^)
 
 
+struct Limited(FromBytes):
+    """A typed binary body with a Muntin limit (M3-043): keeps every byte it
+    receives, up to 16."""
+
+    comptime max_bytes = 16
+
+    var data: List[UInt8]
+
+    def __init__(out self, var data: List[UInt8]):
+        self.data = data^
+
+    @staticmethod
+    def from_bytes(body: List[UInt8]) raises -> Self:
+        return Self(body.copy())
+
+
+def limited(body: Limited) -> Response:
+    """Answers the bytes `Limited.from_bytes` received, in brackets."""
+    return Response(200, _bracketed(body.data))
+
+
+def limited_fields(
+    tag: State[Tag], id: Int, input: WithHeaders[Limited]
+) -> Response:
+    """The state's tag, the route value and every `x-` field, then the bytes
+    `Limited.from_bytes` received, in brackets."""
+    var head = String(tag[].tag, " ", id, " ")
+    for i in range(len(input.headers)):
+        if input.headers.name(i).lower().startswith("x-"):
+            head += input.headers.value(i) + ";"
+    var out = List((head + "|").as_bytes())
+    out.extend(Span(_bracketed(input.body.data)))
+    return Response(200, out^)
+
+
 def marked(var request: Request, var next: Next) raises -> Response:
     """Adds `X-Seen: 1` to every answer `App.handle` gives."""
     var response = next^.run(request^)
@@ -2135,6 +2180,8 @@ def bodies_app() -> App:
     app.post["/typed-bytes"](typed_bytes)
     app.put["/typed-bytes/{id}"](typed_bytes_put, State(Tag("t")))
     app.patch["/typed-bytes-fields/{id}"](typed_bytes_fields, State(Tag("f")))
+    app.post["/limited"](limited)
+    app.patch["/limited-fields/{id}"](limited_fields, State(Tag("l")))
     return app^
 
 
@@ -2626,6 +2673,206 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
         )
         assert_equal(after[0][0].value, "200")
         assert_equal(String(from_utf8=Span(after[1])), "hello")
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+def _sixteen() -> List[UInt8]:
+    """Exactly `Limited.max_bytes` bytes, not UTF-8: 0x00 to 0x07, then
+    0xF8 to 0xFF."""
+    var out = List[UInt8]()
+    for i in range(8):
+        out.append(UInt8(i))
+    for i in range(8):
+        out.append(UInt8(0xF8 + i))
+    return out^
+
+
+def h1_head_only(port: Int, head: String) raises -> String:
+    """Sends `head` (a request line and fields ending in a blank line) and
+    no body, and returns everything the server sends before closing, as
+    text."""
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.set_recv_timeout(TIMEOUT_MS)
+    var wire = List(head.as_bytes())
+    stream.write_all(Span[UInt8, _](wire))
+    var acc = List[UInt8]()
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    while True:
+        var n = stream.read(buf.unsafe_ptr(), len(buf))
+        if n == 0:
+            break
+        for k in range(n):
+            acc.append(buf[k])
+    return String(from_utf8_lossy=Span(acc))
+
+
+def test_typed_bytes_limit_over_http1_and_h2c() raises:
+    """A `FromBytes` type's `max_bytes` (M3-043) over the wire: within it the
+    body reaches `from_bytes` byte for byte, bare and in `WithHeaders`; over
+    it the answer is `App.handle`'s 413, through the middleware (`X-Seen`),
+    over HTTP/1.1 (`Content-Length`, chunked) and h2c (one and two DATA
+    frames); the same `Server` keeps answering."""
+    var octets: List[Tuple[String, String]] = [
+        (String("content-type"), String("application/octet-stream"))
+    ]
+    var fields: List[Tuple[String, String]] = [
+        (String("X-Sig"), String("a")),
+        (String("x-empty"), String("")),
+        (String("x-sig"), String("b")),
+    ]
+    var fields_h2 = List[Tuple[String, String]]()
+    for f in fields:
+        fields_h2.append((f[0].lower(), f[1]))
+    var within: List[List[UInt8]] = [List[UInt8](), _sixteen()]
+    var one_more = _sixteen()
+    one_more.append(0xFF)
+    var over: List[List[UInt8]] = [
+        one_more^,
+        List[UInt8](length=4096, fill=0xFF),
+    ]
+    var child = _serve_in_child(bodies_app())
+    try:
+        for transport in range(4):
+            var chunked = transport == 1
+            var split = transport == 3
+            var name = String(
+                "HTTP/1.1" if transport
+                == 0 else (
+                    "HTTP/1.1 chunked" if chunked else (
+                        "h2c two DATA frames" if split else "h2c"
+                    )
+                )
+            )
+            for body in within:
+                var what = String(name, " ", len(body), " bytes")
+                var bare: List[UInt8]
+                var carried: List[UInt8]
+                if transport < 2:
+                    var b = h1_exchange(
+                        child.port, "POST", "/limited", octets, body, chunked
+                    )
+                    assert_equal(b[0], "HTTP/1.1 200 OK", what)
+                    bare = b[2].copy()
+                    var c = h1_exchange(
+                        child.port,
+                        "PATCH",
+                        "/limited-fields/7",
+                        fields,
+                        body,
+                        chunked,
+                    )
+                    assert_equal(c[0], "HTTP/1.1 200 OK", what)
+                    carried = c[2].copy()
+                else:
+                    var b = h2_exchange(
+                        child.port, "POST", "/limited", octets, body, split
+                    )
+                    assert_equal(
+                        _h2_fields(b[0]), ":status=200;x-seen=1;", what
+                    )
+                    bare = b[1].copy()
+                    var c = h2_exchange(
+                        child.port,
+                        "PATCH",
+                        "/limited-fields/7",
+                        fields_h2,
+                        body,
+                        split,
+                    )
+                    assert_equal(
+                        _h2_fields(c[0]), ":status=200;x-seen=1;", what
+                    )
+                    carried = c[1].copy()
+                assert_true(
+                    _same_bytes(Span(bare), Span(_bracketed(body))), what
+                )
+                var want = List("l 7 a;;b;|".as_bytes())
+                want.extend(Span(_bracketed(body)))
+                assert_true(_same_bytes(Span(carried), Span(want)), what)
+            for body in over:
+                var what = String(name, " ", len(body), " bytes")
+                if transport < 2:
+                    for target in ["/limited", "/limited-fields/7"]:
+                        var r = h1_exchange(
+                            child.port,
+                            "POST" if target == "/limited" else "PATCH",
+                            target,
+                            fields,
+                            body,
+                            chunked,
+                        )
+                        assert_equal(
+                            r[0], "HTTP/1.1 413 Content Too Large", what
+                        )
+                        # `X-Seen`: the answer passed through App.handle.
+                        assert_equal(
+                            r[1],
+                            "X-Seen: 1;Content-Length: 17;Connection: close;",
+                            what,
+                        )
+                        assert_equal(
+                            String(from_utf8=Span(r[2])),
+                            "Content Too Large",
+                            what,
+                        )
+                else:
+                    for target in ["/limited", "/limited-fields/7"]:
+                        var r = h2_exchange(
+                            child.port,
+                            "POST" if target == "/limited" else "PATCH",
+                            target,
+                            fields_h2,
+                            body,
+                            split,
+                        )
+                        assert_equal(
+                            _h2_fields(r[0]), ":status=413;x-seen=1;", what
+                        )
+                        assert_equal(
+                            String(from_utf8=Span(r[1])),
+                            "Content Too Large",
+                            what,
+                        )
+                # The same Server answers a valid request after the refusal.
+                var again = h1_exchange(
+                    child.port, "POST", "/limited", octets, _sixteen()
+                )
+                assert_equal(again[0], "HTTP/1.1 200 OK", what)
+                assert_true(
+                    _same_bytes(Span(again[2]), Span(_bracketed(_sixteen()))),
+                    what,
+                )
+            print(
+                "observed",
+                name + ":",
+                (
+                    "0 and 16 bytes reach Limited.from_bytes exactly, bare and"
+                    " in WithHeaders; 17 and 4096 bytes are 413 with X-Seen"
+                    " (App.handle's); the Server answers afterwards"
+                ),
+            )
+        # Flare's own limit, for contrast: a declared length over its
+        # 10 MiB `max_body_size` is refused before the adapter, so its 413
+        # carries no `X-Seen`.
+        var flare = h1_head_only(
+            child.port,
+            String(
+                "POST /limited HTTP/1.1\r\nHost: localhost\r\n",
+                "Content-Length: ",
+                10 * 1024 * 1024 + 1,
+                "\r\nConnection: close\r\n\r\n",
+            ),
+        )
+        print("observed Flare's own refusal:", flare.split("\r\n")[0])
+        assert_true(flare.startswith("HTTP/1.1 413 "), flare)
+        assert_true("X-Seen" not in flare, flare)
+        var after = h2_exchange(
+            child.port, "POST", "/limited", octets, _sixteen()
+        )
+        assert_equal(_h2_fields(after[0]), ":status=200;x-seen=1;")
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
