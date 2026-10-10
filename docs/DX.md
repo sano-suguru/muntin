@@ -1105,6 +1105,7 @@ def note(req: Request) raises -> Response:
     return Response.text("note: " + req.text())
 
 
+var app = App()
 app.post["/upload"](upload)
 app.post["/note"](note)
 var png: List[UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
