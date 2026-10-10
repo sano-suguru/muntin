@@ -19,7 +19,7 @@ from ._registration_rules import (
     _path_part,
     _query_items,
 )
-from .body import FromBody, FromBytes
+from .body import FromBody, FromBytes, _body_text
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
@@ -143,15 +143,18 @@ from .state import State
 # (`from_body`), handler.
 #
 # Header carriers (M3-012): `WithHeaders[B]` (`headers_body.mojo`) is a body
-# slot without being a `FromBody`: `_kind` accepts `FromBody` or the private
-# marker `_HeaderCarrier`, and the route sets `_Route.headers` for a carrier.
+# slot without being a `FromBody` or a `FromBytes`: `_kind` accepts those or
+# the private marker `_HeaderCarrier`, and the route sets `_Route.headers` for
+# a carrier.
 # For such a route, `App.handle` appends each request header field's name
 # and value after the route values and the JSON verdict (the R1 transport raw
 # routes use). The body slot then rebuilds the fields into a `Headers`
 # (`_carrier_fields`; a failure, which only the M3-002 `_fields` gap can cause,
-# is the fixed 500), reads the body as UTF-8 (400 if it is not) and builds the
-# carrier with `B._from_parts`, which converts the text with the inner
-# `from_body` (a raise: 400). The carrier forwards
+# is the fixed 500) and builds the carrier with `B._from_parts` from the
+# borrowed body bytes, which converts them as a bare body of the inner type
+# (M3-042): a `FromBody` reads them as UTF-8 (400 if they are not) and calls
+# `from_body`, a `FromBytes` calls `from_bytes` on them unread and uncopied;
+# a raise is 400. The carrier forwards
 # `_JsonBody` exactly when its body does, so a `WithHeaders[Json[T]]` route
 # keeps the order above; its arity check allows only name and value pairs after
 # the verdict, and every other JSON body keeps the exact arity. Muntin chooses
@@ -162,10 +165,11 @@ from .state import State
 # Bytes bodies (M3-041): a `FromBytes` type is a body slot too (`_kind`), on
 # every shape that takes a `FromBody`, and `_slot` passes it the request's
 # body bytes, borrowed from `invoke`, with no UTF-8 read and no copy; a raise
-# is 400. It is never a JSON body or a carrier (`WithHeaders[B]` takes a
-# `FromBody`), so `App.handle` appends nothing for it. A type that conforms to
-# both `FromBody` and `FromBytes` is rejected by the rules, so a body always
-# has exactly one conversion.
+# is 400. It is never a JSON body, so `App.handle` appends nothing for it
+# unless it is inside a carrier (M3-042), which receives the fields as any
+# carrier does and no `Content-Type` verdict. A type that conforms to both
+# `FromBody` and `FromBytes` is rejected by the rules, alone or in a carrier,
+# so a body always has exactly one conversion.
 #
 # Header slots (M3-016): on `get` and `delete`, `Headers` is a slot kind by
 # exact type equality (no trait, so no application type is one), accepted
@@ -455,14 +459,6 @@ def _header_slot(args: List[String], at: Int) raises -> Headers:
     return headers^
 
 
-def _body_text(body: List[UInt8]) raises -> String:
-    """The text a body slot converts: a copy of the body bytes when they are
-    well-formed UTF-8 (M3-040). Raises when they are not, and the slot
-    answers 400, as for a `from_body` raise; no byte is replaced, so a typed
-    body never receives a U+FFFD the client did not send."""
-    return String(from_utf8=Span(body))
-
-
 def _as[T: Movable, A: Movable](var value: T) -> A:
     """`value` as `A`, which must equal `T`: the one `rebind_var` in
     `src/muntin`.
@@ -516,9 +512,10 @@ def _slot[
     `FromBody` body is read as UTF-8 (`_body_text`; 400 if it is not) and converted with
     `A.from_body` (400 if it raises); for a JSON body (`_JsonBody`) the 415
     and 413 steps run first (`_json_status`); a `WithHeaders` carrier has
-    its header fields rebuilt (the fixed 500 on failure), then its body read
-    as UTF-8, and is built through `A._from_parts`, whose inner `from_body`
-    raise is the same 400. A `FromBytes` body (M3-041) is converted with
+    its header fields rebuilt (the fixed 500 on failure), then is built
+    through `A._from_parts` from the borrowed bytes, which converts them as
+    a bare body of the carried type (M3-042: a UTF-8 read and `from_body`,
+    or `from_bytes` on them unread), a failure being the same 400. A `FromBytes` body (M3-041) is converted with
     `A.from_bytes(body)`, the borrowed bytes unread and uncopied by Muntin
     (400 if it raises); the rules reject a type that is also a `FromBody`.
 
@@ -575,7 +572,7 @@ def _slot[
             except:
                 raise _Reject(500)  # only the `_fields` gap gets here
             try:
-                return A._from_parts(_body_text(body), fields^)
+                return A._from_parts(body, fields^)
             except:
                 raise _Reject(400)
         else:
@@ -1253,18 +1250,20 @@ struct App(Movable):
         The parameter is the request body: an application type conforming
         to `FromBody`, converted with `from_body` before `handler` runs (a
         conversion failure yields 400 without calling `handler`), or a
-        `WithHeaders[B2]` carrier with `B2: FromBody`, which has no
-        `from_body`: its fields are rebuilt (the fixed 500 on failure) and
-        it is built through `_from_parts`, which converts the inner body
-        with `B2.from_body` (400 on failure); the handler also receives the
-        request's header fields, for which Muntin chooses no status. A
+        `WithHeaders[B2]` carrier with `B2` a `FromBody` or a `FromBytes`,
+        which has no conversion of its own: its fields are rebuilt (the
+        fixed 500 on failure) and it is built through `_from_parts`, which
+        converts the inner body as a bare `B2` is (400 on failure, M3-042);
+        the handler also receives the request's header fields, for which
+        Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
         413 when it is over 1 MiB. Every text body's bytes are read as
         UTF-8 before `from_body` (400 if they are not, M3-040). A type
         conforming to `FromBytes` instead receives the body's bytes,
         whatever they are and unread, in `from_bytes` (400 if it raises,
-        M3-041); a type conforming to both traits is rejected. The body may be
+        M3-041), alone or in a carrier; a type conforming to both traits is
+        rejected. The body may be
         declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
@@ -1503,18 +1502,20 @@ struct App(Movable):
         The parameter is the request body: an application type conforming
         to `FromBody`, converted with `from_body` before `handler` runs (a
         conversion failure yields 400 without calling `handler`), or a
-        `WithHeaders[B2]` carrier with `B2: FromBody`, which has no
-        `from_body`: its fields are rebuilt (the fixed 500 on failure) and
-        it is built through `_from_parts`, which converts the inner body
-        with `B2.from_body` (400 on failure); the handler also receives the
-        request's header fields, for which Muntin chooses no status. A
+        `WithHeaders[B2]` carrier with `B2` a `FromBody` or a `FromBytes`,
+        which has no conversion of its own: its fields are rebuilt (the
+        fixed 500 on failure) and it is built through `_from_parts`, which
+        converts the inner body as a bare `B2` is (400 on failure, M3-042);
+        the handler also receives the request's header fields, for which
+        Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
         413 when it is over 1 MiB. Every text body's bytes are read as
         UTF-8 before `from_body` (400 if they are not, M3-040). A type
         conforming to `FromBytes` instead receives the body's bytes,
         whatever they are and unread, in `from_bytes` (400 if it raises,
-        M3-041); a type conforming to both traits is rejected. The body may be
+        M3-041), alone or in a carrier; a type conforming to both traits is
+        rejected. The body may be
         declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
@@ -1755,18 +1756,20 @@ struct App(Movable):
         The parameter is the request body: an application type conforming
         to `FromBody`, converted with `from_body` before `handler` runs (a
         conversion failure yields 400 without calling `handler`), or a
-        `WithHeaders[B2]` carrier with `B2: FromBody`, which has no
-        `from_body`: its fields are rebuilt (the fixed 500 on failure) and
-        it is built through `_from_parts`, which converts the inner body
-        with `B2.from_body` (400 on failure); the handler also receives the
-        request's header fields, for which Muntin chooses no status. A
+        `WithHeaders[B2]` carrier with `B2` a `FromBody` or a `FromBytes`,
+        which has no conversion of its own: its fields are rebuilt (the
+        fixed 500 on failure) and it is built through `_from_parts`, which
+        converts the inner body as a bare `B2` is (400 on failure, M3-042);
+        the handler also receives the request's header fields, for which
+        Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
         413 when it is over 1 MiB. Every text body's bytes are read as
         UTF-8 before `from_body` (400 if they are not, M3-040). A type
         conforming to `FromBytes` instead receives the body's bytes,
         whatever they are and unread, in `from_bytes` (400 if it raises,
-        M3-041); a type conforming to both traits is rejected. The body may be
+        M3-041), alone or in a carrier; a type conforming to both traits is
+        rejected. The body may be
         declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
@@ -2272,8 +2275,9 @@ struct App(Movable):
         carrier or its last slot is `Headers` (`_Route.headers`). A text
         body route's adapter reads the body bytes as UTF-8 in its body slot
         (`_slot`), converts the text and answers 400 itself if either fails;
-        a `FromBytes` body route's adapter passes the bytes to `from_bytes` unread
-        and answers 400 if it raises (M3-041).
+        a `FromBytes` body route's adapter, bare or in a carrier, passes the
+        bytes to `from_bytes` unread and answers 400 if it raises (M3-041,
+        M3-042).
         A JSON body route (`_Route.json`) also receives the request's
         `Content-Type` verdict after its route values, for the body slot's
         415 step. A carrier route then receives each header field's name
