@@ -144,7 +144,7 @@ def verify_unmapped(req: Request) raises Unmapped -> Response:
 
 def webhook(req: Request) -> Response:
     """The docs/DX.md section 9 example, verbatim."""
-    if Span(req.body) != "signed".as_bytes():  # the body's bytes
+    if Span(req.body) != "signed".as_bytes():  # application code decides
         return Response.text("unsigned", status=401)
     return Response.text("ok")
 

@@ -655,7 +655,7 @@ def remove_user(id: Int, headers: Headers) raises Unauthorized -> String:
     return String("removed ", id)
 
 
-def purge(req: Request) raises -> Response:  # raw: reads a DELETE body
+def purge(req: Request) raises -> Response:  # raw: reads a DELETE body as text
     return Response.text("purged " + req.path + " [" + req.text() + "]")
 
 

@@ -185,20 +185,21 @@ HTTP/1.1 and over h2c, `GET /hello` and the 404 carry the field, and
 so the adapter's `HEAD` step applies to the middleware's answer. The adapter
 is unchanged.
 
-M3-038 serves `bodies_app()` (middleware adding `X-Seen: 1`, a raw
-`POST /bytes` answering the hex of the body bytes it received, a raw
-`POST /echo-raw` answering its body unchanged, the typed `POST /echo`, the
-JSON `POST /greet` and `GET /hello`) and sends request bodies with raw
-clients over HTTP/1.1 (`h1_exchange`) and h2c (`h2_exchange`, the body in
-one DATA frame), reading the response bytes unparsed. A well-formed UTF-8
-body (a U+FFFD the client sent, NUL, empty and an octet stream that happens
-to be UTF-8 included) reaches `App.handle` byte for byte, equal to
-`App.handle`'s answer, and comes back unchanged; a body that is not UTF-8
-(`0x80`, `0xFF`, truncated, overlong, a surrogate, a sent U+FFFD then
-`0xFF`, the PNG signature) is the adapter's 400 before `App.handle` on a
-route, a 405 path and a 404 path, without the middleware's field, and
-under the `HEAD` rule over h2c; the JSON route parses a sent U+FFFD and
-answers 400 to a `0xFF` it parsed as U+FFFD before.
+M3-040 (which replaced M3-038's case) serves `bodies_app()` (middleware
+adding `X-Seen: 1`, a raw `POST /bytes` answering the hex of the body bytes
+it received, the raw byte echo `POST /echo-raw`, the DX example
+`POST /upload`, the typed `POST /echo`, the JSON `POST /greet`, the binary
+`GET /blob` and `GET /hello`) and sends request bodies with raw clients over
+HTTP/1.1 (`h1_exchange`, `Content-Length` or chunked) and h2c
+(`h2_exchange`, one DATA frame or two), reading the response bytes
+unparsed. Every body, well-formed UTF-8 or not (`0x80`, `0xFF`, truncated,
+overlong, a surrogate, the PNG signature, every byte value), reaches
+`App.handle` byte for byte and comes back from the raw echo with the same
+length and bytes and no `Content-Type` added; the typed route answers a body
+that is not UTF-8 with `App.handle`'s 400 through the middleware; 405, 404
+and `HEAD` are `App.handle`'s, through the middleware; the JSON route parses
+a sent U+FFFD and answers a `0xFF` 400; a binary `GET` answer and its `HEAD`
+length go out exactly; and the same `Server` answers afterwards.
 
 M3-039 serves `targets_app()` (`marked`, `GET /hello`, `GET /names/{name}`
 and `GET /items?{limit}`) and sends methods and targets whose bytes are not
@@ -2001,7 +2002,7 @@ def test_get_headers_over_localhost_match_app_handle() raises:
         waitpid(child.pid)
 
 
-# ── M3-038: request body bytes ─────────────────────────────────────────────
+# ── M3-040: request and response body bytes ─────────────────────────────────
 
 
 def _hex(bytes: Span[UInt8, _]) -> String:
@@ -2034,6 +2035,13 @@ def body_echo(req: Request) -> Response:
     return Response(200, req.body.copy())
 
 
+def upload(req: Request) raises -> Response:
+    """The docs/DX.md section 9 "Binary bodies" handler, as written there."""
+    var r = Response(200, req.body.copy())
+    r.headers.add("Content-Type", "application/octet-stream")
+    return r^
+
+
 def blob(req: Request) -> Response:
     """A binary `GET` answer: three bytes, not UTF-8."""
     return Response(200, _octets([0xFF, 0x00, 0x80]))
@@ -2055,6 +2063,7 @@ def bodies_app() -> App:
     app.post["/echo"](echo)
     app.post["/greet"](greet)
     app.get["/blob"](blob)
+    app.post["/upload"](upload)
     return app^
 
 
@@ -2355,6 +2364,24 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
         assert_equal(String(from_utf8=Span(b1[2])), "Bad Request")
         var b2 = h2_exchange(child.port, "POST", "/greet", json, bad_json, True)
         assert_equal(_h2_fields(b2[0]), ":status=400;x-seen=1;")
+        # The DX example: a PNG signature back byte for byte, with the
+        # handler's own Content-Type, on both protocols.
+        var sig = _octets([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        var u1 = h1_exchange(child.port, "POST", "/upload", octets, sig)
+        assert_equal(
+            u1[1],
+            (
+                "Content-Type: application/octet-stream;X-Seen:"
+                " 1;Content-Length: 8;Connection: close;"
+            ),
+        )
+        assert_true(_same_bytes(Span(u1[2]), Span(sig)))
+        var u2 = h2_exchange(child.port, "POST", "/upload", octets, sig, True)
+        assert_equal(
+            _h2_fields(u2[0]),
+            ":status=200;content-type=application/octet-stream;x-seen=1;",
+        )
+        assert_true(_same_bytes(Span(u2[1]), Span(sig)))
         # A binary GET answer goes out exactly; HEAD sends no content and
         # declares the byte length, 3, on both protocols.
         var none = List[Tuple[String, String]]()

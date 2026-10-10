@@ -113,6 +113,22 @@ def as_text(req: Request) raises -> Response:
     return Response.text("text " + req.text())
 
 
+# The docs/DX.md section 9 "Binary bodies" example, verbatim.
+
+
+def upload(req: Request) raises -> Response:
+    # Any bytes, as received, sent back byte for byte; Muntin adds no
+    # Content-Type, so the handler sets its own.
+    var r = Response(200, req.body.copy())
+    r.headers.add("Content-Type", "application/octet-stream")
+    return r^
+
+
+def note(req: Request) raises -> Response:
+    # `text()` raises if the body is not UTF-8.
+    return Response.text("note: " + req.text())
+
+
 # Typed text bodies.
 
 
@@ -184,6 +200,27 @@ def binary_app() -> App:
     app.post["/carrier"](typed_with_headers)
     app.post["/greet"](greet)
     return app^
+
+
+def test_dx_binary_example() raises:
+    var app = App()
+    app.post["/upload"](upload)
+    app.post["/note"](note)
+    var png: List[UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    var r = TestClient(app).post("/upload", png^)
+    assert_equal(r.status, 200)
+    _assert_same(
+        r.body, _octets([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), "png"
+    )
+    assert_equal(len(r.headers), 1)
+    assert_equal(
+        r.headers.get("content-type").value(), "application/octet-stream"
+    )
+    var client = TestClient(app)
+    assert_equal(client.post("/note", "hé").text(), "note: hé")
+    var bad = client.post("/note", _octets([0xFF]))
+    assert_equal(bad.status, 500)
+    assert_equal(bad.text(), "Internal Server Error")
 
 
 def test_raw_echo_returns_every_body_byte_for_byte() raises:

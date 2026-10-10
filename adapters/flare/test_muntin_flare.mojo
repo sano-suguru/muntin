@@ -1,6 +1,6 @@
 """Socket-free contract tests for the Flare adapter (M1-002; headers M3-005;
-`HEAD` M3-027; 405 M3-031; request body bytes M3-038; request target and
-method bytes M3-039).
+`HEAD` M3-027; 405 M3-031; request and response body bytes M3-040, which
+replaced M3-038; request target and method bytes M3-039).
 
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). Every
 dispatch goes through `MuntinHandler.serve`, a Flare handler entry point that

@@ -166,8 +166,8 @@ Semantics:
 
 - `FromBody` is a public Muntin trait refining `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`. The application type conforms to it in its own module; Muntin never names the type. `from_body(body: String)` is the current public body-conversion input contract (`from_body` receives the body as one `String` and sees no header fields or content type, although `Request` carries headers); future body capabilities are added as new APIs without changing it.
 - The body-only shape of `app.post[route](handler)` is a handler (non-raising or raising, section 6) with one parameter, the body, on a route literal with no path or query placeholder (the route-value-then-body shape is below). It returns `String` or `StaticString` (a string-literal result is text too) or a type conforming to `ToResponse` (section 5). Parameter names are not consulted.
-- Muntin calls `from_body(request.body)` before the handler. The body comes from the request body only, never from the path or query (`POST /users?name=Bob` with body `name=Ada` -> `created Ada`), byte for byte (an empty body, surrounding whitespace, NUL and a U+FFFD the client sent reach `from_body` unchanged), and the `Request` is borrowed, not consumed. If `from_body` raises, the response is 400 `Bad Request` and the handler is not called. Routes are selected by method and path as for `GET`; a path no route matches is 404, a path only routes of other methods match is 405 with `Allow`, and `from_body` is not called.
-- A body is text: `Request.body` is a `String`. Through Flare, a request whose body is not well-formed UTF-8 (`0x80`, `0xFF`, a truncated or overlong sequence, a surrogate) is answered 400 `Bad Request` by the adapter before `App.handle`, over HTTP/1.1 and cleartext HTTP/2 (Flare's own refusals come first and are unchanged; among them, a body over its `max_body_size`, 10 MiB by default, and a request its HTTP/1.1 parser or HTTP/2 layer rejects never reach the adapter): no middleware, route scan, `from_body` or handler runs, so it is 400 even on a path no route matches; it is never replaced by U+FFFD. Every other body, U+FFFD and NUL included, reaches the application byte for byte. Binary bodies (images, protobuf, other charsets) are not supported: one that is not UTF-8 is refused, and one that happens to be UTF-8 arrives as text ([Request body bytes decision (M3-038)](history/architecture-decisions.md#request-body-bytes-decision-m3-038)).
+- Muntin reads the request body's bytes as UTF-8 and calls `from_body` with that text before the handler. The body comes from the request body only, never from the path or query (`POST /users?name=Bob` with body `name=Ada` -> `created Ada`), byte for byte (an empty body, surrounding whitespace, NUL and a U+FFFD the client sent reach `from_body` unchanged), and the `Request` is borrowed, not consumed. If the bytes are not well-formed UTF-8, or `from_body` raises, the response is 400 `Bad Request` and the handler is not called. Routes are selected by method and path as for `GET`; a path no route matches is 404, a path only routes of other methods match is 405 with `Allow`, and `from_body` is not called.
+- `Request.body` is the body's bytes (`List[UInt8]`), exactly as the backend received them, and a typed body is text read from them strictly: bytes that are not well-formed UTF-8 (`0x80`, `0xFF`, a truncated or overlong sequence, a surrogate, a PNG signature) are 400 before `from_body`, after routing and through middleware, and are never replaced by U+FFFD, so `from_body` never sees a U+FFFD the client did not send. Through Flare every body reaches `App.handle` byte for byte, over HTTP/1.1 and cleartext HTTP/2 (Flare's own refusals come first and are unchanged; among them, a body over its `max_body_size`, 10 MiB by default, and a request its HTTP/1.1 parser or HTTP/2 layer rejects never reach the adapter). A binary body is for a raw handler (section 9); a typed binary body is not supported ([Binary request and response bodies decision (M3-040)](history/architecture-decisions.md#binary-request-and-response-bodies-decision-m3-040)).
 - Compile-time errors at `app.post`: a parameter type that is neither a `FromBody` body nor a `WithHeaders[B]` carrier (section 4), including `String` (`constraint failed: the handler's parameter is the request body; its type must conform to FromBody`; the message names only `FromBody`); a `Request` body parameter, i.e. `def(req: Request)` with a result other than `Response` or `def(id: Int, req: Request)` (section 9: `constraint failed: Request is the whole request, not a body; a raw handler takes only the Request and returns Response`; two `Request`s are `constraint failed: a raw post handler takes only the Request and returns Response`, and `mut req` matches no overload); an `Int` parameter (`constraint failed: Int is a route-value type, never the request body; the body parameter's type must conform to FromBody`); a path or query placeholder (`constraint failed: handler takes only the request body; route must declare no path or query parameter`). No parameter is `constraint failed: a post handler takes the request body as its last parameter`, and two bodies `constraint failed: a post handler takes one request body, as its last parameter`. A raw `def(request: Request) -> Response` handler is the raw shape (section 9). A body handler passed to `app.get` is `constraint failed: a get handler takes no request body`.
 - `TestClient.post(target, body)` sends `Request("POST", target, body)` through `App.handle`, like `TestClient.get`.
 
@@ -235,8 +235,8 @@ def remove_user(id: Int, headers: Headers) raises Unauthorized -> String:
     return String("removed ", id)
 
 
-def purge(req: Request) -> Response:  # raw: reads a DELETE body
-    return Response.text("purged " + req.path + " [" + req.body + "]")
+def purge(req: Request) raises -> Response:  # raw: reads a DELETE body as text
+    return Response.text("purged " + req.path + " [" + req.text() + "]")
 
 
 var app = App()                       # its own App: the ones above register POST /users/{id}
@@ -685,8 +685,8 @@ app.post["/users/{id}"](replace_user)    # route value, then body
 - `body.value^` does not compile (`field 'body.value...' destroyed out of the middle of a value`); `body^.take()` on a `var body` moves the whole value out (a move-only `T` works). As for any Mojo 1.1.0 struct, moving one field out of that value needs a `deinit` method on the type; otherwise copy the field.
 - `Json[T]` requires `T: FromJson` as a body and `T: ToJson` as a result; otherwise the registration fails (`its type must conform to FromBody`; for the result, `no matching method` with the `where` clause's `violated constraint`).
 - The RFC 8259 grammar, strictly, with Muntin's limits: comments, trailing commas, leading zeros, `NaN`, duplicate member names, a byte order mark, lone surrogates and nesting deeper than 64 are 400. Extra members are ignored. `int()` takes integer literals that fit `Int`, exactly. `float()` goes through Mojo 1.1.0's `atof`: long literals (`100000000000000000000000`) raise (400), and some values come back 1 ulp off (`-2.7546748226290886e+20`, `123456789012345678`); `String(Float64)` in the writer likewise does not always print text that reads back to the same double. Known toolchain gaps, pinned in `tests/test_json.mojo`; read exact values with `int()`.
-- Order on a JSON body route, each step before the next runs: no matching route 404 or 405; a missing, duplicated or invalid query value 400; an invalid path value 400; the `Content-Type` 415; the size 413; malformed JSON or a `from_json` raise 400; then the handler. Every shape that takes a `FromBody` body takes `Json[T]` (body only or `Int` then body, stateless or stateful, either result policy). Other body types keep their rules: no `Content-Type` required and no Muntin cap.
-- Through the Flare backend, a body that is not well-formed UTF-8 is the adapter's 400 before `App.handle` (section 4), so the codec parses only the bytes the client sent: a U+FFFD the client sent in a string is a character, and a byte that is not UTF-8 is never parsed as one.
+- Order on a JSON body route, each step before the next runs: no matching route 404 or 405; a missing, duplicated or invalid query value 400; an invalid path value 400; the `Content-Type` 415; the size 413; a body that is not UTF-8 400; malformed JSON or a `from_json` raise 400; then the handler. Every shape that takes a `FromBody` body takes `Json[T]` (body only or `Int` then body, stateless or stateful, either result policy). Other body types keep their rules: no `Content-Type` required and no Muntin cap.
+- A body that is not well-formed UTF-8 is 400 before parsing (section 4), so the codec parses only the bytes the client sent: a U+FFFD the client sent in a string is a character, and a byte that is not UTF-8 is never parsed as one.
 - JSON bodies are capped at 1 MiB (fixed; 413 above it, and `Json[T].from_body` raises on a larger body in a raw handler). Parsing is linear apart from a sort of each object's member names (duplicates); member lookup (`get`, `value[name]`) scans the object's members, so reading k fields of an m-member object costs O(k·m). At the cap parsing adds at most about 29 MB of memory (measured: 1 MiB of `[0,0,...]`; 1 MiB of typical records adds about 5 MB). Other body types have no Muntin cap.
 - A test reaches a JSON body route through `TestClient` by sending the field (section 10):
 
@@ -1034,7 +1034,7 @@ from muntin import App, Request, Response
 
 
 def webhook(req: Request) -> Response:       # `var req: Request` also works
-    if req.body != "signed":                 # application code decides
+    if Span(req.body) != "signed".as_bytes():  # application code decides
         return Response.text("unsigned", status=401)
     return Response.text("ok")
 
@@ -1081,9 +1081,45 @@ Semantics:
 - The handler may declare `req: Request` (canonical) or `var req: Request` (it owns a fresh copy of the request and can move `req.body` out). It returns `Response` only.
 - It may be non-raising, `raises` or `raises T`, under the error model of section 6: a `T` declaring `ToErrorResponse` answers its own response, anything else is the fixed 500 without the error text.
 - The route is selected by method and path as usual (405 with `Allow` when only routes of other methods match the path, 404 otherwise, without calling the handler; first registration wins across raw and typed routes, and a typed route's 400 does not fall through to a later one). The route literal declares no path or query parameter (`def()`'s rule and messages: `route declares a path parameter but the handler takes none`, `... query parameter ...`, `malformed route literal`).
-- The handler reads `req.method`, `req.path`, `req.query` and `req.body` exactly as the backend built them (the query undecoded, an empty body included). `req.body` is text: through Flare a body that is not UTF-8 never reaches a raw handler (the adapter's 400, section 4), so the escape hatch does not carry binary content; nor does a method or target that is not UTF-8 (the target bullet of "Proven vs. target status"). A raw `get` handler also answers `HEAD`, with `req.method == "HEAD"`, and returns the body it would return for `GET` ("`HEAD`" in "Proven vs. target status"). Muntin runs no typed extraction on a raw route, so it generates no 400 before the handler; the handler's `Response` (or its error's `to_error_response()`) may use any status, 400 included.
+- The handler reads `req.method`, `req.path`, `req.query` and `req.body` exactly as the backend built them (the query undecoded, an empty body included). `req.body` is the body's bytes, whatever they are (below); a method or target that is not UTF-8 never reaches a raw handler (the target bullet of "Proven vs. target status"). A raw `get` handler also answers `HEAD`, with `req.method == "HEAD"`, and returns the body it would return for `GET` ("`HEAD`" in "Proven vs. target status"). Muntin runs no typed extraction on a raw route, so it generates no 400 before the handler; the handler's `Response` (or its error's `to_error_response()`) may use any status, 400 included.
 - A raw-shaped handler that breaks the raw rule on `post` (`def(req: Request) -> String` or `-> User`, `def(id: Int, req: Request)`) reports `constraint failed: Request is the whole request, not a body; a raw handler takes only the Request and returns Response` instead of the `FromBody` message, and one with an extra parameter after the `Request` `constraint failed: a raw post handler takes only the Request and returns Response`. On `get` each is `constraint failed: a raw get handler takes only the Request and returns Response`.
 - An explicitly typed function value must be spelled `def(var Request) thin raises Never -> Response` on Mojo 1.1.0; `def(Request) thin raises Never -> Response` or a type without `raises` fails with `TODO: function type conversions between closures not supported yet` (as for typed values, section 6).
+
+Binary bodies, status: **production** (M3-040); proven by `tests/test_binary_body.mojo` (which registers these handlers, verbatim, and checks the answers below), `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 with `Content-Length` and chunked, cleartext HTTP/2 in one and two DATA frames), `adapters/flare/test_localhost_roundtrip.mojo`. A raw handler receives any request body and returns any response body, byte for byte:
+
+```mojo
+from muntin import App, Request, Response
+from muntin.testing import TestClient
+
+
+def upload(req: Request) raises -> Response:
+    # Any bytes, as received, sent back byte for byte; Muntin adds no
+    # Content-Type, so the handler sets its own.
+    var r = Response(200, req.body.copy())
+    r.headers.add("Content-Type", "application/octet-stream")
+    return r^
+
+
+def note(req: Request) raises -> Response:
+    # `text()` raises if the body is not UTF-8.
+    return Response.text("note: " + req.text())
+
+
+app.post["/upload"](upload)
+app.post["/note"](note)
+var png: List[UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+var r = TestClient(app).post("/upload", png^)
+# POST /upload  89 50 4E 47 0D 0A 1A 0A -> 200, the same 8 bytes, Content-Type: application/octet-stream
+# POST /note    "hé"                    -> 200 "note: hé"
+# POST /note    FF                      -> 500 "Internal Server Error"  (note's raise; it may catch it and answer 400)
+```
+
+- `Request.body` and `Response.body` are `List[UInt8]`, the one representation of a body: no step replaces, drops or adds a byte, and nothing converts it to text unless code asks. `Response(status, bytes^)` and `Request(method, target, bytes^, headers^)` take bytes by move; `Response(status, text)`, `Response.text(text)` and `Request(method, target, text)` store the text's UTF-8 bytes, as before. Muntin adds, guesses or rewrites no `Content-Type`; a handler sets one if it wants one.
+- `req.text()` and `response.text()` return a copy of the bytes as text when they are well-formed UTF-8 and raise otherwise (a U+FFFD the client sent is a character; nothing is replaced). In a raw handler the raise is a handler error, so the fixed 500 unless the error type converts; a handler that must answer 400 catches it, or compares bytes without reading text (`Span(req.body) == "signed".as_bytes()`, as `webhook` above).
+- Middleware sees the request's bytes and may replace them (`request.body = new_bytes^`); the routes receive exactly what it passes on.
+- Through Flare the bytes go out as given; for `HEAD` the adapter sends no content and declares their byte count as `Content-Length` ("`HEAD`" in "Proven vs. target status").
+- Not supported: a typed binary body (a `FromBody` over bytes), streaming and multipart bodies. Typed bodies are text (section 4).
+- Migration from text bodies (M3-040): a text read of `req.body` is `req.text()` in a raising handler; `response.body` compared with text is `response.text()`; `request.body = "x"` is `request.body = List("x".as_bytes())`; `response.text()` now raises.
 
 Typed header access on `get`, status: **production**; proven by `tests/test_get_headers.mojo` (which runs this example as written), `tests/get_headers_api_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. A `get` handler that needs request header fields takes `Headers` as its last parameter; registration is unchanged:
 
@@ -1155,7 +1191,7 @@ def test_hello():
 
 The in-memory path must execute the same Muntin application dispatch seam used by real transports. This is an architecture proof, not merely test convenience.
 
-Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)`, `TestClient.head(target)`, `TestClient.post(target, body)`, `TestClient.put(target, body)`, `TestClient.patch(target, body)` and `TestClient.delete(target)` build a Muntin `Request` and call `App.handle`, the same entry point network adapters use (`head` and `delete` with an empty body; a test that sends a `HEAD` or `DELETE` body builds the `Request` and calls `app.handle`). Each takes the request's header fields as a keyword-only, defaulted argument, moved into the `Request` as `Request`'s initializer takes them (proven by `tests/test_testclient_headers.mojo`, `tests/test_methods.mojo`, `tests/test_testclient_head.mojo`, `tests/testclient_headers_api_fail/` and `tests/methods_api_fail/`, via `./scripts/check.sh`):
+Status: proven on Mojo 1.1.0 with `from muntin.testing import TestClient`; `TestClient.get(target)`, `TestClient.head(target)`, `TestClient.post(target, body)`, `TestClient.put(target, body)`, `TestClient.patch(target, body)` and `TestClient.delete(target)` build a Muntin `Request` and call `App.handle` (`body` is text, or bytes as a `List[UInt8]` passed by move, M3-040: `client.post("/upload", png^)`), the same entry point network adapters use (`head` and `delete` with an empty body; a test that sends a `HEAD` or `DELETE` body builds the `Request` and calls `app.handle`). Each takes the request's header fields as a keyword-only, defaulted argument, moved into the `Request` as `Request`'s initializer takes them (proven by `tests/test_testclient_headers.mojo`, `tests/test_methods.mojo`, `tests/test_testclient_head.mojo`, `tests/testclient_headers_api_fail/` and `tests/methods_api_fail/`, via `./scripts/check.sh`):
 
 ```mojo
 var headers = Headers()
@@ -1166,7 +1202,7 @@ _ = client.get("/echo")                             # no fields
 ```
 
 - The client builds `Request(method, target, body, headers^)` and nothing else: it adds, removes, inspects or merges no field, so its answer equals `app.handle(Request(...))` built from the same method, target and body and a `Headers` value with the same fields. Fields keep their order, casing and repeats, and an empty value is sent as a value.
-- `headers=` is keyword-only: a positional `Headers` after the target or the body is `invalid call to 'get'` (or `'head'`, `'post'`, `'put'`, `'patch'`, `'delete'`): `unexpected argument`. A plain variable is `cannot be implicitly copied` (pass `headers^` or `headers.copy()`), and using it after `^` is `use of uninitialized value`. Each call without `headers=` sends none; the client keeps no per-client fields.
+- `headers=` is keyword-only: a positional `Headers` after the target or the body is `invalid call to 'get'` (or `'head'`, `'delete'`): `unexpected argument`; on `post`, `put` and `patch`, which have a text and a bytes overload, it is `no matching method in call to 'post'` (or `'put'`, `'patch'`) with `candidate not viable: unexpected argument` for each. A plain variable is `cannot be implicitly copied` (pass `headers^` or `headers.copy()`), and using it after `^` is `use of uninitialized value`. Each call without `headers=` sends none; the client keeps no per-client fields.
 - Building `Headers` raises (`add` validates), so a test that sends fields runs in a raising context.
 - `TestClient.head(target)` sends `HEAD`: a raw `get` handler sees `req.method == "HEAD"`, middleware `request.method == "HEAD"`. It returns `App.handle`'s answer unchanged, as every method does: the status, every field and the body, which is the `GET`'s when the route and every middleware answer `HEAD` as `GET`, and otherwise whatever they returned. It applies no wire rule: it removes no body and declares no `Content-Length`, for 204, 205 and 304 too, and keeps a `Content-Length` a handler set. On the wire a network backend sends the status and fields without content and declares the length itself ("`HEAD`" in "Proven vs. target status"); a test of that goes through the backend (`adapters/flare`). Why: [TestClient HEAD decision (M3-036)](history/architecture-decisions.md#testclient-head-decision-m3-036).
 
