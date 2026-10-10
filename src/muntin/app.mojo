@@ -2272,7 +2272,7 @@ struct App(Movable):
         carrier or its last slot is `Headers` (`_Route.headers`). A text
         body route's adapter reads the body bytes as UTF-8 in its body slot
         (`_slot`), converts the text and answers 400 itself if either fails;
-        a `FromBytes` body route's passes the bytes to `from_bytes` unread
+        a `FromBytes` body route's adapter passes the bytes to `from_bytes` unread
         and answers 400 if it raises (M3-041).
         A JSON body route (`_Route.json`) also receives the request's
         `Content-Type` verdict after its route values, for the body slot's

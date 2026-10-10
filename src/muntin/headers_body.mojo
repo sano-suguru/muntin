@@ -3,8 +3,9 @@
 `WithHeaders[B]` carries the request's header fields beside a body in the
 existing body slot of `App.post` (docs/history/architecture-decisions.md, "Typed header access
 decision (M3-012)"). It is not itself a `FromBody`: the body slot in
-`app.mojo` accepts `FromBody` or the private `_HeaderCarrier`, so a body
-alone never produces a carrier without the request's fields.
+`app.mojo` accepts `FromBody`, `FromBytes` (M3-041) or the private
+`_HeaderCarrier`, so a body alone never produces a carrier without the
+request's fields. A carrier's body is text only (`B: FromBody`).
 """
 
 from .body import FromBody, FromBytes
@@ -57,7 +58,9 @@ struct WithHeaders[B: FromBody](
 
     `WithHeaders` is accepted in the body slot but is not a `FromBody`, so a
     generic `B: FromBody` does not accept it. Building one by hand takes an
-    explicit `Headers`: `WithHeaders(body^, headers^)`.
+    explicit `Headers`: `WithHeaders(body^, headers^)`. Its body is text: a
+    `FromBytes` is not a `B`, and a `B` that also conforms to `FromBytes` is
+    rejected at registration, as such a body alone is (M3-041).
     """
 
     var headers: Headers
