@@ -627,6 +627,21 @@ def test_invalid_in_memory_fields_are_the_fixed_500() raises:
         var h = _h("Content-Type", "application/json")
         h._fields.append(_Field("Bad Name", "v"))
         assert_equal(_post(app, target, ok, h^).status, 500, target)
+    # The rebuild also runs before the body's UTF-8 read (M3-040): bytes
+    # that are not UTF-8 beside such a field are the fixed 500, not 400.
+    for shape in _shapes():
+        var h = Headers()
+        h._fields.append(_Field("Bad Name", "v"))
+        var bytes: List[UInt8] = [0xFF]
+        var r = app.handle(Request("POST", shape.target, bytes^, h^))
+        assert_equal(r.status, 500, shape.tag)
+    for target in ["/j", "/j/5", "/jst", "/jst/5"]:
+        var h = _h("Content-Type", "application/json")
+        h._fields.append(_Field("Bad Name", "v"))
+        var bytes: List[UInt8] = [0xFF]
+        assert_equal(
+            app.handle(Request("POST", target, bytes^, h^)).status, 500, target
+        )
     # The rebuild runs after the route value and the JSON steps: an
     # invalid route value is still 400, a JSON body without its
     # `Content-Type` 415, and one over the cap 413.
