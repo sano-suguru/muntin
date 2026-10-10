@@ -408,9 +408,10 @@ def _json_status[
     return 0
 
 
-def _json_answer(status: Int) -> Response:
-    """The response for a nonzero `_json_status`, and for a `FromBytes`
-    body's 413 (M3-043)."""
+def _body_rejection_answer(status: Int) -> Response:
+    """The response for a body slot's 415 or 413 before conversion: a
+    nonzero `_json_status`, or a `FromBytes` body over its `max_bytes`
+    (M3-043). Named for the body, not JSON, since both use it."""
     if status == 415:
         return _unsupported_media_type()
     return _content_too_large()
@@ -503,7 +504,7 @@ def _rejected(r: _Reject) -> Response:
         return _bad_request()
     if r.status == 500:
         return _internal_error()
-    return _json_answer(r.status)
+    return _body_rejection_answer(r.status)
 
 
 def _slot[

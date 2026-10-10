@@ -56,12 +56,16 @@ trait FromBytes(_FromBodyOrBytes):
     `Deinitable` and `Movable` as for `FromBody`: a bytes body type may be
     move-only, and the handler receives the converted value by move.
 
-    `max_bytes` (M3-043) is the longest body, in bytes, the type accepts:
-    a longer one is answered 413 `Content Too Large` without calling
-    `from_bytes` or the handler, after the route values and, in a carrier,
-    before the field rebuild. Every type declares it, so a missing or
-    misspelled limit does not compile; `Int.MAX`, which no body exceeds,
-    is no limit. A negative value is rejected at registration. It measures
+    `max_bytes` (M3-043) is the longest body, in bytes, Muntin passes to
+    `from_bytes` when it dispatches a typed route: `App.handle` answers a
+    longer one 413 `Content Too Large` without calling `from_bytes` or the
+    handler, after the route values and, in a carrier, before the field
+    rebuild. It is not a precondition of `from_bytes` itself: a direct call
+    is not limited. A type conforming to `FromBytes` directly must declare
+    it, so a missing or misspelled limit does not compile there; under a
+    refining trait's default a misspelled override compiles and inherits
+    the default. `Int.MAX`, which no body exceeds, is no limit. A negative
+    value is rejected at registration. It measures
     the body `App.handle` holds after middleware, which the backend has
     already received in full: it is not a receive limit, which is the
     network backend's own configuration.

@@ -624,6 +624,19 @@ def test_within_the_limit_every_body_reaches_from_bytes_byte_for_byte() raises:
             _assert_same(r.body, _expected(shape, body), shape.target)
             assert_equal(_count(FROM_BYTES_CALLS), 1, shape.target)
             assert_equal(_count(HANDLER_CALLS), 1, shape.target)
+            # The same through `App.handle` directly.
+            _reset()
+            var direct = app.handle(
+                Request(shape.method, shape.target, body.copy(), _sent())
+            )
+            assert_equal(direct.status, 200, shape.target + " (App.handle)")
+            _assert_same(
+                direct.body,
+                _expected(shape, body),
+                shape.target + " (App.handle)",
+            )
+            assert_equal(_count(FROM_BYTES_CALLS), 1, shape.target)
+            assert_equal(_count(HANDLER_CALLS), 1, shape.target)
 
 
 def test_one_byte_over_the_limit_is_413_before_from_bytes() raises:
