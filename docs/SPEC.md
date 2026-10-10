@@ -75,6 +75,12 @@ M3-038 reopened the contract (decided in the same item): through the Flare adapt
 
 Binary bodies are still not supported ([Request body bytes decision (M3-038)](history/architecture-decisions.md#request-body-bytes-decision-m3-038)).
 
+M3-039 reopened the contract (decided in the same item): through the Flare adapter, a request Flare hands to the adapter whose method or target is not well-formed UTF-8 is answered 400 `Bad Request` by the adapter before `App.handle`, where M2 routed it with those bytes or, for some targets, the serving process aborted. That changes the 400/404 boundary for that class of requests over Flare, so it is an M2 reopen under M2-016 ("a different 400/404/500 boundary"). By kind:
+- `App.handle` and `TestClient`: unchanged;
+- the wire: over h2c (Flare refuses such bytes over HTTP/1.1 itself, so nothing changes there), such a request is 400 whatever its path, before middleware and routing (a `HEAD` one under M3-027's rule), and the `Server` keeps serving it and the next request; every other method and target, non-ASCII UTF-8, U+FFFD, percent-encoded bytes and methods that are not tokens included, is answered as before;
+- the raw escape hatch: a raw handler receives the whole `Request` of every request that reaches `App.handle`; over Flare such a method or target does not reach it;
+- the accepted set, the overload set and every diagnostic are unchanged.
+
 Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it, except one: the contract's opening sentence holds for `HEAD`'s answer but not for its content. The in-memory response to `HEAD` keeps the body, and keeping it off the wire, with the length, is each network backend's obligation ([HEAD decision (M3-026)](history/architecture-decisions.md#head-decision-m3-026)). What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
 
 ## M3 — composition and production ergonomics
@@ -101,6 +107,7 @@ An M3 area with an open design question is cut decision-first: a decision item p
 | serving an `App` over cleartext HTTP/1.1 and h2c through the Flare adapter's `Server` (`Server.bind(host, port)`, `server.port()`, `server.serve(app)`; one thread, IP literals, no graceful shutdown; no core `app.run()`) | shipped |
 | middleware functions (`app.use(f)` with `def(var Request, var Next) raises -> Response`; the rest runs at most once through `next^.run(request^)`; every request `App.handle` receives, in registration order; compile-time configuration only) | shipped |
 | request body bytes kept exactly through Flare (a well-formed UTF-8 body, U+FFFD and NUL included, byte for byte; a body that is not UTF-8 is the adapter's 400 before `App.handle`, never replaced; not binary support) | shipped |
+| request method and target bytes kept exactly through Flare (well-formed UTF-8 byte for byte; one that is not UTF-8 is the adapter's 400 before `App.handle`, and the `Server` keeps serving) | shipped |
 
 ### Remaining candidates
 

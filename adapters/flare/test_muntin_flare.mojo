@@ -1,5 +1,6 @@
 """Socket-free contract tests for the Flare adapter (M1-002; headers M3-005;
-`HEAD` M3-027; 405 M3-031; request body bytes M3-038).
+`HEAD` M3-027; 405 M3-031; request body bytes M3-038; request target and
+method bytes M3-039).
 
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). Every
 dispatch goes through `MuntinHandler.serve`, a Flare handler entry point that
@@ -190,6 +191,122 @@ def test_request_body_that_is_not_utf8_answers_400_before_app_handle() raises:
         assert_equal(out.status, 200)
         assert_equal(out.text(), "reached " + String(len(body)))
         assert_equal(_wire(out), "X-Seen: 1\r\n")
+
+
+def _unchecked(values: List[Int]) -> String:
+    """`values` as a `String`'s bytes, unchecked, as Flare v0.12.0 builds a
+    method or target over HTTP/2 from HPACK octets (M3-039)."""
+    return String(unsafe_from_utf8=Span(_octets(values)))
+
+
+def _ill_formed_targets() -> List[String]:
+    """Targets that are not UTF-8, among them a byte where `Request` or
+    `App.handle` would start a slice (after `?`, `=` or `&`)."""
+    return [
+        _unchecked([0x2F, 0xFF]),
+        _unchecked([0x2F, 0x80]),
+        _unchecked([0x2F, 0xE3, 0x81]),  # truncated
+        _unchecked([0x2F, 0xC0, 0xAF]),  # overlong
+        _unchecked([0x2F, 0xED, 0xA0, 0x80]),  # a surrogate
+        _unchecked([0x2F, 0xEF, 0xBF, 0xBD, 0xFF]),  # U+FFFD, then 0xFF
+        _unchecked([0x2F, 0xC3, 0x3F, 0x61]),  # truncated before `?`
+        String("/hello?") + _unchecked([0x80]),
+        String("/items?limit=") + _unchecked([0x80]),
+        String("/items?a=1&") + _unchecked([0xBF, 0x3D, 0x35]),
+    ]
+
+
+def _ill_formed_methods() -> List[String]:
+    return [
+        _unchecked([0xFF]),
+        _unchecked([0x47, 0x45, 0x80]),
+        _unchecked([0x47, 0xC3]),
+        _unchecked([0xEF, 0xBF, 0xBD, 0xFF]),
+    ]
+
+
+def test_request_target_and_method_keep_well_formed_bytes() raises:
+    var fffd = _unchecked([0xEF, 0xBF, 0xBD])
+    var targets: List[String] = [
+        "/hello",
+        "/hé?q=✓",
+        String("/") + fffd + "?" + fffd,
+        "/%FF?%C3%A9=%80",
+        "/?",
+        "/a?b?c",
+    ]
+    var methods: List[String] = ["GET", "FOO", "get", "", "é", fffd]
+    for m in methods:
+        for t in targets:
+            var got = to_muntin_request(FlareRequest(m, t))
+            # Exactly the bytes Flare holds, split as `Request` splits any
+            # target.
+            var want = Request(m, t)
+            assert_true(_same_bytes(got.method.as_bytes(), m.as_bytes()))
+            assert_true(_same_bytes(got.path.as_bytes(), want.path.as_bytes()))
+            assert_true(
+                _same_bytes(got.query.as_bytes(), want.query.as_bytes())
+            )
+
+
+def test_request_target_or_method_that_is_not_utf8_cannot_be_converted() raises:
+    var requests = List[Tuple[String, String]]()
+    for t in _ill_formed_targets():
+        requests.append((String("GET"), t))
+    for m in _ill_formed_methods():
+        requests.append((m, String("/hello")))
+    for r in requests:
+        var raised = False
+        try:
+            _ = to_muntin_request(FlareRequest(r[0], r[1]))
+        except:
+            raised = True
+        assert_true(raised)
+
+
+def target_app() -> App:
+    var app = App()
+    app.use(seen)
+    app.get["/hello"](hello)
+    app.get["/items?{limit}"](list_items)
+    return app^
+
+
+def test_request_target_or_method_that_is_not_utf8_answers_400_before_app_handle() raises:
+    var handler = MuntinHandler(target_app())
+    # Neither the middleware nor a handler runs: no `X-Seen`.
+    for t in _ill_formed_targets():
+        var out = handler.serve(FlareRequest("GET", t))
+        assert_equal(out.status, 400)
+        assert_equal(out.text(), "Bad Request")
+        assert_equal(_wire(out), "")
+        # `HEAD`: the adapter's 400 under the `HEAD` rule (M3-027).
+        var head = handler.serve(FlareRequest("HEAD", t))
+        assert_equal(head.status, 400)
+        assert_equal(len(head.body), 0)
+        assert_equal(_wire(head), "Content-Length: 11\r\n")
+    for m in _ill_formed_methods():
+        # A path only `GET` matches (405 in `App.handle`) and a path no
+        # route matches (404).
+        for t in ["/hello", "/missing"]:
+            var out = handler.serve(FlareRequest(m, t))
+            assert_equal(out.status, 400)
+            assert_equal(out.text(), "Bad Request")
+            assert_equal(_wire(out), "")
+    # Well-formed: `App.handle`'s answers, through the middleware.
+    var ok = handler.serve(
+        FlareRequest("GET", "/hello?é=" + _unchecked([0xEF, 0xBF, 0xBD]))
+    )
+    assert_equal(ok.text(), "hello")
+    assert_equal(_wire(ok), "X-Seen: 1\r\n")
+    var decoded = handler.serve(FlareRequest("GET", "/items?limit=%35"))
+    assert_equal(decoded.text(), "items 5")
+    var escaped = handler.serve(FlareRequest("GET", "/items?limit=%FF"))
+    assert_equal(escaped.status, 400)
+    assert_equal(_wire(escaped), "X-Seen: 1\r\n")
+    var unknown = handler.serve(FlareRequest("é", "/hello"))
+    assert_equal(unknown.status, 405)
+    assert_equal(_wire(unknown), "Allow: GET, HEAD\r\nX-Seen: 1\r\n")
 
 
 def test_response_conversion_keeps_status_and_body() raises:

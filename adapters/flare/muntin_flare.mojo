@@ -5,11 +5,21 @@ and never routes on its own. Builds only in the `flare` pixi environment.
 
 Conversion policy (M1; target handling restated for M2-002; headers M3-005,
 decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
-- method: copied verbatim.
-- request target: Flare's `url` (path plus any query, undecoded) passed
-  verbatim to Muntin's `Request`, which splits path from query, exactly as
-  for the in-memory backend. The adapter does not split, parse or decode the
-  query, and does not use Flare's query helpers.
+- method and request target (M3-039, decided in
+  docs/history/architecture-decisions.md "Request target and method bytes
+  decision (M3-039)"): Flare's `method` and `url` (path plus any query,
+  undecoded) copied byte for byte with `String(from_utf8=)` from their
+  `as_bytes()` spans, so only when they are well-formed UTF-8. Over
+  cleartext HTTP/2 Flare v0.12.0 builds both from the HPACK octets with
+  `String(unsafe_from_utf8=)`, so they can hold bytes that are not UTF-8,
+  and a `String` slice that starts inside such a sequence aborts the
+  process (Mojo 1.1.0's code point boundary assertion). Neither is
+  searched, split or sliced before the check: such a method or target
+  cannot be represented, and the answer is 400 before `App.handle`, as for
+  a header field. `_serve_app`'s comparison with `HEAD` compares bytes and
+  runs first. Muntin's `Request` then splits path from query, exactly as
+  for the in-memory backend. The adapter does not split, parse or decode
+  the query, and does not use Flare's query helpers.
 - request body (M3-038, decided in docs/history/architecture-decisions.md
   "Request body bytes decision (M3-038)"): Flare's raw body bytes copied
   into a `String` only when they are well-formed UTF-8, so `Request.body`
@@ -147,13 +157,16 @@ def to_muntin_headers(request: FlareRequest) raises -> Headers:
 
 def to_muntin_request(request: FlareRequest) raises -> Request:
     """Exactly the request's method, target, body and fields, or a raise
-    when they cannot be represented. The body is built from Flare's raw
-    bytes, never `Request.text()`, which replaces bytes that are not UTF-8
-    with U+FFFD: `String(from_utf8=)` keeps well-formed UTF-8 byte for byte
-    and raises on anything else (M3-038)."""
+    when they cannot be represented. `String(from_utf8=)` keeps well-formed
+    UTF-8 byte for byte and raises on anything else. The method and target
+    are checked through their byte spans before `Request` splits the
+    target, because a slice of a `String` that is not UTF-8 can abort
+    (M3-039). The body is built from Flare's raw bytes, never
+    `Request.text()`, which replaces bytes that are not UTF-8 with U+FFFD
+    (M3-038)."""
     return Request(
-        request.method,
-        request.url,
+        String(from_utf8=request.method.as_bytes()),
+        String(from_utf8=request.url.as_bytes()),
         String(from_utf8=Span(request.body)),
         to_muntin_headers(request),
     )
