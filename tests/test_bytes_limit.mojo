@@ -209,6 +209,22 @@ struct Free(FromBytes):
         return Self(len(body))
 
 
+struct Misspelled(FromBytes):
+    """`max_byte` is not `max_bytes`: an extra member, so no limit."""
+
+    comptime max_byte = 4
+
+    var n: Int
+
+    def __init__(out self, n: Int):
+        self.n = n
+
+    @staticmethod
+    def from_bytes(body: List[UInt8]) raises -> Self:
+        _bump(FROM_BYTES_CALLS)
+        return Self(len(body))
+
+
 struct Zero(FromBytes):
     """Accepts only the empty body."""
 
@@ -386,6 +402,11 @@ def free_carrier(input: WithHeaders[Free]) -> String:
     return String(input.body.n)
 
 
+def misspelled(m: Misspelled) -> String:
+    _bump(HANDLER_CALLS)
+    return String(m.n)
+
+
 def zero(z: Zero) -> String:
     _bump(HANDLER_CALLS)
     return String(z.n)
@@ -514,6 +535,7 @@ def limit_app() -> App:
     app.post["/opt/c?{tag}"](c_optional)
     app.post["/free"](free)
     app.post["/free/c"](free_carrier)
+    app.post["/misspelled"](misspelled)
     app.post["/zero"](zero)
     app.post["/zero/c"](zero_carrier)
     app.post["/largest"](largest)
@@ -657,7 +679,7 @@ def test_no_declared_limit_and_the_largest_int_are_unlimited() raises:
     var app = limit_app()
     var client = TestClient(app)
     var big = _filled(2 << 20)
-    for target in ["/free", "/free/c", "/largest"]:
+    for target in ["/free", "/free/c", "/largest", "/misspelled"]:
         _reset()
         var r = client.post(target, big.copy(), headers=_sent())
         assert_equal(r.status, 200, target)
