@@ -1385,7 +1385,7 @@ def h2_exchange(
                 )
             )
         )
-    return _h2_answers(port, wire, 1)[0].copy()
+    return _h2_answers(port, [wire^], 1)[0].copy()
 
 
 def h2_streams(
@@ -1408,62 +1408,36 @@ def h2_streams(
                 )
             )
         )
-    return _h2_answers(port, wire, len(requests))
+    return _h2_answers(port, [wire^], len(requests))
 
 
 def h2_in_turn(
     port: Int, requests: List[Tuple[String, String]]
 ) raises -> List[Tuple[List[HpackHeader], List[UInt8], Int]]:
-    """As `h2_streams`, but each request is sent only after the response
+    """As `h2_streams`, but each request is written only after the response
     to the one before it has ended, on the same connection: a request
     reaches the server after it answered the previous one."""
-    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
-    stream.set_recv_timeout(TIMEOUT_MS)
-    var start = List(H2_PREFACE.as_bytes())
-    start.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
-    stream.write_all(Span[UInt8, _](start))
+    var chunks = List[List[UInt8]]()
     var none = List[Tuple[String, String]]()
-    var decoder = HpackDecoder()
-    var acc = List[UInt8]()
-    var buf = List[UInt8]()
-    buf.resize(4096, 0)
-    var pos = 0
-    var out = List[Tuple[List[HpackHeader], List[UInt8], Int]]()
     for i in range(len(requests)):
-        var sid = 2 * i + 1
-        var frame = _h2_frame(
-            FrameType.HEADERS(),
-            FrameFlags.END_HEADERS() | FrameFlags.END_STREAM(),
-            sid,
-            _h2_block(requests[i][0], requests[i][1], none),
+        var chunk = List[UInt8]()
+        if i == 0:
+            chunk = List(H2_PREFACE.as_bytes())
+            chunk.extend(
+                Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]()))
+            )
+        chunk.extend(
+            Span(
+                _h2_frame(
+                    FrameType.HEADERS(),
+                    FrameFlags.END_HEADERS() | FrameFlags.END_STREAM(),
+                    2 * i + 1,
+                    _h2_block(requests[i][0], requests[i][1], none),
+                )
+            )
         )
-        stream.write_all(Span[UInt8, _](frame))
-        out.append((List[HpackHeader](), List[UInt8](), 0))
-        var ended = False
-        while not ended:
-            var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
-            if not maybe:
-                var n = stream.read(buf.unsafe_ptr(), len(buf))
-                if n == 0:
-                    raise Error("connection closed before the response ended")
-                for k in range(n):
-                    acc.append(buf[k])
-                continue
-            var f = maybe.value().copy()
-            pos += 9 + f.header.length
-            if f.header.type.value == FrameType.GOAWAY().value:
-                raise Error("GOAWAY")
-            if f.header.stream_id != sid:
-                continue
-            if f.header.type.value == FrameType.HEADERS().value:
-                out[i][0] = decoder.decode(Span[UInt8, _](f.payload))
-            elif f.header.type.value == FrameType.DATA().value:
-                out[i][1].extend(Span[UInt8, _](f.payload))
-                out[i][2] += 1
-            elif f.header.type.value == FrameType.RST_STREAM().value:
-                raise Error("RST_STREAM")
-            ended = f.header.flags.has(FrameFlags.END_STREAM())
-    return out^
+        chunks.append(chunk^)
+    return _h2_answers(port, chunks, len(requests))
 
 
 def _h2_block(
@@ -1482,16 +1456,18 @@ def _h2_block(
 
 
 def _h2_answers(
-    port: Int, wire: List[UInt8], streams: Int
+    port: Int, chunks: List[List[UInt8]], streams: Int
 ) raises -> List[Tuple[List[HpackHeader], List[UInt8], Int]]:
-    """Sends `wire` on a new connection and reads until streams 1, 3, ...
-    (`streams` of them) have each ended: per stream, the response's decoded
-    header fields, its body and the number of DATA frames it came in (an
-    empty DATA frame counts). A GOAWAY, an RST_STREAM on one of them or a
-    close before they end raises."""
+    """Writes `chunks[0]` on a new connection, then each next chunk when a
+    stream has ended, and reads until streams 1, 3, ... (`streams` of them)
+    have each ended: per stream, the response's decoded header fields, its
+    body and the number of DATA frames it came in (an empty DATA frame
+    counts). A GOAWAY, an RST_STREAM on one of them or a close before they
+    end raises."""
     var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     stream.set_recv_timeout(TIMEOUT_MS)
-    stream.write_all(Span[UInt8, _](wire))
+    stream.write_all(Span[UInt8, _](chunks[0]))
+    var written = 1
     var decoder = HpackDecoder()
     var acc = List[UInt8]()
     var buf = List[UInt8]()
@@ -1530,6 +1506,9 @@ def _h2_answers(
         if f.header.flags.has(FrameFlags.END_STREAM()) and not ended[i]:
             ended[i] = True
             open -= 1
+            if written < len(chunks):
+                stream.write_all(Span[UInt8, _](chunks[written]))
+                written += 1
     return out^
 
 
