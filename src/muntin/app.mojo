@@ -19,7 +19,7 @@ from ._registration_rules import (
     _path_part,
     _query_items,
 )
-from .body import FromBody
+from .body import FromBody, FromBytes
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
@@ -40,8 +40,9 @@ from .state import State
 # slot is a generic `var A` (a plain `def` with a borrowed parameter converts
 # to it too), and its kind is decided at compile time from its type alone
 # (`_kind`): a route value (`Int`, `String` or an `Optional` of either,
-# below), a body (`FromBody`, or a `WithHeaders` carrier, below), the raw
-# `Request`, the request `Headers` (below), a misplaced `State`, or none.
+# below), a body (`FromBody`, `FromBytes` or a `WithHeaders` carrier,
+# below), the raw `Request`, the request `Headers` (below), a misplaced
+# `State`, or none.
 #
 # Mojo 1.1.0 function types spelled without `thin` are traits and cannot be
 # stored, so the overloads take thin function values; ordinary `def`
@@ -135,8 +136,8 @@ from .state import State
 # field, else empty; other routes' arguments are unchanged). The body slot, for
 # a JSON body only, answers 415 unless the arguments end with the verdict `"1"`
 # at the expected position (an exact arity check), then 413 when the body is
-# over 1 MiB, after the route value and before `from_body`. Every body slot
-# then reads the body bytes as UTF-8 (`_body_text`, M3-040): bytes that are not
+# over 1 MiB, after the route value and before `from_body`. Every text body
+# slot then reads the body bytes as UTF-8 (`_body_text`, M3-040): bytes that are not
 # are 400, as a `from_body` raise is. Order on a JSON body route: 404 or 405,
 # query or capture 400 (`App.handle`), `Int` 400, 415, 413, UTF-8 400, JSON 400
 # (`from_body`), handler.
@@ -157,6 +158,14 @@ from .state import State
 # no status for the fields the handler reads and gives them no meaning; the
 # `Content-Type` verdict for a `Json[T]` body (415) and the rebuild failure
 # (500) still answer before the handler.
+#
+# Bytes bodies (M3-041): a `FromBytes` type is a body slot too (`_kind`), on
+# every shape that takes a `FromBody`, and `_slot` passes it the request's
+# body bytes, borrowed from `invoke`, with no UTF-8 read and no copy; a raise
+# is 400. It is never a JSON body or a carrier (`WithHeaders[B]` takes a
+# `FromBody`), so `App.handle` appends nothing for it. A type that conforms to
+# both `FromBody` and `FromBytes` is rejected by the rules, so a body always
+# has exactly one conversion.
 #
 # Header slots (M3-016): on `get` and `delete`, `Headers` is a slot kind by
 # exact type equality (no trait, so no application type is one), accepted
@@ -503,13 +512,15 @@ def _slot[
     required slot of its type. A raw `Request` is rebuilt
     from all the arguments and the body bytes (`_raw_request`; a failure is
     the fixed 500). A `Headers` slot is rebuilt from the field pairs from
-    `args[at]` on (`_header_slot`; a failure is the fixed 500). A body is
-    read as UTF-8 (`_body_text`; 400 if it is not) and converted with
+    `args[at]` on (`_header_slot`; a failure is the fixed 500). A
+    `FromBody` body is read as UTF-8 (`_body_text`; 400 if it is not) and converted with
     `A.from_body` (400 if it raises); for a JSON body (`_JsonBody`) the 415
     and 413 steps run first (`_json_status`); a `WithHeaders` carrier has
     its header fields rebuilt (the fixed 500 on failure), then its body read
     as UTF-8, and is built through `A._from_parts`, whose inner `from_body`
-    raise is the same 400.
+    raise is the same 400. A `FromBytes` body (M3-041) is converted with
+    `A.from_bytes(body)`, the borrowed bytes unread and uncopied by Muntin
+    (400 if it raises); the rules reject a type that is also a `FromBody`.
 
     `A` is refined here rather than bounded: forwarding a handler with an
     explicit body type to a callee that requires `FromBody` fails on Mojo
@@ -543,6 +554,12 @@ def _slot[
             return _as[Headers, A](_header_slot(args, at))
         except:
             raise _Reject(500)  # only the `_fields` gap gets here
+    elif conforms_to(A, FromBytes):
+        # The bytes as received, borrowed: no UTF-8 read, no copy (M3-041).
+        try:
+            return A.from_bytes(body)
+        except:
+            raise _Reject(400)
     else:
         comptime assert conforms_to(A, FromBody) or conforms_to(
             A, _HeaderCarrier
@@ -1243,8 +1260,11 @@ struct App(Movable):
         request's header fields, for which Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. Every body's bytes are read as UTF-8
-        before `from_body` (400 if they are not, M3-040). The body may be
+        413 when it is over 1 MiB. Every text body's bytes are read as
+        UTF-8 before `from_body` (400 if they are not, M3-040). A type
+        conforming to `FromBytes` instead receives the body's bytes,
+        whatever they are and unread, in `from_bytes` (400 if it raises,
+        M3-041); a type conforming to both traits is rejected. The body may be
         declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
@@ -1490,8 +1510,11 @@ struct App(Movable):
         request's header fields, for which Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. Every body's bytes are read as UTF-8
-        before `from_body` (400 if they are not, M3-040). The body may be
+        413 when it is over 1 MiB. Every text body's bytes are read as
+        UTF-8 before `from_body` (400 if they are not, M3-040). A type
+        conforming to `FromBytes` instead receives the body's bytes,
+        whatever they are and unread, in `from_bytes` (400 if it raises,
+        M3-041); a type conforming to both traits is rejected. The body may be
         declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
@@ -1739,8 +1762,11 @@ struct App(Movable):
         request's header fields, for which Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. Every body's bytes are read as UTF-8
-        before `from_body` (400 if they are not, M3-040). The body may be
+        413 when it is over 1 MiB. Every text body's bytes are read as
+        UTF-8 before `from_body` (400 if they are not, M3-040). A type
+        conforming to `FromBytes` instead receives the body's bytes,
+        whatever they are and unread, in `from_bytes` (400 if it raises,
+        M3-041); a type conforming to both traits is rejected. The body may be
         declared `body: B` or
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are

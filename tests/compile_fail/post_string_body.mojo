@@ -2,7 +2,7 @@
 # and it is a route value, never the body (M3-014); with a placeholder the
 # shape is reported for its placeholder instead
 # (tests/string_route_api_fail/post_string_alone_with_placeholder.mojo).
-# Expected diagnostic (checked by scripts/check.sh): the handler's parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): the handler's parameter is the request body; its type must conform to FromBody or FromBytes
 
 from muntin import App, FromBody, Request, Response
 

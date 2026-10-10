@@ -2,7 +2,7 @@
 # value. The message is production's existing body-type rule for the last slot,
 # which M3-016 keeps. Decision: docs/history/architecture-decisions.md, "Typed
 # get header access decision (M3-016)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's last parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: the handler's last parameter is the request body; its type must conform to FromBody or FromBytes
 from muntin import App, FromBody, Headers
 
 

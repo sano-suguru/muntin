@@ -1,6 +1,6 @@
 # Must not compile: the second parameter of (Int, B) is the request body and
 # its type does not conform to FromBody (M2-009).
-# Expected diagnostic (checked by scripts/check.sh): the handler's last parameter is the request body; its type must conform to FromBody
+# Expected diagnostic (checked by scripts/check.sh): the handler's last parameter is the request body; its type must conform to FromBody or FromBytes
 
 from muntin import App, FromBody
 

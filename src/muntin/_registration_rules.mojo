@@ -23,7 +23,7 @@ registration; and `_match` in `app.mojo` classifies each route segment with
 `_path_params` and in `_match`, which splits the request path with it too.
 """
 
-from .body import FromBody
+from .body import FromBody, FromBytes
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response
 from .state import _InjectedState
@@ -154,12 +154,16 @@ comptime _HEADERS = 6
 comptime _TEXT = 7
 comptime _OPT_INT = 8
 comptime _OPT_TEXT = 9
+comptime _TWO_BODIES = 10
 
 
 def _kind[A: AnyType]() -> Int:
     """The kind of a request slot of type `A`, from its type alone: type
     equality (exact here, as these types carry no origin) for the types
-    that cannot conform to a Muntin trait, `conforms_to` for the rest."""
+    that cannot conform to a Muntin trait, `conforms_to` for the rest. A
+    body is a `FromBody`, a `FromBytes` (M3-041) or a carrier; a type that
+    is both a `FromBody` and a `FromBytes` is a body with two conversions
+    (`_TWO_BODIES`), which the rules reject wherever a body is."""
     comptime if A == _NoSlot:
         return _ABSENT
     elif A == Int:
@@ -176,7 +180,13 @@ def _kind[A: AnyType]() -> Int:
         return _OPT_TEXT
     elif conforms_to(A, _InjectedState):
         return _STATE
-    elif conforms_to(A, FromBody) or conforms_to(A, _HeaderCarrier):
+    elif conforms_to(A, FromBody) and conforms_to(A, FromBytes):
+        return _TWO_BODIES
+    elif (
+        conforms_to(A, FromBody)
+        or conforms_to(A, FromBytes)
+        or conforms_to(A, _HeaderCarrier)
+    ):
         return _BODY
     else:
         return _OTHER
@@ -217,6 +227,7 @@ comptime _QUERY_TWICE = 32
 comptime _GET_OPTIONAL_PLACES = 33
 comptime _POST_OPTIONAL_BODY_PLACES = 34
 comptime _OPTIONAL_AT_PATH = 35
+comptime _BODY_TWO_CONVERSIONS = 36
 
 
 def _takes_none(paths: Int, queries: Int) -> Int:
@@ -226,6 +237,11 @@ def _takes_none(paths: Int, queries: Int) -> Int:
     if queries != 0:
         return _QUERY_TAKES_NONE
     return _OK
+
+
+def _is_body(k: Int) -> Bool:
+    """Whether slot kind `k` is a body, with one conversion or two."""
+    return k == _BODY or k == _TWO_BODIES
 
 
 def _is_value(k: Int) -> Bool:
@@ -271,7 +287,7 @@ def _get_rule(
         if k1 != _RAW or k2 != _ABSENT or not response:
             return _GET_STATE_RAW if stateful else _GET_RAW
         return _takes_none(paths, queries)
-    if k1 == _BODY or k2 == _BODY or k3 == _BODY:
+    if _is_body(k1) or _is_body(k2) or _is_body(k3):
         return _GET_BODY
     if k1 == _OTHER or k2 == _OTHER or k3 == _OTHER:
         return _GET_SLOT_KIND
@@ -319,7 +335,8 @@ def _post_rule(
     slot of no kind or a `Headers`; then the placeholders, with the `Int`,
     `String` or `Optional` message for one value, and for two one message,
     then an optional value at a path position; then the last slot `X`,
-    which is the body position."""
+    which is the body position, where a type with two body conversions
+    (`_TWO_BODIES`) gets its own message."""
     if k1 == _ABSENT:
         return _POST_NO_BODY
     if k1 == _RAW and k2 == _ABSENT:
@@ -336,7 +353,7 @@ def _post_rule(
         return _POST_STATE_RAW if stateful else _POST_RAW
     if a == _STATE or b == _STATE:
         return _ONE_STATE if stateful else _POST_STATE_ARGUMENT
-    if a == _BODY or b == _BODY:
+    if _is_body(a) or _is_body(b):
         return _POST_BODY_LAST
     if a == _OTHER or a == _HEADERS or b == _OTHER or b == _HEADERS:
         return _POST_SLOT_KIND
@@ -361,6 +378,8 @@ def _post_rule(
         return _STATE_REQUEST_AS_BODY if stateful else _REQUEST_AS_BODY
     if body == _STATE:
         return _ONE_STATE if stateful else _POST_STATE_ARGUMENT
+    if body == _TWO_BODIES:
+        return _BODY_TWO_CONVERSIONS
     if body != _BODY:
         return _LAST_BODY_TYPE if stateful or k2 != _ABSENT else _BODY_TYPE
     return _OK
@@ -474,7 +493,7 @@ def _check[
     )
     comptime assert rule != _INT_AS_BODY, (
         "Int is a route-value type, never the request body; the body"
-        " parameter's type must conform to FromBody"
+        " parameter's type must conform to FromBody or FromBytes"
     )
     comptime assert rule != _REQUEST_AS_BODY, (
         "Request is the whole request, not a body; a raw handler takes"
@@ -495,11 +514,11 @@ def _check[
     ), "a handler takes at most one State, as its first parameter"
     comptime assert rule != _BODY_TYPE, (
         "the handler's parameter is the request body; its type must"
-        " conform to FromBody"
+        " conform to FromBody or FromBytes"
     )
     comptime assert rule != _LAST_BODY_TYPE, (
         "the handler's last parameter is the request body; its type must"
-        " conform to FromBody"
+        " conform to FromBody or FromBytes"
     )
     comptime assert rule != _POST_RAW, (
         "a raw " + name + " handler takes only the Request and returns Response"
@@ -555,5 +574,9 @@ def _check[
     comptime assert rule != _OPTIONAL_AT_PATH, (
         "an Optional route value binds a query parameter; route values bind"
         " the path parameters first, then the query parameters"
+    )
+    comptime assert rule != _BODY_TWO_CONVERSIONS, (
+        "the request body's type conforms to both FromBody and FromBytes;"
+        " a body type conforms to one of them"
     )
     comptime assert rule == _OK, "internal: a registration rule has no message"
