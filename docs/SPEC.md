@@ -140,7 +140,7 @@ An M3 area with an open design question is cut decision-first: a decision item p
 | typed binary request bodies (`FromBytes`: `from_bytes` receives the body's bytes, borrowed, on every `post`, `put` and `patch` body shape; a raise is 400 before the handler) | shipped |
 | typed binary request bodies with header fields (`WithHeaders[B]` around a `FromBytes`: the request's `Headers` and the body's bytes, unread and uncopied, in one carrier on every body shape) | shipped |
 | typed binary request body size limits (every `FromBytes` type's required `comptime max_bytes`; a longer body, bare or in `WithHeaders[B]`, is 413 before `from_bytes`; `Int.MAX` is no limit; not a receive limit) | shipped |
-| a configurable receive body limit for `Server` (`Server.bind(host, port, max_body_bytes=n)`, keyword-only, 10 MiB unless set, 0 to 2^59 − 1; Flare refuses a longer body while receiving, before the adapter, over HTTP/1.1 and h2c, with protocol-specific answers; distinct from `App.handle`'s 413s) | shipped |
+| a configurable receive body limit for `Server` (`Server.bind(host, port, max_body_bytes=n)`, keyword-only, 10 MiB unless set, 0 to 2^59 − 1; Flare refuses a longer body while receiving, before the adapter, over HTTP/1.1 and h2c, with protocol-specific answers; an upper bound, not an acceptance guarantee over HTTP/1.1; distinct from `App.handle`'s 413s; Flare's opt-in `FLARE_BUFRING_HANDLER` loop unsupported) | shipped |
 
 ### Remaining candidates
 

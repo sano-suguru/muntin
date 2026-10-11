@@ -86,8 +86,11 @@ own handler re-raises them).
 
 Receive body limit (M3-044, decided in docs/history/architecture-decisions.md
 "Server receive body limit decision (M3-044)"): `Server.bind`'s keyword-only
-`max_body_bytes` (10 MiB, Flare v0.12.0's default, when not given) is the
-largest request body Flare receives. `_server_config` checks it, after the
+`max_body_bytes` (10 MiB, Flare v0.12.0's default, when not given) bounds
+the request body Flare receives: no longer body is received or reaches the
+adapter. It is a bound, not a promise to accept every body within it: over
+HTTP/1.1 Flare also counts a request's head, chunk framing and pipelined
+bytes (below). `_server_config` checks it, after the
 port and before the host is parsed (0 to 2^59 - 1, above which Flare's
 chunk-size scanner can overflow; `max_body_bytes out of range: <value>`
 otherwise), and writes it into both of Flare's fields, `max_body_size`
@@ -97,7 +100,9 @@ before the adapter, with its own answers (docs/DX.md section 1: over
 HTTP/1.1 413 or 400 and a closed connection, also counting a chunked body's
 framing; over h2c a reset stream). It is not
 `FromBytes.max_bytes` or `Json[T]`'s cap, which `App.handle` checks on a
-body already received.
+body already received. Flare's opt-in `FLARE_BUFRING_HANDLER=1` loop is not
+supported: on Flare v0.12.0 it does not answer a request over 8192 wire
+bytes and serves nothing else meanwhile (docs/DX.md section 1).
 """
 
 from flare.http import (
@@ -351,9 +356,13 @@ struct Server(Movable):
     ) raises -> Server:
         """Binds and listens on `host` (an IPv4 or IPv6 literal) and `port`
         (0 to 65535; 0 lets the system choose). A client may connect once it
-        returns. `max_body_bytes` (0 to 2^59 - 1; 10 MiB when not given) is
-        the largest request body Flare receives, over HTTP/1.1 and h2c; a
+        returns. `max_body_bytes` (0 to 2^59 - 1; 10 MiB when not given)
+        bounds the request body Flare receives, over HTTP/1.1 and h2c: a
         longer one is refused while it arrives, before the adapter (M3-044).
+        It does not promise to accept every body within it: over HTTP/1.1
+        Flare refuses (413) when a request's head, chunk framing, body and
+        any pipelined bytes buffered together exceed `max_body_bytes` plus
+        8192.
         Raises for a port or limit out of range, a host that is not an IP
         literal, an address in use or any other OS error."""
         return Server(_host=host, _port=port, _max_body_bytes=max_body_bytes)

@@ -256,9 +256,16 @@ raw route, the `max_bytes` 256 route and a path no route matches alike:
 no counter moved. The HTTP/1.1 connection is closed after the refusal; the
 h2c connection answers its next stream. Over HTTP/1.1 Flare also compares
 everything buffered on the connection, less its 8 KiB header allowance,
-with the limit, so a chunked body within the limit whose head, framing and
-body exceed limit + 8 KiB is 413, and a chunked body far over the limit is
-413 or 400 by arrival. A second
+with the limit: with 4096, an incomplete request of 1-byte chunks (body so
+far about 2 KB) gets no answer at exactly 4096 + 8192 buffered bytes and
+413 with a clean close at one byte more, and a chunked body far over the
+limit is 413 or 400 by arrival. The h2c client acknowledges the server's
+SETTINGS and reads `RST_STREAM` codes with all 32 bits. With
+`FLARE_BUFRING_HANDLER=1` (Linux with io_uring), Flare's buffer-ring loop
+gives the same answers to requests within 8192 wire bytes, closes h2c, and
+answers neither a longer request nor, meanwhile, any other connection: a
+Flare v0.12.0 defect the test pins, which is why Muntin does not support
+that loop. A second
 `Server` (256), serving in its own child, keeps its own limit, and there a 17-byte body to the `max_bytes` 16
 route is `App.handle`'s 413 with `X-Seen`, the middleware counted and no
 conversion or handler. A `Server` with 0 takes only empty bodies, one bound
@@ -269,6 +276,7 @@ overflow Flare's scanner 400 and keeps serving.
 
 from std.ffi import c_int, c_uint, external_call
 from std.os import getenv, setenv
+from std.sys.info import CompilationTarget
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from flare.http import HttpClient
@@ -285,6 +293,7 @@ from flare.http2 import (
     encode_frame,
     parse_frame,
 )
+from flare.runtime.uring_reactor import use_uring_backend
 from flare.tcp import TcpStream
 from flare.net import SocketAddr
 from flare.utils import SIGKILL, exit, fork, kill, waitpid
@@ -3168,9 +3177,12 @@ def receive_app() -> App:
     return app^
 
 
-def _serve_limited_in_child(app: App, limit: Int) raises -> _Child:
+def _serve_limited_in_child(
+    app: App, limit: Int, bufring: Bool = False
+) raises -> _Child:
     """As `_serve_in_child`, through `Server.bind("127.0.0.1", 0,
-    max_body_bytes=limit)`."""
+    max_body_bytes=limit)`. With `bufring`, the child sets
+    `FLARE_BUFRING_HANDLER=1` before `serve`, which Flare reads there."""
     var server = Server.bind("127.0.0.1", 0, max_body_bytes=limit)
     var port = server.port()
     var pid = fork()
@@ -3178,6 +3190,8 @@ def _serve_limited_in_child(app: App, limit: Int) raises -> _Child:
         raise Error("fork() failed")
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        if bufring:
+            _ = setenv("FLARE_BUFRING_HANDLER", "1")
         try:
             server.serve(app)
         except e:
@@ -3245,13 +3259,28 @@ def _h2_settings_window(payload: List[UInt8]) -> Int:
     return -1
 
 
-def _be32(p: List[UInt8]) -> Int:
-    return (
-        ((Int(p[0]) & 0x7F) << 24)
-        | (Int(p[1]) << 16)
-        | (Int(p[2]) << 8)
-        | Int(p[3])
-    )
+def _u32(p: List[UInt8]) -> Int:
+    """The first four bytes of `p` as a big-endian 32-bit value, every bit
+    kept (an `RST_STREAM` error code)."""
+    return (Int(p[0]) << 24) | (Int(p[1]) << 16) | (Int(p[2]) << 8) | Int(p[3])
+
+
+def _window_increment(p: List[UInt8]) -> Int:
+    """A `WINDOW_UPDATE` payload's increment: its 31 low bits (RFC 9113
+    section 6.9: the top bit is reserved and ignored)."""
+    return _u32(p) & 0x7FFFFFFF
+
+
+def test_h2_client_decodes_rst_stream_codes_with_every_bit() raises:
+    """`h2_upload` reads an `RST_STREAM` error code with all 32 bits and a
+    `WINDOW_UPDATE` increment with the reserved top bit dropped, so a code
+    such as 0x8000000B is not taken for `ENHANCE_YOUR_CALM` (11)."""
+    var flagged: List[UInt8] = [0x80, 0x00, 0x00, 0x0B]
+    assert_equal(_u32(flagged), 0x8000000B)
+    assert_true(_u32(flagged) != _ENHANCE_YOUR_CALM)
+    assert_equal(_window_increment(flagged), 11)
+    var plain: List[UInt8] = [0x00, 0x00, 0x00, 0x0B]
+    assert_equal(_u32(plain), _ENHANCE_YOUR_CALM)
 
 
 def h2_upload(
@@ -3261,8 +3290,8 @@ def h2_upload(
     DATA frame (`pieces` 1), two (`pieces` 2, `_halves`) or frames of at
     most 16384 bytes (`pieces` 0), sent within the flow-control windows the
     server grants; then, once stream 1 has ended or been reset, `GET /hello`
-    on stream 3 of the same connection. A GOAWAY or a close before both
-    streams end raises."""
+    on stream 3 of the same connection. The server's SETTINGS are
+    acknowledged. A GOAWAY or a close before both streams end raises."""
     var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     stream.set_recv_timeout(TIMEOUT_MS)
     var none = List[Tuple[String, String]]()
@@ -3341,18 +3370,29 @@ def h2_upload(
                 var w = _h2_settings_window(f.payload)
                 if w >= 0:
                     stream_window += w - 65535
+                # RFC 9113 section 6.5.3: acknowledge the server's SETTINGS.
+                stream.write_all(
+                    Span[UInt8, _](
+                        _h2_frame(
+                            FrameType.SETTINGS(),
+                            FrameFlags.ACK(),
+                            0,
+                            List[UInt8](),
+                        )
+                    )
+                )
             continue
         if t == FrameType.WINDOW_UPDATE().value:
             if sid == 0:
-                conn_window += _be32(f.payload)
+                conn_window += _window_increment(f.payload)
             elif sid == 1:
-                stream_window += _be32(f.payload)
+                stream_window += _window_increment(f.payload)
             continue
         var ended = False
         if t == FrameType.RST_STREAM().value:
             if sid != 1:
                 raise Error("RST_STREAM on stream " + String(sid))
-            out.reset = _be32(f.payload)
+            out.reset = _u32(f.payload)
             ended = True
         elif t == FrameType.HEADERS().value:
             var fields = _h2_fields(decoder.decode(Span[UInt8, _](f.payload)))
@@ -3434,8 +3474,11 @@ def h1_keep_alive_pair(
                         "Connection: close\r\n\r\n",
                     ).as_bytes()
                 )
-            except:
-                pass  # The server may already have closed its side.
+            except e:
+                # The server may already have closed its side; any other
+                # error, a timeout included, is a failure.
+                if not _is_reset(e):
+                    raise e^
     return String(from_utf8_lossy=Span(acc))
 
 
@@ -3654,12 +3697,21 @@ def _chunked_wire(path: String, sizes: List[Int]) -> String:
     return wire + "0\r\n\r\n"
 
 
+def _is_reset(e: Error) -> Bool:
+    """Whether `e` is the peer resetting or having closed the connection
+    (Flare's `ConnectionReset` or `BrokenPipe`), the only errors measured
+    after a refusal; a timeout or any other error is not."""
+    var text = String(e)
+    return text.startswith("ConnectionReset") or text.startswith("BrokenPipe")
+
+
 def h1_until_close_or_reset(port: Int, wire: String) raises -> String:
     """Sends `wire` and returns what the server sends before it closes, as
-    text, followed by `<reset>` when the connection was reset instead. Flare
-    closes without reading the rest of a refused request, so a client still
-    sending can get a reset after (or, on some systems, instead of) the
-    answer."""
+    text, followed by `<reset>` when the connection was reset (`_is_reset`)
+    instead of closed. Flare closes without reading the rest of a refused
+    request, so a client still sending can get a reset after (or, on some
+    systems, instead of) the answer. Any other error, a timeout included,
+    raises: it is not a refusal."""
     var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     stream.set_recv_timeout(TIMEOUT_MS)
     var acc = List[UInt8]()
@@ -3668,9 +3720,12 @@ def h1_until_close_or_reset(port: Int, wire: String) raises -> String:
     var reset = False
     try:
         stream.write_all(wire.as_bytes())
-    except:
+    except e:
+        if not _is_reset(e):
+            raise e^
         reset = True
-    while not reset:
+    # Read even after a reset write: an answer may already have arrived.
+    while True:
         try:
             var n = stream.read(buf.unsafe_ptr(), len(buf))
             if n == 0:
@@ -3678,21 +3733,78 @@ def h1_until_close_or_reset(port: Int, wire: String) raises -> String:
             for k in range(n):
                 acc.append(buf[k])
         except e:
-            if not String(e).startswith("ConnectionReset"):
+            if not _is_reset(e):
                 raise e^
             reset = True
+            break
     var text = String(from_utf8_lossy=Span(acc))
     return text + "<reset>" if reset else text
 
 
+def _ones(n: Int) -> List[Int]:
+    """`n` chunk sizes of 1."""
+    var sizes = List[Int]()
+    for _ in range(n):
+        sizes.append(1)
+    return sizes^
+
+
+def h1_buffered_threshold(port: Int, limit: Int) raises -> String:
+    """Flare's HTTP/1.1 buffered-bytes check at its exact threshold, on one
+    connection: `POST /length` with `limit` bytes in 1-byte chunks (a body
+    within `limit`), of which only the first `limit` + 8192 wire bytes
+    (Flare's `max_header_size` allowance) are sent. Raises unless the server
+    stays silent (the read times out after 1 second) and keeps the
+    connection open; then sends one more byte and returns everything the
+    server sends until it closes, with no reset or other error tolerated.
+    Every byte sent is one the server has read when it refuses, so its close
+    is a FIN. Each body byte takes 6 wire bytes, so the body sent is about
+    (`limit` + 8192) / 6 bytes, under `limit` when `limit` is 4096: the
+    chunk scanner cannot be what refuses."""
+    var wire = List(_chunked_wire("/length", _ones(limit)).as_bytes())
+    var at = limit + 8192
+    if len(wire) <= at + 1:
+        raise Error("the request is too short for the threshold")
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.write_all(Span[UInt8, _](wire)[:at])
+    stream.set_recv_timeout(1_000)
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    var answered = -1
+    try:
+        answered = stream.read(buf.unsafe_ptr(), len(buf))
+    except e:
+        if not String(e).startswith("Timeout"):
+            raise e^
+    if answered >= 0:
+        raise Error(
+            String("at limit + 8192 bytes the server read returned ", answered)
+        )
+    stream.set_recv_timeout(TIMEOUT_MS)
+    stream.write_all(Span[UInt8, _](wire)[at : at + 1])
+    var acc = List[UInt8]()
+    while True:
+        var n = stream.read(buf.unsafe_ptr(), len(buf))
+        if n == 0:
+            break
+        for k in range(n):
+            acc.append(buf[k])
+    return String(from_utf8_lossy=Span(acc))
+
+
 def test_http1_receive_limit_counts_buffered_bytes() raises:
     """Over HTTP/1.1 Flare also compares everything buffered on the
-    connection, less its 8 KiB header allowance, with the limit (M3-044):
-    a chunked body within the limit whose head, framing and body exceed
-    limit + 8 KiB is 413, and a chunked body far over the limit is 413 or
-    400 depending on whether that check or the chunk scanner sees it first,
-    which depends on how the bytes arrive. None reaches the middleware (the
-    counters do not move), and each server keeps answering."""
+    connection, less its 8 KiB header allowance, with the limit (M3-044).
+    With limit 4096: 4096 bytes in two chunks are received; an incomplete
+    request of 1-byte chunks, whose body so far is about 2 KB, is left
+    waiting at exactly 4096 + 8192 buffered bytes and gets Flare's 413 and a
+    clean close at one byte more, so that check, not a disconnect or the
+    chunk scanner, refused it. The whole 4096 bytes in 1-byte chunks (about
+    24.7 KB on the wire), and a chunked body far over a 64-byte limit, are
+    refused too, by that check or the chunk scanner depending on how the
+    bytes arrive; the client may then see a reset, and no other error
+    passes. Nothing reaches the middleware (the counters do not move), and
+    each server keeps answering."""
     var child = _serve_limited_in_child(receive_app(), 4096)
     var small = _Child(-1, 0)
     try:
@@ -3702,19 +3814,21 @@ def test_http1_receive_limit_counts_buffered_bytes() raises:
         )
         assert_true(two.startswith("HTTP/1.1 200 OK\r\n"), two)
         assert_true(two.endswith("\r\n\r\n4096"), two)
-        # The same 4096 bytes in 1-byte chunks: about 24.7 KB on the wire.
-        var ones = List[Int]()
-        for _ in range(4096):
-            ones.append(1)
         var before = _counters(child.port)
+        # The exact threshold: silence at 4096 + 8192 bytes, 413 at one more.
+        var edge = h1_buffered_threshold(child.port, 4096)
+        print("observed: 1-byte chunks at 4096 + 8192 + 1 bytes ->", repr(edge))
+        assert_true(edge.startswith(_H1_413 + "\r\n"), edge)
+        assert_true("\r\nConnection: close\r\n" in edge, edge)
+        assert_true(edge.endswith("\r\n\r\n413 Content Too Large"), edge)
+        # The whole request: refused, possibly ending in a reset.
         var framed = h1_until_close_or_reset(
-            child.port, _chunked_wire("/length", ones)
+            child.port, _chunked_wire("/length", _ones(4096))
         )
         print(
-            "observed: 4096 bytes in 1-byte chunks ->", framed.split("\r\n")[0]
+            "observed: 4096 bytes in 1-byte chunks ->",
+            repr(framed.split("\r\n")[0]),
         )
-        # Refused: Flare's 413, possibly followed by a reset (the client was
-        # still sending), or only a reset where the system reports it first.
         assert_true(
             framed.startswith(_H1_413 + "\r\n") or framed == "<reset>", framed
         )
@@ -3729,7 +3843,9 @@ def test_http1_receive_limit_counts_buffered_bytes() raises:
         var far = h1_until_close_or_reset(
             small.port, _chunked_wire("/length", [8192, 8192])
         )
-        print("observed: 16 KiB chunked, limit 64 ->", far.split("\r\n")[0])
+        print(
+            "observed: 16 KiB chunked, limit 64 ->", repr(far.split("\r\n")[0])
+        )
         assert_true(
             far.startswith(_H1_413 + "\r\n")
             or far.startswith(_H1_400 + "\r\n")
@@ -3748,6 +3864,153 @@ def test_http1_receive_limit_counts_buffered_bytes() raises:
         if small.pid > 0:
             _ = kill(small.pid, SIGKILL)
             waitpid(small.pid)
+
+
+def _silent_for_a_second(port: Int, wire: List[UInt8]) raises -> Bool:
+    """Sends `wire` on a new connection: whether the server then sends
+    nothing and keeps the connection open for 1 second (the read times
+    out). An answer, a close or any other error is `False`."""
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.set_recv_timeout(1_000)
+    stream.write_all(Span[UInt8, _](wire))
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    try:
+        _ = stream.read(buf.unsafe_ptr(), len(buf))
+    except e:
+        return String(e).startswith("Timeout")
+    return False
+
+
+def _post_of(total: Int) -> List[UInt8]:
+    """`POST /length` with `Content-Length` and `Connection: close` whose
+    head and body of `a`s are `total` bytes on the wire (`total` from 1000
+    to 10098, so the length has 4 digits)."""
+    var head = String(
+        "POST /length HTTP/1.1\r\nHost: localhost\r\nContent-Length: ",
+        "0000\r\nConnection: close\r\n\r\n",
+    )
+    var body = total - head.byte_length()
+    var wire = List(
+        String(
+            "POST /length HTTP/1.1\r\nHost: localhost\r\nContent-Length: ",
+            body,
+            "\r\nConnection: close\r\n\r\n",
+        ).as_bytes()
+    )
+    wire.resize(total, 0x61)
+    return wire^
+
+
+def test_receive_limit_on_flare_bufring_path() raises:
+    """`FLARE_BUFRING_HANDLER=1` in the serving process makes Flare serve
+    through its opt-in io_uring buffer-ring loop (Linux with io_uring,
+    HTTP/1.1 only) instead of its unified loop. Muntin does not support that
+    loop; this test records what it does with the receive limit and pins the
+    defect that rules it out.
+
+    With limit 64, every request here fitting in 8192 wire bytes: 0, 63 and
+    64 bytes byte for byte over `Content-Length` and chunked, 65 and 4096
+    bytes Flare's refusal on every route with no middleware, conversion or
+    handler run, a head declaring 65 refused at once, the keep-alive
+    connection closed after a refusal, and the server still answering. That
+    the buffer-ring loop served is read off the wire: it closes an h2c
+    connection, which the unified loop serves.
+
+    The pin: on that loop, Flare v0.12.0 does not answer a request longer
+    than 8192 wire bytes (one buffer-ring buffer), however small its body
+    and whatever the limit (here 10 MiB, Flare's default; reproduced without
+    Muntin), and while that request is pending the server answers no other
+    connection: measured, it spins until its 60-second request timeout. When
+    this pin fails, Flare's loop changed: re-measure the limit on it (M3-044's
+    revisit list). Elsewhere Flare ignores the variable; under `CI` a Linux
+    runner without io_uring fails rather than skips."""
+    comptime if not CompilationTarget.is_linux():
+        print("skipped: Flare reads FLARE_BUFRING_HANDLER on Linux only")
+        return
+    if not use_uring_backend():
+        if getenv("CI") != "":
+            raise Error("no io_uring on this Linux runner; CI is set")
+        print("skipped: no io_uring on this host, and CI is unset")
+        return
+    var child = _serve_limited_in_child(receive_app(), 64, bufring=True)
+    var wedged = _Child(-1, 0)
+    try:
+        for transport in range(2):
+            var name = String("bufring ", _transport_name(transport))
+            for n in [0, 63, 64]:
+                var body = _pattern(n)
+                var before = _counters(child.port)
+                var raw = _accepted(child.port, transport, "/echo-raw", body)
+                assert_true(_same_bytes(Span(raw), Span(body)), name)
+                var typed = _accepted(child.port, transport, "/wide", body)
+                assert_true(_same_bytes(Span(typed), Span(body)), name)
+                var moved = _moved(before, _counters(child.port))
+                assert_equal(moved[0], 2, name)
+                assert_equal(moved[1], 1, name)
+                assert_equal(moved[2], 2, name)
+            for n in [65, 4096]:
+                var body = _pattern(n)
+                var before = _counters(child.port)
+                for path in ["/echo-raw", "/wide", "/missing"]:
+                    _refused_by_backend(child.port, transport, path, body)
+                var moved = _moved(before, _counters(child.port))
+                assert_equal(moved[0], 0, name)
+                assert_equal(moved[1], 0, name)
+                assert_equal(moved[2], 0, name)
+        var head = h1_head_only(
+            child.port,
+            String(
+                "POST /wide HTTP/1.1\r\nHost: localhost\r\n",
+                "Content-Length: 65\r\nConnection: close\r\n\r\n",
+            ),
+        )
+        assert_true(head.startswith(_H1_413 + "\r\n"), head)
+        var pair = h1_keep_alive_pair(child.port, "/echo-raw", _pattern(65))
+        assert_true(pair.startswith(_H1_413 + "\r\n"), pair)
+        assert_equal(pair.count("HTTP/1.1 "), 1, pair)
+        pair = h1_keep_alive_pair(child.port, "/echo-raw", _pattern(64))
+        assert_equal(pair.count("HTTP/1.1 200 OK"), 2, pair)
+        # The buffer-ring loop is serving: it closes an h2c connection.
+        var h2c = String("served")
+        try:
+            _ = h2_upload(child.port, "/echo-raw", _pattern(1), pieces=1)
+        except e:
+            h2c = String(e)
+        print("observed bufring h2c:", h2c)
+        assert_equal(h2c, "connection closed before both streams ended")
+        var hi = h1_exchange(child.port, "GET", "/hello", [], List[UInt8]())
+        assert_equal(hi[0], "HTTP/1.1 200 OK")
+        assert_true(_running(child.pid))
+        # The pin: 8192 wire bytes are answered, 8193 are not, and nothing
+        # else is answered meanwhile.
+        wedged = _serve_limited_in_child(receive_app(), 10485760, bufring=True)
+        var fits = h1_head_only(
+            wedged.port, String(from_utf8=Span(_post_of(8192)))
+        )
+        assert_true(fits.startswith("HTTP/1.1 200 OK\r\n"), fits)
+        assert_true(
+            _silent_for_a_second(wedged.port, _post_of(8193)), "8193 bytes"
+        )
+        var get = List(
+            String(
+                "GET /hello HTTP/1.1\r\nHost: localhost\r\n",
+                "Connection: close\r\n\r\n",
+            ).as_bytes()
+        )
+        assert_true(_silent_for_a_second(wedged.port, get), "GET /hello")
+        print(
+            "observed bufring (limit 64): within it byte for byte, 65 and 4096"
+            " refused as on the unified loop, nothing ran, h2c closed;"
+            " (10 MiB) 8192 wire bytes answered, 8193 not, and no other"
+            " connection answered meanwhile"
+        )
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+        if wedged.pid > 0:
+            _ = kill(wedged.pid, SIGKILL)
+            waitpid(wedged.pid)
 
 
 def test_receive_limit_zero_takes_only_empty_bodies() raises:
