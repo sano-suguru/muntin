@@ -41,7 +41,7 @@ from muntin import Request, Response, ToResponse
 from muntin.body import FromBody
 from muntin._handler_storage import _Erased
 from muntin.app import _bad_request, _carrier_fields, _handler_error
-from muntin.app import _internal_error, _json_answer, _json_status
+from muntin.app import _internal_error, _body_rejection_answer, _json_status
 from muntin._registration_rules import _path_params, _query_params
 from muntin.app import _match, _parse_int
 from muntin.app import _query_value, _raw_request
@@ -145,7 +145,7 @@ def _call_body[
     comptime if conforms_to(B, _JsonBody):
         var status = _json_status[B](args, 1, args[0].byte_length())
         if status != 0:
-            return _json_answer(status)
+            return _body_rejection_answer(status)
     var body: B
     comptime if conforms_to(B, _HeaderCarrier):
         var fields: Headers
@@ -199,7 +199,7 @@ def _call_int_body[
     comptime if conforms_to(B, _JsonBody):
         var status = _json_status[B](args, 2, args[1].byte_length())
         if status != 0:
-            return _json_answer(status)
+            return _body_rejection_answer(status)
     var body: B
     comptime if conforms_to(B, _HeaderCarrier):
         var fields: Headers

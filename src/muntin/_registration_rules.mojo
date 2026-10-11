@@ -155,6 +155,7 @@ comptime _TEXT = 7
 comptime _OPT_INT = 8
 comptime _OPT_TEXT = 9
 comptime _TWO_BODIES = 10
+comptime _NEGATIVE_LIMIT = 11
 
 
 def _kind[A: AnyType]() -> Int:
@@ -166,7 +167,10 @@ def _kind[A: AnyType]() -> Int:
     is a body with two conversions (`_TWO_BODIES`), which the rules reject
     wherever a body is, and so is a carrier around one
     (`_HeaderCarrier._conversions`). A carrier around a type with neither
-    conversion (one conforming only to the private bound) is `_OTHER`."""
+    conversion (one conforming only to the private bound) is `_OTHER`. A
+    `FromBytes` body, bare or carried, whose `max_bytes` is negative is a
+    body with no valid limit (`_NEGATIVE_LIMIT`, M3-043), which the rules
+    reject where a body is accepted."""
     comptime if A == _NoSlot:
         return _ABSENT
     elif A == Int:
@@ -189,8 +193,12 @@ def _kind[A: AnyType]() -> Int:
         var conversions = A._conversions()
         if conversions == 2:
             return _TWO_BODIES
-        return _BODY if conversions == 1 else _OTHER
-    elif conforms_to(A, FromBody) or conforms_to(A, FromBytes):
+        if conversions == 0:
+            return _OTHER
+        return _NEGATIVE_LIMIT if A._max_bytes() < 0 else _BODY
+    elif conforms_to(A, FromBytes):
+        return _NEGATIVE_LIMIT if A.max_bytes < 0 else _BODY
+    elif conforms_to(A, FromBody):
         return _BODY
     else:
         return _OTHER
@@ -232,6 +240,7 @@ comptime _GET_OPTIONAL_PLACES = 33
 comptime _POST_OPTIONAL_BODY_PLACES = 34
 comptime _OPTIONAL_AT_PATH = 35
 comptime _BODY_TWO_CONVERSIONS = 36
+comptime _BODY_NEGATIVE_LIMIT = 37
 
 
 def _takes_none(paths: Int, queries: Int) -> Int:
@@ -244,8 +253,9 @@ def _takes_none(paths: Int, queries: Int) -> Int:
 
 
 def _is_body(k: Int) -> Bool:
-    """Whether slot kind `k` is a body, with one conversion or two."""
-    return k == _BODY or k == _TWO_BODIES
+    """Whether slot kind `k` is a body: with one conversion, with two, or
+    with a negative limit."""
+    return k == _BODY or k == _TWO_BODIES or k == _NEGATIVE_LIMIT
 
 
 def _is_value(k: Int) -> Bool:
@@ -340,7 +350,8 @@ def _post_rule(
     `String` or `Optional` message for one value, and for two one message,
     then an optional value at a path position; then the last slot `X`,
     which is the body position, where a type with two body conversions
-    (`_TWO_BODIES`) gets its own message."""
+    (`_TWO_BODIES`) and a `FromBytes` with a negative `max_bytes`
+    (`_NEGATIVE_LIMIT`, M3-043) each get their own message."""
     if k1 == _ABSENT:
         return _POST_NO_BODY
     if k1 == _RAW and k2 == _ABSENT:
@@ -384,6 +395,8 @@ def _post_rule(
         return _ONE_STATE if stateful else _POST_STATE_ARGUMENT
     if body == _TWO_BODIES:
         return _BODY_TWO_CONVERSIONS
+    if body == _NEGATIVE_LIMIT:
+        return _BODY_NEGATIVE_LIMIT
     if body != _BODY:
         return _LAST_BODY_TYPE if stateful or k2 != _ABSENT else _BODY_TYPE
     return _OK
@@ -582,5 +595,9 @@ def _check[
     comptime assert rule != _BODY_TWO_CONVERSIONS, (
         "the request body's type conforms to both FromBody and FromBytes;"
         " a body type conforms to one of them"
+    )
+    comptime assert rule != _BODY_NEGATIVE_LIMIT, (
+        "the request body's max_bytes is negative; a FromBytes type's"
+        " max_bytes is a byte count, 0 or more"
     )
     comptime assert rule == _OK, "internal: a registration rule has no message"

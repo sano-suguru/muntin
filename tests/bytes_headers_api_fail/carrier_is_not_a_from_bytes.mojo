@@ -7,6 +7,8 @@ from muntin import FromBytes, WithHeaders
 
 
 struct Blob(FromBytes):
+    comptime max_bytes = Int.MAX
+
     var data: List[UInt8]
 
     def __init__(out self, var data: List[UInt8]):
