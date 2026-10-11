@@ -254,10 +254,11 @@ raw route, the `max_bytes` 256 route and a path no route matches alike:
 `413 Content Too Large` (`Content-Length`, also when only the head is sent),
 `400 Bad Request` (chunked) or `RST_STREAM` 11 (h2c), without `X-Seen`, with
 no counter moved. The HTTP/1.1 connection is closed after the refusal; the
-h2c connection answers its next stream. Over HTTP/1.1 Flare also counts the
-raw bytes buffered for a request (less its 8 KiB header allowance), so a
-chunked body within the limit whose framing exceeds that allowance is 413,
-and a chunked body far over the limit is 413 or 400 by arrival. A second
+h2c connection answers its next stream. Over HTTP/1.1 Flare also compares
+everything buffered on the connection, less its 8 KiB header allowance,
+with the limit, so a chunked body within the limit whose head, framing and
+body exceed limit + 8 KiB is 413, and a chunked body far over the limit is
+413 or 400 by arrival. A second
 `Server` (256), serving in its own child, keeps its own limit, and there a 17-byte body to the `max_bytes` 16
 route is `App.handle`'s 413 with `X-Seen`, the middleware counted and no
 conversion or handler. A `Server` with 0 takes only empty bodies, one bound
@@ -3413,10 +3414,11 @@ def h1_keep_alive_pair(
             n = stream.read(buf.unsafe_ptr(), len(buf))
         except e:
             # Once the follow-up is written to a connection the server has
-            # closed, its RST can surface as a read error (macOS reports it
-            # before the end of stream; Linux returns 0): the connection
-            # ended either way. Before that, an error is a failure.
-            if sent:
+            # closed, its RST can surface as a read error (observed on Linux
+            # under load; a system can report it before the end of stream):
+            # the connection ended either way. Any other error, a timeout
+            # included, and any error before that, is a failure.
+            if sent and String(e).startswith("ConnectionReset"):
                 break
             raise e^
         if n == 0:
@@ -3684,12 +3686,13 @@ def h1_until_close_or_reset(port: Int, wire: String) raises -> String:
 
 
 def test_http1_receive_limit_counts_buffered_bytes() raises:
-    """Over HTTP/1.1 Flare also compares the request's raw bytes buffered on
-    the connection, less its 8 KiB header allowance, with the limit (M3-044):
-    a chunked body within the limit whose framing pushes the raw bytes past
+    """Over HTTP/1.1 Flare also compares everything buffered on the
+    connection, less its 8 KiB header allowance, with the limit (M3-044):
+    a chunked body within the limit whose head, framing and body exceed
     limit + 8 KiB is 413, and a chunked body far over the limit is 413 or
     400 depending on whether that check or the chunk scanner sees it first,
-    which depends on how the bytes arrive. None reaches the middleware."""
+    which depends on how the bytes arrive. None reaches the middleware (the
+    counters do not move), and each server keeps answering."""
     var child = _serve_limited_in_child(receive_app(), 4096)
     var small = _Child(-1, 0)
     try:
@@ -3699,10 +3702,11 @@ def test_http1_receive_limit_counts_buffered_bytes() raises:
         )
         assert_true(two.startswith("HTTP/1.1 200 OK\r\n"), two)
         assert_true(two.endswith("\r\n\r\n4096"), two)
-        # The same 4096 bytes in 1-byte chunks: about 20 KiB of raw bytes.
+        # The same 4096 bytes in 1-byte chunks: about 24.7 KB on the wire.
         var ones = List[Int]()
         for _ in range(4096):
             ones.append(1)
+        var before = _counters(child.port)
         var framed = h1_until_close_or_reset(
             child.port, _chunked_wire("/length", ones)
         )
@@ -3715,7 +3719,13 @@ def test_http1_receive_limit_counts_buffered_bytes() raises:
             framed.startswith(_H1_413 + "\r\n") or framed == "<reset>", framed
         )
         assert_true("X-Seen" not in framed, framed)
+        assert_true(_running(child.pid), "the 4096 server stopped")
+        var moved = _moved(before, _counters(child.port))
+        assert_equal(moved[0], 0, "the middleware ran")
+        assert_equal(moved[1], 0, "a conversion ran")
+        assert_equal(moved[2], 0, "a handler ran")
         small = _serve_limited_in_child(receive_app(), 64)
+        before = _counters(small.port)
         var far = h1_until_close_or_reset(
             small.port, _chunked_wire("/length", [8192, 8192])
         )
@@ -3727,8 +3737,11 @@ def test_http1_receive_limit_counts_buffered_bytes() raises:
             far,
         )
         assert_true("X-Seen" not in far, far)
-        var hi = h1_exchange(small.port, "GET", "/hello", [], List[UInt8]())
-        assert_equal(String(from_utf8=Span(hi[2])), "hello")
+        assert_true(_running(small.pid), "the 64 server stopped")
+        moved = _moved(before, _counters(small.port))
+        assert_equal(moved[0], 0, "the middleware ran")
+        assert_equal(moved[1], 0, "a conversion ran")
+        assert_equal(moved[2], 0, "a handler ran")
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
