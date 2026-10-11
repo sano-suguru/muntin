@@ -3884,8 +3884,8 @@ def _silent_for_a_second(port: Int, wire: List[UInt8]) raises -> Bool:
 
 def _post_of(total: Int) -> List[UInt8]:
     """`POST /length` with `Content-Length` and `Connection: close` whose
-    head and body of `a`s are `total` bytes on the wire (`total` from 1000
-    to 10098, so the length has 4 digits)."""
+    head and body of `a`s are `total` bytes on the wire (`total` from 1083
+    to 10082, so the length has 4 digits)."""
     var head = String(
         "POST /length HTTP/1.1\r\nHost: localhost\r\nContent-Length: ",
         "0000\r\nConnection: close\r\n\r\n",
@@ -3921,7 +3921,8 @@ def test_receive_limit_on_flare_bufring_path() raises:
     than 8192 wire bytes (one buffer-ring buffer), however small its body
     and whatever the limit (here 10 MiB, Flare's default; reproduced without
     Muntin), and while that request is pending the server answers no other
-    connection: measured, it spins until its 60-second request timeout. When
+    connection: measured, it spins until its request timeout (60 s by
+    default) answers 408. When
     this pin fails, Flare's loop changed: re-measure the limit on it (M3-044's
     revisit list). Elsewhere Flare ignores the variable; under `CI` a Linux
     runner without io_uring fails rather than skips."""

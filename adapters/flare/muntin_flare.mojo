@@ -101,8 +101,7 @@ HTTP/1.1 413 or 400 and a closed connection, also counting a chunked body's
 framing; over h2c a reset stream). It is not
 `FromBytes.max_bytes` or `Json[T]`'s cap, which `App.handle` checks on a
 body already received. Flare's opt-in `FLARE_BUFRING_HANDLER=1` loop is not
-supported: on Flare v0.12.0 it does not answer a request over 8192 wire
-bytes and serves nothing else meanwhile (docs/DX.md section 1).
+supported (docs/DX.md section 1).
 """
 
 from flare.http import (
