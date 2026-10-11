@@ -3183,14 +3183,22 @@ def _serve_limited_in_child(app: App, limit: Int) raises -> _Child:
 
 
 def _counters(port: Int) raises -> List[Int]:
-    """The child's `seen`, `converted` and `handled` counters, read before
-    this request's own `seen` is counted out: `GET /counts` passes the
-    middleware, so the `seen` it reports includes itself, and this returns
-    one less."""
+    """The child's `seen`, `converted` and `handled` counters. `GET /counts`
+    passes the middleware, so the `seen` it reports includes itself."""
     var r = h1_exchange(port, "GET", "/counts", [], List[UInt8]())
     assert_equal(r[0], "HTTP/1.1 200 OK")
     var parts = String(from_utf8=Span(r[2])).split(" ")
-    return [Int(parts[0]) - 1, Int(parts[1]), Int(parts[2])]
+    return [Int(parts[0]), Int(parts[1]), Int(parts[2])]
+
+
+def _moved(before: List[Int], after: List[Int]) -> List[Int]:
+    """How far each counter moved between two `_counters` reads, not counting
+    the second read's own `GET /counts`."""
+    return [
+        after[0] - before[0] - 1,
+        after[1] - before[1],
+        after[2] - before[2],
+    ]
 
 
 def _pattern(n: Int) -> List[UInt8]:
@@ -3501,24 +3509,24 @@ def test_server_receive_limit_over_http1_and_h2c() raises:
                 assert_true(_same_bytes(Span(raw), Span(body)), name)
                 var typed = _accepted(child.port, transport, "/wide", body)
                 assert_true(_same_bytes(Span(typed), Span(body)), name)
-                var after = _counters(child.port)
+                var moved = _moved(before, _counters(child.port))
                 # Each POST through the middleware; one conversion; two
                 # handlers. (h2c also sent `GET /hello` after each.)
                 var extra = 2 if transport >= 2 else 0
-                assert_equal(after[0] - before[0], 2 + extra, name)
-                assert_equal(after[1] - before[1], 1, name)
-                assert_equal(after[2] - before[2], 2, name)
+                assert_equal(moved[0], 2 + extra, name)
+                assert_equal(moved[1], 1, name)
+                assert_equal(moved[2], 2, name)
             for n in [65, 4096]:
                 var body = _pattern(n)
                 var before = _counters(child.port)
                 for path in ["/echo-raw", "/wide", "/missing"]:
                     _refused_by_backend(child.port, transport, path, body)
-                var after = _counters(child.port)
+                var moved = _moved(before, _counters(child.port))
                 # Only the h2c follow-up `GET /hello`s reached the middleware.
                 var extra = 3 if transport >= 2 else 0
-                assert_equal(after[0] - before[0], extra, name)
-                assert_equal(after[1] - before[1], 0, name)
-                assert_equal(after[2] - before[2], 0, name)
+                assert_equal(moved[0], extra, name)
+                assert_equal(moved[1], 0, name)
+                assert_equal(moved[2], 0, name)
             print(
                 "observed",
                 name + ":",
@@ -3572,10 +3580,10 @@ def test_receive_limit_and_max_bytes_are_told_apart() raises:
         var r = h1_exchange(a.port, "POST", "/wide", [], _pattern(65))
         assert_equal(r[0], _H1_413)
         assert_equal(r[1], _H1_413_FIELDS)
-        var after = _counters(a.port)
-        assert_equal(after[0] - before[0], 0, "A: middleware ran")
-        assert_equal(after[1] - before[1], 0, "A: from_bytes ran")
-        assert_equal(after[2] - before[2], 0, "A: the handler ran")
+        var moved = _moved(before, _counters(a.port))
+        assert_equal(moved[0], 0, "A: middleware ran")
+        assert_equal(moved[1], 0, "A: from_bytes ran")
+        assert_equal(moved[2], 0, "A: the handler ran")
         # (B)
         before = _counters(b.port)
         r = h1_exchange(b.port, "POST", "/narrow", [], _pattern(17))
@@ -3585,11 +3593,11 @@ def test_receive_limit_and_max_bytes_are_told_apart() raises:
         var o = h2_upload(b.port, "/narrow", _pattern(17), pieces=2)
         assert_equal(o.reset, -1)
         assert_equal(o.fields, ":status=413;x-seen=1;")
-        after = _counters(b.port)
+        moved = _moved(before, _counters(b.port))
         # Two POSTs and the h2c follow-up `GET /hello` reached the middleware.
-        assert_equal(after[0] - before[0], 3, "B: middleware did not run")
-        assert_equal(after[1] - before[1], 0, "B: from_bytes ran")
-        assert_equal(after[2] - before[2], 0, "B: the handler ran")
+        assert_equal(moved[0], 3, "B: middleware did not run")
+        assert_equal(moved[1], 0, "B: from_bytes ran")
+        assert_equal(moved[2], 0, "B: the handler ran")
         # Each Server keeps its own limit: 100 bytes are A's refusal and
         # reach B's raw route.
         _refused_by_backend(a.port, 0, "/echo-raw", _pattern(100))
