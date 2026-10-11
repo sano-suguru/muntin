@@ -93,9 +93,9 @@ chunk-size scanner can overflow; `max_body_bytes out of range: <value>`
 otherwise), and writes it into both of Flare's fields, `max_body_size`
 (HTTP/1.1) and `h2.max_body_size` (HTTP/2, which the first does not reach);
 every other field keeps Flare's default. Flare refuses a longer body itself,
-before the adapter: 413 for an HTTP/1.1 `Content-Length`, as soon as the
-head declares it, and 400 for a chunked total, each closing the connection;
-`RST_STREAM` `ENHANCE_YOUR_CALM` for the stream over h2c. It is not
+before the adapter, with its own answers (docs/DX.md section 1: over
+HTTP/1.1 413 or 400 and a closed connection, also counting a chunked body's
+framing; over h2c a reset stream). It is not
 `FromBytes.max_bytes` or `Json[T]`'s cap, which `App.handle` checks on a
 body already received.
 """

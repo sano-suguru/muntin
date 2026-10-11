@@ -254,8 +254,11 @@ raw route, the `max_bytes` 256 route and a path no route matches alike:
 `413 Content Too Large` (`Content-Length`, also when only the head is sent),
 `400 Bad Request` (chunked) or `RST_STREAM` 11 (h2c), without `X-Seen`, with
 no counter moved. The HTTP/1.1 connection is closed after the refusal; the
-h2c connection answers its next stream. A second `Server` (256) in the same
-process keeps its own limit, and there a 17-byte body to the `max_bytes` 16
+h2c connection answers its next stream. Over HTTP/1.1 Flare also counts the
+raw bytes buffered for a request (less its 8 KiB header allowance), so a
+chunked body within the limit whose framing exceeds that allowance is 413,
+and a chunked body far over the limit is 413 or 400 by arrival. A second
+`Server` (256), serving in its own child, keeps its own limit, and there a 17-byte body to the `max_bytes` 16
 route is `App.handle`'s 413 with `X-Seen`, the middleware counted and no
 conversion or handler. A `Server` with 0 takes only empty bodies, one bound
 with no limit takes 10 MiB and refuses one byte more on both protocols, and
@@ -3405,7 +3408,17 @@ def h1_keep_alive_pair(
     buf.resize(4096, 0)
     var sent = False
     while True:
-        var n = stream.read(buf.unsafe_ptr(), len(buf))
+        var n: Int
+        try:
+            n = stream.read(buf.unsafe_ptr(), len(buf))
+        except e:
+            # Once the follow-up is written to a connection the server has
+            # closed, its RST can surface as a read error (macOS reports it
+            # before the end of stream; Linux returns 0): the connection
+            # ended either way. Before that, an error is a failure.
+            if sent:
+                break
+            raise e^
         if n == 0:
             break
         for k in range(n):
@@ -3566,15 +3579,16 @@ def test_server_receive_limit_over_http1_and_h2c() raises:
 
 
 def test_receive_limit_and_max_bytes_are_told_apart() raises:
-    """Two `Server`s with different limits in one process keep their own,
-    and the refusing layer is read from the middleware's field and the
+    """Two `Server`s bound with different limits, each serving in its own
+    child, keep their own, and the refusing layer is read from the middleware's field and the
     counters, not the status: (A) receive limit 64 and `max_bytes` 256,
     65 bytes: Flare's refusal, nothing in Muntin ran; (B) receive limit 256
     and `max_bytes` 16, 17 bytes: `App.handle`'s 413 through the
     middleware, no conversion or handler."""
     var a = _serve_limited_in_child(receive_app(), 64)
-    var b = _serve_limited_in_child(receive_app(), 256)
+    var b = _Child(-1, 0)
     try:
+        b = _serve_limited_in_child(receive_app(), 256)
         # (A)
         var before = _counters(a.port)
         var r = h1_exchange(a.port, "POST", "/wide", [], _pattern(65))
@@ -3598,8 +3612,8 @@ def test_receive_limit_and_max_bytes_are_told_apart() raises:
         assert_equal(moved[0], 3, "B: middleware did not run")
         assert_equal(moved[1], 0, "B: from_bytes ran")
         assert_equal(moved[2], 0, "B: the handler ran")
-        # Each Server keeps its own limit: 100 bytes are A's refusal and
-        # reach B's raw route.
+        # Each Server (each in its own child) keeps its own limit: 100 bytes
+        # are A's refusal and reach B's raw route.
         _refused_by_backend(a.port, 0, "/echo-raw", _pattern(100))
         _refused_by_backend(a.port, 2, "/echo-raw", _pattern(100))
         var raw = _accepted(b.port, 0, "/echo-raw", _pattern(100))
@@ -3616,8 +3630,111 @@ def test_receive_limit_and_max_bytes_are_told_apart() raises:
     finally:
         _ = kill(a.pid, SIGKILL)
         waitpid(a.pid)
-        _ = kill(b.pid, SIGKILL)
-        waitpid(b.pid)
+        if b.pid > 0:
+            _ = kill(b.pid, SIGKILL)
+            waitpid(b.pid)
+
+
+def _chunked_wire(path: String, sizes: List[Int]) -> String:
+    """`POST path` with `Transfer-Encoding: chunked`, `Connection: close`
+    and one chunk of `a`s per entry of `sizes`."""
+    var wire = String(
+        "POST ",
+        path,
+        " HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n",
+        "Connection: close\r\n\r\n",
+    )
+    for size in sizes:
+        wire += String(hex(size)[byte=2:], "\r\n")
+        for _ in range(size):
+            wire += "a"
+        wire += "\r\n"
+    return wire + "0\r\n\r\n"
+
+
+def h1_until_close_or_reset(port: Int, wire: String) raises -> String:
+    """Sends `wire` and returns what the server sends before it closes, as
+    text, followed by `<reset>` when the connection was reset instead. Flare
+    closes without reading the rest of a refused request, so a client still
+    sending can get a reset after (or, on some systems, instead of) the
+    answer."""
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.set_recv_timeout(TIMEOUT_MS)
+    var acc = List[UInt8]()
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    var reset = False
+    try:
+        stream.write_all(wire.as_bytes())
+    except:
+        reset = True
+    while not reset:
+        try:
+            var n = stream.read(buf.unsafe_ptr(), len(buf))
+            if n == 0:
+                break
+            for k in range(n):
+                acc.append(buf[k])
+        except e:
+            if not String(e).startswith("ConnectionReset"):
+                raise e^
+            reset = True
+    var text = String(from_utf8_lossy=Span(acc))
+    return text + "<reset>" if reset else text
+
+
+def test_http1_receive_limit_counts_buffered_bytes() raises:
+    """Over HTTP/1.1 Flare also compares the request's raw bytes buffered on
+    the connection, less its 8 KiB header allowance, with the limit (M3-044):
+    a chunked body within the limit whose framing pushes the raw bytes past
+    limit + 8 KiB is 413, and a chunked body far over the limit is 413 or
+    400 depending on whether that check or the chunk scanner sees it first,
+    which depends on how the bytes arrive. None reaches the middleware."""
+    var child = _serve_limited_in_child(receive_app(), 4096)
+    var small = _Child(-1, 0)
+    try:
+        # 4096 bytes in two chunks: within the limit, received.
+        var two = h1_head_only(
+            child.port, _chunked_wire("/length", [2048, 2048])
+        )
+        assert_true(two.startswith("HTTP/1.1 200 OK\r\n"), two)
+        assert_true(two.endswith("\r\n\r\n4096"), two)
+        # The same 4096 bytes in 1-byte chunks: about 20 KiB of raw bytes.
+        var ones = List[Int]()
+        for _ in range(4096):
+            ones.append(1)
+        var framed = h1_until_close_or_reset(
+            child.port, _chunked_wire("/length", ones)
+        )
+        print(
+            "observed: 4096 bytes in 1-byte chunks ->", framed.split("\r\n")[0]
+        )
+        # Refused: Flare's 413, possibly followed by a reset (the client was
+        # still sending), or only a reset where the system reports it first.
+        assert_true(
+            framed.startswith(_H1_413 + "\r\n") or framed == "<reset>", framed
+        )
+        assert_true("X-Seen" not in framed, framed)
+        small = _serve_limited_in_child(receive_app(), 64)
+        var far = h1_until_close_or_reset(
+            small.port, _chunked_wire("/length", [8192, 8192])
+        )
+        print("observed: 16 KiB chunked, limit 64 ->", far.split("\r\n")[0])
+        assert_true(
+            far.startswith(_H1_413 + "\r\n")
+            or far.startswith(_H1_400 + "\r\n")
+            or far == "<reset>",
+            far,
+        )
+        assert_true("X-Seen" not in far, far)
+        var hi = h1_exchange(small.port, "GET", "/hello", [], List[UInt8]())
+        assert_equal(String(from_utf8=Span(hi[2])), "hello")
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+        if small.pid > 0:
+            _ = kill(small.pid, SIGKILL)
+            waitpid(small.pid)
 
 
 def test_receive_limit_zero_takes_only_empty_bodies() raises:
