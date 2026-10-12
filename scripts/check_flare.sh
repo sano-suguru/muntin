@@ -179,7 +179,7 @@ echo "ok: no server process left behind"
 
 # M3-033: Server.bind, port and serve (the example is built above, not run:
 # it binds the fixed port 8080).
-step "run Server tests (bind, port, the receive body limit, serve a borrowed App, SIGTERM and SIGINT)"
+step "run Server tests (bind, port, the receive body limit, serve a borrowed App, graceful stop on SIGTERM and SIGINT)"
 server_status=0
 NO_PROXY=127.0.0.1 ./build/test_server >"$tmp/server.log" 2>&1 || server_status=$?
 cat "$tmp/server.log"

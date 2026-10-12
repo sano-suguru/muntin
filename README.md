@@ -2,7 +2,7 @@
 
 Muntin is a typed application layer for building web services in Mojo. Your handlers depend on Muntin, not on Flare or another networking runtime.
 
-Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over cleartext HTTP on one thread, with an IP-literal host and no graceful shutdown. It is not production-ready.
+Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over cleartext HTTP on one thread, with an IP-literal host, stopping gracefully on SIGTERM or SIGINT. It is not production-ready.
 
 ```mojo
 from muntin import App
@@ -75,7 +75,7 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
-- **Serving:** `Server` in the Flare adapter module (`muntin_flare`) serves an `App` over cleartext HTTP/1.1 and HTTP/2 with prior knowledge, on one thread. Its limits: no graceful shutdown (SIGINT, from Ctrl-C, or SIGTERM ends the process and cuts in-flight requests, unless the process inherited the signal ignored), an IP literal as the host (`"127.0.0.1"`, `"0.0.0.0"`, `"::1"`; not `"localhost"`), no TLS or HTTP/3, one backend setting (an upper bound on the request body it receives, `max_body_bytes`, 10 MiB unless set) and Flare's defaults for the rest, and it runs from a clone with two `-I` paths, not from a published package. Details: [`docs/DX.md`](docs/DX.md) section 1.
+- **Serving:** `Server` in the Flare adapter module (`muntin_flare`) serves an `App` over cleartext HTTP/1.1 and HTTP/2 with prior knowledge, on one thread. On SIGTERM or SIGINT it refuses new connections and serves the open ones for a grace window (`shutdown_grace_ms`, 5 s unless set) before it returns; a stop always takes the whole window. Its limits: an IP literal as the host (`"127.0.0.1"`, `"0.0.0.0"`, `"::1"`; not `"localhost"`), no TLS or HTTP/3, two backend settings (an upper bound on the request body it receives, `max_body_bytes`, 10 MiB unless set, and the grace window) and Flare's defaults for the rest, and it runs from a clone with two `-I` paths, not from a published package. Details: [`docs/DX.md`](docs/DX.md) section 1.
 - **Not yet:** runtime-configured middleware and request-scoped context, and serving beyond those limits.
 
 Shipped and remaining capabilities: [`docs/SPEC.md`](docs/SPEC.md). Long-term API targets: [`docs/DX.md`](docs/DX.md).

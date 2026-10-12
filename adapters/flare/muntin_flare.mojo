@@ -74,11 +74,9 @@ listener. `server.port()` is the bound port. `server.serve(app)` borrows
 `app` and runs Flare's single-worker `serve` on the calling thread with
 `_BorrowedHandler`, which answers through `_serve_app` as `MuntinHandler`
 does; a raise propagates and a return returns, with no policy of its own.
-On Flare v0.12.0 a return means the reactor stopped (a failed poll). There
-is no stop call, graceful shutdown, signal handling, worker count or
-backend configuration other than the body limit below: SIGINT and SIGTERM
-end the process unless it inherited them ignored (the Mojo 1.1.0 runtime's
-own handler re-raises them).
+It returns after a graceful stop (below) or when the reactor stopped on a
+failed poll. There is no stop call, worker count or backend configuration
+other than the body limit and the grace window below.
 `_BorrowedHandler` is not `Copyable`, which keeps Flare's multi-worker
 `serve` out of reach. `Server`'s one initializer takes keyword-only `_host`,
 `_port` and `_max_body_bytes`, so `Server.bind` is the one public spelling.
@@ -103,6 +101,21 @@ framing; over h2c a reset stream). It is not
 body already received. `Server.serve` refuses to start when the environment
 selects Flare's opt-in `FLARE_BUFRING_HANDLER=1` loop, which is not
 supported (docs/DX.md section 1).
+
+Graceful shutdown (M3-045, decided in docs/history/architecture-decisions.md
+"Graceful shutdown decision (M3-045)"): while `serve` runs, SIGTERM and
+SIGINT stop it. `_StopWatch` installs `_stop_signal_seen`, a handler that
+does nothing, with `SA_RESETHAND`, so a delivered signal only resets its
+disposition to `SIG_DFL`; a watcher thread (`_watch_for_stop`) sees that,
+resets the other signal too (a second one takes the default action) and
+calls Flare's `drain` with `Server.bind`'s `shutdown_grace_ms` (0 to
+86,400,000; 5000 when not given, Flare v0.12.0's default, kept in
+`ServerConfig.shutdown_timeout_ms`): the listener closes, the open
+connections are served for the whole window, then Flare closes them and its
+`serve` returns. A handler still running `_REACTOR_STOP_MS` after the window
+ends the process with 128 + the signal. When `serve` returns or raises, the
+watcher is joined and both dispositions are put back. What clients see:
+docs/DX.md section 1.
 """
 
 from std.atomic import Atomic, Ordering
