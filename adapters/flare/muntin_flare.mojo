@@ -105,7 +105,10 @@ selects Flare's opt-in `FLARE_BUFRING_HANDLER=1` loop, which is not
 supported (docs/DX.md section 1).
 """
 
+from std.atomic import Atomic, Ordering
+from std.ffi import c_int, external_call
 from std.os import getenv
+from std.sys import CompilationTarget
 
 from flare.http import (
     Handler,
@@ -115,6 +118,9 @@ from flare.http import (
     ServerConfig,
 )
 from flare.net import IpAddr, SocketAddr
+from flare.runtime import libc_nanosleep_ms, monotonic_now_ms
+from flare.runtime._thread import ThreadHandle, _OpaquePtr
+from flare.utils import exit
 from muntin import App, Headers, Request, Response
 
 
@@ -325,15 +331,188 @@ comptime _BUFRING_UNSUPPORTED = (
 (M3-044; why: docs/DX.md section 1)."""
 
 
-def _server_config(max_body_bytes: Int) raises -> ServerConfig:
+comptime _DEFAULT_SHUTDOWN_GRACE_MS = 5000
+"""`Server.bind`'s grace window when none is given: Flare v0.12.0's
+`ServerConfig.shutdown_timeout_ms` default, written here so that a Flare
+upgrade does not change it (M3-045)."""
+
+comptime _LARGEST_SHUTDOWN_GRACE_MS = 86_400_000
+"""One day, the largest grace window `Server.bind` takes (M3-045)."""
+
+comptime _REACTOR_STOP_MS = 1000
+"""How long the watcher waits, after the grace window, for Flare's reactor to
+leave its loop before it ends the process with 128 + the signal. The reactor
+reads its stop flag at least every 100 ms, but not while a handler runs."""
+
+comptime _WATCH_POLL_MS = 50
+"""How often the watcher looks for a stop signal."""
+
+comptime _SIGINT = 2
+comptime _SIGTERM = 15
+comptime _SIGACTION_BYTES = 256
+"""Room for a `struct sigaction` on every supported system (152 bytes on
+Linux glibc, 16 on macOS). The handler is its first word on both."""
+comptime _SA_FLAGS_OFFSET = 12 if CompilationTarget.is_macos() else 136
+comptime _SA_RESTART_RESETHAND = (
+    0x2 | 0x4 if CompilationTarget.is_macos() else 0x10000000 | 0x80000000
+)
+"""`SA_RESTART | SA_RESETHAND`: interrupted system calls restart, and the
+kernel resets the disposition to `SIG_DFL` as it delivers the signal."""
+
+comptime _CB_DONE = 0
+"""Control block cell: 1 once Flare's `serve` has returned or raised."""
+comptime _CB_SERVER = 1
+"""Control block cell: the address of the serving `HttpServer`."""
+comptime _CB_GRACE = 2
+"""Control block cell: the grace window, in milliseconds."""
+comptime _CB_LEN = 3
+
+
+def _stop_signal_seen(sig: c_int) abi("C"):
+    """The handler `Server.serve` installs for SIGTERM and SIGINT. It does
+    nothing: with `SA_RESETHAND` the kernel resets the disposition to
+    `SIG_DFL` as it delivers the signal, and that reset is the notification
+    the watcher reads. No allocation, lock, raise, global or Flare or Mojo
+    object is touched in signal context (M3-045)."""
+    pass
+
+
+def _sigaction(sig: Int, new: Int, old: Int) -> Int:
+    """`sigaction(2)` with both `struct sigaction` pointers as addresses (0 is
+    NULL)."""
+    return Int(external_call["sigaction", c_int](c_int(sig), new, old))
+
+
+def _cell(
+    block: Int, i: Int
+) -> Pointer[Scalar[DType.int64], MutUntrackedOrigin]:
+    return Pointer[Int64, MutUntrackedOrigin](
+        unsafe_from_address=block + 8 * i
+    ).unsafe_bitcast[Scalar[DType.int64]]()
+
+
+def _load(block: Int, i: Int) -> Int:
+    return Int(Atomic[Int64].load[ordering=Ordering.ACQUIRE](_cell(block, i)))
+
+
+def _store(block: Int, i: Int, value: Int):
+    Atomic[Int64].store[ordering=Ordering.RELEASE](
+        _cell(block, i), Int64(value)
+    )
+
+
+def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
+    """The watcher thread `Server.serve` runs beside Flare's reactor (M3-045).
+
+    Every `_WATCH_POLL_MS` it reads the dispositions of SIGTERM and SIGINT;
+    one that is back to `SIG_DFL` was delivered. It then resets the other to
+    `SIG_DFL` too, so a second stop signal ends the process by the default
+    action, and calls Flare's `drain` with the grace window, which closes the
+    listener, keeps the reactor serving the open connections for the whole
+    window and then sets its stop flag. If the reactor has not left its loop
+    `_REACTOR_STOP_MS` later (a handler still running), it ends the process
+    with status 128 + the signal. It returns when the serving thread marks
+    `_CB_DONE`. Never raises (a pthread start routine)."""
+    var block = Int(arg)
+    var seen = List[UInt8](length=_SIGACTION_BYTES, fill=0)
+    var sig = 0
+    while sig == 0:
+        if _load(block, _CB_DONE) != 0:
+            return arg
+        for candidate in [_SIGTERM, _SIGINT]:
+            _ = _sigaction(candidate, 0, Int(seen.unsafe_ptr()))
+            if sig == 0 and seen.unsafe_ptr().unsafe_bitcast[Int]()[] == 0:
+                sig = candidate
+        if sig == 0:
+            _ = libc_nanosleep_ms(_WATCH_POLL_MS)
+    var default = List[UInt8](length=_SIGACTION_BYTES, fill=0)
+    _ = _sigaction(_SIGTERM, Int(default.unsafe_ptr()), 0)
+    _ = _sigaction(_SIGINT, Int(default.unsafe_ptr()), 0)
+    var server = Pointer[HttpServer, MutUntrackedOrigin](
+        unsafe_from_address=_load(block, _CB_SERVER)
+    )
+    try:
+        _ = server[].drain(_load(block, _CB_GRACE))
+    except:
+        server[].close()
+    var deadline = monotonic_now_ms() + _REACTOR_STOP_MS
+    while _load(block, _CB_DONE) == 0:
+        if monotonic_now_ms() >= deadline:
+            exit(128 + sig)
+        _ = libc_nanosleep_ms(5)
+    _ = seen^
+    _ = default^
+    return arg
+
+
+def _restore_dispositions(previous: Int):
+    """Puts back the SIGTERM and SIGINT dispositions saved at `previous`."""
+    _ = _sigaction(_SIGTERM, previous, 0)
+    _ = _sigaction(_SIGINT, previous + _SIGACTION_BYTES, 0)
+
+
+struct _StopWatch(Movable):
+    """What `Server.serve` sets up around Flare's `serve` and undoes after it
+    (M3-045): the stop handler on SIGTERM and SIGINT, the dispositions it
+    replaced, and the watcher thread with its control block. The block and
+    the server it points to outlive the thread, which `finish` joins."""
+
+    var _block: List[Int64]
+    var _previous: List[UInt8]
+    var _watcher: ThreadHandle
+
+    def __init__(out self, server_addr: Int, grace_ms: Int) raises:
+        self._block = List[Int64](length=_CB_LEN, fill=0)
+        var block = Int(self._block.unsafe_ptr())
+        _store(block, _CB_SERVER, server_addr)
+        _store(block, _CB_GRACE, grace_ms)
+        var handler: def(c_int) thin abi("C") -> None = _stop_signal_seen
+        var action = List[UInt8](length=_SIGACTION_BYTES, fill=0)
+        var at = action.unsafe_ptr()
+        at.unsafe_bitcast[Int]()[] = Pointer(to=handler).unsafe_bitcast[Int]()[]
+        at.unsafe_offset(_SA_FLAGS_OFFSET).unsafe_bitcast[Int32]()[] = Int32(
+            _SA_RESTART_RESETHAND
+        )
+        self._previous = List[UInt8](length=2 * _SIGACTION_BYTES, fill=0)
+        var previous = Int(self._previous.unsafe_ptr())
+        _ = _sigaction(_SIGTERM, Int(at), previous)
+        _ = _sigaction(_SIGINT, Int(at), previous + _SIGACTION_BYTES)
+        _ = action^
+        try:
+            self._watcher = ThreadHandle.spawn_os[_watch_for_stop](
+                _OpaquePtr(unsafe_from_address=block)
+            )
+        except e:
+            _restore_dispositions(previous)
+            raise e^
+
+    def finish(mut self) raises:
+        """Marks serving done, joins the watcher and puts the dispositions
+        `__init__` replaced back."""
+        _store(Int(self._block.unsafe_ptr()), _CB_DONE, 1)
+        self._watcher.join()
+        _restore_dispositions(Int(self._previous.unsafe_ptr()))
+
+
+def _server_config(
+    max_body_bytes: Int, shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS
+) raises -> ServerConfig:
     """Flare's default `ServerConfig` with `max_body_bytes` as the request body
     limit of both protocols: `max_body_size` (HTTP/1.1) and
-    `h2.max_body_size` (HTTP/2, which the first does not reach). Raises
-    `max_body_bytes out of range: <value>` outside 0 to 2^59 - 1."""
+    `h2.max_body_size` (HTTP/2, which the first does not reach), and
+    `shutdown_grace_ms` in `shutdown_timeout_ms`, where `Server.serve` reads
+    it (Flare's `drain` takes its window as an argument). Raises
+    `max_body_bytes out of range: <value>` outside 0 to 2^59 - 1, then
+    `shutdown_grace_ms out of range: <value>` outside 0 to 86,400,000."""
     if max_body_bytes < 0 or max_body_bytes > _LARGEST_MAX_BODY_BYTES:
         raise Error("max_body_bytes out of range: " + String(max_body_bytes))
+    if shutdown_grace_ms < 0 or shutdown_grace_ms > _LARGEST_SHUTDOWN_GRACE_MS:
+        raise Error(
+            "shutdown_grace_ms out of range: " + String(shutdown_grace_ms)
+        )
     var config = ServerConfig(max_body_size=max_body_bytes)
     config.h2.max_body_size = max_body_bytes
+    config.shutdown_timeout_ms = shutdown_grace_ms
     return config^
 
 
@@ -349,10 +528,11 @@ struct Server(Movable):
         _host: String,
         _port: Int,
         _max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
+        _shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
     ) raises:
         if _port < 0 or _port > 65535:
             raise Error("port out of range: " + String(_port))
-        var config = _server_config(_max_body_bytes)
+        var config = _server_config(_max_body_bytes, _shutdown_grace_ms)
         self._server = HttpServer.bind(
             SocketAddr(IpAddr.parse(_host), UInt16(_port)), config^
         )
@@ -363,6 +543,7 @@ struct Server(Movable):
         port: Int,
         *,
         max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
+        shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
     ) raises -> Server:
         """Binds and listens on `host` (an IPv4 or IPv6 literal) and `port`
         (0 to 65535; 0 lets the system choose). A client may connect once it
@@ -372,10 +553,17 @@ struct Server(Movable):
         It does not promise to accept every body within it: over HTTP/1.1
         Flare refuses (413) when a request's head, chunk framing, body and
         any pipelined bytes buffered together exceed `max_body_bytes` plus
-        8192.
-        Raises for a port or limit out of range, a host that is not an IP
-        literal, an address in use or any other OS error."""
-        return Server(_host=host, _port=port, _max_body_bytes=max_body_bytes)
+        8192. `shutdown_grace_ms` (0 to 86,400,000; 5000 when not given) is
+        how long `serve` keeps serving the open connections after SIGTERM
+        or SIGINT (M3-045; docs/DX.md section 1).
+        Raises for a port, limit or grace out of range, a host that is not
+        an IP literal, an address in use or any other OS error."""
+        return Server(
+            _host=host,
+            _port=port,
+            _max_body_bytes=max_body_bytes,
+            _shutdown_grace_ms=shutdown_grace_ms,
+        )
 
     def port(self) -> Int:
         """The bound port: the system's choice when bound with 0."""
@@ -389,7 +577,23 @@ struct Server(Movable):
         Muntin with Flare v0.12.0`, before serving, when the environment
         sets `FLARE_BUFRING_HANDLER` to `1`, the value with which Flare's
         `serve` takes its buffer-ring loop on Linux with io_uring; it
-        refuses it on every system (M3-044)."""
+        refuses it on every system (M3-044).
+
+        SIGTERM and SIGINT stop it gracefully while it serves (M3-045;
+        docs/DX.md section 1): new connections are refused at once, the
+        open ones are served for `shutdown_grace_ms`, then Flare closes
+        what is left and this returns. A second stop signal ends the
+        process by the default action; a handler still running
+        `_REACTOR_STOP_MS` after the window ends it with 128 + the signal.
+        The dispositions both signals had are back when this returns or
+        raises."""
         if getenv("FLARE_BUFRING_HANDLER") == "1":
             raise Error(_BUFRING_UNSUPPORTED)
-        self._server.serve(_BorrowedHandler(app))
+        var watch = _StopWatch(
+            Int(Pointer(to=self._server)),
+            self._server.config.shutdown_timeout_ms,
+        )
+        try:
+            self._server.serve(_BorrowedHandler(app))
+        finally:
+            watch.finish()
