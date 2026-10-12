@@ -320,10 +320,9 @@ handles without overflowing (it multiplies before it compares; with 2^59 or
 comptime _BUFRING_UNSUPPORTED = (
     "FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare v0.12.0"
 )
-"""What `Server.serve` raises, before serving, when the environment selects
-Flare's io_uring buffer-ring loop: on Flare v0.12.0 that loop leaves a
-request over 8192 wire bytes unanswered and the whole server stalled
-(M3-044)."""
+"""What `Server.serve` raises, before serving, when the environment sets
+`FLARE_BUFRING_HANDLER=1`, which selects Flare's unsupported buffer-ring loop
+(M3-044; why: docs/DX.md section 1)."""
 
 
 def _server_config(max_body_bytes: Int) raises -> ServerConfig:
@@ -389,7 +388,8 @@ struct Server(Movable):
         this returns. Raises `FLARE_BUFRING_HANDLER=1 is unsupported by
         Muntin with Flare v0.12.0`, before serving, when the environment
         sets `FLARE_BUFRING_HANDLER` to `1`, the value with which Flare's
-        `serve` takes its buffer-ring loop (M3-044)."""
+        `serve` takes its buffer-ring loop on Linux with io_uring; it
+        refuses it on every system (M3-044)."""
         if getenv("FLARE_BUFRING_HANDLER") == "1":
             raise Error(_BUFRING_UNSUPPORTED)
         self._server.serve(_BorrowedHandler(app))

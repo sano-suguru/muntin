@@ -48,6 +48,7 @@ comptime AF_INET6 = 30 if CompilationTarget.is_macos() else 10
 comptime SOCK_STREAM = 1
 comptime EAFNOSUPPORT = 47 if CompilationTarget.is_macos() else 97
 comptime LARGEST_BODY_LIMIT = 576460752303423487  # 2^59 - 1
+comptime REFUSAL_ALARM_S = 10
 
 
 def hello() -> String:
@@ -444,7 +445,7 @@ def test_docs_receive_limit_example() raises:
 def _serve_with_bufring_env(value: String) raises -> _Child:
     """As `_serve_in_child(borrowed_app(), 0)`, but the child sets
     `FLARE_BUFRING_HANDLER` to `value` before `server.serve(app)` and arms a
-    10-second alarm. If `serve` raises, the child prints the error and exits
+    `REFUSAL_ALARM_S` alarm. If `serve` raises, the child prints the error and exits
     7 when it is M3-044's refusal, 8 otherwise; if it returns, it exits 9."""
     var app = borrowed_app()
     var server = Server.bind("127.0.0.1", 0)
@@ -453,7 +454,7 @@ def _serve_with_bufring_env(value: String) raises -> _Child:
     if pid < 0:
         raise Error("fork() failed")
     if pid == 0:
-        _ = external_call["alarm", c_uint](c_uint(10))
+        _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
         _ = setenv("FLARE_BUFRING_HANDLER", value)
         try:
             server.serve(app)
