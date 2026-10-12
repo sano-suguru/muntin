@@ -17,6 +17,8 @@ adapter_tests=$adapter/test_muntin_flare.mojo
 serve_probe=$adapter/serve_probe.mojo
 roundtrip=$adapter/test_localhost_roundtrip.mojo
 server_tests=$adapter/test_server.mojo
+# M3-045: the program test_server.mojo execs for its stop tests.
+stop_driver=$adapter/stop_driver.mojo
 example=examples/hello_server.mojo
 # M3-032's must-not-build fixtures for Server (docs/history/architecture-decisions.md
 # "Serving entrypoint decision (M3-032)") and M3-044's ("Server receive body
@@ -98,6 +100,7 @@ build_bg test_muntin_flare -I src -I "$adapter" "$adapter_tests"
 build_bg serve_probe -I src -I "$adapter" "$serve_probe"
 build_bg_known test_localhost_roundtrip -I src -I "$adapter" "$roundtrip"
 build_bg test_server -I src -I "$adapter" "$server_tests"
+build_bg stop_driver -I src -I "$adapter" "$stop_driver"
 build_bg hello_server -I src -I "$adapter" "$example"
 build_bg flare_header_probe -I src -I "$adapter" compat/flare/headers/flare_header_probe.mojo
 build_bg inbound_rebuild -I src -I tests -I "$adapter" compat/flare/headers/inbound_rebuild.mojo
@@ -183,7 +186,7 @@ step "run Server tests (bind, port, the receive body limit, serve a borrowed App
 server_status=0
 NO_PROXY=127.0.0.1 ./build/test_server >"$tmp/server.log" 2>&1 || server_status=$?
 cat "$tmp/server.log"
-leftover_server='^\./build/test_server$'
+leftover_server='^\./build/(test_server|stop_driver)( |$)'
 if pgrep -f "$leftover_server"; then
     pkill -KILL -f "$leftover_server" || true
     echo "error: $server_tests left a server process behind" >&2
@@ -326,7 +329,7 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/body_probe.log"; then
 fi
 
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo compat/flare/body/body_probe.mojo; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$stop_driver" "$example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo compat/flare/body/body_probe.mojo; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1

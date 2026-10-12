@@ -133,7 +133,7 @@ from flare.http import (
 from flare.net import IpAddr, SocketAddr
 from flare.runtime import libc_nanosleep_ms, monotonic_now_ms
 from flare.runtime._thread import ThreadHandle, _OpaquePtr
-from flare.utils import exit
+from flare.utils import exit, getpid, kill
 from muntin import App, Headers, Request, Response
 
 
@@ -378,7 +378,9 @@ comptime _CB_SERVER = 1
 """Control block cell: the address of the serving `HttpServer`."""
 comptime _CB_GRACE = 2
 """Control block cell: the grace window, in milliseconds."""
-comptime _CB_LEN = 3
+comptime _CB_SIGNAL = 3
+"""Control block cell: the stop signal the watcher acted on, or 0."""
+comptime _CB_LEN = 4
 
 
 def _stop_signal_seen(sig: c_int) abi("C"):
@@ -438,6 +440,7 @@ def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
                 sig = candidate
         if sig == 0:
             _ = libc_nanosleep_ms(_WATCH_POLL_MS)
+    _store(block, _CB_SIGNAL, sig)
     var default = List[UInt8](length=_SIGACTION_BYTES, fill=0)
     _ = _sigaction(_SIGTERM, Int(default.unsafe_ptr()), 0)
     _ = _sigaction(_SIGINT, Int(default.unsafe_ptr()), 0)
@@ -499,12 +502,31 @@ struct _StopWatch(Movable):
             _restore_dispositions(previous)
             raise e^
 
-    def finish(mut self) raises:
+    def finish(mut self) raises -> Int:
         """Marks serving done, joins the watcher and puts the dispositions
-        `__init__` replaced back."""
-        _store(Int(self._block.unsafe_ptr()), _CB_DONE, 1)
+        `__init__` replaced back. Returns the stop signal the watcher acted
+        on, or 0. A stop signal that arrived too late for the watcher (its
+        disposition is `SIG_DFL` but the watcher did not act) is sent again
+        once the previous dispositions are back, so it is not lost."""
+        var block = Int(self._block.unsafe_ptr())
+        _store(block, _CB_DONE, 1)
         self._watcher.join()
+        var acted = _load(block, _CB_SIGNAL)
+        var missed = 0
+        if acted == 0:
+            var seen = List[UInt8](length=_SIGACTION_BYTES, fill=0)
+            for sig in [_SIGTERM, _SIGINT]:
+                _ = _sigaction(sig, 0, Int(seen.unsafe_ptr()))
+                if (
+                    missed == 0
+                    and seen.unsafe_ptr().unsafe_bitcast[Int]()[] == 0
+                ):
+                    missed = sig
+            _ = seen^
         _restore_dispositions(Int(self._previous.unsafe_ptr()))
+        if missed != 0:
+            _ = kill(getpid(), missed)
+        return acted
 
 
 def _server_config(
@@ -608,5 +630,10 @@ struct Server(Movable):
         )
         try:
             self._server.serve(_BorrowedHandler(app))
-        finally:
-            watch.finish()
+        except e:
+            # A stop that closed the listener before Flare's `serve` set up
+            # its reactor makes that `serve` raise: still a stop.
+            if watch.finish() == 0:
+                raise e^
+            return
+        _ = watch.finish()

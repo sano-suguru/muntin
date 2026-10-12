@@ -73,6 +73,7 @@ comptime EAFNOSUPPORT = 47 if CompilationTarget.is_macos() else 97
 comptime LARGEST_BODY_LIMIT = 576460752303423487  # 2^59 - 1
 comptime REFUSAL_ALARM_S = 10
 comptime WNOHANG = 1
+comptime DRIVER = "./build/stop_driver"
 comptime GRACE_MS = 1500
 comptime SHORT_GRACE_MS = 300
 comptime LONG_GRACE_MS = 10_000
@@ -124,6 +125,7 @@ def _serve_in_child(app: App, restore: Int) raises -> _Child:
         raise Error("fork() failed")
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        _default_sigpipe()
         if restore > 0:
             # signal(restore, SIG_DFL); SIG_DFL is 0 on Linux and macOS.
             _ = external_call["signal", Int](c_int(restore), Int(0))
@@ -133,6 +135,12 @@ def _serve_in_child(app: App, restore: Int) raises -> _Child:
             print("server child: serve failed:", e)
         exit(1)
     return _Child(pid, port)
+
+
+def _default_sigpipe():
+    """Gives a forked serving child SIGPIPE's default disposition back: the
+    runner ignores it (`main`), and a child must not inherit that."""
+    _ = external_call["signal", Int](c_int(SIGPIPE), Int(0))
 
 
 def _stop(pid: Int):
@@ -415,6 +423,7 @@ def test_docs_receive_limit_example() raises:
         raise Error("fork() failed")
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        _default_sigpipe()
         try:
             server.serve(app)
         except e:
@@ -460,6 +469,7 @@ def _serve_with_bufring_env(value: String) raises -> _Child:
         raise Error("fork() failed")
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
+        _default_sigpipe()
         _ = setenv("FLARE_BUFRING_HANDLER", value)
         try:
             server.serve(app)
@@ -562,8 +572,10 @@ def _held_pipes() raises -> Tuple[_Held, Int, Int]:
 def _serve_stoppable(app: App, grace_ms: Int) raises -> _Child:
     """As `_serve_in_child`, bound with `shutdown_grace_ms=grace_ms`. The
     child exits 0 when `serve` returns with the SIGTERM and SIGINT
-    dispositions it had before (the runtime's handler), 4 when it returns
-    with others, and 1 when it raises."""
+    dispositions it had before (the runtime's handler) and a second `serve`
+    on the closed listener raises with them back too; 1 when the first
+    raises, 4 or 6 when the dispositions differ after the first or the
+    second, and 5 when the second returns."""
     var server = Server.bind("127.0.0.1", 0, shutdown_grace_ms=grace_ms)
     var port = server.port()
     var pid = fork()
@@ -571,6 +583,7 @@ def _serve_stoppable(app: App, grace_ms: Int) raises -> _Child:
         raise Error("fork() failed")
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        _default_sigpipe()
         var term = _handler_word(SIGTERM)
         var int = _handler_word(SIGINT)
         try:
@@ -580,6 +593,15 @@ def _serve_stoppable(app: App, grace_ms: Int) raises -> _Child:
             exit(1)
         if _handler_word(SIGTERM) != term or _handler_word(SIGINT) != int:
             exit(4)
+        # The listener is closed now, so serving again raises; the
+        # dispositions must be back after that path too.
+        try:
+            server.serve(app)
+            exit(5)
+        except:
+            pass
+        if _handler_word(SIGTERM) != term or _handler_word(SIGINT) != int:
+            exit(6)
         exit(0)
     return _Child(pid, port)
 
@@ -713,6 +735,7 @@ def _stops_gracefully(sig: Int) raises:
             dropped[1],
         )
         assert_equal(dropped[0], "", "a queued connection was answered")
+        assert_true(dropped[1] == "reset" or dropped[1] == "eof", dropped[1])
         var ended = _reap_within(child.pid, GRACE_MS + STOP_BOUND_MS)
         reaped = ended[0] >= 0
         var after = monotonic_now_ms() - signaled_at
@@ -748,9 +771,11 @@ def _stops_idle(sig: Int, grace_ms: Int = SHORT_GRACE_MS) raises:
         # One answer shows the child is in `serve`.
         var raw = _exchange(child.port, _request("GET", "/hello"))
         assert_equal(_content(raw), "hello")
+        var signaled_at = monotonic_now_ms()
         assert_equal(kill(child.pid, sig), 0)
         var ended = _reap_within(child.pid, grace_ms + STOP_BOUND_MS)
         reaped = ended[0] >= 0
+        var after = monotonic_now_ms() - signaled_at
         print(
             "observed: idle, signal",
             sig,
@@ -761,7 +786,7 @@ def _stops_idle(sig: Int, grace_ms: Int = SHORT_GRACE_MS) raises:
             "ms",
         )
         assert_equal(_exit_code(ended[0]), 0, "serve did not return")
-        assert_true(ended[1] >= grace_ms, "ended before the window")
+        assert_true(after >= grace_ms, "ended before the window")
     finally:
         if not reaped:
             _stop(child.pid)
@@ -861,11 +886,13 @@ def test_stop_is_bounded_with_a_handler_that_does_not_return() raises:
     try:
         var in_flight = _send(child.port, _request("GET", held.path))
         assert_equal(_read_byte(held.started), 1, "the handler never started")
+        var signaled_at = monotonic_now_ms()
         assert_equal(kill(child.pid, SIGTERM), 0)
         var ended = _reap_within(
             child.pid, SHORT_GRACE_MS + STOP_BOUND_MS + 1000
         )
         reaped = ended[0] >= 0
+        var after = monotonic_now_ms() - signaled_at
         print(
             "observed: stuck handler -> status",
             ended[0],
@@ -875,7 +902,7 @@ def test_stop_is_bounded_with_a_handler_that_does_not_return() raises:
         )
         assert_equal(_exit_code(ended[0]), 128 + SIGTERM)
         assert_true(
-            ended[1] >= SHORT_GRACE_MS + STOP_BOUND_MS, "ended before the bound"
+            after >= SHORT_GRACE_MS + STOP_BOUND_MS, "ended before the bound"
         )
         var got = _read_all(in_flight)
         print("observed: stuck handler's client got", repr(got[0]), got[1])
@@ -1078,6 +1105,114 @@ def test_h2c_request_in_flight_finishes() raises:
             _stop(child.pid)
         _close(held.started)
         _close(held.release)
+
+
+def _cstr(s: String) -> List[UInt8]:
+    var out = List[UInt8](s.as_bytes())
+    out.append(0)
+    return out^
+
+
+def _exec_driver(grace_ms: Int, ignore_sigint: Bool) raises -> _Child:
+    """Forks and `execv`s `build/stop_driver <grace_ms>` (built by
+    scripts/check_flare.sh), a whole Mojo program with the runtime's worker
+    threads and handlers, and reads the port it prints. With
+    `ignore_sigint` the program starts with SIGINT ignored, as a background
+    job of a non-interactive shell does. The caller must reap `pid`."""
+    var out = _pipe()
+    var path = _cstr(DRIVER)
+    var grace = _cstr(String(grace_ms))
+    var args = List[Int]()
+    args.append(Int(path.unsafe_ptr()))
+    args.append(Int(grace.unsafe_ptr()))
+    args.append(0)
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["dup2", c_int](c_int(out[1]), c_int(1))
+        _close(out[0])
+        _default_sigpipe()
+        if ignore_sigint:
+            _ = external_call["signal", Int](c_int(SIGINT), Int(1))  # SIG_IGN
+        _ = external_call["execv", c_int](
+            Int(path.unsafe_ptr()), Int(args.unsafe_ptr())
+        )
+        exit(127)
+    _close(out[1])
+    var line = String()
+    while True:
+        var byte = List[UInt8](length=1, fill=0)
+        var source = FileDescriptor(out[0])
+        if source.read_bytes(byte) != 1 or byte[0] == UInt8(ord("\n")):
+            break
+        line += chr(Int(byte[0]))
+    _close(out[0])
+    _ = path^
+    _ = grace^
+    _ = args^
+    if line == "":
+        _stop(pid)
+        raise Error("build/stop_driver printed no port")
+    return _Child(pid, atol(line))
+
+
+def test_a_built_program_finishes_the_request_in_flight() raises:
+    """The stop as an application gets it: an `execv`d program, with the
+    runtime's threads (any of which may take the signal) and its handlers,
+    answers a request held when SIGTERM arrives and ends by returning from
+    `main`, with status 0."""
+    var pipes = _held_pipes()
+    var child = _exec_driver(GRACE_MS, False)
+    _close(pipes[1])
+    _close(pipes[2])
+    var held = pipes[0].copy()
+    var reaped = False
+    try:
+        var in_flight = _send(child.port, _request("GET", held.path))
+        assert_equal(_read_byte(held.started), 1, "the handler never started")
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        assert_true(_refused_within(child.port, 1000) >= 0)
+        _write_byte(held.release)
+        var got = _read_all(in_flight)
+        assert_equal(_status_line(got[0]), "HTTP/1.1 200 OK")
+        assert_equal(_content(got[0]), "released after the stop")
+        var ended = _reap_within(child.pid, GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        print(
+            "observed: built program, SIGTERM -> status",
+            ended[0],
+            "after",
+            ended[1],
+            "ms",
+        )
+        assert_equal(_exit_code(ended[0]), 0, "main did not return")
+    finally:
+        if not reaped:
+            _stop(child.pid)
+        _close(held.started)
+        _close(held.release)
+
+
+def test_a_built_program_stops_on_an_inherited_ignored_sigint() raises:
+    """A program started with SIGINT ignored still stops on SIGINT while it
+    serves: the runtime replaced the ignore before `main`."""
+    var child = _exec_driver(SHORT_GRACE_MS, True)
+    var reaped = False
+    try:
+        var raw = _exchange(child.port, _request("GET", "/hello"))
+        assert_equal(_content(raw), "hello")
+        assert_equal(kill(child.pid, SIGINT), 0)
+        var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        print(
+            "observed: built program, inherited SIG_IGN, SIGINT -> status",
+            ended[0],
+        )
+        assert_equal(_exit_code(ended[0]), 0, "main did not return")
+    finally:
+        if not reaped:
+            _stop(child.pid)
 
 
 def test_bind_raises_for_a_grace_out_of_range() raises:
