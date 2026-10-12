@@ -18,15 +18,20 @@ The receive body limit (M3-044, decided in docs/history/architecture-decisions.m
 section 1 example runs as written but on port 0. What a client sees on each
 transport is in `adapters/flare/test_localhost_roundtrip.mojo`.
 
+`Server.serve` refuses to start, on every system, when the environment sets
+`FLARE_BUFRING_HANDLER` to `1`, which would select Flare's buffer-ring loop
+(M3-044); any other value serves as usual. Each case sets the variable only in
+a forked child.
+
 The `::1` case needs IPv6. It is skipped only where the host shows it has none
 (`socket(AF_INET6, ...)` fails with `EAFNOSUPPORT`) and `CI` is unset; under
 `CI` it always runs, so the CI runners keep binding `::1`.
 """
 
 from std.ffi import c_int, c_uint, external_call, get_errno
-from std.os import getenv
+from std.os import getenv, setenv
 from std.sys import CompilationTarget
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from flare.http import ServerConfig
 from flare.net import SocketAddr
@@ -370,6 +375,7 @@ def test_server_config_sets_both_body_limits() raises:
         assert_equal(config.keep_alive, flare.keep_alive)
         assert_equal(config.idle_timeout_ms, flare.idle_timeout_ms)
         assert_equal(config.request_timeout_ms, flare.request_timeout_ms)
+        assert_false(config.use_bufring, "the buffer-ring loop selected")
         assert_equal(
             config.h2.max_concurrent_streams, flare.h2.max_concurrent_streams
         )
@@ -433,6 +439,54 @@ def test_docs_receive_limit_example() raises:
         assert_equal(_content(raw), "Hello, Mojo!")
     finally:
         _stop(pid)
+
+
+def _serve_with_bufring_env(value: String) raises -> _Child:
+    """As `_serve_in_child(borrowed_app(), 0)`, but the child sets
+    `FLARE_BUFRING_HANDLER` to `value` before `server.serve(app)` and arms a
+    10-second alarm. If `serve` raises, the child prints the error and exits
+    7 when it is M3-044's refusal, 8 otherwise; if it returns, it exits 9."""
+    var app = borrowed_app()
+    var server = Server.bind("127.0.0.1", 0)
+    var port = server.port()
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(10))
+        _ = setenv("FLARE_BUFRING_HANDLER", value)
+        try:
+            server.serve(app)
+        except e:
+            print("observed: FLARE_BUFRING_HANDLER=" + value, "->", e)
+            if (
+                String(e)
+                == "FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare"
+                " v0.12.0"
+            ):
+                exit(7)
+            exit(8)
+        exit(9)
+    return _Child(pid, port)
+
+
+def test_serve_refuses_flare_bufring_handler() raises:
+    """With `FLARE_BUFRING_HANDLER=1` in the environment, `serve` raises
+    M3-044's message before serving (the child exits 7, not killed by its
+    alarm); with `0` it serves."""
+    var refused = _serve_with_bufring_env("1")
+    var status = _wait_status(refused.pid)
+    print("observed: FLARE_BUFRING_HANDLER=1 -> waitpid status", status)
+    assert_true(status >= 0, "waitpid failed")
+    assert_equal(status & 0x7F, 0, "the child was killed, not refused")
+    assert_equal((status >> 8) & 0xFF, 7, "serve did not raise the refusal")
+    var served = _serve_with_bufring_env("0")
+    try:
+        var raw = _exchange(served.port, _request("GET", "/hello"))
+        assert_equal(_status_line(raw), "HTTP/1.1 200 OK")
+        assert_equal(_content(raw), "hello")
+    finally:
+        _stop(served.pid)
 
 
 def test_sigterm_ends_a_serving_child() raises:

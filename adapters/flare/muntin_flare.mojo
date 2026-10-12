@@ -100,9 +100,12 @@ before the adapter, with its own answers (docs/DX.md section 1: over
 HTTP/1.1 413 or 400 and a closed connection, also counting a chunked body's
 framing; over h2c a reset stream). It is not
 `FromBytes.max_bytes` or `Json[T]`'s cap, which `App.handle` checks on a
-body already received. Flare's opt-in `FLARE_BUFRING_HANDLER=1` loop is not
+body already received. `Server.serve` refuses to start when the environment
+selects Flare's opt-in `FLARE_BUFRING_HANDLER=1` loop, which is not
 supported (docs/DX.md section 1).
 """
+
+from std.os import getenv
 
 from flare.http import (
     Handler,
@@ -314,6 +317,15 @@ handles without overflowing (it multiplies before it compares; with 2^59 or
 `Int.MAX` one chunk-size line aborted the serving process, M3-044)."""
 
 
+comptime _BUFRING_UNSUPPORTED = (
+    "FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare v0.12.0"
+)
+"""What `Server.serve` raises, before serving, when the environment selects
+Flare's io_uring buffer-ring loop: on Flare v0.12.0 that loop leaves a
+request over 8192 wire bytes unanswered and the whole server stalled
+(M3-044)."""
+
+
 def _server_config(max_body_bytes: Int) raises -> ServerConfig:
     """Flare's default `ServerConfig` with `max_body_bytes` as the request body
     limit of both protocols: `max_body_size` (HTTP/1.1) and
@@ -374,5 +386,10 @@ struct Server(Movable):
         """Serves the borrowed `app` on the calling thread with Flare's
         single-worker reactor. It does not return while serving; when
         Flare's `serve` raises, the raise propagates, and when it returns,
-        this returns."""
+        this returns. Raises `FLARE_BUFRING_HANDLER=1 is unsupported by
+        Muntin with Flare v0.12.0`, before serving, when the environment
+        sets `FLARE_BUFRING_HANDLER` to `1`, the value with which Flare's
+        `serve` takes its buffer-ring loop (M3-044)."""
+        if getenv("FLARE_BUFRING_HANDLER") == "1":
+            raise Error(_BUFRING_UNSUPPORTED)
         self._server.serve(_BorrowedHandler(app))

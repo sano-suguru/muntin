@@ -263,9 +263,9 @@ limit is 413 or 400 by arrival. The h2c client acknowledges the server's
 SETTINGS and reads `RST_STREAM` codes with all 32 bits. With
 `FLARE_BUFRING_HANDLER=1` (Linux with io_uring), Flare's buffer-ring loop
 gives the same answers to requests within 8192 wire bytes, closes h2c, and
-answers neither a longer request nor, meanwhile, any other connection: a
-Flare v0.12.0 defect the test pins, which is why Muntin does not support
-that loop. A second
+answers neither a longer request nor, while that connection is held open,
+any other connection: a Flare v0.12.0 defect the test pins, served through
+Flare's own `HttpServer` because `Server.serve` refuses the variable. A second
 `Server` (256), serving in its own child, keeps its own limit, and there a 17-byte body to the `max_bytes` 16
 route is `App.handle`'s 413 with `X-Seen`, the middleware counted and no
 conversion or handler. A `Server` with 0 takes only empty bodies, one bound
@@ -279,7 +279,7 @@ from std.os import getenv, setenv
 from std.sys.info import CompilationTarget
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
-from flare.http import HttpClient
+from flare.http import HttpClient, HttpServer
 from flare.http import Request as FlareRequest
 from flare.http.proto import ascii_unchecked_string
 from flare.http2 import (
@@ -316,7 +316,7 @@ from muntin import (
     WithHeaders,
 )
 from muntin.testing import TestClient
-from muntin_flare import Server
+from muntin_flare import MuntinHandler, Server, _server_config
 
 comptime TIMEOUT_MS = 5_000
 comptime CHILD_LIFETIME_S = 30
@@ -3177,12 +3177,9 @@ def receive_app() -> App:
     return app^
 
 
-def _serve_limited_in_child(
-    app: App, limit: Int, bufring: Bool = False
-) raises -> _Child:
+def _serve_limited_in_child(app: App, limit: Int) raises -> _Child:
     """As `_serve_in_child`, through `Server.bind("127.0.0.1", 0,
-    max_body_bytes=limit)`. With `bufring`, the child sets
-    `FLARE_BUFRING_HANDLER=1` before `serve`, which Flare reads there."""
+    max_body_bytes=limit)`."""
     var server = Server.bind("127.0.0.1", 0, max_body_bytes=limit)
     var port = server.port()
     var pid = fork()
@@ -3190,8 +3187,6 @@ def _serve_limited_in_child(
         raise Error("fork() failed")
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
-        if bufring:
-            _ = setenv("FLARE_BUFRING_HANDLER", "1")
         try:
             server.serve(app)
         except e:
@@ -3866,19 +3861,43 @@ def test_http1_receive_limit_counts_buffered_bytes() raises:
             waitpid(small.pid)
 
 
-def _silent_for_a_second(port: Int, wire: List[UInt8]) raises -> Bool:
-    """Sends `wire` on a new connection: whether the server then sends
-    nothing and keeps the connection open for 1 second (the read times
-    out). An answer, a close or any other error is `False`."""
-    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
-    stream.set_recv_timeout(1_000)
-    stream.write_all(Span[UInt8, _](wire))
+def _serve_flare_bufring_in_child(var app: App, limit: Int) raises -> _Child:
+    """Flare's own `HttpServer`, bound on an ephemeral loopback port with
+    `_server_config(limit)` (the configuration `Server.bind` builds), serving
+    `MuntinHandler(app)` in a forked child that first sets
+    `FLARE_BUFRING_HANDLER=1`, which Flare's `serve` reads. `Server.serve`
+    refuses that variable (M3-044), so this is Flare's loop observed with
+    Muntin's handler, not a supported `Server`. The caller must reap `pid`.
+    """
+    var server = HttpServer.bind(
+        SocketAddr.localhost(UInt16(0)), _server_config(limit)
+    )
+    var port = Int(server.local_addr().port)
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        _ = setenv("FLARE_BUFRING_HANDLER", "1")
+        try:
+            server.serve(MuntinHandler(app^))
+        except e:
+            print("server child: serve failed:", e)
+        exit(1)
+    return _Child(pid, port)
+
+
+def _times_out(mut stream: TcpStream) raises -> Bool:
+    """Whether a read on `stream` (its receive timeout set by the caller)
+    times out: `False` for an answer or a close; any other error raises."""
     var buf = List[UInt8]()
     buf.resize(4096, 0)
     try:
         _ = stream.read(buf.unsafe_ptr(), len(buf))
     except e:
-        return String(e).startswith("Timeout")
+        if String(e).startswith("Timeout"):
+            return True
+        raise e^
     return False
 
 
@@ -3905,9 +3924,11 @@ def _post_of(total: Int) -> List[UInt8]:
 def test_receive_limit_on_flare_bufring_path() raises:
     """`FLARE_BUFRING_HANDLER=1` in the serving process makes Flare serve
     through its opt-in io_uring buffer-ring loop (Linux with io_uring,
-    HTTP/1.1 only) instead of its unified loop. Muntin does not support that
-    loop; this test records what it does with the receive limit and pins the
-    defect that rules it out.
+    HTTP/1.1 only) instead of its unified loop. `Server.serve` refuses the
+    variable (`adapters/flare/test_server.mojo`), so this serves through
+    Flare's own `HttpServer` with Muntin's configuration and handler
+    (`_serve_flare_bufring_in_child`): it records what that loop does with
+    the receive limit and pins the defect that rules it out.
 
     With limit 64, every request here fitting in 8192 wire bytes: 0, 63 and
     64 bytes byte for byte over `Content-Length` and chunked, 65 and 4096
@@ -3922,7 +3943,8 @@ def test_receive_limit_on_flare_bufring_path() raises:
     and whatever the limit (here 10 MiB, Flare's default; reproduced without
     Muntin), and while that request is pending the server answers no other
     connection: measured, it spins until its request timeout (60 s by
-    default) answers 408. When
+    default) answers 408. The pin holds the stalled connection open while it
+    sends `GET /hello` on another. When
     this pin fails, Flare's loop changed: re-measure the limit on it (M3-044's
     revisit list). Elsewhere Flare ignores the variable; under `CI` a Linux
     runner without io_uring fails rather than skips."""
@@ -3934,7 +3956,7 @@ def test_receive_limit_on_flare_bufring_path() raises:
             raise Error("no io_uring on this Linux runner; CI is set")
         print("skipped: no io_uring on this host, and CI is unset")
         return
-    var child = _serve_limited_in_child(receive_app(), 64, bufring=True)
+    var child = _serve_flare_bufring_in_child(receive_app(), 64)
     var wedged = _Child(-1, 0)
     try:
         for transport in range(2):
@@ -3983,23 +4005,29 @@ def test_receive_limit_on_flare_bufring_path() raises:
         var hi = h1_exchange(child.port, "GET", "/hello", [], List[UInt8]())
         assert_equal(hi[0], "HTTP/1.1 200 OK")
         assert_true(_running(child.pid))
-        # The pin: 8192 wire bytes are answered, 8193 are not, and nothing
-        # else is answered meanwhile.
-        wedged = _serve_limited_in_child(receive_app(), 10485760, bufring=True)
+        # The pin: 8192 wire bytes are answered, 8193 are not, and while
+        # that connection is held open no other connection is answered.
+        wedged = _serve_flare_bufring_in_child(receive_app(), 10485760)
         var fits = h1_head_only(
             wedged.port, String(from_utf8=Span(_post_of(8192)))
         )
         assert_true(fits.startswith("HTTP/1.1 200 OK\r\n"), fits)
-        assert_true(
-            _silent_for_a_second(wedged.port, _post_of(8193)), "8193 bytes"
-        )
-        var get = List(
+        var held = TcpStream.connect(SocketAddr.localhost(UInt16(wedged.port)))
+        held.set_recv_timeout(1_000)
+        held.write_all(Span[UInt8, _](_post_of(8193)))
+        assert_true(_times_out(held), "8193 bytes answered")
+        var other = TcpStream.connect(SocketAddr.localhost(UInt16(wedged.port)))
+        other.set_recv_timeout(1_000)
+        other.write_all(
             String(
                 "GET /hello HTTP/1.1\r\nHost: localhost\r\n",
                 "Connection: close\r\n\r\n",
             ).as_bytes()
         )
-        assert_true(_silent_for_a_second(wedged.port, get), "GET /hello")
+        assert_true(_times_out(other), "GET answered beside the 8193 bytes")
+        # Closed only now: `held` was open for the whole `GET` check.
+        other.close()
+        held.close()
         print(
             "observed bufring (limit 64): within it byte for byte, 65 and 4096"
             " refused as on the unified loop, nothing ran, h2c closed;"
