@@ -561,7 +561,9 @@ def _held_pipes() raises -> Tuple[_Held, Int, Int]:
 
 def _serve_stoppable(app: App, grace_ms: Int) raises -> _Child:
     """As `_serve_in_child`, bound with `shutdown_grace_ms=grace_ms`. The
-    child exits 0 when `serve` returns and 1 when it raises."""
+    child exits 0 when `serve` returns with the SIGTERM and SIGINT
+    dispositions it had before (the runtime's handler), 4 when it returns
+    with others, and 1 when it raises."""
     var server = Server.bind("127.0.0.1", 0, shutdown_grace_ms=grace_ms)
     var port = server.port()
     var pid = fork()
@@ -569,13 +571,29 @@ def _serve_stoppable(app: App, grace_ms: Int) raises -> _Child:
         raise Error("fork() failed")
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        var term = _handler_word(SIGTERM)
+        var int = _handler_word(SIGINT)
         try:
             server.serve(app)
         except e:
             print("server child: serve failed:", e)
             exit(1)
+        if _handler_word(SIGTERM) != term or _handler_word(SIGINT) != int:
+            exit(4)
         exit(0)
     return _Child(pid, port)
+
+
+def _handler_word(sig: Int) -> Int:
+    """The handler of `sig`'s current disposition, as `sigaction` reports it
+    (the first word of `struct sigaction` on Linux and macOS)."""
+    var action = List[UInt8](length=256, fill=0)
+    _ = external_call["sigaction", c_int](
+        c_int(sig), 0, Int(action.unsafe_ptr())
+    )
+    var word = action.unsafe_ptr().unsafe_bitcast[Int]()[]
+    _ = action^
+    return word
 
 
 def _reap_within(pid: Int, bound_ms: Int) -> Tuple[Int, Int]:
@@ -720,18 +738,18 @@ def test_sigint_finishes_the_request_in_flight() raises:
     _stops_gracefully(SIGINT)
 
 
-def _stops_idle(sig: Int) raises:
+def _stops_idle(sig: Int, grace_ms: Int = SHORT_GRACE_MS) raises:
     """With no request in flight, `sig` ends the serving child with status 0
     after the grace window and within the bound."""
     var app = borrowed_app()
-    var child = _serve_stoppable(app, SHORT_GRACE_MS)
+    var child = _serve_stoppable(app, grace_ms)
     var reaped = False
     try:
         # One answer shows the child is in `serve`.
         var raw = _exchange(child.port, _request("GET", "/hello"))
         assert_equal(_content(raw), "hello")
         assert_equal(kill(child.pid, sig), 0)
-        var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        var ended = _reap_within(child.pid, grace_ms + STOP_BOUND_MS)
         reaped = ended[0] >= 0
         print(
             "observed: idle, signal",
@@ -743,7 +761,7 @@ def _stops_idle(sig: Int) raises:
             "ms",
         )
         assert_equal(_exit_code(ended[0]), 0, "serve did not return")
-        assert_true(ended[1] >= SHORT_GRACE_MS, "ended before the window")
+        assert_true(ended[1] >= grace_ms, "ended before the window")
     finally:
         if not reaped:
             _stop(child.pid)
@@ -755,6 +773,44 @@ def test_sigterm_stops_an_idle_server() raises:
 
 def test_sigint_stops_an_idle_server() raises:
     _stops_idle(SIGINT)
+
+
+def test_zero_grace_stops_at_the_next_turn() raises:
+    """`shutdown_grace_ms=0`: no window; the reactor leaves its loop within
+    its 100 ms poll."""
+    _stops_idle(SIGTERM, 0)
+
+
+def stop_self() raises -> String:
+    """Asks its own server to stop, as an application can without a stop
+    call."""
+    var pid = external_call["getpid", c_int]()
+    if Int(external_call["kill", c_int](pid, c_int(SIGTERM))) != 0:
+        raise Error("kill failed")
+    return "stopping"
+
+
+def test_a_handler_can_stop_its_own_server() raises:
+    """A handler that sends its own process SIGTERM is answered, and the
+    server then stops as for an outside SIGTERM."""
+    var app = borrowed_app()
+    app.get["/stop"](stop_self)
+    var child = _serve_stoppable(app, SHORT_GRACE_MS)
+    var reaped = False
+    try:
+        var raw = _exchange(child.port, _request("GET", "/stop"))
+        assert_equal(_status_line(raw), "HTTP/1.1 200 OK")
+        assert_equal(_content(raw), "stopping")
+        assert_true(_refused_within(child.port, 1000) >= 0)
+        var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        print(
+            "observed: self stop -> status", ended[0], "after", ended[1], "ms"
+        )
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+    finally:
+        if not reaped:
+            _stop(child.pid)
 
 
 def test_stop_is_bounded_with_a_stalled_client() raises:
