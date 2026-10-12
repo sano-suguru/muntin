@@ -11,22 +11,35 @@ it in `finally` unless the test has already reaped it. Requests are raw
 HTTP/1.1 over `TcpStream` with `Connection: close`, read until the server
 closes.
 
+The receive body limit (M3-044, decided in docs/history/architecture-decisions.md
+"Server receive body limit decision (M3-044)"): `Server.bind`'s keyword-only
+`max_body_bytes` is checked (0 to 2^59 - 1) before anything is bound, and
+`_server_config` writes it into both of Flare's fields; the `docs/DX.md`
+section 1 example runs as written but on port 0. What a client sees on each
+transport is in `adapters/flare/test_localhost_roundtrip.mojo`.
+
+`Server.serve` refuses to start, on every system, when the environment sets
+`FLARE_BUFRING_HANDLER` to `1`, which would select Flare's buffer-ring loop
+(M3-044); any other value serves as usual. Each case sets the variable only in
+a forked child.
+
 The `::1` case needs IPv6. It is skipped only where the host shows it has none
 (`socket(AF_INET6, ...)` fails with `EAFNOSUPPORT`) and `CI` is unset; under
 `CI` it always runs, so the CI runners keep binding `::1`.
 """
 
 from std.ffi import c_int, c_uint, external_call, get_errno
-from std.os import getenv
+from std.os import getenv, setenv
 from std.sys import CompilationTarget
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
+from flare.http import ServerConfig
 from flare.net import SocketAddr
 from flare.tcp import TcpStream
 from flare.utils import SIGINT, SIGKILL, SIGTERM, exit, fork, kill, waitpid
 from muntin import App, Request, Response
 from muntin.testing import TestClient
-from muntin_flare import Server
+from muntin_flare import Server, _server_config
 
 comptime TIMEOUT_MS = 5_000
 comptime CHILD_LIFETIME_S = 30
@@ -34,6 +47,8 @@ comptime SIGALRM = 14
 comptime AF_INET6 = 30 if CompilationTarget.is_macos() else 10
 comptime SOCK_STREAM = 1
 comptime EAFNOSUPPORT = 47 if CompilationTarget.is_macos() else 97
+comptime LARGEST_BODY_LIMIT = 576460752303423487  # 2^59 - 1
+comptime REFUSAL_ALARM_S = 10
 
 
 def hello() -> String:
@@ -299,6 +314,180 @@ def _ended_by(sig: Int) raises:
     finally:
         if not reaped:
             _stop(child.pid)
+
+
+def _bind_limit_error(host: String, port: Int, limit: Int) -> String:
+    """The text `Server.bind(host, port, max_body_bytes=limit)` raises, or
+    what it bound."""
+    try:
+        var server = Server.bind(host, port, max_body_bytes=limit)
+        return "bound port " + String(server.port())
+    except e:
+        return String(e)
+
+
+def test_bind_raises_for_a_body_limit_out_of_range() raises:
+    """Below 0 and above 2^59 - 1 (where Flare's chunk-size scanner can
+    overflow) `bind` raises Muntin's message, after the port check and before
+    the host is parsed or anything is bound: on a port a child serves, the
+    raise is the range's, not `AddressInUse`."""
+    var app = borrowed_app()
+    var child = _serve_in_child(app, 0)
+    try:
+        for limit in [-1, LARGEST_BODY_LIMIT + 1, Int.MAX, -Int.MAX]:
+            var error = _bind_limit_error("127.0.0.1", child.port, limit)
+            print("observed: max_body_bytes", limit, "->", error)
+            assert_equal(error, "max_body_bytes out of range: " + String(limit))
+        assert_equal(
+            _bind_limit_error("localhost", 0, -1),
+            "max_body_bytes out of range: -1",
+        )
+        assert_equal(
+            _bind_limit_error("127.0.0.1", 65536, -1),
+            "port out of range: 65536",
+        )
+        # The child still serves: nothing was bound over its port.
+        var raw = _exchange(child.port, _request("GET", "/hello"))
+        assert_equal(_content(raw), "hello")
+    finally:
+        _stop(child.pid)
+
+
+def test_bind_accepts_the_body_limit_range_ends() raises:
+    for limit in [0, 1, LARGEST_BODY_LIMIT]:
+        var error = _bind_limit_error("127.0.0.1", 0, limit)
+        print("observed: max_body_bytes", limit, "->", error)
+        assert_true(error.startswith("bound port "), error)
+
+
+def test_server_config_sets_both_body_limits() raises:
+    """One value reaches both of Flare's fields (HTTP/1.1 and HTTP/2); every
+    other field keeps Flare's default. Muntin's default equals Flare
+    v0.12.0's for both."""
+    var flare = ServerConfig()
+    assert_equal(flare.max_body_size, 10 * 1024 * 1024)
+    assert_equal(flare.h2.max_body_size, 10 * 1024 * 1024)
+    for limit in [0, 64, 10 * 1024 * 1024, LARGEST_BODY_LIMIT]:
+        var config = _server_config(limit)
+        assert_equal(config.max_body_size, limit)
+        assert_equal(config.h2.max_body_size, limit)
+        assert_equal(config.max_header_size, flare.max_header_size)
+        assert_equal(config.max_uri_length, flare.max_uri_length)
+        assert_equal(config.keep_alive, flare.keep_alive)
+        assert_equal(config.idle_timeout_ms, flare.idle_timeout_ms)
+        assert_equal(config.request_timeout_ms, flare.request_timeout_ms)
+        assert_false(config.use_bufring, "the buffer-ring loop selected")
+        assert_equal(
+            config.h2.max_concurrent_streams, flare.h2.max_concurrent_streams
+        )
+        assert_equal(
+            config.h2.initial_window_size, flare.h2.initial_window_size
+        )
+    for limit in [-1, LARGEST_BODY_LIMIT + 1]:
+        try:
+            _ = _server_config(limit)
+            assert_true(False, "no raise for " + String(limit))
+        except e:
+            assert_equal(
+                String(e), "max_body_bytes out of range: " + String(limit)
+            )
+
+
+def welcome() -> String:
+    return "Hello, Mojo!"
+
+
+def test_docs_receive_limit_example() raises:
+    """The `docs/DX.md` section 1 receive limit example as written, on port 0
+    instead of 8080: 64 KiB is received, a head declaring one byte more is
+    Flare's 413 before any body is sent."""
+    var app = App()
+    app.get["/"](welcome)
+    var server = Server.bind("127.0.0.1", 0, max_body_bytes=64 * 1024)
+    var port = server.port()
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        try:
+            server.serve(app)
+        except e:
+            print("server child: serve failed:", e)
+        exit(1)
+    _ = server^
+    try:
+        var within = String(
+            "POST / HTTP/1.1\r\nHost: muntin\r\nContent-Length: 65536\r\n",
+            "Connection: close\r\n\r\n",
+        )
+        for _ in range(65536):
+            within += "a"
+        var raw = _exchange(port, within)
+        # Received, then App.handle: no POST route on `/`.
+        assert_equal(_status_line(raw), "HTTP/1.1 405 Method Not Allowed")
+        raw = _exchange(
+            port,
+            String(
+                "POST / HTTP/1.1\r\nHost: muntin\r\nContent-Length: 65537",
+                "\r\nConnection: close\r\n\r\n",
+            ),
+        )
+        print("observed: 65537 declared ->", _status_line(raw))
+        assert_equal(_status_line(raw), "HTTP/1.1 413 Content Too Large")
+        assert_equal(_content(raw), "413 Content Too Large")
+        raw = _exchange(port, _request("GET", "/"))
+        assert_equal(_content(raw), "Hello, Mojo!")
+    finally:
+        _stop(pid)
+
+
+def _serve_with_bufring_env(value: String) raises -> _Child:
+    """As `_serve_in_child(borrowed_app(), 0)`, but the child sets
+    `FLARE_BUFRING_HANDLER` to `value` before `server.serve(app)` and arms a
+    `REFUSAL_ALARM_S` alarm. If `serve` raises, the child prints the error and exits
+    7 when it is M3-044's refusal, 8 otherwise; if it returns, it exits 9."""
+    var app = borrowed_app()
+    var server = Server.bind("127.0.0.1", 0)
+    var port = server.port()
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
+        _ = setenv("FLARE_BUFRING_HANDLER", value)
+        try:
+            server.serve(app)
+        except e:
+            print("observed: FLARE_BUFRING_HANDLER=" + value, "->", e)
+            if (
+                String(e)
+                == "FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare"
+                " v0.12.0"
+            ):
+                exit(7)
+            exit(8)
+        exit(9)
+    return _Child(pid, port)
+
+
+def test_serve_refuses_flare_bufring_handler() raises:
+    """With `FLARE_BUFRING_HANDLER=1` in the environment, `serve` raises
+    M3-044's message before serving (the child exits 7, not killed by its
+    alarm); with `0` it serves."""
+    var refused = _serve_with_bufring_env("1")
+    var status = _wait_status(refused.pid)
+    print("observed: FLARE_BUFRING_HANDLER=1 -> waitpid status", status)
+    assert_true(status >= 0, "waitpid failed")
+    assert_equal(status & 0x7F, 0, "the child was killed, not refused")
+    assert_equal((status >> 8) & 0xFF, 7, "serve did not raise the refusal")
+    var served = _serve_with_bufring_env("0")
+    try:
+        var raw = _exchange(served.port, _request("GET", "/hello"))
+        assert_equal(_status_line(raw), "HTTP/1.1 200 OK")
+        assert_equal(_content(raw), "hello")
+    finally:
+        _stop(served.pid)
 
 
 def test_sigterm_ends_a_serving_child() raises:

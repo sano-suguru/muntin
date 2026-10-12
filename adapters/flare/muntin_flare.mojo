@@ -68,7 +68,7 @@ Serving (M3-033, decided in docs/history/architecture-decisions.md "Serving
 entrypoint decision (M3-032)"): `Server.bind(host, port)` checks that `port`
 is 0 to 65535 (`port out of range: <port>` otherwise, before anything is
 parsed or bound), then binds and listens on `host`, an IPv4 or IPv6 literal
-(Flare's `IpAddr.parse`: no name resolution), with Flare's default
+(Flare's `IpAddr.parse`: no name resolution), with `_server_config`'s
 `ServerConfig`. A bind failure raises; dropping the `Server` closes its
 listener. `server.port()` is the bound port. `server.serve(app)` borrows
 `app` and runs Flare's single-worker `serve` on the calling thread with
@@ -76,20 +76,43 @@ listener. `server.port()` is the bound port. `server.serve(app)` borrows
 does; a raise propagates and a return returns, with no policy of its own.
 On Flare v0.12.0 a return means the reactor stopped (a failed poll). There
 is no stop call, graceful shutdown, signal handling, worker count or
-backend configuration: SIGINT and SIGTERM end the process unless it
-inherited them ignored (the Mojo 1.1.0 runtime's own handler re-raises
-them).
+backend configuration other than the body limit below: SIGINT and SIGTERM
+end the process unless it inherited them ignored (the Mojo 1.1.0 runtime's
+own handler re-raises them).
 `_BorrowedHandler` is not `Copyable`, which keeps Flare's multi-worker
-`serve` out of reach. `Server`'s one initializer takes
-keyword-only `_host` and `_port`, so `Server.bind` is the one public
-spelling. `MuntinHandler` stays for the adapter's own tests and probes.
+`serve` out of reach. `Server`'s one initializer takes keyword-only `_host`,
+`_port` and `_max_body_bytes`, so `Server.bind` is the one public spelling.
+`MuntinHandler` stays for the adapter's own tests and probes.
+
+Receive body limit (M3-044, decided in docs/history/architecture-decisions.md
+"Server receive body limit decision (M3-044)"): `Server.bind`'s keyword-only
+`max_body_bytes` (10 MiB, Flare v0.12.0's default, when not given) bounds
+the request body Flare receives: no longer body is received or reaches the
+adapter. It is a bound, not a promise to accept every body within it: over
+HTTP/1.1 Flare also counts a request's head, chunk framing and pipelined
+bytes (below). `_server_config` checks it, after the
+port and before the host is parsed (0 to 2^59 - 1, above which Flare's
+chunk-size scanner can overflow; `max_body_bytes out of range: <value>`
+otherwise), and writes it into both of Flare's fields, `max_body_size`
+(HTTP/1.1) and `h2.max_body_size` (HTTP/2, which the first does not reach);
+every other field keeps Flare's default. Flare refuses a longer body itself,
+before the adapter, with its own answers (docs/DX.md section 1: over
+HTTP/1.1 413 or 400 and a closed connection, also counting a chunked body's
+framing; over h2c a reset stream). It is not
+`FromBytes.max_bytes` or `Json[T]`'s cap, which `App.handle` checks on a
+body already received. `Server.serve` refuses to start when the environment
+selects Flare's opt-in `FLARE_BUFRING_HANDLER=1` loop, which is not
+supported (docs/DX.md section 1).
 """
+
+from std.os import getenv
 
 from flare.http import (
     Handler,
     HttpServer,
     Request as FlareRequest,
     Response as FlareResponse,
+    ServerConfig,
 )
 from flare.net import IpAddr, SocketAddr
 from muntin import App, Headers, Request, Response
@@ -283,26 +306,76 @@ struct _BorrowedHandler[origin: Origin[mut=False]](Handler):
         return _serve_app(self._app[], request)
 
 
+comptime _DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
+"""`Server.bind`'s receive body limit when none is given: Flare v0.12.0's
+default for both protocols, written here so that a Flare upgrade does not
+change it (M3-044)."""
+
+comptime _LARGEST_MAX_BODY_BYTES = Int.MAX >> 4
+"""2^59 - 1: the largest receive body limit Flare v0.12.0's chunk-size scanner
+handles without overflowing (it multiplies before it compares; with 2^59 or
+`Int.MAX` one chunk-size line aborted the serving process, M3-044)."""
+
+
+comptime _BUFRING_UNSUPPORTED = (
+    "FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare v0.12.0"
+)
+"""What `Server.serve` raises, before serving, when the environment sets
+`FLARE_BUFRING_HANDLER=1`, which selects Flare's unsupported buffer-ring loop
+(M3-044; why: docs/DX.md section 1)."""
+
+
+def _server_config(max_body_bytes: Int) raises -> ServerConfig:
+    """Flare's default `ServerConfig` with `max_body_bytes` as the request body
+    limit of both protocols: `max_body_size` (HTTP/1.1) and
+    `h2.max_body_size` (HTTP/2, which the first does not reach). Raises
+    `max_body_bytes out of range: <value>` outside 0 to 2^59 - 1."""
+    if max_body_bytes < 0 or max_body_bytes > _LARGEST_MAX_BODY_BYTES:
+        raise Error("max_body_bytes out of range: " + String(max_body_bytes))
+    var config = ServerConfig(max_body_size=max_body_bytes)
+    config.h2.max_body_size = max_body_bytes
+    return config^
+
+
 struct Server(Movable):
     """A listening socket that serves a Muntin `App` over HTTP through Flare
     (M3-033). `Server.bind` is the one public spelling."""
 
     var _server: HttpServer
 
-    def __init__(out self, *, _host: String, _port: Int) raises:
+    def __init__(
+        out self,
+        *,
+        _host: String,
+        _port: Int,
+        _max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
+    ) raises:
         if _port < 0 or _port > 65535:
             raise Error("port out of range: " + String(_port))
+        var config = _server_config(_max_body_bytes)
         self._server = HttpServer.bind(
-            SocketAddr(IpAddr.parse(_host), UInt16(_port))
+            SocketAddr(IpAddr.parse(_host), UInt16(_port)), config^
         )
 
     @staticmethod
-    def bind(host: String, port: Int) raises -> Server:
+    def bind(
+        host: String,
+        port: Int,
+        *,
+        max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
+    ) raises -> Server:
         """Binds and listens on `host` (an IPv4 or IPv6 literal) and `port`
         (0 to 65535; 0 lets the system choose). A client may connect once it
-        returns. Raises for a port out of range, a host that is not an IP
+        returns. `max_body_bytes` (0 to 2^59 - 1; 10 MiB when not given)
+        bounds the request body Flare receives, over HTTP/1.1 and h2c: a
+        longer one is refused while it arrives, before the adapter (M3-044).
+        It does not promise to accept every body within it: over HTTP/1.1
+        Flare refuses (413) when a request's head, chunk framing, body and
+        any pipelined bytes buffered together exceed `max_body_bytes` plus
+        8192.
+        Raises for a port or limit out of range, a host that is not an IP
         literal, an address in use or any other OS error."""
-        return Server(_host=host, _port=port)
+        return Server(_host=host, _port=port, _max_body_bytes=max_body_bytes)
 
     def port(self) -> Int:
         """The bound port: the system's choice when bound with 0."""
@@ -312,5 +385,11 @@ struct Server(Movable):
         """Serves the borrowed `app` on the calling thread with Flare's
         single-worker reactor. It does not return while serving; when
         Flare's `serve` raises, the raise propagates, and when it returns,
-        this returns."""
+        this returns. Raises `FLARE_BUFRING_HANDLER=1 is unsupported by
+        Muntin with Flare v0.12.0`, before serving, when the environment
+        sets `FLARE_BUFRING_HANDLER` to `1`, the value with which Flare's
+        `serve` takes its buffer-ring loop on Linux with io_uring; it
+        refuses it on every system (M3-044)."""
+        if getenv("FLARE_BUFRING_HANDLER") == "1":
+            raise Error(_BUFRING_UNSUPPORTED)
         self._server.serve(_BorrowedHandler(app))

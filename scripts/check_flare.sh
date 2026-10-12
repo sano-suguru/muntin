@@ -19,12 +19,14 @@ roundtrip=$adapter/test_localhost_roundtrip.mojo
 server_tests=$adapter/test_server.mojo
 example=examples/hello_server.mojo
 # M3-032's must-not-build fixtures for Server (docs/history/architecture-decisions.md
-# "Serving entrypoint decision (M3-032)"), built with -I src -I $adapter.
+# "Serving entrypoint decision (M3-032)") and M3-044's ("Server receive body
+# limit decision (M3-044)"), built with -I src -I $adapter.
 serve_fixtures=(
     compat/flare/serve/workers_need_copyable.mojo
     compat/flare/serve/server_handler_not_copyable.mojo
     compat/flare/serve/server_positional_init.mojo
     compat/flare/serve/server_keyword_init.mojo
+    compat/flare/serve/server_bind_positional_limit.mojo
 )
 
 step() { printf '\n== %s\n' "$*"; }
@@ -177,7 +179,7 @@ echo "ok: no server process left behind"
 
 # M3-033: Server.bind, port and serve (the example is built above, not run:
 # it binds the fixed port 8080).
-step "run Server tests (bind, port, serve a borrowed App, SIGTERM and SIGINT)"
+step "run Server tests (bind, port, the receive body limit, serve a borrowed App, SIGTERM and SIGINT)"
 server_status=0
 NO_PROXY=127.0.0.1 ./build/test_server >"$tmp/server.log" 2>&1 || server_status=$?
 cat "$tmp/server.log"
@@ -197,7 +199,7 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/server.log"; then
 fi
 echo "ok: no server process left behind"
 
-step "Server must-not-build fixtures (M3-032)"
+step "Server must-not-build fixtures (M3-032, M3-044)"
 for fixture_s in "${serve_fixtures[@]}"; do
     expected_s="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check_flare.sh): //p' "$fixture_s")"
     if [[ -z "$expected_s" ]]; then

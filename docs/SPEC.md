@@ -140,13 +140,14 @@ An M3 area with an open design question is cut decision-first: a decision item p
 | typed binary request bodies (`FromBytes`: `from_bytes` receives the body's bytes, borrowed, on every `post`, `put` and `patch` body shape; a raise is 400 before the handler) | shipped |
 | typed binary request bodies with header fields (`WithHeaders[B]` around a `FromBytes`: the request's `Headers` and the body's bytes, unread and uncopied, in one carrier on every body shape) | shipped |
 | typed binary request body size limits (every `FromBytes` type's required `comptime max_bytes`; a longer body, bare or in `WithHeaders[B]`, is 413 before `from_bytes`; `Int.MAX` is no limit; not a receive limit) | shipped |
+| a configurable receive body limit for `Server` (`Server.bind(host, port, max_body_bytes=n)`, keyword-only, 10 MiB unless set, 0 to 2^59 − 1; Flare refuses a longer body while receiving, before the adapter, over HTTP/1.1 and h2c, with protocol-specific answers; an upper bound, not an acceptance guarantee over HTTP/1.1; distinct from `App.handle`'s 413s; Flare's opt-in `FLARE_BUFRING_HANDLER` loop unsupported: `serve` refuses to start with it set to `1`) | shipped |
 
 ### Remaining candidates
 
 Each becomes its own item, a decision item first where it opens a design question.
 
 - **OpenAPI/schema output**: needs a type-to-format mapping; codecs are hand-mapped today, so a schema source waits for a derived codec;
-- **body limits beyond `FromBytes`** ([M3-043](history/architecture-decisions.md#typed-binary-request-body-size-limits-decision-m3-043)): a limit for text bodies (`FromBody`), an `App`-wide or per-registration limit, a receive-time limit (backend configuration, below);
+- **body limits beyond `FromBytes`** ([M3-043](history/architecture-decisions.md#typed-binary-request-body-size-limits-decision-m3-043)): a limit for text bodies (`FromBody`), an `App`-wide or per-registration limit; a per-route receive limit or one refusal status across protocols ([M3-044](history/architecture-decisions.md#server-receive-body-limit-decision-m3-044), which made the `Server`-wide receive limit configurable);
 - **JSON follow-ups**: a configurable body cap, derived codecs, `+json` or missing `Content-Type`, top-level list results;
 - **compile-time header names, a `FromHeaders` converter**: a converter makes Muntin choose a status for header values; `Headers` can conform to it without changing the `get` shapes;
 - **more route values**: three or more values, a default written in the literal (`?{limit=20}`), other value types, a named carrier that checks placeholder names. A value type is a slot kind; a third value beside a body or `Headers` needs slot arity 4 ([M3-022](history/architecture-decisions.md#several-route-values-decision-m3-022));
@@ -158,7 +159,7 @@ Each becomes its own item, a decision item first where it opens a design questio
 - structured errors, including application-level error mappers (rejected on Mojo 1.1.0 by M2-012; its revisit conditions apply);
 - observability hooks, including logging of dropped handler errors;
 - streaming;
-- serving lifecycle beyond `Server`: graceful shutdown, signal handling, several serving threads, backend configuration (body size, timeouts, TLS) and one call that binds and serves, each with a revisit condition in [M3-032](history/architecture-decisions.md#serving-entrypoint-decision-m3-032), and host names, which M3-032 leaves out of its slice with none;
+- serving lifecycle beyond `Server`: graceful shutdown, signal handling, several serving threads, backend configuration beyond the receive body limit (timeouts, TLS; the body limit shipped with [M3-044](history/architecture-decisions.md#server-receive-body-limit-decision-m3-044)) and one call that binds and serves, each with a revisit condition in [M3-032](history/architecture-decisions.md#serving-entrypoint-decision-m3-032), and host names, which M3-032 leaves out of its slice with none;
 - performance benchmarks and allocation profiling.
 
 ## Long-term success criterion
