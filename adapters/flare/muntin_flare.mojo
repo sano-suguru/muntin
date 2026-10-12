@@ -73,9 +73,9 @@ parsed or bound), then binds and listens on `host`, an IPv4 or IPv6 literal
 listener. `server.port()` is the bound port. `server.serve(app)` borrows
 `app` and runs Flare's single-worker `serve` on the calling thread with
 `_BorrowedHandler`, which answers through `_serve_app` as `MuntinHandler`
-does; a raise propagates and a return returns, with no policy of its own.
-It returns after a graceful stop (below) or when the reactor stopped on a
-failed poll. There is no stop call, worker count or backend configuration
+does; a raise propagates and a return returns, with one exception: a raise
+after a stop signal (below) returns. It returns after a graceful stop or
+when the reactor stopped on a failed poll. There is no stop call, worker count or backend configuration
 other than the body limit and the grace window below.
 `_BorrowedHandler` is not `Copyable`, which keeps Flare's multi-worker
 `serve` out of reach. `Server`'s one initializer takes keyword-only `_host`,
@@ -461,10 +461,25 @@ def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
     return arg
 
 
-def _restore_dispositions(previous: Int):
-    """Puts back the SIGTERM and SIGINT dispositions saved at `previous`."""
-    _ = _sigaction(_SIGTERM, previous, 0)
-    _ = _sigaction(_SIGINT, previous + _SIGACTION_BYTES, 0)
+def _restore_dispositions(previous: Int) -> Int:
+    """Puts back the SIGTERM and SIGINT dispositions saved at `previous`,
+    reading each one it replaces in the same call. Returns a signal whose
+    replaced disposition was `SIG_DFL` (delivered since it was last set), or
+    0."""
+    var replaced = List[UInt8](length=_SIGACTION_BYTES, fill=0)
+    var delivered = 0
+    for i in range(2):
+        var sig = _SIGTERM if i == 0 else _SIGINT
+        _ = _sigaction(
+            sig, previous + i * _SIGACTION_BYTES, Int(replaced.unsafe_ptr())
+        )
+        if (
+            delivered == 0
+            and replaced.unsafe_ptr().unsafe_bitcast[Int]()[] == 0
+        ):
+            delivered = sig
+    _ = replaced^
+    return delivered
 
 
 struct _StopWatch(Movable):
@@ -499,33 +514,24 @@ struct _StopWatch(Movable):
                 _OpaquePtr(unsafe_from_address=block)
             )
         except e:
-            _restore_dispositions(previous)
+            _ = _restore_dispositions(previous)
             raise e^
 
     def finish(mut self) raises -> Int:
         """Marks serving done, joins the watcher and puts the dispositions
         `__init__` replaced back. Returns the stop signal the watcher acted
-        on, or 0. A stop signal that arrived too late for the watcher (its
-        disposition is `SIG_DFL` but the watcher did not act) is sent again
-        once the previous dispositions are back, so it is not lost."""
+        on, or 0. A stop signal the watcher did not act on (it arrived as
+        serving ended for another reason) is sent again once the previous
+        dispositions are back, so it is not lost: the restore reads what it
+        replaces in the same `sigaction` call, so no signal can slip between
+        the check and the restore."""
         var block = Int(self._block.unsafe_ptr())
         _store(block, _CB_DONE, 1)
         self._watcher.join()
         var acted = _load(block, _CB_SIGNAL)
-        var missed = 0
-        if acted == 0:
-            var seen = List[UInt8](length=_SIGACTION_BYTES, fill=0)
-            for sig in [_SIGTERM, _SIGINT]:
-                _ = _sigaction(sig, 0, Int(seen.unsafe_ptr()))
-                if (
-                    missed == 0
-                    and seen.unsafe_ptr().unsafe_bitcast[Int]()[] == 0
-                ):
-                    missed = sig
-            _ = seen^
-        _restore_dispositions(Int(self._previous.unsafe_ptr()))
-        if missed != 0:
-            _ = kill(getpid(), missed)
+        var delivered = _restore_dispositions(Int(self._previous.unsafe_ptr()))
+        if acted == 0 and delivered != 0:
+            _ = kill(getpid(), delivered)
         return acted
 
 
@@ -607,8 +613,10 @@ struct Server(Movable):
     def serve(mut self, app: App) raises:
         """Serves the borrowed `app` on the calling thread with Flare's
         single-worker reactor. It does not return while serving; when
-        Flare's `serve` raises, the raise propagates, and when it returns,
-        this returns. Raises `FLARE_BUFRING_HANDLER=1 is unsupported by
+        Flare's `serve` raises, the raise propagates (unless a stop signal
+        was acted on: a stop that closed the listener before Flare's reactor
+        was set up makes it raise, and this then returns), and when it
+        returns, this returns. Raises `FLARE_BUFRING_HANDLER=1 is unsupported by
         Muntin with Flare v0.12.0`, before serving, when the environment
         sets `FLARE_BUFRING_HANDLER` to `1`, the value with which Flare's
         `serve` takes its buffer-ring loop on Linux with io_uring; it

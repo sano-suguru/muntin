@@ -1133,28 +1133,35 @@ def _exec_driver(grace_ms: Int, ignore_sigint: Bool) raises -> _Child:
         _ = external_call["dup2", c_int](c_int(out[1]), c_int(1))
         _close(out[0])
         _default_sigpipe()
+        # Survives execve: a driver that stalls before printing its port, or
+        # outlives the runner, still ends.
+        _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
         if ignore_sigint:
             _ = external_call["signal", Int](c_int(SIGINT), Int(1))  # SIG_IGN
         _ = external_call["execv", c_int](
             Int(path.unsafe_ptr()), Int(args.unsafe_ptr())
         )
+        _ = path^
+        _ = grace^
+        _ = args^
         exit(127)
     _close(out[1])
     var line = String()
-    while True:
-        var byte = List[UInt8](length=1, fill=0)
-        var source = FileDescriptor(out[0])
-        if source.read_bytes(byte) != 1 or byte[0] == UInt8(ord("\n")):
-            break
-        line += chr(Int(byte[0]))
-    _close(out[0])
-    _ = path^
-    _ = grace^
-    _ = args^
-    if line == "":
+    try:
+        while True:
+            var byte = List[UInt8](length=1, fill=0)
+            var source = FileDescriptor(out[0])
+            if source.read_bytes(byte) != 1 or byte[0] == UInt8(ord("\n")):
+                break
+            line += chr(Int(byte[0]))
+        _close(out[0])
+        if line == "":
+            raise Error("build/stop_driver printed no port")
+        return _Child(pid, atol(line))
+    except e:
+        _close(out[0])
         _stop(pid)
-        raise Error("build/stop_driver printed no port")
-    return _Child(pid, atol(line))
+        raise e^
 
 
 def test_a_built_program_finishes_the_request_in_flight() raises:
@@ -1163,10 +1170,13 @@ def test_a_built_program_finishes_the_request_in_flight() raises:
     answers a request held when SIGTERM arrives and ends by returning from
     `main`, with status 0."""
     var pipes = _held_pipes()
-    var child = _exec_driver(GRACE_MS, False)
-    _close(pipes[1])
-    _close(pipes[2])
     var held = pipes[0].copy()
+    var child: _Child
+    try:
+        child = _exec_driver(GRACE_MS, False)
+    finally:
+        _close(pipes[1])
+        _close(pipes[2])
     var reaped = False
     try:
         var in_flight = _send(child.port, _request("GET", held.path))
@@ -1196,7 +1206,7 @@ def test_a_built_program_finishes_the_request_in_flight() raises:
 
 def test_a_built_program_stops_on_an_inherited_ignored_sigint() raises:
     """A program started with SIGINT ignored still stops on SIGINT while it
-    serves: the runtime replaced the ignore before `main`."""
+    serves (`serve` installs its handler whatever the disposition was)."""
     var child = _exec_driver(SHORT_GRACE_MS, True)
     var reaped = False
     try:
