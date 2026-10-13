@@ -1891,11 +1891,16 @@ struct _H2Client(Movable):
     def get(mut self, sid: Int, path: String) raises:
         self.stream.write_all(Span[UInt8, _](_h2_get(sid, path)))
 
-    def read_within(mut self, ms: Int, until: Int) raises -> String:
-        """Reads frames until `until` streams have ended (`"ended"`), a
-        read waits longer than `ms` (`"timeout"`), or the server closes
-        (`"eof"`) or resets (`"reset"`) the connection."""
+    def set_timeout(mut self, ms: Int) raises:
+        """How long one read in `read_within` may wait. Set it only while the
+        connection is open: on macOS `setsockopt` fails with `EINVAL` on a
+        connection the server has reset."""
         self.stream.set_recv_timeout(ms)
+
+    def read_within(mut self, until: Int) raises -> String:
+        """Reads frames until `until` streams have ended (`"ended"`), a
+        read waits longer than the timeout (`"timeout"`), or the server
+        closes (`"eof"`) or resets (`"reset"`) the connection."""
         var buf = List[UInt8](length=4096, fill=0)
         var how = String("ended")
         while True:
@@ -1939,7 +1944,6 @@ struct _H2Client(Movable):
                 else:
                     raise e^
                 break
-        self.stream.set_recv_timeout(TIMEOUT_MS)
         return how^
 
 
@@ -1970,10 +1974,15 @@ def _h2c_blocks_streams(kind: Int, same_connection: Bool) raises:
         var early: String
         if same_connection:
             first.get(3, mark_path)
-            early = first.read_within(HOLD_PROBE_MS, 1)
+            first.set_timeout(HOLD_PROBE_MS)
+            early = first.read_within(1)
         else:
             other.get(1, mark_path)
-            early = other.read_within(HOLD_PROBE_MS, 1)
+            other.set_timeout(HOLD_PROBE_MS)
+            early = other.read_within(1)
+        # Both connections are still open while stream 1 is held.
+        first.set_timeout(TIMEOUT_MS)
+        other.set_timeout(TIMEOUT_MS)
         var early_first = first.answers[0]
         var early_light = first.answers[
             1
@@ -1981,12 +1990,10 @@ def _h2c_blocks_streams(kind: Int, same_connection: Bool) raises:
         _write_byte(held.release)
         # On the same connection, read on after stream 1 until stream 3
         # ends or the connection does.
-        var after_first = first.read_within(
-            TIMEOUT_MS, 2 if same_connection else 1
-        )
+        var after_first = first.read_within(2 if same_connection else 1)
         var after_other = String("")
         if not same_connection:
-            after_other = other.read_within(TIMEOUT_MS, 1)
+            after_other = other.read_within(1)
         var light = first.answers[1] if same_connection else other.answers[0]
         reaped = _end_blocking(kind, child.pid)
         var order = _rest_of_pipe(held.started)
