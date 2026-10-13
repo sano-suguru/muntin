@@ -112,15 +112,18 @@ calls Flare's `drain` with `Server.bind`'s `shutdown_grace_ms` (0 to
 86,400,000; 5000 when not given, Flare v0.12.0's default, kept in
 `ServerConfig.shutdown_timeout_ms`): the listener closes, the open
 connections are served for the whole window, then Flare closes them and its
-`serve` returns. A handler still running `_REACTOR_STOP_MS` after the window
-ends the process with 128 + the signal. When `serve` returns or raises, the
-watcher is joined and both dispositions are put back. What clients see:
-docs/DX.md section 1.
+`serve` returns. A handler still running `_REACTOR_STOP_MS` after `drain`
+returned ends the process with 128 + the signal. When `serve` returns or
+raises, the watcher is joined and both dispositions are put back. The
+dispositions are process-wide, so `_StopWatch` first claims the process's
+one serving cell (`_get_global`) and another `serve` meanwhile raises
+`Server.serve is already serving in this process`; every `sigaction`
+result is checked. What clients see: docs/DX.md section 1.
 """
 
 from std.atomic import Atomic, Ordering
-from std.ffi import c_int, external_call
-from std.os import getenv
+from std.ffi import _get_global, c_int, external_call, get_errno
+from std.os import abort, getenv
 from std.sys import CompilationTarget
 
 from flare.http import (
@@ -364,13 +367,32 @@ comptime _SIGINT = 2
 comptime _SIGTERM = 15
 comptime _SIGACTION_BYTES = 256
 """Room for a `struct sigaction` on every supported system (152 bytes on
-Linux glibc, 16 on macOS). The handler is its first word on both."""
+Linux x86-64 glibc, 16 on macOS arm64). The handler is its first word on
+both."""
 comptime _SA_FLAGS_OFFSET = 12 if CompilationTarget.is_macos() else 136
 comptime _SA_RESTART_RESETHAND = (
     0x2 | 0x4 if CompilationTarget.is_macos() else 0x10000000 | 0x80000000
 )
 """`SA_RESTART | SA_RESETHAND`: interrupted system calls restart, and the
-kernel resets the disposition to `SIG_DFL` as it delivers the signal."""
+kernel resets the disposition to `SIG_DFL` as it delivers the signal. These
+values and `_SA_FLAGS_OFFSET` are verified on Linux x86-64 (glibc) and macOS
+arm64 only, the project's two platforms; `_StopWatch` refuses to compile
+elsewhere."""
+
+comptime _ALREADY_SERVING = "Server.serve is already serving in this process"
+"""What `Server.serve` raises, before touching any signal, while another
+`serve` runs in the same process: SIGTERM and SIGINT dispositions are
+process-wide, so one `serve` at a time owns them (M3-045)."""
+
+comptime _STAGE_INSTALLED = 1
+"""`serve`'s `_stage` hook: both stop handlers are installed and the watcher
+is not yet started."""
+comptime _STAGE_WATCHING = 2
+"""`_stage`: the watcher is running and Flare's `serve` is not yet called."""
+comptime _STAGE_SERVED = 3
+"""`_stage`: Flare's `serve` returned or raised; the watcher still runs."""
+comptime _STAGE_JOINED = 4
+"""`_stage`: the watcher is joined; the dispositions are not yet restored."""
 
 comptime _CB_DONE = 0
 """Control block cell: 1 once Flare's `serve` has returned or raised."""
@@ -380,7 +402,18 @@ comptime _CB_GRACE = 2
 """Control block cell: the grace window, in milliseconds."""
 comptime _CB_SIGNAL = 3
 """Control block cell: the stop signal the watcher acted on, or 0."""
-comptime _CB_LEN = 4
+comptime _CB_DRAIN_ERROR = 4
+"""Control block cell: the address of the `String` the watcher writes
+Flare's `drain` error into; set to 1 in `_CB_DRAIN_FAILED` after it."""
+comptime _CB_DRAIN_FAILED = 5
+"""Control block cell: 1 when Flare's `drain` raised and the watcher fell
+back to `close` (a hard stop)."""
+comptime _CB_LEN = 6
+
+
+def _no_stage(stage: Int):
+    """`Server.serve`'s default `_stage` hook: nothing."""
+    pass
 
 
 def _stop_signal_seen(sig: c_int) abi("C"):
@@ -394,8 +427,12 @@ def _stop_signal_seen(sig: c_int) abi("C"):
 
 def _sigaction(sig: Int, new: Int, old: Int) -> Int:
     """`sigaction(2)` with both `struct sigaction` pointers as addresses (0 is
-    NULL)."""
+    NULL): 0, or -1 with `errno` set."""
     return Int(external_call["sigaction", c_int](c_int(sig), new, old))
+
+
+def _errno() -> String:
+    return "errno " + String(Int(get_errno().value))
 
 
 def _cell(
@@ -416,18 +453,59 @@ def _store(block: Int, i: Int, value: Int):
     )
 
 
+def _new_serving_cell() -> Optional[Pointer[NoneType, MutUntrackedOrigin]]:
+    return Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(external_call["calloc", Int](1, 8))
+    )
+
+
+def _free_serving_cell(cell: Optional[Pointer[NoneType, MutUntrackedOrigin]]):
+    if cell:
+        external_call["free", NoneType](Int(cell.value()))
+
+
+def _serving_cell() -> Int:
+    """The address of the process's one serving cell: 1 while a `serve` owns
+    the stop signals, else 0. Mojo 1.1.0 has no module-level `var`; the
+    standard library's `_get_global` creates the cell once per process,
+    under its own lock (M3-045)."""
+    return Int(
+        _get_global[
+            "muntin_flare.serving", _new_serving_cell, _free_serving_cell
+        ]().value()
+    )
+
+
+def _claim_serving() -> Bool:
+    """Sets the serving cell from 0 to 1 atomically; `False` if another
+    `serve` holds it."""
+    var expected = Int64(0)
+    return Atomic[Int64].compare_exchange(
+        _cell(_serving_cell(), 0), expected, Int64(1)
+    )
+
+
+def _release_serving():
+    _store(_serving_cell(), 0, 0)
+
+
 def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
     """The watcher thread `Server.serve` runs beside Flare's reactor (M3-045).
 
     Every `_WATCH_POLL_MS` it reads the dispositions of SIGTERM and SIGINT;
-    one that is back to `SIG_DFL` was delivered. It then resets the other to
+    one that is back to `SIG_DFL` was delivered (a read that fails is not a
+    delivery: it reads again next turn). It then resets the other to
     `SIG_DFL` too, so a second stop signal ends the process by the default
-    action, and calls Flare's `drain` with the grace window, which closes the
-    listener, keeps the reactor serving the open connections for the whole
-    window and then sets its stop flag. If the reactor has not left its loop
-    `_REACTOR_STOP_MS` later (a handler still running), it ends the process
-    with status 128 + the signal. It returns when the serving thread marks
-    `_CB_DONE`. Never raises (a pthread start routine)."""
+    action (if that reset fails, a second signal is absorbed instead), and
+    calls Flare's `drain` with the grace window, which closes the listener,
+    keeps the reactor serving the open connections for the whole window and
+    then sets its stop flag. If `drain` raises, it writes the error where
+    `_CB_DRAIN_ERROR` points, marks `_CB_DRAIN_FAILED` and falls back to
+    `close`, Flare's hard stop; `serve` then raises. If the reactor has not
+    left its loop `_REACTOR_STOP_MS` after `drain` returned (a handler still
+    running), it ends the process with status 128 + the signal. It returns
+    when the serving thread marks `_CB_DONE`. Never raises (a pthread start
+    routine)."""
     var block = Int(arg)
     var seen = List[UInt8](length=_SIGACTION_BYTES, fill=0)
     var sig = 0
@@ -435,8 +513,11 @@ def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
         if _load(block, _CB_DONE) != 0:
             return arg
         for candidate in [_SIGTERM, _SIGINT]:
-            _ = _sigaction(candidate, 0, Int(seen.unsafe_ptr()))
-            if sig == 0 and seen.unsafe_ptr().unsafe_bitcast[Int]()[] == 0:
+            if (
+                sig == 0
+                and _sigaction(candidate, 0, Int(seen.unsafe_ptr())) == 0
+                and seen.unsafe_ptr().unsafe_bitcast[Int]()[] == 0
+            ):
                 sig = candidate
         if sig == 0:
             _ = libc_nanosleep_ms(_WATCH_POLL_MS)
@@ -449,7 +530,11 @@ def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
     )
     try:
         _ = server[].drain(_load(block, _CB_GRACE))
-    except:
+    except e:
+        Pointer[String, MutUntrackedOrigin](
+            unsafe_from_address=_load(block, _CB_DRAIN_ERROR)
+        )[] = String(e)
+        _store(block, _CB_DRAIN_FAILED, 1)
         server[].close()
     var deadline = monotonic_now_ms() + _REACTOR_STOP_MS
     while _load(block, _CB_DONE) == 0:
@@ -461,42 +546,77 @@ def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
     return arg
 
 
-def _restore_dispositions(previous: Int) -> Int:
-    """Puts back the SIGTERM and SIGINT dispositions saved at `previous`,
-    reading each one it replaces in the same call. Returns a signal whose
-    replaced disposition was `SIG_DFL` (delivered since it was last set), or
-    0."""
+def _restore_one(sig: Int, saved: Int) -> Int:
+    """Puts back `sig`'s disposition saved at `saved`, reading the one it
+    replaces in the same call: -1 if `sigaction` failed, 1 if the replaced
+    disposition was `SIG_DFL` (`sig` was delivered since it was last set),
+    else 0."""
     var replaced = List[UInt8](length=_SIGACTION_BYTES, fill=0)
-    var delivered = 0
-    for i in range(2):
-        var sig = _SIGTERM if i == 0 else _SIGINT
-        _ = _sigaction(
-            sig, previous + i * _SIGACTION_BYTES, Int(replaced.unsafe_ptr())
-        )
-        if (
-            delivered == 0
-            and replaced.unsafe_ptr().unsafe_bitcast[Int]()[] == 0
-        ):
-            delivered = sig
+    if _sigaction(sig, saved, Int(replaced.unsafe_ptr())) != 0:
+        return -1
+    var delivered = replaced.unsafe_ptr().unsafe_bitcast[Int]()[] == 0
     _ = replaced^
-    return delivered
+    return 1 if delivered else 0
+
+
+def _restore_both(previous: Int) -> Int:
+    """Puts back the SIGTERM and SIGINT dispositions saved at `previous` (two
+    `struct sigaction` slots): -1 if either `sigaction` failed, else a
+    signal delivered since the stop handler was installed (its replaced
+    disposition was `SIG_DFL`), or 0."""
+    var term = _restore_one(_SIGTERM, previous)
+    var int = _restore_one(_SIGINT, previous + _SIGACTION_BYTES)
+    if term < 0 or int < 0:
+        return -1
+    if term == 1:
+        return _SIGTERM
+    if int == 1:
+        return _SIGINT
+    return 0
 
 
 struct _StopWatch(Movable):
     """What `Server.serve` sets up around Flare's `serve` and undoes after it
-    (M3-045): the stop handler on SIGTERM and SIGINT, the dispositions it
-    replaced, and the watcher thread with its control block. The block and
-    the server it points to outlive the thread, which `finish` joins."""
+    (M3-045): the process's serving claim, the stop handler on SIGTERM and
+    SIGINT, the dispositions it replaced, and the watcher thread with its
+    control block. The block, the error string and the server it points to
+    outlive the thread, which `finish` joins before anything is freed."""
 
     var _block: List[Int64]
     var _previous: List[UInt8]
+    var _drain_error: List[String]
     var _watcher: ThreadHandle
 
-    def __init__(out self, server_addr: Int, grace_ms: Int) raises:
+    def __init__(
+        out self,
+        server_addr: Int,
+        grace_ms: Int,
+        stage: def(Int) thin -> None,
+    ) raises:
+        """Claims the process's serving cell (raises `_ALREADY_SERVING`
+        otherwise), installs the stop handler on SIGTERM then SIGINT and
+        starts the watcher. If an install or the start fails, what was
+        changed is put back, the claim is released and it raises, before
+        any serving."""
+        comptime assert (
+            CompilationTarget.is_linux() and CompilationTarget.is_x86()
+        ) or (
+            # macOS is arm64 or x86-64: not x86 is arm64.
+            CompilationTarget.is_macos()
+            and not CompilationTarget.is_x86()
+        ), (
+            "muntin_flare: Server's stop handling writes struct sigaction's"
+            " layout and flags for Linux x86-64 and macOS arm64 only, where"
+            " they were verified (M3-045)"
+        )
+        if not _claim_serving():
+            raise Error(_ALREADY_SERVING)
         self._block = List[Int64](length=_CB_LEN, fill=0)
+        self._drain_error = List[String](length=1, fill=String())
         var block = Int(self._block.unsafe_ptr())
         _store(block, _CB_SERVER, server_addr)
         _store(block, _CB_GRACE, grace_ms)
+        _store(block, _CB_DRAIN_ERROR, Int(self._drain_error.unsafe_ptr()))
         var handler: def(c_int) thin abi("C") -> None = _stop_signal_seen
         var action = List[UInt8](length=_SIGACTION_BYTES, fill=0)
         var at = action.unsafe_ptr()
@@ -506,32 +626,73 @@ struct _StopWatch(Movable):
         )
         self._previous = List[UInt8](length=2 * _SIGACTION_BYTES, fill=0)
         var previous = Int(self._previous.unsafe_ptr())
-        _ = _sigaction(_SIGTERM, Int(at), previous)
-        _ = _sigaction(_SIGINT, Int(at), previous + _SIGACTION_BYTES)
+        if _sigaction(_SIGTERM, Int(at), previous) != 0:
+            var failure = _errno()
+            _release_serving()
+            raise Error("serve: sigaction(SIGTERM) failed: " + failure)
+        if _sigaction(_SIGINT, Int(at), previous + _SIGACTION_BYTES) != 0:
+            var failure = _errno()
+            if _restore_one(_SIGTERM, previous) == 1:
+                _ = kill(getpid(), _SIGTERM)
+            _release_serving()
+            raise Error("serve: sigaction(SIGINT) failed: " + failure)
         _ = action^
+        stage(_STAGE_INSTALLED)
         try:
             self._watcher = ThreadHandle.spawn_os[_watch_for_stop](
                 _OpaquePtr(unsafe_from_address=block)
             )
         except e:
-            _ = _restore_dispositions(previous)
+            var resend = _restore_both(previous)
+            _release_serving()
+            if resend > 0:
+                _ = kill(getpid(), resend)
             raise e^
 
-    def finish(mut self) raises -> Int:
-        """Marks serving done, joins the watcher and puts the dispositions
-        `__init__` replaced back. Returns the stop signal the watcher acted
-        on, or 0. A stop signal the watcher did not act on (it arrived as
-        serving ended for another reason) is sent again once the previous
+    def finish(mut self, stage: def(Int) thin -> None) raises -> Int:
+        """Marks serving done, joins the watcher, puts the dispositions
+        `__init__` replaced back and releases the serving claim. Returns the
+        stop signal the watcher acted on, or 0.
+
+        A stop signal the watcher did not act on (it arrived as serving
+        ended for another reason) is sent again once the previous
         dispositions are back, so it is not lost: the restore reads what it
-        replaces in the same `sigaction` call, so no signal can slip between
-        the check and the restore."""
+        replaces in the same `sigaction` call. If the watcher cannot be
+        joined, it may still read this block, so after putting the
+        dispositions back the process aborts rather than free it. Raises
+        when a restore failed, or when Flare's `drain` raised (the stop was
+        then a hard stop, not a graceful one)."""
         var block = Int(self._block.unsafe_ptr())
+        stage(_STAGE_SERVED)
         _store(block, _CB_DONE, 1)
-        self._watcher.join()
+        try:
+            self._watcher.join()
+        except e:
+            _ = _restore_both(Int(self._previous.unsafe_ptr()))
+            abort(
+                "Server.serve: the stop watcher could not be joined ("
+                + String(e)
+                + ")"
+            )
+        stage(_STAGE_JOINED)
         var acted = _load(block, _CB_SIGNAL)
-        var delivered = _restore_dispositions(Int(self._previous.unsafe_ptr()))
-        if acted == 0 and delivered != 0:
-            _ = kill(getpid(), delivered)
+        var restored = _restore_both(Int(self._previous.unsafe_ptr()))
+        var failure = _errno() if restored < 0 else String()
+        _release_serving()
+        if acted == 0 and restored > 0:
+            _ = kill(getpid(), restored)
+        if restored < 0:
+            raise Error(
+                "serve: putting back the SIGTERM and SIGINT dispositions"
+                " failed: "
+                + failure
+            )
+        if _load(block, _CB_DRAIN_FAILED) != 0:
+            raise Error(
+                "serve: the graceful stop failed and open connections were"
+                " closed at once: Flare's drain raised: "
+                + self._drain_error[0]
+            )
         return acted
 
 
@@ -610,7 +771,12 @@ struct Server(Movable):
         """The bound port: the system's choice when bound with 0."""
         return Int(self._server.local_addr().port)
 
-    def serve(mut self, app: App) raises:
+    def serve(
+        mut self,
+        app: App,
+        *,
+        _stage: def(Int) thin -> None = _no_stage,
+    ) raises:
         """Serves the borrowed `app` on the calling thread with Flare's
         single-worker reactor. It does not return while serving; when
         Flare's `serve` raises, the raise propagates (unless a stop signal
@@ -620,28 +786,36 @@ struct Server(Movable):
         Muntin with Flare v0.12.0`, before serving, when the environment
         sets `FLARE_BUFRING_HANDLER` to `1`, the value with which Flare's
         `serve` takes its buffer-ring loop on Linux with io_uring; it
-        refuses it on every system (M3-044).
+        refuses it on every system (M3-044). Raises `Server.serve is
+        already serving in this process`, before touching any signal, while
+        another `serve` runs in the same process (M3-045).
 
         SIGTERM and SIGINT stop it gracefully while it serves (M3-045;
         docs/DX.md section 1): new connections are refused at once, the
         open ones are served for `shutdown_grace_ms`, then Flare closes
         what is left and this returns. A second stop signal ends the
         process by the default action; a handler still running
-        `_REACTOR_STOP_MS` after the window ends it with 128 + the signal.
-        The dispositions both signals had are back when this returns or
-        raises."""
+        `_REACTOR_STOP_MS` after Flare's `drain` returned ends it with
+        128 + the signal. The dispositions both signals had are back when
+        this returns or raises. If Flare's `drain` raises, the stop falls
+        back to a hard stop and this raises with its error.
+
+        `_stage` is not API: the stop tests pass a hook called at the
+        `_STAGE_*` points to place a signal there."""
         if getenv("FLARE_BUFRING_HANDLER") == "1":
             raise Error(_BUFRING_UNSUPPORTED)
         var watch = _StopWatch(
             Int(Pointer(to=self._server)),
             self._server.config.shutdown_timeout_ms,
+            _stage,
         )
+        _stage(_STAGE_WATCHING)
         try:
             self._server.serve(_BorrowedHandler(app))
         except e:
             # A stop that closed the listener before Flare's `serve` set up
             # its reactor makes that `serve` raise: still a stop.
-            if watch.finish() == 0:
+            if watch.finish(_stage) == 0:
                 raise e^
             return
-        _ = watch.finish()
+        _ = watch.finish(_stage)

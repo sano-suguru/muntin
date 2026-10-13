@@ -62,7 +62,14 @@ from flare.tcp import TcpStream
 from flare.utils import SIGINT, SIGKILL, SIGTERM, exit, fork, kill, waitpid
 from muntin import App, Request, Response
 from muntin.testing import TestClient
-from muntin_flare import Server, _server_config
+from muntin_flare import (
+    Server,
+    _STAGE_INSTALLED,
+    _STAGE_JOINED,
+    _STAGE_SERVED,
+    _STAGE_WATCHING,
+    _server_config,
+)
 
 comptime TIMEOUT_MS = 5_000
 comptime CHILD_LIFETIME_S = 30
@@ -80,6 +87,7 @@ comptime SHORT_GRACE_MS = 300
 comptime LONG_GRACE_MS = 10_000
 comptime STOP_BOUND_MS = 1000
 comptime LARGEST_GRACE_MS = 86_400_000
+comptime ALREADY_SERVING = "Server.serve is already serving in this process"
 
 
 def hello() -> String:
@@ -578,7 +586,8 @@ def _serve_stoppable(app: App, grace_ms: Int) raises -> _Child:
     dispositions it had before (the runtime's handler) and a second `serve`
     on the closed listener raises with them back too; 1 when the first
     raises, 4 or 6 when the dispositions differ after the first or the
-    second, and 5 when the second returns."""
+    second, 5 when the second returns, and 7 when the second is refused as
+    already serving (the first did not release the process's claim)."""
     var server = Server.bind("127.0.0.1", 0, shutdown_grace_ms=grace_ms)
     var port = server.port()
     var pid = fork()
@@ -601,8 +610,9 @@ def _serve_stoppable(app: App, grace_ms: Int) raises -> _Child:
         try:
             server.serve(app)
             exit(5)
-        except:
-            pass
+        except e:
+            if String(e) == ALREADY_SERVING:
+                exit(7)
         if _handler_word(SIGTERM) != term or _handler_word(SIGINT) != int:
             exit(6)
         exit(0)
@@ -1019,7 +1029,10 @@ def _h2_get(sid: Int, path: String) -> List[UInt8]:
 def test_h2c_request_in_flight_finishes() raises:
     """An h2c stream whose handler is waiting when SIGTERM arrives is
     answered after the stop began; a stream opened on the same connection
-    during the window, and how the connection ends, are observed."""
+    during the window is answered too (observed). The client acknowledges
+    the server's SETTINGS (RFC 9113 section 6.5.3), and the connection must
+    end by a close or a reset within the window plus the bound, not by the
+    read timing out."""
     var app = stoppable_app()
     var pipes = _held_pipes()
     var child = _serve_stoppable(app, GRACE_MS)
@@ -1043,17 +1056,6 @@ def test_h2c_request_in_flight_finishes() raises:
         var acc = List[UInt8]()
         var buf = List[UInt8](length=4096, fill=0)
         var how = String("eof")
-        while True:
-            try:
-                var n = stream.read(buf.unsafe_ptr(), len(buf))
-                if n == 0:
-                    break
-                for i in range(n):
-                    acc.append(buf[i])
-            except e:
-                how = String(e)
-                break
-        var closed_after = monotonic_now_ms() - signaled_at
         var pos = 0
         var decoder = HpackDecoder()
         var bodies = List[String]()
@@ -1063,22 +1065,48 @@ def test_h2c_request_in_flight_finishes() raises:
         statuses.append("")
         statuses.append("")
         var goaway = False
+        var acked = False
         while True:
-            var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
-            if not maybe:
+            # Every complete frame so far; the server's SETTINGS is acked.
+            while True:
+                var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
+                if not maybe:
+                    break
+                var f = maybe.value().copy()
+                pos += 9 + f.header.length
+                var sid = f.header.stream_id
+                if f.header.type.value == FrameType.SETTINGS().value:
+                    if sid == 0 and not f.header.flags.has(FrameFlags.ACK()):
+                        stream.write_all(
+                            Span[UInt8, _](
+                                _h2_frame(
+                                    FrameType.SETTINGS(),
+                                    FrameFlags.ACK(),
+                                    0,
+                                    List[UInt8](),
+                                )
+                            )
+                        )
+                        acked = True
+                elif f.header.type.value == FrameType.GOAWAY().value:
+                    goaway = True
+                elif sid == 1 or sid == 3:
+                    var i = (sid - 1) // 2
+                    if f.header.type.value == FrameType.HEADERS().value:
+                        var fields = decoder.decode(Span[UInt8, _](f.payload))
+                        statuses[i] = fields[0].value
+                    elif f.header.type.value == FrameType.DATA().value:
+                        bodies[i] += String(from_utf8_lossy=Span(f.payload))
+            try:
+                var n = stream.read(buf.unsafe_ptr(), len(buf))
+                if n == 0:
+                    break
+                for i in range(n):
+                    acc.append(buf[i])
+            except e:
+                how = "reset" if _is_reset(String(e)) else String(e)
                 break
-            var f = maybe.value().copy()
-            pos += 9 + f.header.length
-            var sid = f.header.stream_id
-            if f.header.type.value == FrameType.GOAWAY().value:
-                goaway = True
-            elif sid == 1 or sid == 3:
-                var i = (sid - 1) // 2
-                if f.header.type.value == FrameType.HEADERS().value:
-                    var fields = decoder.decode(Span[UInt8, _](f.payload))
-                    statuses[i] = fields[0].value
-                elif f.header.type.value == FrameType.DATA().value:
-                    bodies[i] += String(from_utf8_lossy=Span(f.payload))
+        var closed_after = monotonic_now_ms() - signaled_at
         print(
             "observed: h2c stream 1 ->",
             statuses[0],
@@ -1093,6 +1121,12 @@ def test_h2c_request_in_flight_finishes() raises:
             "after",
             closed_after,
             "ms",
+        )
+        assert_true(acked, "the server sent no SETTINGS")
+        assert_true(how == "eof" or how == "reset", how)
+        assert_true(
+            closed_after <= GRACE_MS + STOP_BOUND_MS,
+            "the h2c connection outlived the window and the bound",
         )
         assert_equal(statuses[0], "200")
         assert_equal(bodies[0], "released after the stop")
@@ -1226,6 +1260,175 @@ def test_a_built_program_stops_on_an_inherited_ignored_sigint() raises:
     finally:
         if not reaped:
             _stop(child.pid)
+
+
+def serve_again() raises -> String:
+    """Binds a second `Server` and serves it from inside a handler of the
+    first, which is serving: the text `serve` raises, or `served`."""
+    var inner = App()
+    inner.get["/"](hello)
+    var second = Server.bind("127.0.0.1", 0)
+    try:
+        second.serve(inner)
+    except e:
+        return String(e)
+    return "served"
+
+
+def test_a_second_serve_in_the_process_is_refused() raises:
+    """SIGTERM and SIGINT dispositions are process-wide, so while one `serve`
+    runs, another `serve` in the same process (here from inside one of its
+    handlers) raises `Server.serve is already serving in this process`
+    before touching them; the first one then still stops on SIGTERM with
+    the dispositions it replaced put back (`_serve_stoppable` exits 0)."""
+    var app = borrowed_app()
+    app.get["/again"](serve_again)
+    var child = _serve_stoppable(app, SHORT_GRACE_MS)
+    var reaped = False
+    try:
+        var raw = _exchange(child.port, _request("GET", "/again"))
+        print("observed: serve inside serve ->", repr(_content(raw)))
+        assert_equal(_status_line(raw), "HTTP/1.1 200 OK")
+        assert_equal(_content(raw), ALREADY_SERVING)
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        assert_equal(_exit_code(ended[0]), 0, "the first serve did not stop")
+    finally:
+        if not reaped:
+            _stop(child.pid)
+
+
+def _no_stage(stage: Int):
+    pass
+
+
+def _term_when_installed(stage: Int):
+    """SIGTERM to this process once both stop handlers are installed, before
+    the watcher starts."""
+    if stage == _STAGE_INSTALLED:
+        _ = external_call["kill", c_int](
+            external_call["getpid", c_int](), c_int(SIGTERM)
+        )
+
+
+def _term_before_flare_serves(stage: Int):
+    """SIGTERM once the watcher runs, before Flare's `serve` is called, then
+    300 ms (six watcher polls) so the watcher has closed the listener first:
+    Flare's `serve` then raises on it."""
+    if stage == _STAGE_WATCHING:
+        _ = external_call["kill", c_int](
+            external_call["getpid", c_int](), c_int(SIGTERM)
+        )
+        _ = libc_nanosleep_ms(300)
+
+
+def _term_after_flare_served(stage: Int):
+    """SIGTERM after Flare's `serve` ended, while the watcher still runs."""
+    if stage == _STAGE_SERVED:
+        _ = external_call["kill", c_int](
+            external_call["getpid", c_int](), c_int(SIGTERM)
+        )
+
+
+def _term_after_join(stage: Int):
+    """SIGTERM after the watcher was joined, before the restore."""
+    if stage == _STAGE_JOINED:
+        _ = external_call["kill", c_int](
+            external_call["getpid", c_int](), c_int(SIGTERM)
+        )
+
+
+def _serve_twice_with_stages(
+    first: def(Int) thin -> None, second: def(Int) thin -> None
+) raises -> _Child:
+    """A forked child that serves `borrowed_app()` with `first` as `serve`'s
+    `_stage` hook, then serves the same `Server` again (its listener is
+    closed, so Flare's `serve` raises at once) with `second`. Exits 11 if
+    the first raises, 4 if the dispositions differ after it, 20 if the
+    second returns, 22 if the second is refused as already serving, 6 if
+    the dispositions differ after it, else 21. The caller must reap `pid`.
+    """
+    var app = borrowed_app()
+    var server = Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS)
+    var port = server.port()
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        _default_sigpipe()
+        var term = _handler_word(SIGTERM)
+        var int = _handler_word(SIGINT)
+        try:
+            server.serve(app, _stage=first)
+        except e:
+            print("stage child: first serve raised:", e)
+            exit(11)
+        if _handler_word(SIGTERM) != term or _handler_word(SIGINT) != int:
+            exit(4)
+        try:
+            server.serve(app, _stage=second)
+            exit(20)
+        except e:
+            if String(e) == ALREADY_SERVING:
+                exit(22)
+        if _handler_word(SIGTERM) != term or _handler_word(SIGINT) != int:
+            exit(6)
+        exit(21)
+    return _Child(pid, port)
+
+
+def _stage_outcome(
+    first: def(Int) thin -> None, second: def(Int) thin -> None
+) raises -> Int:
+    """`_serve_twice_with_stages`'s raw `waitpid` status, or -1 if the child
+    outlived its bound (and was killed)."""
+    var child = _serve_twice_with_stages(first, second)
+    return _reap_within(child.pid, 2 * (SHORT_GRACE_MS + STOP_BOUND_MS))[0]
+
+
+def test_a_stop_before_the_watcher_starts_is_acted_on() raises:
+    """A SIGTERM delivered between the handlers' install and the watcher's
+    start is seen by the watcher: the first `serve` returns, with the
+    dispositions back and the process's claim released (the second `serve`
+    raises on the closed listener, not as already serving)."""
+    var status = _stage_outcome(_term_when_installed, _no_stage)
+    print("observed: SIGTERM at stage installed -> status", status)
+    assert_equal(_exit_code(status), 21)
+
+
+def test_a_stop_before_flare_serves_returns() raises:
+    """A stop acted on before Flare's `serve` runs closes the listener under
+    it, so Flare's `serve` raises; `serve` returns as for any stop."""
+    var status = _stage_outcome(_term_before_flare_serves, _no_stage)
+    print("observed: SIGTERM at stage watching -> status", status)
+    assert_equal(_exit_code(status), 21)
+
+
+def test_a_stop_as_flare_serve_ends_is_not_lost() raises:
+    """A SIGTERM after Flare's `serve` ended for another reason (it raised on
+    the closed listener), while the watcher still runs: either the watcher
+    acts on it and `serve` returns, or it is sent again once the previous
+    dispositions are back and ends the process. Never a hang, a crash or a
+    lost signal."""
+    var status = _stage_outcome(_term_when_installed, _term_after_flare_served)
+    print("observed: SIGTERM at stage served -> status", status)
+    assert_true(
+        _exit_code(status) == 20 or (status >= 0 and status & 0x7F == SIGTERM),
+        String(status),
+    )
+
+
+def test_a_stop_after_the_watcher_is_joined_is_sent_again() raises:
+    """A SIGTERM after the watcher was joined, before the restore, is
+    absorbed by the stop handler; `serve` sends it again once the previous
+    dispositions (the runtime's handler) are back, and it ends the
+    process."""
+    var status = _stage_outcome(_term_when_installed, _term_after_join)
+    print("observed: SIGTERM at stage joined -> status", status)
+    assert_true(status >= 0, "the child outlived its bound")
+    assert_equal(status & 0x7F, SIGTERM, "the signal was lost")
 
 
 def test_bind_raises_for_a_grace_out_of_range() raises:
