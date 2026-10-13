@@ -31,7 +31,12 @@ struct Created(ToResponse):
     var text: String
 
     def to_response(deinit self) -> Response:
-        return Response.text("created " + self.text, status=201)
+        var response = Response.text("created " + self.text, status=201)
+        try:
+            response.headers.add("X-Made", self.text)
+        except:
+            pass
+        return response^
 
 
 @fieldwise_init
@@ -109,6 +114,14 @@ def state_int_headers(db: State[Db], id: Int, headers: Headers) -> String:
     return String("sih ", db[].name, " ", id, " ", _fields(headers))
 
 
+def state_int(db: State[Db], id: Int) -> String:
+    return String("si ", db[].name, " ", id)
+
+
+def state_headers(db: State[Db], headers: Headers) -> String:
+    return "sh " + db[].name + " " + _fields(headers)
+
+
 def state_int_text(db: State[Db], a: Int, b: String) -> String:
     return String("sit ", db[].name, " ", a, " ", b)
 
@@ -181,6 +194,14 @@ def _app() raises -> App:
     app.post["/sih/{id}"](state_int_headers, State(Db("g")))
     app.put["/sih/{id}"](state_int_headers, State(Db("g")))
     app.patch["/sih/{id}"](state_int_headers, State(Db("g")))
+    app.get["/si/{id}"](state_int, State(Db("g")))
+    app.post["/si/{id}"](state_int, State(Db("g")))
+    app.put["/si/{id}"](state_int, State(Db("g")))
+    app.patch["/si/{id}"](state_int, State(Db("g")))
+    app.get["/sh"](state_headers, State(Db("g")))
+    app.post["/sh"](state_headers, State(Db("g")))
+    app.put["/sh"](state_headers, State(Db("g")))
+    app.patch["/sh"](state_headers, State(Db("g")))
     app.get["/sit/{a}?{b}"](state_int_text, State(Db("g")))
     app.post["/sit/{a}?{b}"](state_int_text, State(Db("g")))
     app.put["/sit/{a}?{b}"](state_int_text, State(Db("g")))
@@ -227,6 +248,9 @@ def _targets() -> List[String]:
         "/st",
         "/sih/3",
         "/sih/x",
+        "/si/5",
+        "/si/x",
+        "/sh",
         "/sit/1?b=z",
         "/sit/x?b=z",
         "/sooh/2?b=3",
@@ -245,13 +269,14 @@ def _headers() raises -> Headers:
 
 
 def _same(got: Response, want: Response, what: String) raises:
+    """The same status, the same body bytes, and the same header fields
+    (names and values, in order)."""
     assert_equal(got.status, want.status, what)
-    assert_equal(got.text(), want.text(), what)
-    assert_equal(
-        len(got.headers.get_all("content-type")),
-        len(want.headers.get_all("content-type")),
-        what,
-    )
+    assert_true(got.body == want.body, what)
+    assert_equal(len(got.headers), len(want.headers), what)
+    for i in range(len(want.headers)):
+        assert_equal(got.headers.name(i), want.headers.name(i), what)
+        assert_equal(got.headers.value(i), want.headers.value(i), what)
 
 
 def test_every_bodyless_shape_answers_as_on_get() raises:
@@ -321,6 +346,7 @@ def test_answers_are_the_handlers() raises:
     var made = client.post("/created", "x")
     assert_equal(made.status, 201)
     assert_equal(made.text(), "created x")
+    assert_equal(made.headers.get("x-made").or_else(""), "x")
     var refused = client.put("/conflict/9", "x")
     assert_equal(refused.status, 409)
     assert_equal(refused.text(), "conflict 9")
@@ -330,6 +356,10 @@ def test_answers_are_the_handlers() raises:
     assert_equal(
         client.put("/sih/3", "x", headers=_headers()).text(),
         "sih g 3 1,,three",
+    )
+    assert_equal(client.patch("/si/5", "x").text(), "si g 5")
+    assert_equal(
+        client.put("/sh", "x", headers=_headers()).text(), "sh g 1,,three"
     )
     assert_equal(client.patch("/sit/1?b=z", "x").text(), "sit g 1 z")
     assert_equal(
@@ -416,7 +446,7 @@ def test_dx_example() raises:
     app.post["/users/{id}/activate"](activate)
     app.post["/logout"](logout)
     app.put["/users/{id}/follow"](follow, State(Db("ada")))
-    # POST /users/7/activate  (any body or none)   -> 200 "activated 7"
+    # POST /users/7/activate  (no body, or any body App.handle receives) -> 200 "activated 7"
     # POST /users/abc/activate                     -> 400 "Bad Request"
     # POST /logout  Authorization: t1              -> 200 "bye"
     # POST /logout  (no Authorization)             -> 401 "Unauthorized"

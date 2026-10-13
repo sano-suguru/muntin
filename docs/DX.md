@@ -296,7 +296,7 @@ def follow(db: State[Db], id: Int) -> String:
 app.post["/users/{id}/activate"](activate)
 app.post["/logout"](logout)
 app.put["/users/{id}/follow"](follow, State(Db("ada")))
-# POST /users/7/activate  (any body or none)   -> 200 "activated 7"
+# POST /users/7/activate  (no body, or any body App.handle receives) -> 200 "activated 7"
 # POST /users/abc/activate                     -> 400 "Bad Request"
 # POST /logout  Authorization: t1              -> 200 "bye"
 # POST /logout  (no Authorization)             -> 401 "Unauthorized"
@@ -307,7 +307,7 @@ app.put["/users/{id}/follow"](follow, State(Db("ada")))
 Semantics:
 
 - A `post`, `put` or `patch` handler whose parameters are only route values and at most one `Headers`, last, is bodyless: `def()`, `def(V)`, `def(V, V)`, `def(Headers)`, `def(V, Headers)`, `def(V, V, Headers)`, each also after a leading `State[S]`, `V` an `Int`, a `String` or an `Optional` of either. It takes `get`'s rules (route values above, `Headers` as in section 9) and answers a request exactly as the same handler on `get` answers it: route values decoded and converted with their 400s, header fields delivered in order, results and errors as for any typed handler.
-- The request's body is not read: any body, none, bytes that are not UTF-8 or a JSON `Content-Type` change nothing, and Muntin chooses no status for it, as on a typed `get` or `delete` route. A handler that must refuse a body takes a body type that refuses it, or is raw (section 9).
+- The request's body is not read: any body that reaches `App.handle`, none, bytes that are not UTF-8 or a JSON `Content-Type` change nothing, and Muntin chooses no status for it, as on a typed `get` or `delete` route. This is `App.handle`'s rule, not a promise that the network accepts any body: a backend refuses some requests before `App.handle` whatever the route (through Flare, a body over the `Server`'s `max_body_bytes`, section 1). A handler that must refuse a body takes a body type that refuses it, or is raw (section 9).
 - A shape with a body is not bodyless: a last parameter whose type is no Muntin kind (a body type that forgot `FromBody`) is still `constraint failed: the handler's last parameter is the request body; its type must conform to FromBody or FromBytes` (`the handler's parameter ...` when it is the only one). The rules' messages name the method (`a post handler takes one Headers, as its last parameter`, `a patch handler takes at most two route values`).
 
 `HEAD`, proven by `tests/test_head.mojo` (which runs this example as written), `tests/test_testclient_head.mojo` (`TestClient.head`), `adapters/flare/test_muntin_flare.mojo` and, over real loopback connections through Flare (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo` and `compat/flare/head/head_probe.mojo` (via `./scripts/check_flare.sh`). A `get` route answers `HEAD`; there is no `app.head`:
