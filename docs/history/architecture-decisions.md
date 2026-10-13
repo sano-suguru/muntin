@@ -4112,3 +4112,32 @@ Status: **decision** (M3-046, [pull request #84](https://github.com/sano-suguru/
 - an application asks for several processes serving one address as a supported form: a serving-lifecycle item (its stop semantics, macOS, tests).
 
 **Next action: explicit deferral.** No production slice follows: the revisit conditions above name what would make a concurrent `Server` decidable.
+
+### Server idle timeout decision (M3-047)
+
+Status: **decision** (M3-047; the choice and its next action follow the evidence below). It decides whether `Server` should let an application set Flare's `ServerConfig.idle_timeout_ms`, which `Server` leaves at Flare v0.12.0's default (500 ms). Two records name it: [M3-032](#serving-entrypoint-decision-m3-032) ("applications need a backend limit or protocol setting changed (body size, timeouts, TLS): revisit whether `Server` takes a Muntin-owned configuration") and [M3-046](#head-of-line-blocking-decision-m3-046) ("`Server` gains backend configuration: an `idle_timeout_ms` would let an application trade the dropped requests for longer waits"), which declined its candidate E (the adapter setting a longer timeout for everyone) because it would change every application's keep-alive close. The question, candidates, criteria and pass conditions below were written before any measurement; what precedes them was read from the records named above and from Flare v0.12.0's source.
+
+**Why now.** M3-046 pinned that a handler running longer than the idle timeout (counting a connection's idle time before it) makes Flare close open HTTP/1.1 keep-alive and h2c connections whose requests arrived meanwhile, unanswered: with the default, such a handler loses requests rather than only delaying them, and an application has no way to change that short of building Flare's `HttpServer` itself, which M3-032 rejected as API.
+
+**Question.** Should `Server` expose Flare's idle timeout, and if so how: its spelling and where it lives; whether every existing `Server.bind(...)` call and `server.serve(app)` keep building and answering exactly as today, the 500 ms default included; the unit, the valid values and where an invalid one is caught (0, which Flare documents as "disables", a negative value, a value whose arithmetic in Flare could overflow, and the largest value worth accepting); whether one value reaches HTTP/1.1 and h2c alike; what a longer value changes on the wire (requests that waited behind a long handler answered after it, never during it) and what it does not (the blocking itself); what it costs (idle connections, and connections that never send a byte, held longer); how it interacts with M3-045's stop (the grace window, the bound, the keep-alive close during the window); whether two `Server`s keep their own values; and what changes in the accepted set, the overload set, the diagnostics and the runtime, classified against M2-016.
+
+**What it is not.** Other timeouts (`write_timeout_ms`, `read_body_timeout_ms`, `request_timeout_ms`, `handler_timeout_ms`, which Flare does not enforce), keep-alive limits, connection counts, TLS and workers are out of scope; so is any change to the blocking itself (M3-046's deferral stands).
+
+**Candidates.**
+- A, a keyword-only argument of `Server.bind`: `Server.bind(host, port, *, ..., idle_timeout_ms=n)`, whose omission keeps the 500 ms default, checked by `bind` before anything is bound and written by the adapter into Flare's configuration.
+- B, a typed timeout configuration: a Muntin-owned type (for example `Timeouts(idle_ms=...)`) passed to `bind`, holding this timeout now and others later.
+- C, change the default: the adapter sets a longer idle timeout for every `Server`, with no API change (M3-046's candidate E).
+- D, decision only: leave the API and the adapter unchanged, and record the blockers and revisit triggers.
+
+**Comparison criteria**, per candidate: the spelling beside `max_body_bytes` and `shutdown_grace_ms`; the public API added; whether every existing call keeps building and answering as today with the same default on both protocols; ownership; how the next setting would be added; the unit, range and zero semantics, and where an invalid value is caught, with what message; whether one value reaches HTTP/1.1 and h2c, and how a partial propagation would be caught; the effect on M3-046's dropped requests and on its pinned default-configuration tests; the cost of idle connections; the interaction with M3-045's stop; whether Flare types reach application code (A1, A2); the code added; accepted set, overload set, diagnostics and runtime by kind (M2-016). The smallest candidate that meets the pass conditions is chosen; a configuration is not chosen merely because it can be built.
+
+**Pass conditions** for an implementing candidate (each with executable evidence in real child processes, each child reaped within a bound):
+- with an explicit timeout longer than a 1 s held handler, a request sent during the hold on an HTTP/1.1 keep-alive connection answered before the hold, stream 3 on the held stream's h2c connection, and stream 1 on another h2c connection set up before the hold are each answered after the release and never during the hold, and no other handler runs before the held one returns (the order pipe); these tests fail before the change;
+- with no value given, M3-046's default-configuration tests pass unchanged (the waiting requests dropped), so the default is still 500 ms on both protocols;
+- two `Server`s bound in one process with different values keep their own;
+- the range's boundaries, zero included, are checked by `bind` with the message the record names, before anything is bound (on a port a child serves, so a raise is not `AddressInUse`), and the accepted ends bind;
+- SIGTERM still stops a `Server` bound with a long idle timeout within its own `shutdown_grace_ms` and bound (the window plus 1 s), with an idle keep-alive connection open, exit 0;
+- `max_body_bytes`, `shutdown_grace_ms`, the one reactor, the signal claim, `_BorrowedHandler`'s non-`Copyable` guard, the serving fixtures and every existing test are unchanged and pass; `src/muntin` is unchanged and `check_boundaries.sh` passes;
+- scratch mutations, each turning a listed test red: the propagation removed (the value never reaching Flare's configuration), the default changed, and the validation broken (each end).
+
+If no candidate meets them, D: the API and the adapter stay unchanged, and the record names the blockers and what would lift them.
