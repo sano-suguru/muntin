@@ -4,6 +4,8 @@ channels = ["https://conda.modular.com/max", "conda-forge"]
 name = "muntin"
 platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
+license = "MIT"
+license-file = "LICENSE"
 # Required for git source dependencies (Flare) built by pixi-build.
 preview = ["pixi-build"]
 
