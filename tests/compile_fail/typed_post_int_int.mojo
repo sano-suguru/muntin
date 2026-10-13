@@ -1,6 +1,6 @@
 # Must not compile: the ToResponse twin of post_int_int.mojo, on a query
-# route value, repeats its Int guard and message (M2-009).
-# Expected diagnostic (checked by scripts/check.sh): Int is a route-value type, never the request body; the body parameter's type must conform to FromBody or FromBytes
+# route value: the same rule and message (M2-009, M3-048).
+# Expected diagnostic (checked by scripts/check.sh): handler takes two route values; route must declare exactly two path or query parameters
 
 from muntin import App, Response, ToResponse
 

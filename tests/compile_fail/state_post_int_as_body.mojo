@@ -1,6 +1,7 @@
-# Must not compile: a stateful handler taking State then Int registered on
-# POST: Int is a route value, never the body (M3-006).
-# Expected diagnostic (checked by scripts/check.sh): Int is a route-value type, never the request body; the body parameter's type must conform to FromBody or FromBytes
+# Must not compile: State then a lone Int on a POST route with no
+# placeholder: Int is a route value, never the body (M3-006), so the handler
+# is bodyless and its value needs a placeholder (M3-048).
+# Expected diagnostic (checked by scripts/check.sh): handler takes one Int parameter; route must declare exactly one path or query parameter
 from muntin import App, FromBody, State
 
 

@@ -1,7 +1,7 @@
-# Must not compile: (Int, Int) on a route with one placeholder puts an Int in
-# the body slot. Rejected by type equality, whatever conformances exist
-# (M2-005, M2-009).
-# Expected diagnostic (checked by scripts/check.sh): Int is a route-value type, never the request body; the body parameter's type must conform to FromBody or FromBytes
+# Must not compile: (Int, Int) on a route with one placeholder. Int is never
+# the body (M2-005, M2-009), so the handler is bodyless with two route values
+# and `get`'s two-value placeholder rule applies (M3-048).
+# Expected diagnostic (checked by scripts/check.sh): handler takes two route values; route must declare exactly two path or query parameters
 
 from muntin import App
 

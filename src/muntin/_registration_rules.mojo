@@ -215,10 +215,8 @@ comptime _GET_RAW = 6
 comptime _GET_STATE_RAW = 7
 comptime _GET_BODY = 8
 comptime _GET_SLOT_KIND = 9
-comptime _POST_NO_BODY = 11
 comptime _POST_BODY_PLACES = 12
 comptime _POST_INT_BODY_PLACES = 13
-comptime _INT_AS_BODY = 14
 comptime _REQUEST_AS_BODY = 15
 comptime _STATE_REQUEST_AS_BODY = 16
 comptime _POST_STATE_ARGUMENT = 17
@@ -267,6 +265,12 @@ def _is_value(k: Int) -> Bool:
 def _is_optional(k: Int) -> Bool:
     """Whether slot kind `k` is an optional route value (M3-024)."""
     return k == _OPT_INT or k == _OPT_TEXT
+
+
+def _bodyless(k: Int) -> Bool:
+    """Whether slot kind `k` may be a slot of a bodyless shape (M3-048):
+    absent, a route value or `Headers`."""
+    return k == _ABSENT or _is_value(k) or k == _HEADERS
 
 
 def _optional_at_path(k1: Int, k2: Int, paths: Int) -> Bool:
@@ -337,7 +341,9 @@ def _post_rule(
     queries: Int,
 ) -> Int:
     """`post`'s rules for slot kinds `k1`, `k2`, `k3` (`_ABSENT` when
-    missing): `def(B)` with no placeholder, `def(V, B)` with exactly one,
+    missing). A bodyless shape, every slot absent, a route value or
+    `Headers` (`_bodyless`), takes `get`'s rules and messages (M3-048).
+    Otherwise: `def(B)` with no placeholder, `def(V, B)` with exactly one,
     `def(V, V, B)` with exactly two (M3-022), `V` an `Int` or `String` route
     value or an `Optional` of either (M3-024), or the raw
     `def(Request) -> Response` with none. The order
@@ -349,11 +355,12 @@ def _post_rule(
     slot of no kind or a `Headers`; then the placeholders, with the `Int`,
     `String` or `Optional` message for one value, and for two one message,
     then an optional value at a path position; then the last slot `X`,
-    which is the body position, where a type with two body conversions
+    which is the body position (never a route value there, as such a
+    shape is bodyless), where a type with two body conversions
     (`_TWO_BODIES`) and a `FromBytes` with a negative `max_bytes`
     (`_NEGATIVE_LIMIT`, M3-043) each get their own message."""
-    if k1 == _ABSENT:
-        return _POST_NO_BODY
+    if _bodyless(k1) and _bodyless(k2) and _bodyless(k3):
+        return _get_rule(stateful, k1, k2, k3, response, paths, queries)
     if k1 == _RAW and k2 == _ABSENT:
         if response:
             return _takes_none(paths, queries)
@@ -387,8 +394,6 @@ def _post_rule(
             )
     elif paths + queries != 0:
         return _POST_BODY_PLACES
-    if body == _INT:
-        return _INT_AS_BODY
     if body == _RAW:
         return _STATE_REQUEST_AS_BODY if stateful else _REQUEST_AS_BODY
     if body == _STATE:
@@ -497,9 +502,6 @@ def _check[
         + " handler's parameter is an Int or String route value, an Optional"
         " of one, the request Headers or, for a raw handler, the Request"
     )
-    comptime assert rule != _POST_NO_BODY, (
-        "a " + name + " handler takes the request body as its last parameter"
-    )
     comptime assert rule != _POST_BODY_PLACES, (
         "handler takes only the request body; route must declare no path"
         " or query parameter"
@@ -507,10 +509,6 @@ def _check[
     comptime assert rule != _POST_INT_BODY_PLACES, (
         "handler takes one Int parameter and the request body; route must"
         " declare exactly one path or query parameter"
-    )
-    comptime assert rule != _INT_AS_BODY, (
-        "Int is a route-value type, never the request body; the body"
-        " parameter's type must conform to FromBody or FromBytes"
     )
     comptime assert rule != _REQUEST_AS_BODY, (
         "Request is the whole request, not a body; a raw handler takes"
