@@ -32,6 +32,16 @@ releases it, so the stop is sent while a handler is running. The parent reaps
 every child with `_reap_within`, which SIGKILLs a child that outlives its
 bound and fails the test instead of hanging.
 
+Head-of-line blocking (M3-046, decided in docs/history/architecture-decisions.md
+"Head-of-line blocking decision (M3-046)"): with one handler held, a light
+request on another HTTP/1.1 connection, another stream of the same h2c
+connection or another h2c connection is not handled until the held one
+returns; the order in which the handlers ran is read from a pipe after the
+child ended. The same cases run on Flare's own `HttpServer` with a handler that
+has no Muntin code, with its default configuration (where waiting keep-alive
+and h2c requests are dropped once a hold outlasts the idle timeout) and with a
+long idle timeout (where they are only serialized).
+
 The `::1` case needs IPv6. It is skipped only where the host shows it has none
 (`socket(AF_INET6, ...)` fails with `EAFNOSUPPORT`) and `CI` is unset; under
 `CI` it always runs, so the CI runners keep binding `::1`.
