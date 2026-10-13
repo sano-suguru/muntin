@@ -127,3 +127,7 @@ git diff --check
 ```
 
 `pixi run check` and `pixi run test` run the same scripts. `pixi run format` formats sources.
+
+## License
+
+[MIT](LICENSE)
