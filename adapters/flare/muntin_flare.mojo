@@ -438,10 +438,14 @@ def _sigaction(sig: Int, new: Int, old: Int) -> Int:
 
 def _send_here(sig: Int):
     """Sends `sig` again to the calling thread (`raise(3)`), so its
-    disposition is acted on before this returns (unless the thread blocks
-    it): a terminating default action ends the process, a handler runs on
-    this thread. `kill` to the process could run a handler on another
-    thread later, after the serving claim is released (M3-045)."""
+    disposition is acted on before this returns: a terminating default
+    action ends the process, a handler runs on this thread. `kill` to the
+    process could run a handler on another thread later, after the serving
+    claim is released. If the calling thread blocks `sig`, it stays pending
+    on that thread past the release and is acted on, once unblocked, by the
+    disposition current then (a later `serve`'s stop handler included):
+    `serve` is supported only on a thread that blocks neither SIGTERM nor
+    SIGINT (docs/DX.md section 1; M3-045)."""
     _ = external_call["raise", c_int](c_int(sig))
 
 
@@ -857,7 +861,10 @@ struct Server(Movable):
         `_REACTOR_STOP_MS` after Flare's `drain` returned ends it with
         128 + the signal. The dispositions both signals had are back when
         this returns or raises. If Flare's `drain` raises, the stop falls
-        back to a hard stop and this raises with its error.
+        back to a hard stop and this raises with its error. The calling
+        thread must block neither SIGTERM nor SIGINT, before or during this
+        call: a stop signal sent again as it ends would otherwise stay
+        pending on that thread after the claim is released.
 
         `_stage` is not API: the stop tests pass a hook called at the
         `_STAGE_*` points to place a signal there."""
