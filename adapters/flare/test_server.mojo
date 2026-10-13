@@ -56,6 +56,7 @@ from flare.http2 import (
     parse_frame,
 )
 from flare.net import SocketAddr
+from flare.net._libc_event import _pipe as _flare_pipe
 from flare.runtime import libc_nanosleep_ms, monotonic_now_ms
 from flare.tcp import TcpStream
 from flare.utils import SIGINT, SIGKILL, SIGTERM, exit, fork, kill, waitpid
@@ -529,7 +530,9 @@ def stoppable_app() -> App:
 
 def _pipe() raises -> Tuple[Int, Int]:
     var fds = List[c_int](length=2, fill=0)
-    if Int(external_call["pipe", c_int](Int(fds.unsafe_ptr()))) != 0:
+    # Flare's own wrapper: its declaration of `pipe` (used for the macOS
+    # reactor's wakeup) is the one a program may have.
+    if Int(_flare_pipe(fds.unsafe_ptr())) != 0:
         raise Error("pipe() failed")
     return (Int(fds[0]), Int(fds[1]))
 
