@@ -64,11 +64,16 @@ from muntin import App, Request, Response
 from muntin.testing import TestClient
 from muntin_flare import (
     Server,
+    _SA_FLAGS_OFFSET,
+    _SA_RESTART_RESETHAND,
     _STAGE_INSTALLED,
     _STAGE_JOINED,
+    _STAGE_RESTORED,
     _STAGE_SERVED,
     _STAGE_WATCHING,
     _server_config,
+    _serving_held,
+    _stop_signal_seen,
 )
 
 comptime TIMEOUT_MS = 5_000
@@ -1450,6 +1455,79 @@ def test_a_stop_after_the_watcher_is_joined_is_sent_again() raises:
     print("observed: SIGTERM at stage joined -> status", status)
     assert_true(status >= 0, "the child outlived its bound")
     assert_equal(status & 0x7F, SIGTERM, "the signal was lost")
+
+
+def _install_reset_on_delivery(sig: Int) -> Int:
+    """Gives `sig` a handler that does nothing, with `SA_RESETHAND`, so a
+    delivery shows as the disposition going back to `SIG_DFL`. Returns
+    `sigaction`'s result."""
+    var handler: def(c_int) thin abi("C") -> None = _stop_signal_seen
+    var action = List[UInt8](length=256, fill=0)
+    var at = action.unsafe_ptr()
+    at.unsafe_bitcast[Int]()[] = Pointer(to=handler).unsafe_bitcast[Int]()[]
+    at.unsafe_offset(_SA_FLAGS_OFFSET).unsafe_bitcast[Int32]()[] = Int32(
+        _SA_RESTART_RESETHAND
+    )
+    var result = Int(external_call["sigaction", c_int](c_int(sig), Int(at), 0))
+    _ = action^
+    return result
+
+
+def _term_after_join_then_check_order(stage: Int):
+    """SIGTERM after the join, as `_term_after_join`; then, at the stage
+    after the restore and the resend, exits 30 if the serving claim is
+    already released, or 32 if the resent SIGTERM has not reached the
+    previous disposition (it resets to `SIG_DFL` on delivery) within 1 s:
+    the resend reaches this thread before `raise` returns, so the wait is
+    only a margin inside the reap bound.
+    """
+    if stage == _STAGE_JOINED:
+        _ = external_call["kill", c_int](
+            external_call["getpid", c_int](), c_int(SIGTERM)
+        )
+    if stage == _STAGE_RESTORED:
+        if not _serving_held():
+            exit(30)
+        var start = monotonic_now_ms()
+        while _handler_word(SIGTERM) != 0:
+            if monotonic_now_ms() - start >= 1000:
+                exit(32)
+            _ = libc_nanosleep_ms(5)
+
+
+def test_a_stop_sent_again_is_sent_before_the_claim_is_released() raises:
+    """The resend of a late SIGTERM happens while this `serve` still holds
+    the process's claim, so no later `serve` can have installed its handler
+    when it is sent. The child gives SIGTERM a handler that resets on
+    delivery, so the resend is seen and does not end it; after `serve`
+    raises (the listener is closed) the claim must be released."""
+    var app = borrowed_app()
+    var server = Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS)
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        _default_sigpipe()
+        if _install_reset_on_delivery(SIGTERM) != 0:
+            exit(33)
+        try:
+            server.serve(app, _stage=_term_when_installed)
+        except e:
+            print("order child: first serve raised:", e)
+            exit(11)
+        try:
+            server.serve(app, _stage=_term_after_join_then_check_order)
+            exit(20)
+        except e:
+            if String(e) == ALREADY_SERVING:
+                exit(22)
+        if _serving_held():
+            exit(31)
+        exit(21)
+    var status = _reap_within(pid, 2 * (SHORT_GRACE_MS + STOP_BOUND_MS))[0]
+    print("observed: resend before release -> status", status)
+    assert_equal(_exit_code(status), 21)
 
 
 def test_bind_raises_for_a_grace_out_of_range() raises:

@@ -79,7 +79,8 @@ when the reactor stopped on a failed poll. There is no stop call, worker count o
 other than the body limit and the grace window below.
 `_BorrowedHandler` is not `Copyable`, which keeps Flare's multi-worker
 `serve` out of reach. `Server`'s one initializer takes keyword-only `_host`,
-`_port` and `_max_body_bytes`, so `Server.bind` is the one public spelling.
+`_port`, `_max_body_bytes` and `_shutdown_grace_ms`, so `Server.bind` is
+the one public spelling.
 `MuntinHandler` stays for the adapter's own tests and probes.
 
 Receive body limit (M3-044, decided in docs/history/architecture-decisions.md
@@ -107,8 +108,9 @@ Graceful shutdown (M3-045, decided in docs/history/architecture-decisions.md
 SIGINT stop it. `_StopWatch` installs `_stop_signal_seen`, a handler that
 does nothing, with `SA_RESETHAND`, so a delivered signal only resets its
 disposition to `SIG_DFL`; a watcher thread (`_watch_for_stop`) sees that,
-resets the other signal too (a second one takes the default action) and
-calls Flare's `drain` with `Server.bind`'s `shutdown_grace_ms` (0 to
+resets both to `SIG_DFL` (a second one takes the default action; if a
+reset fails, it ends the process at once with 128 + the signal) and calls
+Flare's `drain` with `Server.bind`'s `shutdown_grace_ms` (0 to
 86,400,000; 5000 when not given, Flare v0.12.0's default, kept in
 `ServerConfig.shutdown_timeout_ms`): the listener closes, the open
 connections are served for the whole window, then Flare closes them and its
@@ -136,7 +138,7 @@ from flare.http import (
 from flare.net import IpAddr, SocketAddr
 from flare.runtime import libc_nanosleep_ms, monotonic_now_ms
 from flare.runtime._thread import ThreadHandle, _OpaquePtr
-from flare.utils import exit, getpid, kill
+from flare.utils import exit
 from muntin import App, Headers, Request, Response
 
 
@@ -393,6 +395,9 @@ comptime _STAGE_SERVED = 3
 """`_stage`: Flare's `serve` returned or raised; the watcher still runs."""
 comptime _STAGE_JOINED = 4
 """`_stage`: the watcher is joined; the dispositions are not yet restored."""
+comptime _STAGE_RESTORED = 5
+"""`_stage`: the dispositions are restored and a stop signal the watcher did
+not act on is sent again; the serving claim is not yet released."""
 
 comptime _CB_DONE = 0
 """Control block cell: 1 once Flare's `serve` has returned or raised."""
@@ -429,6 +434,15 @@ def _sigaction(sig: Int, new: Int, old: Int) -> Int:
     """`sigaction(2)` with both `struct sigaction` pointers as addresses (0 is
     NULL): 0, or -1 with `errno` set."""
     return Int(external_call["sigaction", c_int](c_int(sig), new, old))
+
+
+def _send_here(sig: Int):
+    """Sends `sig` again to the calling thread (`raise(3)`), so its
+    disposition is acted on before this returns (unless the thread blocks
+    it): a terminating default action ends the process, a handler runs on
+    this thread. `kill` to the process could run a handler on another
+    thread later, after the serving claim is released (M3-045)."""
+    _ = external_call["raise", c_int](c_int(sig))
 
 
 def _errno() -> String:
@@ -491,17 +505,24 @@ def _release_serving():
     _store(_serving_cell(), 0, 0)
 
 
+def _serving_held() -> Bool:
+    """Whether a `serve` holds the process's serving claim (for tests)."""
+    return _load(_serving_cell(), 0) != 0
+
+
 def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
     """The watcher thread `Server.serve` runs beside Flare's reactor (M3-045).
 
     Every `_WATCH_POLL_MS` it reads the dispositions of SIGTERM and SIGINT;
     one that is back to `SIG_DFL` was delivered (a read that fails is not a
-    delivery: it reads again next turn). It then resets the other to
-    `SIG_DFL` too, so a second stop signal ends the process by the default
-    action (if that reset fails, a second signal is absorbed instead), and
-    calls Flare's `drain` with the grace window, which closes the listener,
-    keeps the reactor serving the open connections for the whole window and
-    then sets its stop flag. If `drain` raises, it writes the error where
+    delivery: it reads again next turn). It then resets both to `SIG_DFL`,
+    so a second stop signal ends the process by the default action; if
+    either reset fails, a second signal could be absorbed by the stop
+    handler, so it ends the process at once with status 128 + the
+    signal, without a graceful stop. Otherwise it calls Flare's `drain`
+    with the grace window, which closes the listener, keeps the reactor
+    serving the open connections for the whole window and then sets its
+    stop flag. If `drain` raises, it writes the error where
     `_CB_DRAIN_ERROR` points, marks `_CB_DRAIN_FAILED` and falls back to
     `close`, Flare's hard stop; `serve` then raises. If the reactor has not
     left its loop `_REACTOR_STOP_MS` after `drain` returned (a handler still
@@ -525,8 +546,12 @@ def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
             _ = libc_nanosleep_ms(_WATCH_POLL_MS)
     _store(block, _CB_SIGNAL, sig)
     var default = List[UInt8](length=_SIGACTION_BYTES, fill=0)
-    _ = _sigaction(_SIGTERM, Int(default.unsafe_ptr()), 0)
-    _ = _sigaction(_SIGINT, Int(default.unsafe_ptr()), 0)
+    if (
+        _sigaction(_SIGTERM, Int(default.unsafe_ptr()), 0) != 0
+        or _sigaction(_SIGINT, Int(default.unsafe_ptr()), 0) != 0
+    ):
+        # The second-signal escape cannot be kept: stop now instead.
+        exit(128 + sig)
     var server = Pointer[HttpServer, MutUntrackedOrigin](
         unsafe_from_address=_load(block, _CB_SERVER)
     )
@@ -645,9 +670,9 @@ struct _StopWatch(Movable):
                     + "; putting SIGTERM back failed too: "
                     + undo
                 )
-            _release_serving()
             if delivered == 1:
-                _ = kill(getpid(), _SIGTERM)
+                _send_here(_SIGTERM)
+            _release_serving()
             raise Error("serve: sigaction(SIGINT) failed: " + failure)
         _ = action^
         stage(_STAGE_INSTALLED)
@@ -658,10 +683,10 @@ struct _StopWatch(Movable):
         except e:
             var undo = String()
             var resend = _restore_both(previous, undo)
+            if resend > 0:
+                _send_here(resend)
             if not undo:
                 _release_serving()
-            if resend > 0:
-                _ = kill(getpid(), resend)
             if undo:
                 raise Error(
                     String(e)
@@ -678,7 +703,9 @@ struct _StopWatch(Movable):
         A stop signal the watcher did not act on (it arrived as serving
         ended for another reason) is sent again once the previous
         dispositions are back, so it is not lost: the restore reads what it
-        replaces in the same `sigaction` call. If the watcher cannot be
+        replaces in the same `sigaction` call. It is sent to this thread
+        and acted on before the claim is released, so no later `serve` has
+        installed its handler by then. If the watcher cannot be
         joined, it may still read this block, so after putting the
         dispositions back the process aborts rather than free it. Raises
         when a restore failed (the claim then stays held: a signal may keep
@@ -702,10 +729,11 @@ struct _StopWatch(Movable):
         var acted = _load(block, _CB_SIGNAL)
         var failure = String()
         var delivered = _restore_both(Int(self._previous.unsafe_ptr()), failure)
+        if acted == 0 and delivered > 0:
+            _send_here(delivered)
+        stage(_STAGE_RESTORED)
         if not failure:
             _release_serving()
-        if acted == 0 and delivered > 0:
-            _ = kill(getpid(), delivered)
         if failure:
             # A signal may keep the stop handler with no watcher behind it:
             # the claim stays held, so no later `serve` in this process
@@ -823,7 +851,9 @@ struct Server(Movable):
         docs/DX.md section 1): new connections are refused at once, the
         open ones are served for `shutdown_grace_ms`, then Flare closes
         what is left and this returns. A second stop signal ends the
-        process by the default action; a handler still running
+        process by the default action (if resetting the dispositions to
+        `SIG_DFL` for that fails, the stop is not graceful: the process
+        ends at once with 128 + the signal); a handler still running
         `_REACTOR_STOP_MS` after Flare's `drain` returned ends it with
         128 + the signal. The dispositions both signals had are back when
         this returns or raises. If Flare's `drain` raises, the stop falls
