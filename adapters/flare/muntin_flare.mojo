@@ -76,11 +76,11 @@ listener. `server.port()` is the bound port. `server.serve(app)` borrows
 does; a raise propagates and a return returns, with one exception: a raise
 after a stop signal (below) returns. It returns after a graceful stop or
 when the reactor stopped on a failed poll. There is no stop call, worker count or backend configuration
-other than the body limit and the grace window below.
+other than the body limit, the grace window and the idle timeout below.
 `_BorrowedHandler` is not `Copyable`, which keeps Flare's multi-worker
 `serve` out of reach. `Server`'s one initializer takes keyword-only `_host`,
-`_port`, `_max_body_bytes` and `_shutdown_grace_ms`, so `Server.bind` is
-the one public spelling.
+`_port`, `_max_body_bytes`, `_shutdown_grace_ms` and `_idle_timeout_ms`, so
+`Server.bind` is the one public spelling.
 `MuntinHandler` stays for the adapter's own tests and probes.
 
 Receive body limit (M3-044, decided in docs/history/architecture-decisions.md
@@ -102,6 +102,15 @@ framing; over h2c a reset stream). It is not
 body already received. `Server.serve` refuses to start when the environment
 selects Flare's opt-in `FLARE_BUFRING_HANDLER=1` loop, which is not
 supported (docs/DX.md section 1).
+
+Idle timeout (M3-047, decided in docs/history/architecture-decisions.md
+"Server idle timeout decision (M3-047)"): `Server.bind`'s keyword-only
+`idle_timeout_ms` (500, Flare v0.12.0's default, when not given) is written
+into Flare's one `idle_timeout_ms`, which its HTTP/1.1 and HTTP/2 handles
+both read: how long a connection stays open while nothing arrives on it.
+`_server_config` checks it after the grace window and before the host is
+parsed: 1 to 86,400,000 (`idle_timeout_ms out of range: <value>`
+otherwise), since Flare reads 0 and negative values as no idle timer.
 
 Graceful shutdown (M3-045, decided in docs/history/architecture-decisions.md
 "Graceful shutdown decision (M3-045)"): while `serve` runs, SIGTERM and
@@ -356,6 +365,14 @@ upgrade does not change it (M3-045)."""
 
 comptime _LARGEST_SHUTDOWN_GRACE_MS = 86_400_000
 """One day, the largest grace window `Server.bind` takes (M3-045)."""
+
+comptime _DEFAULT_IDLE_TIMEOUT_MS = 500
+"""`Server.bind`'s idle timeout when none is given: Flare v0.12.0's
+`ServerConfig.idle_timeout_ms` default, written here so that a Flare upgrade
+does not change it (M3-047)."""
+
+comptime _LARGEST_IDLE_TIMEOUT_MS = 86_400_000
+"""One day, the largest idle timeout `Server.bind` takes (M3-047)."""
 
 comptime _REACTOR_STOP_MS = 1000
 """How long the watcher waits, after the grace window, for Flare's reactor to
@@ -758,24 +775,32 @@ struct _StopWatch(Movable):
 
 
 def _server_config(
-    max_body_bytes: Int, shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS
+    max_body_bytes: Int,
+    shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
+    idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
 ) raises -> ServerConfig:
     """Flare's default `ServerConfig` with `max_body_bytes` as the request body
     limit of both protocols: `max_body_size` (HTTP/1.1) and
-    `h2.max_body_size` (HTTP/2, which the first does not reach), and
+    `h2.max_body_size` (HTTP/2, which the first does not reach),
     `shutdown_grace_ms` in `shutdown_timeout_ms`, where `Server.serve` reads
-    it (Flare's `drain` takes its window as an argument). Raises
-    `max_body_bytes out of range: <value>` outside 0 to 2^59 - 1, then
-    `shutdown_grace_ms out of range: <value>` outside 0 to 86,400,000."""
+    it (Flare's `drain` takes its window as an argument), and
+    `idle_timeout_ms` in Flare's one field of that name, which both
+    protocols read. Raises `max_body_bytes out of range: <value>` outside 0
+    to 2^59 - 1, then `shutdown_grace_ms out of range: <value>` outside 0 to
+    86,400,000, then `idle_timeout_ms out of range: <value>` outside 1 to
+    86,400,000 (Flare reads 0, and a negative value, as no idle timer)."""
     if max_body_bytes < 0 or max_body_bytes > _LARGEST_MAX_BODY_BYTES:
         raise Error("max_body_bytes out of range: " + String(max_body_bytes))
     if shutdown_grace_ms < 0 or shutdown_grace_ms > _LARGEST_SHUTDOWN_GRACE_MS:
         raise Error(
             "shutdown_grace_ms out of range: " + String(shutdown_grace_ms)
         )
+    if idle_timeout_ms < 1 or idle_timeout_ms > _LARGEST_IDLE_TIMEOUT_MS:
+        raise Error("idle_timeout_ms out of range: " + String(idle_timeout_ms))
     var config = ServerConfig(max_body_size=max_body_bytes)
     config.h2.max_body_size = max_body_bytes
     config.shutdown_timeout_ms = shutdown_grace_ms
+    config.idle_timeout_ms = idle_timeout_ms
     return config^
 
 
@@ -792,10 +817,13 @@ struct Server(Movable):
         _port: Int,
         _max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
         _shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
+        _idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
     ) raises:
         if _port < 0 or _port > 65535:
             raise Error("port out of range: " + String(_port))
-        var config = _server_config(_max_body_bytes, _shutdown_grace_ms)
+        var config = _server_config(
+            _max_body_bytes, _shutdown_grace_ms, _idle_timeout_ms
+        )
         self._server = HttpServer.bind(
             SocketAddr(IpAddr.parse(_host), UInt16(_port)), config^
         )
@@ -807,6 +835,7 @@ struct Server(Movable):
         *,
         max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
         shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
+        idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
     ) raises -> Server:
         """Binds and listens on `host` (an IPv4 or IPv6 literal) and `port`
         (0 to 65535; 0 lets the system choose). A client may connect once it
@@ -818,14 +847,19 @@ struct Server(Movable):
         any pipelined bytes buffered together exceed `max_body_bytes` plus
         8192. `shutdown_grace_ms` (0 to 86,400,000; 5000 when not given) is
         how long `serve` keeps serving the open connections after SIGTERM
-        or SIGINT (M3-045; docs/DX.md section 1).
-        Raises for a port, limit or grace out of range, a host that is not
-        an IP literal, an address in use or any other OS error."""
+        or SIGINT (M3-045; docs/DX.md section 1). `idle_timeout_ms` (1 to
+        86,400,000; 500 when not given) is how long Flare keeps a
+        connection open, over HTTP/1.1 and h2c, while nothing arrives on it
+        (M3-047; docs/DX.md section 1).
+        Raises for a port, limit, grace or idle timeout out of range, a host
+        that is not an IP literal, an address in use or any other OS
+        error."""
         return Server(
             _host=host,
             _port=port,
             _max_body_bytes=max_body_bytes,
             _shutdown_grace_ms=shutdown_grace_ms,
+            _idle_timeout_ms=idle_timeout_ms,
         )
 
     def port(self) -> Int:
