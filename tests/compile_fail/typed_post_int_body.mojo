@@ -1,6 +1,6 @@
-# Must not compile: an Int body on App.post for a handler with a
-# ToResponse result (M2-008); rejected as for a String result.
-# Expected diagnostic (checked by scripts/check.sh): Int is a route-value type, never the request body; the body parameter's type must conform to FromBody or FromBytes
+# Must not compile: post_int_body.mojo with a ToResponse result (M2-008):
+# the same bodyless placeholder rule and message (M3-048).
+# Expected diagnostic (checked by scripts/check.sh): handler takes one Int parameter; route must declare exactly one path or query parameter
 
 from muntin import App, Response
 

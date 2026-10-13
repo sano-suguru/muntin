@@ -179,15 +179,19 @@ from .state import State
 # rebuild. The length is the body `invoke` passes, after middleware; a
 # negative limit is rejected at registration (`_kind`).
 #
-# Header slots (M3-016): on `get` and `delete`, `Headers` is a slot kind by
-# exact type equality (no trait, so no application type is one), accepted
+# Header slots (M3-016): on `get`, `delete` and bodyless handlers, `Headers`
+# is a slot kind by exact type equality (no trait, so no application type is
+# one), accepted
 # once, as the last slot, after at most two route values. The route sets
 # `_Route.headers`, so `App.handle` appends each field's name and value after
 # the route values, and the slot rebuilds them into a fresh `Headers`
 # (`_header_slot`; a failure, again only the `_fields` gap, is the fixed 500)
-# that the handler owns or borrows. `post`, `put` and `patch` take no
-# `Headers` slot: their fields come through the carrier, and `_post_rule`
-# reports a `Headers` slot as it reports a type of no kind.
+# that the handler owns or borrows. On `post`, `put` and `patch` a handler
+# with a body takes no `Headers` slot: its fields come through the carrier,
+# and `_post_rule` reports a `Headers` before the body as a type of no kind.
+# A bodyless handler there (only route values and a `Headers` last) takes
+# `get`'s shapes and rules (M3-048) and is dispatched as on `get`: no slot
+# reads the body.
 #
 # Route values (M3-018): a route value is an `Int` or a `String` (`_TEXT`, by
 # exact type equality, so no application type is one) or an `Optional` of
@@ -1242,9 +1246,9 @@ struct App(Movable):
     ](mut self, handler: def() thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """The parameterless `post` shape. No such handler is accepted
-        today (a `post` handler takes the request body last, or is raw); a
-        registration reports that rule."""
+        """Registers a parameterless `handler` for `POST path`, as `get`
+        on `def()` (M3-048): `path` declares no parameter, and the request's
+        body is not read."""
         _check["POST", False, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits[
             "POST", False, path, R, _NoSlot, _NoSlot, _NoSlot
@@ -1291,7 +1295,11 @@ struct App(Movable):
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
         handled as for `get` on `def()`; this holds for every body shape,
-        stateless or stateful."""
+        stateless or stateful.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["POST", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["POST", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
@@ -1327,7 +1335,11 @@ struct App(Movable):
         404); the body's own steps follow; neither calls `handler`. The route
         value may be borrowed or `var`; an explicitly typed function value
         spells both parameters `var`. Results and raises as for `get` on
-        `def()`."""
+        `def()`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["POST", False, path, R, A, B, _NoSlot]()
         comptime if _admits["POST", False, path, R, A, B, _NoSlot]():
             self._routes.append(
@@ -1361,7 +1373,11 @@ struct App(Movable):
         `def(var A)`. An optional value binds a `{key}` item: one at a path
         position is rejected. An invalid value yields 400 before the next value
         or the body is converted; the body's own steps follow; neither calls
-        `handler`. Results and raises as for `get` on `def()`."""
+        `handler`. Results and raises as for `get` on `def()`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["POST", False, path, R, A, B, C]()
         comptime if _admits["POST", False, path, R, A, B, C]():
             self._routes.append(
@@ -1383,8 +1399,9 @@ struct App(Movable):
     ](
         mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
-        """The stateful parameterless `post` shape. No such handler is
-        accepted today; a registration reports the body rule."""
+        """Registers a stateful parameterless `handler` for `POST path`,
+        as `get` on `def(State[S])` (M3-048); the request's body is not
+        read."""
         _check["POST", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["POST", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
@@ -1415,7 +1432,11 @@ struct App(Movable):
         `def(var A)` after the state: the request body, or the raw
         `Request` returning `Response`. `handler`'s first parameter is
         `State[S]`, the type of `state`; the route keeps one copy of
-        `state`, and each request passes it to `handler` by borrow."""
+        `state`, and each request passes it to `handler` by borrow.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["POST", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["POST", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
@@ -1445,7 +1466,11 @@ struct App(Movable):
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `POST path`, as `post` on
         `def(var A, var B)` after the state: a route value, then the request
-        body. The state is passed as for `post` on `def(State[S], var A)`."""
+        body. The state is passed as for `post` on `def(State[S], var A)`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["POST", True, path, R, A, B, _NoSlot]()
         comptime if _admits["POST", True, path, R, A, B, _NoSlot]():
             self._routes.append(
@@ -1477,7 +1502,11 @@ struct App(Movable):
         """Registers the stateful `handler` for `POST path`, as `post` on
         `def(var A, var B, var C)` after the state: two route values, then the
         request body. The state is passed as for `post` on
-        `def(State[S], var A)`."""
+        `def(State[S], var A)`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["POST", True, path, R, A, B, C]()
         comptime if _admits["POST", True, path, R, A, B, C]():
             self._routes.append(
@@ -1497,9 +1526,9 @@ struct App(Movable):
     ](mut self, handler: def() thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """The parameterless `put` shape. No such handler is accepted
-        today (a `put` handler takes the request body last, or is raw); a
-        registration reports that rule."""
+        """Registers a parameterless `handler` for `PUT path`, as `get`
+        on `def()` (M3-048): `path` declares no parameter, and the request's
+        body is not read."""
         _check["PUT", False, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", False, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
@@ -1544,7 +1573,11 @@ struct App(Movable):
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
         handled as for `get` on `def()`; this holds for every body shape,
-        stateless or stateful."""
+        stateless or stateful.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PUT", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
@@ -1580,7 +1613,11 @@ struct App(Movable):
         404); the body's own steps follow; neither calls `handler`. The route
         value may be borrowed or `var`; an explicitly typed function value
         spells both parameters `var`. Results and raises as for `get` on
-        `def()`."""
+        `def()`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PUT", False, path, R, A, B, _NoSlot]()
         comptime if _admits["PUT", False, path, R, A, B, _NoSlot]():
             self._routes.append(
@@ -1614,7 +1651,11 @@ struct App(Movable):
         `def(var A)`. An optional value binds a `{key}` item: one at a path
         position is rejected. An invalid value yields 400 before the next value
         or the body is converted; the body's own steps follow; neither calls
-        `handler`. Results and raises as for `get` on `def()`."""
+        `handler`. Results and raises as for `get` on `def()`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PUT", False, path, R, A, B, C]()
         comptime if _admits["PUT", False, path, R, A, B, C]():
             self._routes.append(
@@ -1636,8 +1677,9 @@ struct App(Movable):
     ](
         mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
-        """The stateful parameterless `put` shape. No such handler is
-        accepted today; a registration reports the body rule."""
+        """Registers a stateful parameterless `handler` for `PUT path`,
+        as `get` on `def(State[S])` (M3-048); the request's body is not
+        read."""
         _check["PUT", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
             self._routes.append(
@@ -1668,7 +1710,11 @@ struct App(Movable):
         `def(var A)` after the state: the request body, or the raw
         `Request` returning `Response`. `handler`'s first parameter is
         `State[S]`, the type of `state`; the route keeps one copy of
-        `state`, and each request passes it to `handler` by borrow."""
+        `state`, and each request passes it to `handler` by borrow.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PUT", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
@@ -1698,7 +1744,11 @@ struct App(Movable):
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PUT path`, as `put` on
         `def(var A, var B)` after the state: a route value, then the request
-        body. The state is passed as for `put` on `def(State[S], var A)`."""
+        body. The state is passed as for `put` on `def(State[S], var A)`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PUT", True, path, R, A, B, _NoSlot]()
         comptime if _admits["PUT", True, path, R, A, B, _NoSlot]():
             self._routes.append(
@@ -1730,7 +1780,11 @@ struct App(Movable):
         """Registers the stateful `handler` for `PUT path`, as `put` on
         `def(var A, var B, var C)` after the state: two route values, then the
         request body. The state is passed as for `put` on
-        `def(State[S], var A)`."""
+        `def(State[S], var A)`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PUT", True, path, R, A, B, C]()
         comptime if _admits["PUT", True, path, R, A, B, C]():
             self._routes.append(
@@ -1750,9 +1804,9 @@ struct App(Movable):
     ](mut self, handler: def() thin raises E -> R) where (
         R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
-        """The parameterless `patch` shape. No such handler is accepted
-        today (a `patch` handler takes the request body last, or is raw); a
-        registration reports that rule."""
+        """Registers a parameterless `handler` for `PATCH path`, as `get`
+        on `def()` (M3-048): `path` declares no parameter, and the request's
+        body is not read."""
         _check["PATCH", False, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits[
             "PATCH", False, path, R, _NoSlot, _NoSlot, _NoSlot
@@ -1799,7 +1853,11 @@ struct App(Movable):
         `var body: B`, and `B` may be move-only. A `Request` parameter
         instead makes a raw handler, as for `get`. Results and raises are
         handled as for `get` on `def()`; this holds for every body shape,
-        stateless or stateful."""
+        stateless or stateful.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PATCH", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PATCH", False, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
@@ -1835,7 +1893,11 @@ struct App(Movable):
         404); the body's own steps follow; neither calls `handler`. The route
         value may be borrowed or `var`; an explicitly typed function value
         spells both parameters `var`. Results and raises as for `get` on
-        `def()`."""
+        `def()`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PATCH", False, path, R, A, B, _NoSlot]()
         comptime if _admits["PATCH", False, path, R, A, B, _NoSlot]():
             self._routes.append(
@@ -1869,7 +1931,11 @@ struct App(Movable):
         `def(var A)`. An optional value binds a `{key}` item: one at a path
         position is rejected. An invalid value yields 400 before the next value
         or the body is converted; the body's own steps follow; neither calls
-        `handler`. Results and raises as for `get` on `def()`."""
+        `handler`. Results and raises as for `get` on `def()`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PATCH", False, path, R, A, B, C]()
         comptime if _admits["PATCH", False, path, R, A, B, C]():
             self._routes.append(
@@ -1891,8 +1957,9 @@ struct App(Movable):
     ](
         mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
-        """The stateful parameterless `patch` shape. No such handler is
-        accepted today; a registration reports the body rule."""
+        """Registers a stateful parameterless `handler` for `PATCH path`,
+        as `get` on `def(State[S])` (M3-048); the request's body is not
+        read."""
         _check["PATCH", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits[
             "PATCH", True, path, R, _NoSlot, _NoSlot, _NoSlot
@@ -1925,7 +1992,11 @@ struct App(Movable):
         `def(var A)` after the state: the request body, or the raw
         `Request` returning `Response`. `handler`'s first parameter is
         `State[S]`, the type of `state`; the route keeps one copy of
-        `state`, and each request passes it to `handler` by borrow."""
+        `state`, and each request passes it to `handler` by borrow.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PATCH", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PATCH", True, path, R, A, _NoSlot, _NoSlot]():
             self._routes.append(
@@ -1955,7 +2026,11 @@ struct App(Movable):
     ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PATCH path`, as `patch` on
         `def(var A, var B)` after the state: a route value, then the request
-        body. The state is passed as for `patch` on `def(State[S], var A)`."""
+        body. The state is passed as for `patch` on `def(State[S], var A)`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PATCH", True, path, R, A, B, _NoSlot]()
         comptime if _admits["PATCH", True, path, R, A, B, _NoSlot]():
             self._routes.append(
@@ -1987,7 +2062,11 @@ struct App(Movable):
         """Registers the stateful `handler` for `PATCH path`, as `patch` on
         `def(var A, var B, var C)` after the state: two route values, then the
         request body. The state is passed as for `patch` on
-        `def(State[S], var A)`."""
+        `def(State[S], var A)`.
+
+        A handler whose parameters are only route values and a `Headers`
+        last is bodyless and takes `get`'s shape of this arity instead
+        (M3-048)."""
         _check["PATCH", True, path, R, A, B, C]()
         comptime if _admits["PATCH", True, path, R, A, B, C]():
             self._routes.append(
