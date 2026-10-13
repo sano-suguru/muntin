@@ -1045,16 +1045,47 @@ def test_h2c_request_in_flight_finishes() raises:
         stream.set_recv_timeout(GRACE_MS + STOP_BOUND_MS + 2000)
         var wire = List(H2_PREFACE.as_bytes())
         wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
-        wire.extend(Span(_h2_get(1, held.path)))
         stream.write_all(Span[UInt8, _](wire))
+        # Read and acknowledge the server's SETTINGS before opening stream 1:
+        # once its handler holds the reactor, Flare writes nothing more.
+        var acc = List[UInt8]()
+        var buf = List[UInt8](length=4096, fill=0)
+        var acked = False
+        var scan = 0
+        while not acked:
+            var maybe = parse_frame(Span[UInt8, _](acc)[scan:])
+            if not maybe:
+                var n = stream.read(buf.unsafe_ptr(), len(buf))
+                if n == 0:
+                    raise Error("closed before the server's SETTINGS")
+                for i in range(n):
+                    acc.append(buf[i])
+                continue
+            var f = maybe.value().copy()
+            scan += 9 + f.header.length
+            if (
+                f.header.type.value == FrameType.SETTINGS().value
+                and f.header.stream_id == 0
+                and not f.header.flags.has(FrameFlags.ACK())
+            ):
+                stream.write_all(
+                    Span[UInt8, _](
+                        _h2_frame(
+                            FrameType.SETTINGS(),
+                            FrameFlags.ACK(),
+                            0,
+                            List[UInt8](),
+                        )
+                    )
+                )
+                acked = True
+        stream.write_all(Span[UInt8, _](_h2_get(1, held.path)))
         assert_equal(_read_byte(held.started), 1, "the handler never started")
         var signaled_at = monotonic_now_ms()
         assert_equal(kill(child.pid, SIGTERM), 0)
         assert_true(_refused_within(child.port, 1000) >= 0)
         stream.write_all(Span[UInt8, _](_h2_get(3, "/hello")))
         _write_byte(held.release)
-        var acc = List[UInt8]()
-        var buf = List[UInt8](length=4096, fill=0)
         var how = String("eof")
         var pos = 0
         var decoder = HpackDecoder()
@@ -1065,9 +1096,8 @@ def test_h2c_request_in_flight_finishes() raises:
         statuses.append("")
         statuses.append("")
         var goaway = False
-        var acked = False
         while True:
-            # Every complete frame so far; the server's SETTINGS is acked.
+            # Every complete frame so far (the SETTINGS were acked above).
             while True:
                 var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
                 if not maybe:
@@ -1075,20 +1105,7 @@ def test_h2c_request_in_flight_finishes() raises:
                 var f = maybe.value().copy()
                 pos += 9 + f.header.length
                 var sid = f.header.stream_id
-                if f.header.type.value == FrameType.SETTINGS().value:
-                    if sid == 0 and not f.header.flags.has(FrameFlags.ACK()):
-                        stream.write_all(
-                            Span[UInt8, _](
-                                _h2_frame(
-                                    FrameType.SETTINGS(),
-                                    FrameFlags.ACK(),
-                                    0,
-                                    List[UInt8](),
-                                )
-                            )
-                        )
-                        acked = True
-                elif f.header.type.value == FrameType.GOAWAY().value:
+                if f.header.type.value == FrameType.GOAWAY().value:
                     goaway = True
                 elif sid == 1 or sid == 3:
                     var i = (sid - 1) // 2
@@ -1122,7 +1139,6 @@ def test_h2c_request_in_flight_finishes() raises:
             closed_after,
             "ms",
         )
-        assert_true(acked, "the server sent no SETTINGS")
         assert_true(how == "eof" or how == "reset", how)
         assert_true(
             closed_after <= GRACE_MS + STOP_BOUND_MS,
@@ -1314,13 +1330,18 @@ def _term_when_installed(stage: Int):
 
 def _term_before_flare_serves(stage: Int):
     """SIGTERM once the watcher runs, before Flare's `serve` is called, then
-    300 ms (six watcher polls) so the watcher has closed the listener first:
-    Flare's `serve` then raises on it."""
+    waits (up to 2 s) until the watcher has acted: it resets SIGINT to
+    `SIG_DFL` right before `drain`, whose first step closes the listener, so
+    50 ms after that reset Flare's `serve` meets a closed listener and
+    raises."""
     if stage == _STAGE_WATCHING:
         _ = external_call["kill", c_int](
             external_call["getpid", c_int](), c_int(SIGTERM)
         )
-        _ = libc_nanosleep_ms(300)
+        var start = monotonic_now_ms()
+        while _handler_word(SIGINT) != 0 and monotonic_now_ms() - start < 2000:
+            _ = libc_nanosleep_ms(5)
+        _ = libc_nanosleep_ms(50)
 
 
 def _term_after_flare_served(stage: Int):

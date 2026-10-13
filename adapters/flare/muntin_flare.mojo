@@ -454,9 +454,10 @@ def _store(block: Int, i: Int, value: Int):
 
 
 def _new_serving_cell() -> Optional[Pointer[NoneType, MutUntrackedOrigin]]:
-    return Pointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(external_call["calloc", Int](1, 8))
-    )
+    var cell = Int(external_call["calloc", Int](1, 8))
+    if cell == 0:
+        return None
+    return Pointer[NoneType, MutUntrackedOrigin](unsafe_from_address=cell)
 
 
 def _free_serving_cell(cell: Optional[Pointer[NoneType, MutUntrackedOrigin]]):
@@ -469,11 +470,12 @@ def _serving_cell() -> Int:
     the stop signals, else 0. Mojo 1.1.0 has no module-level `var`; the
     standard library's `_get_global` creates the cell once per process,
     under its own lock (M3-045)."""
-    return Int(
-        _get_global[
-            "muntin_flare.serving", _new_serving_cell, _free_serving_cell
-        ]().value()
-    )
+    var cell = _get_global[
+        "muntin_flare.serving", _new_serving_cell, _free_serving_cell
+    ]()
+    if not cell:
+        abort("Server.serve: no memory for the process's serving cell")
+    return Int(cell.value())
 
 
 def _claim_serving() -> Bool:
@@ -546,28 +548,28 @@ def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
     return arg
 
 
-def _restore_one(sig: Int, saved: Int) -> Int:
+def _restore_one(sig: Int, saved: Int, mut failure: String) -> Int:
     """Puts back `sig`'s disposition saved at `saved`, reading the one it
-    replaces in the same call: -1 if `sigaction` failed, 1 if the replaced
-    disposition was `SIG_DFL` (`sig` was delivered since it was last set),
-    else 0."""
+    replaces in the same call: -1 if `sigaction` failed (`failure` then
+    names the call and its `errno`), 1 if the replaced disposition was
+    `SIG_DFL` (`sig` was delivered since it was last set), else 0."""
     var replaced = List[UInt8](length=_SIGACTION_BYTES, fill=0)
     if _sigaction(sig, saved, Int(replaced.unsafe_ptr())) != 0:
+        failure = "sigaction(" + String(sig) + "): " + _errno()
         return -1
     var delivered = replaced.unsafe_ptr().unsafe_bitcast[Int]()[] == 0
     _ = replaced^
     return 1 if delivered else 0
 
 
-def _restore_both(previous: Int) -> Int:
+def _restore_both(previous: Int, mut failure: String) -> Int:
     """Puts back the SIGTERM and SIGINT dispositions saved at `previous` (two
-    `struct sigaction` slots): -1 if either `sigaction` failed, else a
-    signal delivered since the stop handler was installed (its replaced
-    disposition was `SIG_DFL`), or 0."""
-    var term = _restore_one(_SIGTERM, previous)
-    var int = _restore_one(_SIGINT, previous + _SIGACTION_BYTES)
-    if term < 0 or int < 0:
-        return -1
+    `struct sigaction` slots). Returns a signal delivered since the stop
+    handler was installed (its replaced disposition was `SIG_DFL`) among
+    those put back, or 0; `failure` is left empty, or names a `sigaction`
+    that failed (that signal may keep the stop handler)."""
+    var term = _restore_one(_SIGTERM, previous, failure)
+    var int = _restore_one(_SIGINT, previous + _SIGACTION_BYTES, failure)
     if term == 1:
         return _SIGTERM
     if int == 1:
@@ -632,9 +634,20 @@ struct _StopWatch(Movable):
             raise Error("serve: sigaction(SIGTERM) failed: " + failure)
         if _sigaction(_SIGINT, Int(at), previous + _SIGACTION_BYTES) != 0:
             var failure = _errno()
-            if _restore_one(_SIGTERM, previous) == 1:
-                _ = kill(getpid(), _SIGTERM)
+            var undo = String()
+            var delivered = _restore_one(_SIGTERM, previous, undo)
+            if undo:
+                # SIGTERM may keep the stop handler: hold the claim, so no
+                # later `serve` saves it as the disposition to put back.
+                raise Error(
+                    "serve: sigaction(SIGINT) failed: "
+                    + failure
+                    + "; putting SIGTERM back failed too: "
+                    + undo
+                )
             _release_serving()
+            if delivered == 1:
+                _ = kill(getpid(), _SIGTERM)
             raise Error("serve: sigaction(SIGINT) failed: " + failure)
         _ = action^
         stage(_STAGE_INSTALLED)
@@ -643,10 +656,18 @@ struct _StopWatch(Movable):
                 _OpaquePtr(unsafe_from_address=block)
             )
         except e:
-            var resend = _restore_both(previous)
-            _release_serving()
+            var undo = String()
+            var resend = _restore_both(previous, undo)
+            if not undo:
+                _release_serving()
             if resend > 0:
                 _ = kill(getpid(), resend)
+            if undo:
+                raise Error(
+                    String(e)
+                    + "; putting the dispositions back failed: "
+                    + undo
+                )
             raise e^
 
     def finish(mut self, stage: def(Int) thin -> None) raises -> Int:
@@ -660,15 +681,18 @@ struct _StopWatch(Movable):
         replaces in the same `sigaction` call. If the watcher cannot be
         joined, it may still read this block, so after putting the
         dispositions back the process aborts rather than free it. Raises
-        when a restore failed, or when Flare's `drain` raised (the stop was
-        then a hard stop, not a graceful one)."""
+        when a restore failed (the claim then stays held: a signal may keep
+        the stop handler, and no later `serve` may save it as the
+        disposition to put back), or when Flare's `drain` raised (the stop
+        was then a hard stop, not a graceful one)."""
         var block = Int(self._block.unsafe_ptr())
         stage(_STAGE_SERVED)
         _store(block, _CB_DONE, 1)
         try:
             self._watcher.join()
         except e:
-            _ = _restore_both(Int(self._previous.unsafe_ptr()))
+            var ignored = String()
+            _ = _restore_both(Int(self._previous.unsafe_ptr()), ignored)
             abort(
                 "Server.serve: the stop watcher could not be joined ("
                 + String(e)
@@ -676,16 +700,21 @@ struct _StopWatch(Movable):
             )
         stage(_STAGE_JOINED)
         var acted = _load(block, _CB_SIGNAL)
-        var restored = _restore_both(Int(self._previous.unsafe_ptr()))
-        var failure = _errno() if restored < 0 else String()
-        _release_serving()
-        if acted == 0 and restored > 0:
-            _ = kill(getpid(), restored)
-        if restored < 0:
+        var failure = String()
+        var delivered = _restore_both(Int(self._previous.unsafe_ptr()), failure)
+        if not failure:
+            _release_serving()
+        if acted == 0 and delivered > 0:
+            _ = kill(getpid(), delivered)
+        if failure:
+            # A signal may keep the stop handler with no watcher behind it:
+            # the claim stays held, so no later `serve` in this process
+            # saves that handler as the disposition to put back.
             raise Error(
                 "serve: putting back the SIGTERM and SIGINT dispositions"
-                " failed: "
+                " failed ("
                 + failure
+                + "); this process cannot serve again"
             )
         if _load(block, _CB_DRAIN_FAILED) != 0:
             raise Error(
@@ -815,7 +844,17 @@ struct Server(Movable):
         except e:
             # A stop that closed the listener before Flare's `serve` set up
             # its reactor makes that `serve` raise: still a stop.
-            if watch.finish(_stage) == 0:
+            var acted: Int
+            try:
+                acted = watch.finish(_stage)
+            except cleanup:
+                raise Error(
+                    String(cleanup)
+                    + " (after Flare's serve raised: "
+                    + String(e)
+                    + ")"
+                )
+            if acted == 0:
                 raise e^
             return
         _ = watch.finish(_stage)
