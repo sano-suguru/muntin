@@ -1,0 +1,13 @@
+# Dependabot covers GitHub Actions only. Dependabot's conda ecosystem reads
+# environment.yml, not pixi.toml/pixi.lock, and changing the Mojo version or
+# the Flare pin needs the owner's approval, so pixi dependencies stay manual.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
