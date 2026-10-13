@@ -64,8 +64,6 @@ from muntin import App, Request, Response
 from muntin.testing import TestClient
 from muntin_flare import (
     Server,
-    _SA_FLAGS_OFFSET,
-    _SA_RESTART_RESETHAND,
     _STAGE_INSTALLED,
     _STAGE_JOINED,
     _STAGE_RESTORED,
@@ -73,7 +71,6 @@ from muntin_flare import (
     _STAGE_WATCHING,
     _server_config,
     _serving_held,
-    _stop_signal_seen,
 )
 
 comptime TIMEOUT_MS = 5_000
@@ -1457,20 +1454,23 @@ def test_a_stop_after_the_watcher_is_joined_is_sent_again() raises:
     assert_equal(status & 0x7F, SIGTERM, "the signal was lost")
 
 
+def _reset_on_delivery(sig: c_int) abi("C"):
+    """A handler that sets its signal back to `SIG_DFL` itself (`signal` is
+    async-signal-safe), so a delivery shows in the disposition. Not
+    `SA_RESETHAND`: macOS does not report that flag in the disposition
+    `serve` saves, so putting it back drops the flag."""
+    _ = external_call["signal", Int](sig, Int(0))
+
+
 def _install_reset_on_delivery(sig: Int) -> Int:
-    """Gives `sig` a handler that does nothing, with `SA_RESETHAND`, so a
-    delivery shows as the disposition going back to `SIG_DFL`. Returns
-    `sigaction`'s result."""
-    var handler: def(c_int) thin abi("C") -> None = _stop_signal_seen
-    var action = List[UInt8](length=256, fill=0)
-    var at = action.unsafe_ptr()
-    at.unsafe_bitcast[Int]()[] = Pointer(to=handler).unsafe_bitcast[Int]()[]
-    at.unsafe_offset(_SA_FLAGS_OFFSET).unsafe_bitcast[Int32]()[] = Int32(
-        _SA_RESTART_RESETHAND
+    """Gives `sig` the `_reset_on_delivery` handler. Returns `signal`'s
+    result (-1 on failure)."""
+    var handler: def(c_int) thin abi("C") -> None = _reset_on_delivery
+    return Int(
+        external_call["signal", Int](
+            c_int(sig), Pointer(to=handler).unsafe_bitcast[Int]()[]
+        )
     )
-    var result = Int(external_call["sigaction", c_int](c_int(sig), Int(at), 0))
-    _ = action^
-    return result
 
 
 def _term_after_join_then_check_order(stage: Int):
@@ -1498,8 +1498,8 @@ def _term_after_join_then_check_order(stage: Int):
 def test_a_stop_sent_again_is_sent_before_the_claim_is_released() raises:
     """The resend of a late SIGTERM happens while this `serve` still holds
     the process's claim, so no later `serve` can have installed its handler
-    when it is sent. The child gives SIGTERM a handler that resets on
-    delivery, so the resend is seen and does not end it; after `serve`
+    when it is sent. The child gives SIGTERM a handler that resets itself
+    on delivery, so the resend is seen and does not end it; after `serve`
     raises (the listener is closed) the claim must be released."""
     var app = borrowed_app()
     var server = Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS)
@@ -1509,7 +1509,7 @@ def test_a_stop_sent_again_is_sent_before_the_claim_is_released() raises:
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
         _default_sigpipe()
-        if _install_reset_on_delivery(SIGTERM) != 0:
+        if _install_reset_on_delivery(SIGTERM) == -1:
             exit(33)
         try:
             server.serve(app, _stage=_term_when_installed)
