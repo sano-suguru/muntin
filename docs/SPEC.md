@@ -132,7 +132,7 @@ An M3 area with an open design question is cut decision-first: a decision item p
 | `HEAD` through `get` routes (the `GET` route's steps; the backend sends no content and the body's length) | shipped |
 | `TestClient.head` (sends `HEAD`; returns `App.handle`'s answer unchanged, body included; the network backend alone keeps the content off the wire) | shipped |
 | 405 `Method Not Allowed` with `Allow` for a request whose path a route of another method matches (404 when no route matches the path) | shipped |
-| serving an `App` over cleartext HTTP/1.1 and h2c through the Flare adapter's `Server` (`Server.bind(host, port)`, `server.port()`, `server.serve(app)`; one thread, IP literals, no graceful shutdown; no core `app.run()`) | shipped |
+| serving an `App` over cleartext HTTP/1.1 and h2c through the Flare adapter's `Server` (`Server.bind(host, port)`, `server.port()`, `server.serve(app)`; one thread, IP literals; no core `app.run()`) | shipped |
 | middleware functions (`app.use(f)` with `def(var Request, var Next) raises -> Response`; the rest runs at most once through `next^.run(request^)`; every request `App.handle` receives, in registration order; compile-time configuration only) | shipped |
 | request body bytes kept exactly through Flare (a well-formed UTF-8 body, U+FFFD and NUL included, byte for byte; a body that is not UTF-8 was the adapter's 400 before `App.handle`, never replaced; replaced by binary bodies below) | shipped |
 | request method and target bytes kept exactly through Flare (well-formed UTF-8 byte for byte; one that is not UTF-8 is the adapter's 400 before `App.handle`, and the `Server` keeps serving) | shipped |
@@ -140,6 +140,7 @@ An M3 area with an open design question is cut decision-first: a decision item p
 | typed binary request bodies (`FromBytes`: `from_bytes` receives the body's bytes, borrowed, on every `post`, `put` and `patch` body shape; a raise is 400 before the handler) | shipped |
 | typed binary request bodies with header fields (`WithHeaders[B]` around a `FromBytes`: the request's `Headers` and the body's bytes, unread and uncopied, in one carrier on every body shape) | shipped |
 | typed binary request body size limits (every `FromBytes` type's required `comptime max_bytes`; a longer body, bare or in `WithHeaders[B]`, is 413 before `from_bytes`; `Int.MAX` is no limit; not a receive limit) | shipped |
+| graceful shutdown of `Server` on SIGTERM and SIGINT (`Server.bind(..., shutdown_grace_ms=n)`, keyword-only, 5,000 ms unless set, 0 to 86,400,000: new connections refused at once, open connections served for the whole window, then closed and `serve` returns; a handler still running 1 s after the window ends the process with 128 + the signal; a second signal ends it at once; one `serve` per process; Linux x86-64 and macOS arm64 only; no stop call, no early return) | shipped |
 | a configurable receive body limit for `Server` (`Server.bind(host, port, max_body_bytes=n)`, keyword-only, 10 MiB unless set, 0 to 2^59 − 1; Flare refuses a longer body while receiving, before the adapter, over HTTP/1.1 and h2c, with protocol-specific answers; an upper bound, not an acceptance guarantee over HTTP/1.1; distinct from `App.handle`'s 413s; Flare's opt-in `FLARE_BUFRING_HANDLER` loop unsupported: `serve` refuses to start with it set to `1`) | shipped |
 
 ### Remaining candidates
@@ -159,7 +160,7 @@ Each becomes its own item, a decision item first where it opens a design questio
 - structured errors, including application-level error mappers (rejected on Mojo 1.1.0 by M2-012; its revisit conditions apply);
 - observability hooks, including logging of dropped handler errors;
 - streaming;
-- serving lifecycle beyond `Server`: graceful shutdown, signal handling, several serving threads, backend configuration beyond the receive body limit (timeouts, TLS; the body limit shipped with [M3-044](history/architecture-decisions.md#server-receive-body-limit-decision-m3-044)) and one call that binds and serves, each with a revisit condition in [M3-032](history/architecture-decisions.md#serving-entrypoint-decision-m3-032), and host names, which M3-032 leaves out of its slice with none;
+- serving lifecycle beyond `Server`: a stop call, ending the grace window early when nothing is in flight (needs Flare to report live connections; [M3-045](history/architecture-decisions.md#graceful-shutdown-decision-m3-045)), several serving threads, backend configuration beyond the receive body limit (timeouts, TLS; the body limit shipped with [M3-044](history/architecture-decisions.md#server-receive-body-limit-decision-m3-044)) and one call that binds and serves, each with a revisit condition in [M3-032](history/architecture-decisions.md#serving-entrypoint-decision-m3-032), and host names, which M3-032 leaves out of its slice with none;
 - performance benchmarks and allocation profiling.
 
 ## Long-term success criterion
