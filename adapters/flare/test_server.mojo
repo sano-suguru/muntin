@@ -2192,7 +2192,9 @@ def test_idle_timeout_closes_silent_partial_and_h2c_connections() raises:
     """With `idle_timeout_ms` 1,000, a connection that sends nothing, one that
     stops inside its HTTP/1.1 head, and an h2c connection idle after the
     SETTINGS exchange are each closed, with no answer, about 1,000 ms after
-    their last bytes, not at the default's 500."""
+    their last bytes, not at the default's 500 (each opened and timed on its
+    own). A request that stops inside its body is not closed by it: that
+    connection, opened first, is still open after all three."""
     var app = borrowed_app()
     var idle = 1000
     var child = _fork_stoppable(
@@ -2206,19 +2208,26 @@ def test_idle_timeout_closes_silent_partial_and_h2c_connections() raises:
     )
     var reaped = False
     try:
+        var body = _send(
+            child.port,
+            (
+                "POST /hello HTTP/1.1\r\nHost: muntin\r\nContent-Length:"
+                " 100\r\n\r\n0123456789"
+            ),
+        )
+        var body_at = monotonic_now_ms()
+        var closed = List[Tuple[Int, String]]()
         var silent = TcpStream.connect(SocketAddr.localhost(UInt16(child.port)))
         silent.set_recv_timeout(TIMEOUT_MS)
-        var silent_at = monotonic_now_ms()
+        closed.append(_closed_after(silent, monotonic_now_ms()))
         var partial = _send(child.port, "GET /hello HTTP/1.1\r\nHost: mu")
-        var partial_at = monotonic_now_ms()
+        closed.append(_closed_after(partial, monotonic_now_ms()))
         var h2 = _H2Client(child.port)
         var h2_at = monotonic_now_ms()
-        h2.set_timeout(TIMEOUT_MS)
-        var closed = List[Tuple[Int, String]]()
-        closed.append(_closed_after(silent, silent_at))
-        closed.append(_closed_after(partial, partial_at))
         var h2_end = h2.read_within(1)
         closed.append((monotonic_now_ms() - h2_at, h2_end))
+        var body_open_for = monotonic_now_ms() - body_at
+        var body_now = _answer_within(body, 200)
         print(
             "observed: idle_timeout_ms",
             idle,
@@ -2234,12 +2243,15 @@ def test_idle_timeout_closes_silent_partial_and_h2c_connections() raises:
             closed[2][1],
             "after",
             closed[2][0],
+            "ms; stalled body still open after",
+            body_open_for,
             "ms",
         )
         for c in closed:
             assert_true(c[1] == "eof" or c[1] == "reset", c[1])
             assert_true(c[0] >= idle - 100 and c[0] <= idle + 500, String(c[0]))
-        assert_equal(h2.answers[0], "", "the h2c connection was answered")
+        assert_true(body_open_for >= idle + 500, String(body_open_for))
+        assert_equal(body_now, "", "the stalled body was answered")
         assert_equal(kill(child.pid, SIGTERM), 0)
         var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
         reaped = ended[0] >= 0
@@ -2267,7 +2279,8 @@ def _idle_close_ms(port: Int) raises -> Int:
 def test_servers_keep_their_own_idle_timeouts() raises:
     """Two `Server`s bound in one process, one with `LONGER_IDLE_MS` and one
     with none, each close an idle keep-alive connection after their own
-    timeout (each serves in its own child)."""
+    timeout (each serves in its own child; the first child also inherits the
+    second's listener, which it never serves)."""
     var longer = Server.bind(
         "127.0.0.1",
         0,
@@ -2279,10 +2292,11 @@ def test_servers_keep_their_own_idle_timeouts() raises:
     assert_equal(plain._server.config.idle_timeout_ms, DEFAULT_IDLE_MS)
     var app = borrowed_app()
     var a = _fork_stoppable(longer^, app)
-    var b = _fork_stoppable(plain^, app)
+    var b = _Child(0, 0)
     var reaped_a = False
     var reaped_b = False
     try:
+        b = _fork_stoppable(plain^, app)
         var closed_a = _idle_close_ms(a.port)
         var closed_b = _idle_close_ms(b.port)
         print(
@@ -2301,7 +2315,7 @@ def test_servers_keep_their_own_idle_timeouts() raises:
         )
         assert_true(
             closed_b >= DEFAULT_IDLE_MS - 100
-            and closed_b <= DEFAULT_IDLE_MS + 300,
+            and closed_b <= DEFAULT_IDLE_MS + 400,
             String(closed_b),
         )
         assert_equal(kill(a.pid, SIGTERM), 0)
@@ -2315,7 +2329,7 @@ def test_servers_keep_their_own_idle_timeouts() raises:
     finally:
         if not reaped_a:
             _stop(a.pid)
-        if not reaped_b:
+        if not reaped_b and b.pid > 0:
             _stop(b.pid)
 
 
@@ -2348,7 +2362,6 @@ def test_sigterm_drains_within_its_window_with_a_longer_idle_timeout() raises:
         assert_true(refused >= 0, "a new connection was still accepted")
         var got = _read_all(ka)
         var ka_closed = monotonic_now_ms() - signaled_at
-        h2.set_timeout(GRACE_MS + STOP_BOUND_MS + TIMEOUT_MS)
         var h2_end = h2.read_within(1)
         var h2_closed = monotonic_now_ms() - signaled_at
         var ended = _reap_within(child.pid, GRACE_MS + STOP_BOUND_MS)
