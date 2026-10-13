@@ -1707,7 +1707,7 @@ def _answer_within(mut stream: TcpStream, ms: Int) raises -> String:
             raise Error("closed while the first request was held")
         got = String(from_utf8_lossy=Span(buf)[:n])
     except e:
-        if "Timeout" not in String(e):
+        if not String(e).startswith("Timeout"):
             raise e^
     stream.set_recv_timeout(TIMEOUT_MS)
     return got^
@@ -1742,7 +1742,8 @@ def _h1_blocks_other_connections(kind: Int) raises:
     answered before the hold nor on one opened during it. With a hold longer
     than Flare's idle timeout, once A's handler returns the keep-alive
     connection is closed with its request unread (no answer; its handler
-    never runs), and the new connection, still queued by the system, is
+    never runs), A's own keep-alive connection is closed right after its
+    answer, and the new connection, still queued by the system, is
     answered; with `_FLARE_PATIENT` both are answered. Either way no handler
     runs before A's returned: the order pipe reads `a` first."""
     var patient = kind == _FLARE_PATIENT
@@ -1759,14 +1760,21 @@ def _h1_blocks_other_connections(kind: Int) raises:
         open.set_recv_timeout(TIMEOUT_MS)
         open.write_all("GET /hello HTTP/1.1\r\nHost: muntin\r\n\r\n".as_bytes())
         assert_equal(_content(_one_response(open)), "hello")
-        var a = _send(child.port, _request("GET", hold_path))
+        # Keep-alive, so how the held connection ends after its answer shows.
+        var a = _send(
+            child.port,
+            "GET " + hold_path + " HTTP/1.1\r\nHost: muntin\r\n\r\n",
+        )
         assert_equal(_read_byte(held.started), 1, "the handler never started")
         open.write_all(_request("GET", mark_path).as_bytes())
         var fresh = _send(child.port, _request("GET", mark_path))
         var early_open = _answer_within(open, HOLD_PROBE_MS)
         var early_fresh = _answer_within(fresh, HOLD_PROBE_MS)
         _write_byte(held.release)
-        var got_a = _read_all(a)
+        var got_a = _one_response(a)
+        var a_after = String("open")
+        if not patient:
+            a_after = _read_all(a)[1]
         var got_open = _read_all(open)
         var got_fresh = _read_all(fresh)
         reaped = _end_blocking(kind, child.pid)
@@ -1779,7 +1787,9 @@ def _h1_blocks_other_connections(kind: Int) raises:
             "new",
             repr(early_fresh),
             "| after: held",
-            repr(_content(got_a[0])),
+            repr(_content(got_a)),
+            "then",
+            a_after,
             "keep-alive",
             repr(_content(got_open[0])),
             got_open[1],
@@ -1790,12 +1800,15 @@ def _h1_blocks_other_connections(kind: Int) raises:
         )
         assert_equal(early_open, "", "a keep-alive connection was answered")
         assert_equal(early_fresh, "", "a new connection was answered")
-        assert_equal(_content(got_a[0]), "released")
+        assert_equal(_content(got_a), "released")
         assert_equal(_content(got_fresh[0]), "marked")
         if patient:
             assert_equal(_content(got_open[0]), "marked")
             assert_equal(order, "abb")
         else:
+            # The held connection's idle timer was armed from the clock as
+            # it was before the hold, so it is closed right after its answer.
+            assert_true(a_after == "reset" or a_after == "eof", a_after)
             assert_equal(got_open[0], "", "the keep-alive request was answered")
             assert_true(
                 got_open[1] == "reset" or got_open[1] == "eof", got_open[1]
@@ -1919,7 +1932,7 @@ struct _H2Client(Movable):
                 for i in range(n):
                     self.acc.append(buf[i])
             except e:
-                if "Timeout" in String(e):
+                if String(e).startswith("Timeout"):
                     how = "timeout"
                 elif _is_reset(String(e)):
                     how = "reset"
