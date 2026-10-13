@@ -42,6 +42,13 @@ has no Muntin code, with its default configuration (where waiting keep-alive
 and h2c requests are dropped once a hold outlasts the idle timeout) and with a
 long idle timeout (where they are only serialized).
 
+Idle timeout (M3-047, decided in docs/history/architecture-decisions.md
+"Server idle timeout decision (M3-047)"): the head-of-line blocking cases run
+again on a `Server` bound with a long `idle_timeout_ms`, where the waiting
+requests are answered after the held handler instead of dropped; the range is
+checked before anything is bound; two `Server`s in one process keep their
+own values; and a stop still ends within its window and bound.
+
 The `::1` case needs IPv6. It is skipped only where the host shows it has none
 (`socket(AF_INET6, ...)` fails with `EAFNOSUPPORT`) and `CI` is unset; under
 `CI` it always runs, so the CI runners keep binding `::1`.
@@ -606,7 +613,14 @@ def _serve_stoppable(app: App, grace_ms: Int) raises -> _Child:
     raises, 4 or 6 when the dispositions differ after the first or the
     second, 5 when the second returns, and 7 when the second is refused as
     already serving (the first did not release the process's claim)."""
-    var server = Server.bind("127.0.0.1", 0, shutdown_grace_ms=grace_ms)
+    return _fork_stoppable(
+        Server.bind("127.0.0.1", 0, shutdown_grace_ms=grace_ms), app
+    )
+
+
+def _fork_stoppable(var server: Server, app: App) raises -> _Child:
+    """`_serve_stoppable`'s child, for a `Server` the caller bound; the
+    parent's copy of the listener is dropped when this returns."""
     var port = server.port()
     var pid = fork()
     if pid < 0:
@@ -1580,8 +1594,8 @@ ended), which does not depend on time; the wait is how long a server that
 did serve the second request meanwhile has to show it on the wire."""
 
 comptime PATIENT_IDLE_MS = 60_000
-"""`idle_timeout_ms` of `_FLARE_PATIENT`: far longer than any test's hold, so
-Flare's idle timer closes no connection during it."""
+"""`idle_timeout_ms` of `_FLARE_PATIENT` and `_MUNTIN_PATIENT`: far longer
+than any test's hold, so Flare's idle timer closes no connection during it."""
 
 
 def held_in_order(started: Int, release: Int) raises -> String:
@@ -1638,15 +1652,28 @@ comptime _FLARE = 1
 comptime _FLARE_PATIENT = 2
 """`_serve_blocking`: as `_FLARE`, with `idle_timeout_ms` set to
 `PATIENT_IDLE_MS`, so only the serial dispatch shows."""
+comptime _MUNTIN_PATIENT = 3
+"""`_serve_blocking`: the adapter's `Server` bound with
+`idle_timeout_ms=PATIENT_IDLE_MS` (M3-047), served as `_MUNTIN`."""
 
 
 def _serve_blocking(kind: Int) raises -> _Child:
     """A child serving the blocking routes on an ephemeral loopback port:
-    with `_MUNTIN`, as `_serve_stoppable` (it exits 0 after a graceful
-    stop); otherwise Flare's single-worker `serve` (ended by
+    with `_MUNTIN` or `_MUNTIN_PATIENT`, as `_serve_stoppable` (it exits 0
+    after a graceful stop); otherwise Flare's single-worker `serve` (ended by
     `_end_blocking`)."""
     if kind == _MUNTIN:
         return _serve_stoppable(blocking_app(), SHORT_GRACE_MS)
+    if kind == _MUNTIN_PATIENT:
+        return _fork_stoppable(
+            Server.bind(
+                "127.0.0.1",
+                0,
+                shutdown_grace_ms=SHORT_GRACE_MS,
+                idle_timeout_ms=PATIENT_IDLE_MS,
+            ),
+            blocking_app(),
+        )
     var config = ServerConfig()
     if kind == _FLARE_PATIENT:
         config.idle_timeout_ms = PATIENT_IDLE_MS
@@ -1668,10 +1695,11 @@ def _serve_blocking(kind: Int) raises -> _Child:
 
 def _end_blocking(kind: Int, pid: Int) raises -> Bool:
     """Ends a `_serve_blocking` child within a bound and says whether it was
-    reaped: `_MUNTIN` by SIGTERM, which must end it with status 0 (it was
-    still serving normally); Flare's own server, which has no graceful stop
-    here, by SIGKILL, which must end it by that signal."""
-    if kind == _MUNTIN:
+    reaped: `_MUNTIN` and `_MUNTIN_PATIENT` by SIGTERM, which must end it
+    with status 0 (it was still serving normally); Flare's own server, which
+    has no graceful stop here, by SIGKILL, which must end it by that
+    signal."""
+    if kind == _MUNTIN or kind == _MUNTIN_PATIENT:
         assert_equal(kill(pid, SIGTERM), 0)
         var ended = _reap_within(pid, SHORT_GRACE_MS + STOP_BOUND_MS)
         assert_equal(_exit_code(ended[0]), 0, "the server did not stop")
@@ -1744,9 +1772,10 @@ def _h1_blocks_other_connections(kind: Int) raises:
     connection is closed with its request unread (no answer; its handler
     never runs), A's own keep-alive connection is closed right after its
     answer, and the new connection, still queued by the system, is
-    answered; with `_FLARE_PATIENT` both are answered. Either way no handler
-    runs before A's returned: the order pipe reads `a` first."""
-    var patient = kind == _FLARE_PATIENT
+    answered; with `_FLARE_PATIENT` or `_MUNTIN_PATIENT` both are answered.
+    Either way no handler runs before A's returned: the order pipe reads `a`
+    first."""
+    var patient = kind == _FLARE_PATIENT or kind == _MUNTIN_PATIENT
     var pipes = _held_pipes()
     var child = _serve_blocking(kind)
     _close(pipes[1])
@@ -1954,10 +1983,10 @@ def _h2c_blocks_streams(kind: Int, same_connection: Bool) raises:
     hold longer than Flare's idle timeout, once stream 1's handler returns
     its answer is sent and then the connection that carries the light
     stream is closed with it unread (no answer; its handler never runs);
-    with `_FLARE_PATIENT` the light stream is answered after stream 1. No
-    handler runs before stream 1's returned: the order pipe reads `a`
-    first."""
-    var patient = kind == _FLARE_PATIENT
+    with `_FLARE_PATIENT` or `_MUNTIN_PATIENT` the light stream is answered
+    after stream 1. No handler runs before stream 1's returned: the order
+    pipe reads `a` first."""
+    var patient = kind == _FLARE_PATIENT or kind == _MUNTIN_PATIENT
     var pipes = _held_pipes()
     var child = _serve_blocking(kind)
     _close(pipes[1])
@@ -2055,6 +2084,363 @@ def test_h2c_flare_alone_serializes_streams() raises:
 
 def test_h2c_flare_alone_serializes_connections() raises:
     _h2c_blocks_streams(_FLARE_PATIENT, False)
+
+
+# ── Idle timeout (M3-047) ──────────────────────────────────────────────────
+
+
+comptime DEFAULT_IDLE_MS = 500
+comptime LARGEST_IDLE_MS = 86_400_000
+comptime LONGER_IDLE_MS = 3000
+"""The idle timeout of the `Server` that `test_servers_keep_their_own_idle_timeouts`
+binds beside one bound with none."""
+
+
+def test_h1_a_longer_idle_timeout_answers_waiting_requests_after_the_hold() raises:
+    """With `idle_timeout_ms` longer than the hold, the keep-alive request
+    that waited behind the held handler is answered after it, never during
+    it; with none given it is dropped
+    (`test_h1_a_held_handler_blocks_other_connections`)."""
+    _h1_blocks_other_connections(_MUNTIN_PATIENT)
+
+
+def test_h2c_a_longer_idle_timeout_answers_its_connection_after_the_hold() raises:
+    _h2c_blocks_streams(_MUNTIN_PATIENT, True)
+
+
+def test_h2c_a_longer_idle_timeout_answers_other_connections_after_the_hold() raises:
+    _h2c_blocks_streams(_MUNTIN_PATIENT, False)
+
+
+def _bind_idle_error(host: String, port: Int, idle: Int) -> String:
+    """The text `Server.bind(host, port, idle_timeout_ms=idle)` raises, or
+    what it bound."""
+    try:
+        var server = Server.bind(host, port, idle_timeout_ms=idle)
+        return "bound port " + String(server.port())
+    except e:
+        return String(e)
+
+
+def test_bind_raises_for_an_idle_timeout_out_of_range() raises:
+    """0 (Flare's "no idle timer"), negative values and values above one day
+    raise before anything is bound: on a port a child serves the raise is
+    the range, not `AddressInUse`, and on a host name it is the range, not
+    the host. 1 and the largest value bind, and the bound `Server` holds
+    the value."""
+    var app = borrowed_app()
+    var child = _serve_in_child(app, 0)
+    try:
+        for idle in [Int.MIN, -1, 0, LARGEST_IDLE_MS + 1, Int.MAX]:
+            var error = _bind_idle_error("127.0.0.1", child.port, idle)
+            print("observed: idle_timeout_ms", idle, "->", error)
+            assert_equal(error, "idle_timeout_ms out of range: " + String(idle))
+        assert_equal(
+            _bind_idle_error("localhost", 0, 0),
+            "idle_timeout_ms out of range: 0",
+        )
+    finally:
+        _stop(child.pid)
+    # Checked after the grace window.
+    var error: String
+    try:
+        var server = Server.bind(
+            "127.0.0.1", 0, shutdown_grace_ms=-1, idle_timeout_ms=0
+        )
+        error = "bound port " + String(server.port())
+    except e:
+        error = String(e)
+    assert_equal(error, "shutdown_grace_ms out of range: -1")
+    for idle in [1, LARGEST_IDLE_MS]:
+        var server = Server.bind("127.0.0.1", 0, idle_timeout_ms=idle)
+        assert_true(server.port() > 0)
+        assert_equal(server._server.config.idle_timeout_ms, idle)
+
+
+def test_server_config_sets_the_idle_timeout() raises:
+    """`_server_config` writes the idle timeout into Flare's one field, which
+    both protocols read, and changes nothing else; with none given the
+    bound `Server` holds 500, Flare v0.12.0's default."""
+    var flare = ServerConfig()
+    assert_equal(flare.idle_timeout_ms, DEFAULT_IDLE_MS)
+    assert_equal(_server_config(64).idle_timeout_ms, DEFAULT_IDLE_MS)
+    var config = _server_config(64, 1234, 4321)
+    assert_equal(config.idle_timeout_ms, 4321)
+    assert_equal(config.max_body_size, 64)
+    assert_equal(config.h2.max_body_size, 64)
+    assert_equal(config.shutdown_timeout_ms, 1234)
+    assert_equal(config.write_timeout_ms, flare.write_timeout_ms)
+    assert_equal(config.read_body_timeout_ms, flare.read_body_timeout_ms)
+    assert_equal(config.request_timeout_ms, flare.request_timeout_ms)
+    var plain = Server.bind("127.0.0.1", 0)
+    assert_equal(plain._server.config.idle_timeout_ms, DEFAULT_IDLE_MS)
+    var set = Server.bind("127.0.0.1", 0, idle_timeout_ms=4321)
+    assert_equal(set._server.config.idle_timeout_ms, 4321)
+
+
+def _closed_after(mut stream: TcpStream, opened: Int) -> Tuple[Int, String]:
+    """Milliseconds from `opened` until the server closed `stream`, and how
+    the read ended (`eof`, `reset`, or the raise's text, a timeout
+    included). Nothing may arrive on it first."""
+    var got = _read_all(stream)
+    if got[0] != "":
+        return (-1, "answered: " + got[0])
+    return (monotonic_now_ms() - opened, got[1])
+
+
+def test_idle_timeout_closes_silent_partial_and_h2c_connections() raises:
+    """With `idle_timeout_ms` 1,000, a connection that sends nothing, one that
+    stops inside its HTTP/1.1 head, and an h2c connection idle after the
+    SETTINGS exchange are each closed, with no answer, about 1,000 ms after
+    their last bytes, not at the default's 500 (each opened and timed on its
+    own), and so is an h2c stream that stops inside its body (h2c has no
+    body timer). An HTTP/1.1 request that stops inside its body is not
+    closed by it (Flare's body timer applies): that connection, opened
+    first, is still open after the others closed."""
+    var app = borrowed_app()
+    var idle = 1000
+    var child = _fork_stoppable(
+        Server.bind(
+            "127.0.0.1",
+            0,
+            shutdown_grace_ms=SHORT_GRACE_MS,
+            idle_timeout_ms=idle,
+        ),
+        app,
+    )
+    var reaped = False
+    try:
+        var body = _send(
+            child.port,
+            (
+                "POST /hello HTTP/1.1\r\nHost: muntin\r\nContent-Length:"
+                " 100\r\n\r\n0123456789"
+            ),
+        )
+        var body_at = monotonic_now_ms()
+        var closed = List[Tuple[Int, String]]()
+        var silent = TcpStream.connect(SocketAddr.localhost(UInt16(child.port)))
+        silent.set_recv_timeout(TIMEOUT_MS)
+        closed.append(_closed_after(silent, monotonic_now_ms()))
+        var partial = _send(child.port, "GET /hello HTTP/1.1\r\nHost: mu")
+        closed.append(_closed_after(partial, monotonic_now_ms()))
+        var h2 = _H2Client(child.port)
+        var h2_at = monotonic_now_ms()
+        var h2_end = h2.read_within(1)
+        closed.append((monotonic_now_ms() - h2_at, h2_end))
+        var h2_body = _H2Client(child.port)
+        var hdrs = List[HpackHeader]()
+        hdrs.append(HpackHeader(":method", "POST"))
+        hdrs.append(HpackHeader(":scheme", "http"))
+        hdrs.append(HpackHeader(":path", "/hello"))
+        hdrs.append(HpackHeader(":authority", "localhost"))
+        hdrs.append(HpackHeader("content-length", "100"))
+        var wire = _h2_frame(
+            FrameType.HEADERS(),
+            FrameFlags.END_HEADERS(),
+            1,
+            HpackEncoder().encode(Span[HpackHeader, _](hdrs)),
+        )
+        wire.extend(
+            Span(
+                _h2_frame(FrameType.DATA(), 0, 1, List("0123456789".as_bytes()))
+            )
+        )
+        h2_body.stream.write_all(Span[UInt8, _](wire))
+        var h2_body_at = monotonic_now_ms()
+        var h2_body_end = h2_body.read_within(1)
+        closed.append((monotonic_now_ms() - h2_body_at, h2_body_end))
+        var body_open_for = monotonic_now_ms() - body_at
+        var body_now: String
+        try:
+            body_now = _answer_within(body, 200)
+        except e:
+            body_now = "closed: " + String(e)
+        print(
+            "observed: idle_timeout_ms",
+            idle,
+            "-> silent closed",
+            closed[0][1],
+            "after",
+            closed[0][0],
+            "ms; partial head",
+            closed[1][1],
+            "after",
+            closed[1][0],
+            "ms; h2c",
+            closed[2][1],
+            "after",
+            closed[2][0],
+            "ms; h2c stalled body",
+            closed[3][1],
+            "after",
+            closed[3][0],
+            "ms; HTTP/1.1 stalled body after",
+            body_open_for,
+            "ms:",
+            repr(body_now),
+        )
+        for c in closed:
+            assert_true(c[1] == "eof" or c[1] == "reset", c[1])
+            assert_true(c[0] >= idle - 100 and c[0] <= idle + 500, String(c[0]))
+        assert_equal(
+            h2_body.answers[0], "", "the stalled h2c stream was answered"
+        )
+        assert_equal(body_now, "", "the stalled HTTP/1.1 body was closed")
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        assert_equal(_exit_code(ended[0]), 0)
+    finally:
+        if not reaped:
+            _stop(child.pid)
+
+
+def _idle_close_ms(port: Int) raises -> Int:
+    """Opens an HTTP/1.1 keep-alive connection, reads one answer, and
+    returns how many milliseconds later the server closed it, or -1 if it
+    was still open after `TIMEOUT_MS`."""
+    var stream = _send(port, "GET /hello HTTP/1.1\r\nHost: muntin\r\n\r\n")
+    assert_equal(_content(_one_response(stream)), "hello")
+    var start = monotonic_now_ms()
+    var got = _read_all(stream)
+    var after = monotonic_now_ms() - start
+    if got[1] != "eof" and got[1] != "reset":
+        return -1
+    assert_equal(got[0], "", "an answer after the first")
+    return after
+
+
+def test_servers_keep_their_own_idle_timeouts() raises:
+    """Two `Server`s bound in one process, one with `LONGER_IDLE_MS` and one
+    with none, each close an idle keep-alive connection after their own
+    timeout (each serves in its own child; the first child also inherits the
+    second's listener, which it never serves)."""
+    var longer = Server.bind(
+        "127.0.0.1",
+        0,
+        shutdown_grace_ms=SHORT_GRACE_MS,
+        idle_timeout_ms=LONGER_IDLE_MS,
+    )
+    var plain = Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS)
+    assert_equal(longer._server.config.idle_timeout_ms, LONGER_IDLE_MS)
+    assert_equal(plain._server.config.idle_timeout_ms, DEFAULT_IDLE_MS)
+    var app = borrowed_app()
+    var a = _fork_stoppable(longer^, app)
+    var b = _Child(0, 0)
+    var reaped_a = False
+    var reaped_b = False
+    try:
+        b = _fork_stoppable(plain^, app)
+        var closed_a = _idle_close_ms(a.port)
+        var closed_b = _idle_close_ms(b.port)
+        print(
+            "observed: idle keep-alive closed after",
+            closed_a,
+            "ms (idle_timeout_ms",
+            LONGER_IDLE_MS,
+            ") and",
+            closed_b,
+            "ms (none given)",
+        )
+        assert_true(
+            closed_a >= LONGER_IDLE_MS - 100
+            and closed_a <= LONGER_IDLE_MS + 1000,
+            String(closed_a),
+        )
+        assert_true(
+            closed_b >= DEFAULT_IDLE_MS - 100
+            and closed_b <= DEFAULT_IDLE_MS + 400,
+            String(closed_b),
+        )
+        assert_equal(kill(a.pid, SIGTERM), 0)
+        assert_equal(kill(b.pid, SIGTERM), 0)
+        var ended_a = _reap_within(a.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        reaped_a = ended_a[0] >= 0
+        var ended_b = _reap_within(b.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        reaped_b = ended_b[0] >= 0
+        assert_equal(_exit_code(ended_a[0]), 0)
+        assert_equal(_exit_code(ended_b[0]), 0)
+    finally:
+        if not reaped_a:
+            _stop(a.pid)
+        if not reaped_b and b.pid > 0:
+            _stop(b.pid)
+
+
+def test_sigterm_drains_within_its_window_with_a_longer_idle_timeout() raises:
+    """With `idle_timeout_ms` far longer than `shutdown_grace_ms`, an idle
+    HTTP/1.1 keep-alive connection and an idle h2c connection opened before
+    SIGTERM stay open through the window (the idle timer does not close
+    them) and are closed at its end; the child exits 0 within the time to
+    see the signal, the window and the bound, as with the default."""
+    var app = borrowed_app()
+    var child = _fork_stoppable(
+        Server.bind(
+            "127.0.0.1",
+            0,
+            shutdown_grace_ms=GRACE_MS,
+            idle_timeout_ms=PATIENT_IDLE_MS,
+        ),
+        app,
+    )
+    var reaped = False
+    try:
+        var ka = _send(
+            child.port, "GET /hello HTTP/1.1\r\nHost: muntin\r\n\r\n"
+        )
+        assert_equal(_content(_one_response(ka)), "hello")
+        var h2 = _H2Client(child.port)
+        var signaled_at = monotonic_now_ms()
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        var refused = _refused_within(child.port, 1000)
+        assert_true(refused >= 0, "a new connection was still accepted")
+        var got = _read_all(ka)
+        var ka_closed = monotonic_now_ms() - signaled_at
+        var h2_end = h2.read_within(1)
+        var h2_closed = monotonic_now_ms() - signaled_at
+        var ended = _reap_within(child.pid, GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        var after = monotonic_now_ms() - signaled_at
+        print(
+            "observed: idle_timeout_ms",
+            PATIENT_IDLE_MS,
+            "grace",
+            GRACE_MS,
+            "-> refused after",
+            refused,
+            "ms; keep-alive closed",
+            got[1],
+            "after",
+            ka_closed,
+            "ms; h2c",
+            h2_end,
+            "after",
+            h2_closed,
+            "ms; status",
+            ended[0],
+            "after",
+            after,
+            "ms",
+        )
+        assert_equal(got[0], "", "an answer after the first")
+        assert_true(got[1] == "eof" or got[1] == "reset", got[1])
+        assert_true(h2_end == "eof" or h2_end == "reset", h2_end)
+        assert_true(ka_closed >= GRACE_MS, "closed before the window ended")
+        assert_true(h2_closed >= GRACE_MS, "closed before the window ended")
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+        assert_true(after >= GRACE_MS, "ended before the window")
+        assert_true(
+            after <= _WATCH_SLACK_MS + GRACE_MS + STOP_BOUND_MS,
+            "ended after the bound",
+        )
+    finally:
+        if not reaped:
+            _stop(child.pid)
+
+
+comptime _WATCH_SLACK_MS = 100
+"""The watcher's 50 ms poll and the parent's 5 ms reap poll, with room."""
 
 
 def main() raises:
