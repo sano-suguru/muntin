@@ -2193,8 +2193,10 @@ def test_idle_timeout_closes_silent_partial_and_h2c_connections() raises:
     stops inside its HTTP/1.1 head, and an h2c connection idle after the
     SETTINGS exchange are each closed, with no answer, about 1,000 ms after
     their last bytes, not at the default's 500 (each opened and timed on its
-    own). A request that stops inside its body is not closed by it: that
-    connection, opened first, is still open after all three."""
+    own), and so is an h2c stream that stops inside its body (h2c has no
+    body timer). An HTTP/1.1 request that stops inside its body is not
+    closed by it (Flare's body timer applies): that connection, opened
+    first, is still open after the others closed."""
     var app = borrowed_app()
     var idle = 1000
     var child = _fork_stoppable(
@@ -2226,8 +2228,34 @@ def test_idle_timeout_closes_silent_partial_and_h2c_connections() raises:
         var h2_at = monotonic_now_ms()
         var h2_end = h2.read_within(1)
         closed.append((monotonic_now_ms() - h2_at, h2_end))
+        var h2_body = _H2Client(child.port)
+        var hdrs = List[HpackHeader]()
+        hdrs.append(HpackHeader(":method", "POST"))
+        hdrs.append(HpackHeader(":scheme", "http"))
+        hdrs.append(HpackHeader(":path", "/hello"))
+        hdrs.append(HpackHeader(":authority", "localhost"))
+        hdrs.append(HpackHeader("content-length", "100"))
+        var wire = _h2_frame(
+            FrameType.HEADERS(),
+            FrameFlags.END_HEADERS(),
+            1,
+            HpackEncoder().encode(Span[HpackHeader, _](hdrs)),
+        )
+        wire.extend(
+            Span(
+                _h2_frame(FrameType.DATA(), 0, 1, List("0123456789".as_bytes()))
+            )
+        )
+        h2_body.stream.write_all(Span[UInt8, _](wire))
+        var h2_body_at = monotonic_now_ms()
+        var h2_body_end = h2_body.read_within(1)
+        closed.append((monotonic_now_ms() - h2_body_at, h2_body_end))
         var body_open_for = monotonic_now_ms() - body_at
-        var body_now = _answer_within(body, 200)
+        var body_now: String
+        try:
+            body_now = _answer_within(body, 200)
+        except e:
+            body_now = "closed: " + String(e)
         print(
             "observed: idle_timeout_ms",
             idle,
@@ -2243,15 +2271,22 @@ def test_idle_timeout_closes_silent_partial_and_h2c_connections() raises:
             closed[2][1],
             "after",
             closed[2][0],
-            "ms; stalled body still open after",
+            "ms; h2c stalled body",
+            closed[3][1],
+            "after",
+            closed[3][0],
+            "ms; HTTP/1.1 stalled body after",
             body_open_for,
-            "ms",
+            "ms:",
+            repr(body_now),
         )
         for c in closed:
             assert_true(c[1] == "eof" or c[1] == "reset", c[1])
             assert_true(c[0] >= idle - 100 and c[0] <= idle + 500, String(c[0]))
-        assert_true(body_open_for >= idle + 500, String(body_open_for))
-        assert_equal(body_now, "", "the stalled body was answered")
+        assert_equal(
+            h2_body.answers[0], "", "the stalled h2c stream was answered"
+        )
+        assert_equal(body_now, "", "the stalled HTTP/1.1 body was closed")
         assert_equal(kill(child.pid, SIGTERM), 0)
         var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
         reaped = ended[0] >= 0
