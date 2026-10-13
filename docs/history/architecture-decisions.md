@@ -4019,3 +4019,32 @@ A fresh-context review scoped to these fixes found nothing blocking; its finding
 3. *Docs:* `docs/DX.md`'s Protocols line still said `max_body_bytes` was the only backend configuration (now with `shutdown_grace_ms`), and the adapter's docstring did not list `_shutdown_grace_ms` among the initializer's keywords.
 
 **Owner's third review of the pull request.** The owner accepted the three changes above and leaned to approving, with one precondition to state before merging: `raise` acts on the signal before it returns only if the calling thread does not block it. A serving thread that blocks SIGTERM, while the runtime's threads do not, lets a late SIGTERM run the stop handler on another thread; `finish` restores, `raise` leaves the resend pending on the serving thread, the claim is released, a later `serve` installs its handler, and when the first thread unblocks SIGTERM that later `serve` stops. Decision: the supported contract excludes it. `serve` is supported only on a thread that blocks neither SIGTERM nor SIGINT, before or during the call; `docs/DX.md` section 1, `serve`'s docstring and `docs/ARCHITECTURE.md` say so (Muntin blocks neither). Rejected: unblocking the signal around the resend (`pthread_sigmask`), which would deliver a signal the application chose to hold for its own `sigwait` or `signalfd`, and any mechanism keeping a pending resend from reaching the next `serve`, which is more machinery for a configuration Muntin does not create. Untested: a documented exclusion, not a path the code handles.
+
+### Head-of-line blocking decision (M3-046)
+
+Status: **decision** (M3-046; `src/muntin` unchanged). [M3-032](#serving-entrypoint-decision-m3-032) chose one reactor thread for `Server.serve` and left a revisit condition: "an application needs more than one serving thread: revisit whether `App.handle` may run concurrently ([M3-001](#application-state-decision-m3-001) interior mutability, [M3-008](#json-codec-decision-m3-008) the JSON cap) and whether `Server` takes a worker count". This record measures what the one thread costs on the wire, and decides whether Muntin can change it now. The question, candidates, criteria and pass conditions below were written before the wire measurements.
+
+**Why now.** `Server.serve` calls `App.handle` synchronously on Flare's one reactor thread, so one slow handler may hold every other request in the process. That is the largest remaining property of `Server` that applications cannot see from its API, and M3-045's stop tests already observed one symptom (a connection queued while a handler held the reactor was not accepted).
+
+**Question.**
+1. Over HTTP/1.1, while a handler on connection A has not returned, is a light `GET` on another connection B answered, or even accepted?
+2. Over prior-knowledge h2c, while stream 1's handler has not returned, is stream 3 on the same connection answered? And a stream on another h2c connection?
+3. Is the cause Muntin's code, Flare's single reactor, or the handler being synchronous: does Flare's own `HttpServer` with a Flare handler (no Muntin) behave the same?
+4. With more workers, what improves: progress across connections, progress of streams within one h2c connection, or both? The two are not to be conflated.
+5. Can any of it be had while `App.handle`, middleware, `State`, the borrowed `App` and `_BorrowedHandler`'s non-`Copyable` guard keep their contracts, with the ownership, data races and lifetimes explained rather than asserted?
+
+**What settles it:**
+- the serving path in Muntin's adapter and Flare v0.12.0's single- and multi-worker reactors, read in code (the dispatch of a request to the handler, the multi-worker overload's signature, how connections and h2c streams are assigned to workers, any API that runs a handler off the reactor and posts its answer back);
+- wire tests in real child processes, with a handler held by a pipe (M3-045's `held`), so that whether a second request progresses before the first is released is decided by the order of events, not by sleeps or CPU speed: HTTP/1.1 and h2c separately, the h2c client acknowledging the server's SETTINGS; each child reaped within a bound (a child that outlives it is killed and the test fails);
+- the same tests against Flare's own `HttpServer` with a Flare-only handler, single-worker and, where it builds, multi-worker (the second only as evidence about Flare, never as a Muntin path);
+- for any candidate that would call `App.handle` from more than one thread: an account of every piece of state it reaches (the `App`'s routes and erased handlers, `_Shared`'s counts, `State[S]` values, middleware, the JSON cap's memory bound) and whether Mojo 1.1.0 can make the compiler reject a state type that is unsafe to share.
+
+**Candidates.**
+- A, Flare's multi-worker `serve`: a `Copyable` handler sharing the borrowed `App` across worker threads, a worker count on `Server`. Only if the safety account above holds.
+- B, separate the reactor from handler execution: the reactor hands each request to other threads and the answer goes back to the reactor that owns the connection. Only if Flare v0.12.0 offers the hand-off and the way back.
+- C, keep one reactor per `Server` and recommend several OS processes (each binding its own `Server`), stating what improves and what remains.
+- D, decision only: if no safe implementation exists, pin the current blocking with tests and record what Flare or Mojo would need.
+
+**Comparison criteria:** progress of other connections while a handler blocks; progress of other streams of the same h2c connection; CPU use across cores; the ownership safety of `App` and `State` (who may touch them from which thread, and what the compiler checks); compatibility of `Server.bind`/`serve`, M3-044's receive limit and M3-045's stop and one-`serve`-per-process claim; the code added; dependence on Flare internals; testability on Linux x86-64 and macOS arm64.
+
+**Pass conditions** for an implementing candidate (each on the wire, on both CI systems): a test that fails before the change and passes after, for each protocol the change claims to improve; a test that pins what it does not improve; the safety account above with each claim backed by a test, a fixture or the compiler; scratch mutations that turn the new tests red; M3-044's and M3-045's tests and the serving fixtures unchanged and passing. If no candidate meets them, D.
