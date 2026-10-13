@@ -32,6 +32,16 @@ releases it, so the stop is sent while a handler is running. The parent reaps
 every child with `_reap_within`, which SIGKILLs a child that outlives its
 bound and fails the test instead of hanging.
 
+Head-of-line blocking (M3-046, decided in docs/history/architecture-decisions.md
+"Head-of-line blocking decision (M3-046)"): with one handler held, a light
+request on another HTTP/1.1 connection, another stream of the same h2c
+connection or another h2c connection is not handled until the held one
+returns; the order in which the handlers ran is read from a pipe after the
+child ended. The same cases run on Flare's own `HttpServer` with a handler that
+has no Muntin code, with its default configuration (where waiting keep-alive
+and h2c requests are dropped once a hold outlasts the idle timeout) and with a
+long idle timeout (where they are only serialized).
+
 The `::1` case needs IPv6. It is skipped only where the host shows it has none
 (`socket(AF_INET6, ...)` fails with `EAFNOSUPPORT`) and `CI` is unset; under
 `CI` it always runs, so the CI runners keep binding `::1`.
@@ -43,7 +53,13 @@ from std.os import getenv, setenv
 from std.sys import CompilationTarget
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
-from flare.http import ServerConfig
+from flare.http import (
+    Handler,
+    HttpServer,
+    Request as FlareRequest,
+    Response as FlareResponse,
+    ServerConfig,
+)
 from flare.http2 import (
     Frame,
     FrameFlags,
@@ -1548,6 +1564,497 @@ def test_bind_raises_for_a_grace_out_of_range() raises:
 def test_server_config_sets_the_grace() raises:
     assert_equal(_server_config(64).shutdown_timeout_ms, 5000)
     assert_equal(_server_config(64, 1234).shutdown_timeout_ms, 1234)
+
+
+# ── Head-of-line blocking (M3-046) ─────────────────────────────────────────
+
+
+comptime HOLD_PROBE_MS = 1000
+"""How long a blocking test keeps the first request's handler held after the
+second request was sent, waiting for the second one's answer. It is longer
+than Flare v0.12.0's default `idle_timeout_ms` (500), on purpose: the tests
+with the default configuration pin what a hold that long does to connections
+that wait meanwhile. What each test asserts about progress is the order in
+which the handlers ran (a pipe they all write to, read after the child
+ended), which does not depend on time; the wait is how long a server that
+did serve the second request meanwhile has to show it on the wire."""
+
+comptime PATIENT_IDLE_MS = 60_000
+"""`idle_timeout_ms` of `_FLARE_PATIENT`: far longer than any test's hold, so
+Flare's idle timer closes no connection during it."""
+
+
+def held_in_order(started: Int, release: Int) raises -> String:
+    """As `held`, and writes `a` to the pipe `started` once released, just
+    before it returns."""
+    var out = FileDescriptor(started)
+    out.write_bytes("s".as_bytes())
+    var byte = List[UInt8](length=1, fill=0)
+    var source = FileDescriptor(release)
+    if source.read_bytes(byte) != 1:
+        raise Error("held_in_order: not released")
+    out.write_bytes("a".as_bytes())
+    return "released"
+
+
+def mark(order: Int) raises -> String:
+    """Writes `b` to the pipe `order`: the second request's handler ran."""
+    var out = FileDescriptor(order)
+    out.write_bytes("b".as_bytes())
+    return "marked"
+
+
+def blocking_app() -> App:
+    var app = App()
+    app.get["/hello"](hello)
+    app.get["/hold/{started}/{release}"](held_in_order)
+    app.get["/mark/{order}"](mark)
+    return app^
+
+
+struct _FlareHold(Handler):
+    """The routes of `blocking_app` as a Flare handler with no Muntin code,
+    to tell Flare's behavior apart from Muntin's."""
+
+    def __init__(out self):
+        pass
+
+    def serve(self, request: FlareRequest) raises -> FlareResponse:
+        var parts = request.url.split("/")
+        var body = String("hello")
+        if len(parts) == 4 and parts[1] == "hold":
+            body = held_in_order(Int(parts[2]), Int(parts[3]))
+        elif len(parts) == 3 and parts[1] == "mark":
+            body = mark(Int(parts[2]))
+        return FlareResponse(status=200, body=List(body.as_bytes()))
+
+
+comptime _MUNTIN = 0
+"""`_serve_blocking`: the adapter's `Server` serving `blocking_app`, as an
+application gets it (Flare's default `idle_timeout_ms`)."""
+comptime _FLARE = 1
+"""`_serve_blocking`: Flare's own single-worker `HttpServer` serving
+`_FlareHold`, with Flare's default configuration."""
+comptime _FLARE_PATIENT = 2
+"""`_serve_blocking`: as `_FLARE`, with `idle_timeout_ms` set to
+`PATIENT_IDLE_MS`, so only the serial dispatch shows."""
+
+
+def _serve_blocking(kind: Int) raises -> _Child:
+    """A child serving the blocking routes on an ephemeral loopback port:
+    with `_MUNTIN`, as `_serve_stoppable` (it exits 0 after a graceful
+    stop); otherwise Flare's single-worker `serve` (ended by
+    `_end_blocking`)."""
+    if kind == _MUNTIN:
+        return _serve_stoppable(blocking_app(), SHORT_GRACE_MS)
+    var config = ServerConfig()
+    if kind == _FLARE_PATIENT:
+        config.idle_timeout_ms = PATIENT_IDLE_MS
+    var server = HttpServer.bind(SocketAddr.localhost(0), config^)
+    var port = Int(server.local_addr().port)
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        _default_sigpipe()
+        try:
+            server.serve(_FlareHold())
+        except e:
+            print("flare child: serve failed:", e)
+        exit(1)
+    return _Child(pid, port)
+
+
+def _end_blocking(kind: Int, pid: Int) raises -> Bool:
+    """Ends a `_serve_blocking` child within a bound and says whether it was
+    reaped: `_MUNTIN` by SIGTERM, which must end it with status 0 (it was
+    still serving normally); Flare's own server, which has no graceful stop
+    here, by SIGKILL, which must end it by that signal."""
+    if kind == _MUNTIN:
+        assert_equal(kill(pid, SIGTERM), 0)
+        var ended = _reap_within(pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        assert_equal(_exit_code(ended[0]), 0, "the server did not stop")
+        return ended[0] >= 0
+    assert_equal(kill(pid, SIGKILL), 0)
+    var ended = _reap_within(pid, STOP_BOUND_MS)
+    assert_true(ended[0] >= 0, "the Flare child was not reaped")
+    assert_equal(ended[0] & 0x7F, SIGKILL, "the Flare child was not killed")
+    return True
+
+
+def _rest_of_pipe(fd: Int) raises -> String:
+    """Every byte left in the pipe `fd` until EOF. Call it only once the
+    child, the only other writer, has ended, so the read cannot block."""
+    var out = String()
+    var byte = List[UInt8](length=1, fill=0)
+    var source = FileDescriptor(fd)
+    while source.read_bytes(byte) == 1:
+        out += chr(Int(byte[0]))
+    return out^
+
+
+def _answer_within(mut stream: TcpStream, ms: Int) raises -> String:
+    """The bytes of one read that returns within `ms`, or `""` if the read
+    timed out. A close or a reset raises: the connection must stay open
+    while the first request is held."""
+    stream.set_recv_timeout(ms)
+    var buf = List[UInt8](length=4096, fill=0)
+    var got = String()
+    try:
+        var n = stream.read(buf.unsafe_ptr(), len(buf))
+        if n == 0:
+            raise Error("closed while the first request was held")
+        got = String(from_utf8_lossy=Span(buf)[:n])
+    except e:
+        if not String(e).startswith("Timeout"):
+            raise e^
+    stream.set_recv_timeout(TIMEOUT_MS)
+    return got^
+
+
+def _one_response(mut stream: TcpStream) raises -> String:
+    """One HTTP/1.1 response that declares its content length, read from a
+    connection that stays open after it."""
+    var out = List[UInt8]()
+    var buf = List[UInt8](length=1, fill=0)
+    while True:
+        var n = stream.read(buf.unsafe_ptr(), 1)
+        if n == 0:
+            raise Error("closed before a whole response")
+        out.append(buf[0])
+        var text = String(from_utf8_lossy=Span(out))
+        var end = text.find("\r\n\r\n")
+        if end < 0:
+            continue
+        var at = text.find("Content-Length: ")
+        if at < 0:
+            raise Error("no Content-Length: " + text)
+        var stop = text.find("\r\n", at)
+        var declared = Int(String(text[byte = at + 16 : stop]))
+        if text.byte_length() - (end + 4) == declared:
+            return text^
+
+
+def _h1_blocks_other_connections(kind: Int) raises:
+    """Over HTTP/1.1, while connection A's handler is held, a light request
+    is not answered, neither on a keep-alive connection Flare accepted and
+    answered before the hold nor on one opened during it. With a hold longer
+    than Flare's idle timeout, once A's handler returns the keep-alive
+    connection is closed with its request unread (no answer; its handler
+    never runs), A's own keep-alive connection is closed right after its
+    answer, and the new connection, still queued by the system, is
+    answered; with `_FLARE_PATIENT` both are answered. Either way no handler
+    runs before A's returned: the order pipe reads `a` first."""
+    var patient = kind == _FLARE_PATIENT
+    var pipes = _held_pipes()
+    var child = _serve_blocking(kind)
+    _close(pipes[1])
+    _close(pipes[2])
+    var held = pipes[0].copy()
+    var reaped = False
+    try:
+        var mark_path = "/mark/" + String(pipes[1])
+        var hold_path = held.path.replace("/held/", "/hold/")
+        var open = TcpStream.connect(SocketAddr.localhost(UInt16(child.port)))
+        open.set_recv_timeout(TIMEOUT_MS)
+        open.write_all("GET /hello HTTP/1.1\r\nHost: muntin\r\n\r\n".as_bytes())
+        assert_equal(_content(_one_response(open)), "hello")
+        # Keep-alive, so how the held connection ends after its answer shows.
+        var a = _send(
+            child.port,
+            "GET " + hold_path + " HTTP/1.1\r\nHost: muntin\r\n\r\n",
+        )
+        assert_equal(_read_byte(held.started), 1, "the handler never started")
+        open.write_all(_request("GET", mark_path).as_bytes())
+        var fresh = _send(child.port, _request("GET", mark_path))
+        var early_open = _answer_within(open, HOLD_PROBE_MS)
+        var early_fresh = _answer_within(fresh, HOLD_PROBE_MS)
+        _write_byte(held.release)
+        var got_a = _one_response(a)
+        var a_after = String("open")
+        if not patient:
+            a_after = _read_all(a)[1]
+        var got_open = _read_all(open)
+        var got_fresh = _read_all(fresh)
+        reaped = _end_blocking(kind, child.pid)
+        var order = _rest_of_pipe(held.started)
+        print(
+            "observed: kind",
+            kind,
+            "h1 while held: keep-alive",
+            repr(early_open),
+            "new",
+            repr(early_fresh),
+            "| after: held",
+            repr(_content(got_a)),
+            "then",
+            a_after,
+            "keep-alive",
+            repr(_content(got_open[0])),
+            got_open[1],
+            "new",
+            repr(_content(got_fresh[0])),
+            "| handler order",
+            repr(order),
+        )
+        assert_equal(early_open, "", "a keep-alive connection was answered")
+        assert_equal(early_fresh, "", "a new connection was answered")
+        assert_equal(_content(got_a), "released")
+        assert_equal(_content(got_fresh[0]), "marked")
+        if patient:
+            assert_equal(_content(got_open[0]), "marked")
+            assert_equal(order, "abb")
+        else:
+            # The held connection's idle timer was armed from the clock as
+            # it was before the hold, so it is closed right after its answer.
+            assert_true(a_after == "reset" or a_after == "eof", a_after)
+            assert_equal(got_open[0], "", "the keep-alive request was answered")
+            assert_true(
+                got_open[1] == "reset" or got_open[1] == "eof", got_open[1]
+            )
+            assert_equal(order, "ab")
+    finally:
+        if not reaped:
+            _stop(child.pid)
+        _close(held.started)
+        _close(held.release)
+
+
+def test_h1_a_held_handler_blocks_other_connections() raises:
+    _h1_blocks_other_connections(_MUNTIN)
+
+
+def test_h1_flare_alone_blocks_other_connections() raises:
+    _h1_blocks_other_connections(_FLARE)
+
+
+def test_h1_flare_alone_serializes_handlers() raises:
+    _h1_blocks_other_connections(_FLARE_PATIENT)
+
+
+struct _H2Client(Movable):
+    """A prior-knowledge h2c client connection that has exchanged SETTINGS
+    with the server (each side's acknowledged), with what it has read so
+    far and each stream's answer: `answers[(sid - 1) // 2]` is
+    `"<status> <body>"` once that stream ended, else `""`."""
+
+    var stream: TcpStream
+    var acc: List[UInt8]
+    var pos: Int
+    var decoder: HpackDecoder
+    var statuses: List[String]
+    var bodies: List[String]
+    var answers: List[String]
+
+    def __init__(out self, port: Int) raises:
+        self.stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+        self.stream.set_recv_timeout(TIMEOUT_MS)
+        self.acc = List[UInt8]()
+        self.pos = 0
+        self.decoder = HpackDecoder()
+        self.statuses = List[String](length=4, fill="")
+        self.bodies = List[String](length=4, fill="")
+        self.answers = List[String](length=4, fill="")
+        var wire = List(H2_PREFACE.as_bytes())
+        wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
+        self.stream.write_all(Span[UInt8, _](wire))
+        var buf = List[UInt8](length=4096, fill=0)
+        while True:
+            var maybe = parse_frame(Span[UInt8, _](self.acc)[self.pos :])
+            if not maybe:
+                var n = self.stream.read(buf.unsafe_ptr(), len(buf))
+                if n == 0:
+                    raise Error("closed before the server's SETTINGS")
+                for i in range(n):
+                    self.acc.append(buf[i])
+                continue
+            var f = maybe.value().copy()
+            self.pos += 9 + f.header.length
+            if (
+                f.header.type.value == FrameType.SETTINGS().value
+                and f.header.stream_id == 0
+                and not f.header.flags.has(FrameFlags.ACK())
+            ):
+                self.stream.write_all(
+                    Span[UInt8, _](
+                        _h2_frame(
+                            FrameType.SETTINGS(),
+                            FrameFlags.ACK(),
+                            0,
+                            List[UInt8](),
+                        )
+                    )
+                )
+                return
+
+    def get(mut self, sid: Int, path: String) raises:
+        self.stream.write_all(Span[UInt8, _](_h2_get(sid, path)))
+
+    def set_timeout(mut self, ms: Int) raises:
+        """How long one read in `read_within` may wait. Set it only while the
+        connection is open: on macOS `setsockopt` fails with `EINVAL` on a
+        connection the server has reset."""
+        self.stream.set_recv_timeout(ms)
+
+    def read_within(mut self, until: Int) raises -> String:
+        """Reads frames until `until` streams have ended (`"ended"`), a
+        read waits longer than the timeout (`"timeout"`), or the server
+        closes (`"eof"`) or resets (`"reset"`) the connection."""
+        var buf = List[UInt8](length=4096, fill=0)
+        var how = String("ended")
+        while True:
+            while True:
+                var maybe = parse_frame(Span[UInt8, _](self.acc)[self.pos :])
+                if not maybe:
+                    break
+                var f = maybe.value().copy()
+                self.pos += 9 + f.header.length
+                var sid = f.header.stream_id
+                if sid == 0 or sid > 7:
+                    continue
+                var i = (sid - 1) // 2
+                if f.header.type.value == FrameType.HEADERS().value:
+                    var fields = self.decoder.decode(Span[UInt8, _](f.payload))
+                    self.statuses[i] = fields[0].value
+                elif f.header.type.value == FrameType.DATA().value:
+                    self.bodies[i] += String(from_utf8_lossy=Span(f.payload))
+                else:
+                    continue
+                if f.header.flags.has(FrameFlags.END_STREAM()):
+                    self.answers[i] = self.statuses[i] + " " + self.bodies[i]
+            var ended = 0
+            for answer in self.answers:
+                if answer != "":
+                    ended += 1
+            if ended >= until:
+                break
+            try:
+                var n = self.stream.read(buf.unsafe_ptr(), len(buf))
+                if n == 0:
+                    how = "eof"
+                    break
+                for i in range(n):
+                    self.acc.append(buf[i])
+            except e:
+                if String(e).startswith("Timeout"):
+                    how = "timeout"
+                elif _is_reset(String(e)):
+                    how = "reset"
+                else:
+                    raise e^
+                break
+        return how^
+
+
+def _h2c_blocks_streams(kind: Int, same_connection: Bool) raises:
+    """Over prior-knowledge h2c, while stream 1's handler is held, a light
+    stream is not answered: stream 3 on the same connection, or stream 1 on
+    another connection whose SETTINGS were exchanged before the hold. With a
+    hold longer than Flare's idle timeout, once stream 1's handler returns
+    its answer is sent and then the connection that carries the light
+    stream is closed with it unread (no answer; its handler never runs);
+    with `_FLARE_PATIENT` the light stream is answered after stream 1. No
+    handler runs before stream 1's returned: the order pipe reads `a`
+    first."""
+    var patient = kind == _FLARE_PATIENT
+    var pipes = _held_pipes()
+    var child = _serve_blocking(kind)
+    _close(pipes[1])
+    _close(pipes[2])
+    var held = pipes[0].copy()
+    var reaped = False
+    try:
+        var mark_path = "/mark/" + String(pipes[1])
+        var hold_path = held.path.replace("/held/", "/hold/")
+        var first = _H2Client(child.port)
+        var other = _H2Client(child.port)
+        first.get(1, hold_path)
+        assert_equal(_read_byte(held.started), 1, "the handler never started")
+        var early: String
+        if same_connection:
+            first.get(3, mark_path)
+            first.set_timeout(HOLD_PROBE_MS)
+            early = first.read_within(1)
+        else:
+            other.get(1, mark_path)
+            other.set_timeout(HOLD_PROBE_MS)
+            early = other.read_within(1)
+        # Both connections are still open while stream 1 is held.
+        first.set_timeout(TIMEOUT_MS)
+        other.set_timeout(TIMEOUT_MS)
+        var early_first = first.answers[0]
+        var early_light = first.answers[
+            1
+        ] if same_connection else other.answers[0]
+        _write_byte(held.release)
+        # On the same connection, read on after stream 1 until stream 3
+        # ends or the connection does.
+        var after_first = first.read_within(2 if same_connection else 1)
+        var after_other = String("")
+        if not same_connection:
+            after_other = other.read_within(1)
+        var light = first.answers[1] if same_connection else other.answers[0]
+        reaped = _end_blocking(kind, child.pid)
+        var order = _rest_of_pipe(held.started)
+        print(
+            "observed: kind",
+            kind,
+            "h2c",
+            "same connection" if same_connection else "other connection",
+            "while held:",
+            early,
+            repr(early_light),
+            "| after: stream 1",
+            repr(first.answers[0]),
+            after_first,
+            "light",
+            repr(light),
+            after_other,
+            "| handler order",
+            repr(order),
+        )
+        assert_equal(early, "timeout", "the connection ended during the hold")
+        assert_equal(early_first, "", "the held stream was answered")
+        assert_equal(early_light, "", "the light stream was answered")
+        assert_equal(first.answers[0], "200 released")
+        if patient:
+            assert_equal(light, "200 marked")
+            assert_equal(order, "ab")
+        else:
+            assert_equal(light, "", "the light stream was answered")
+            var end = after_first if same_connection else after_other
+            assert_true(end == "reset" or end == "eof", end)
+            assert_equal(order, "a")
+    finally:
+        if not reaped:
+            _stop(child.pid)
+        _close(held.started)
+        _close(held.release)
+
+
+def test_h2c_a_held_stream_blocks_its_connection() raises:
+    _h2c_blocks_streams(_MUNTIN, True)
+
+
+def test_h2c_a_held_stream_blocks_other_connections() raises:
+    _h2c_blocks_streams(_MUNTIN, False)
+
+
+def test_h2c_flare_alone_blocks_its_connection() raises:
+    _h2c_blocks_streams(_FLARE, True)
+
+
+def test_h2c_flare_alone_blocks_other_connections() raises:
+    _h2c_blocks_streams(_FLARE, False)
+
+
+def test_h2c_flare_alone_serializes_streams() raises:
+    _h2c_blocks_streams(_FLARE_PATIENT, True)
+
+
+def test_h2c_flare_alone_serializes_connections() raises:
+    _h2c_blocks_streams(_FLARE_PATIENT, False)
 
 
 def main() raises:
