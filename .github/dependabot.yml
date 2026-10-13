@@ -1,0 +1,13 @@
+# Scope and reasons: docs/DEVELOPMENT.md, "CI and merging".
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Minor and patch bumps share one PR; each major bump gets its own.
+      github-actions:
+        update-types: [minor, patch]
+        patterns:
+          - "*"
