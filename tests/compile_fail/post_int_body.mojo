@@ -2,7 +2,7 @@
 # route value, never the body (M2-005), so the handler is bodyless and takes
 # `get`'s rules: its value needs a placeholder (M3-048).
 # Decision: docs/history/architecture-decisions.md, "Bodyless typed post,
-# # put and patch handlers decision (M3-048)".
+# put and patch handlers decision (M3-048)".
 # Expected diagnostic (checked by scripts/check.sh): handler takes one Int parameter; route must declare exactly one path or query parameter
 
 from muntin import App, FromBody, Request, Response

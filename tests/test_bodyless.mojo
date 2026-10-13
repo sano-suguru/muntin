@@ -109,6 +109,18 @@ def state_int_headers(db: State[Db], id: Int, headers: Headers) -> String:
     return String("sih ", db[].name, " ", id, " ", _fields(headers))
 
 
+def state_int_text(db: State[Db], a: Int, b: String) -> String:
+    return String("sit ", db[].name, " ", a, " ", b)
+
+
+def state_two_headers(
+    db: State[Db], a: Int, b: Optional[Int], headers: Headers
+) -> String:
+    return String(
+        "sooh ", db[].name, " ", a, " ", b.or_else(-1), " ", _fields(headers)
+    )
+
+
 def _app() raises -> App:
     """Every bodyless shape on one path each, registered on `get`, `post`,
     `put` and `patch` with the same handler."""
@@ -169,6 +181,14 @@ def _app() raises -> App:
     app.post["/sih/{id}"](state_int_headers, State(Db("g")))
     app.put["/sih/{id}"](state_int_headers, State(Db("g")))
     app.patch["/sih/{id}"](state_int_headers, State(Db("g")))
+    app.get["/sit/{a}?{b}"](state_int_text, State(Db("g")))
+    app.post["/sit/{a}?{b}"](state_int_text, State(Db("g")))
+    app.put["/sit/{a}?{b}"](state_int_text, State(Db("g")))
+    app.patch["/sit/{a}?{b}"](state_int_text, State(Db("g")))
+    app.get["/sooh/{a}?{b}"](state_two_headers, State(Db("g")))
+    app.post["/sooh/{a}?{b}"](state_two_headers, State(Db("g")))
+    app.put["/sooh/{a}?{b}"](state_two_headers, State(Db("g")))
+    app.patch["/sooh/{a}?{b}"](state_two_headers, State(Db("g")))
     return app^
 
 
@@ -207,6 +227,11 @@ def _targets() -> List[String]:
         "/st",
         "/sih/3",
         "/sih/x",
+        "/sit/1?b=z",
+        "/sit/x?b=z",
+        "/sooh/2?b=3",
+        "/sooh/2",
+        "/sooh/2?b=x",
     ]
 
 
@@ -305,6 +330,11 @@ def test_answers_are_the_handlers() raises:
     assert_equal(
         client.put("/sih/3", "x", headers=_headers()).text(),
         "sih g 3 1,,three",
+    )
+    assert_equal(client.patch("/sit/1?b=z", "x").text(), "sit g 1 z")
+    assert_equal(
+        client.post("/sooh/2", "x", headers=_headers()).text(),
+        "sooh g 2 -1 1,,three",
     )
     var bytes = client.post("/none", [UInt8(0xFF)])
     assert_equal(bytes.status, 200)

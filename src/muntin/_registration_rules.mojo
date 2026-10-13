@@ -349,7 +349,7 @@ def _post_rule(
     `def(Request) -> Response` with none. The order
     decides which message a shape that breaks several rules gets: a raw
     handler returning `Response` gets the raw placeholder messages; for any
-    other `def(X)` (a `Request` or a `String` included), the placeholders
+    other `def(X)` (a `Request` included), the placeholders
     and then `X`. With more slots, each rule is checked over every slot
     before the last before the next rule: a `Request`, a `State`, a body, a
     slot of no kind or a `Headers`; then the placeholders, with the `Int`,
