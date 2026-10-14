@@ -2507,7 +2507,9 @@ is free."""
 
 def _fork_workers[
     make: def() thin raises -> App
-](var server: Server, workers: Int, built_fd: Int = -1) raises -> _Child:
+](
+    var server: Server, workers: Int, built_fd: Int = -1, files: Int = 0
+) raises -> _Child:
     """A child that serves with `server.serve[make](workers=workers)`. With
     `built_fd` >= 0 it first sets `MUNTIN_TEST_BUILT_FD` to it, for
     `who_app`. It exits 0 when `serve` returns with the SIGTERM and SIGINT
@@ -2521,6 +2523,8 @@ def _fork_workers[
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
         _default_sigpipe()
+        if files > 0:
+            _raise_open_files(files)
         if built_fd >= 0:
             _ = setenv("MUNTIN_TEST_BUILT_FD", String(built_fd))
         var term = _handler_word(SIGTERM)
@@ -2534,6 +2538,31 @@ def _fork_workers[
             exit(4)
         exit(0)
     return _Child(pid, port)
+
+
+comptime RLIMIT_NOFILE = 8 if CompilationTarget.is_macos() else 7
+
+
+def _raise_open_files(files: Int):
+    """Raises this process's soft open-file limit to `files` (at most the
+    hard limit) when it is lower: a reactor per worker holds several
+    descriptors, and a macOS runner's default soft limit can be 256."""
+    var limit = List[UInt64](length=2, fill=0)
+    if (
+        Int(
+            external_call["getrlimit", c_int](
+                c_int(RLIMIT_NOFILE), Int(limit.unsafe_ptr())
+            )
+        )
+        != 0
+    ):
+        return
+    if limit[0] >= UInt64(files):
+        return
+    limit[0] = min(UInt64(files), limit[1])
+    _ = external_call["setrlimit", c_int](
+        c_int(RLIMIT_NOFILE), Int(limit.unsafe_ptr())
+    )
 
 
 def _workers_answer_during_a_hold(h2: Bool) raises:
@@ -2909,12 +2938,16 @@ def test_a_make_ending_after_the_stop_keeps_the_window() raises:
 
 
 def _serve_gated(
-    var server: Server, gate: Int, stage: def(Int) thin -> None
+    var server: Server,
+    gate: Int,
+    stage: def(Int) thin -> None,
+    workers: Int = WORKERS,
 ) raises -> Int:
-    """A child that serves `server.serve[gated_app](workers=WORKERS)`, with
+    """A child that serves `server.serve[gated_app](workers=workers)`, with
     `gate` as `MUNTIN_TEST_GATE_FD` and `stage` as the `_stage` hook. It
     exits 0 when `serve` returns, 7 when it raises a worker's `make` error,
-    1 when it raises anything else. Returns its pid."""
+    3 when it raises anything else (1 is left to `serve` ending the
+    process). Returns its pid."""
     var pid = fork()
     if pid < 0:
         raise Error("fork() failed")
@@ -2923,12 +2956,12 @@ def _serve_gated(
         _default_sigpipe()
         _ = setenv("MUNTIN_TEST_GATE_FD", String(gate))
         try:
-            server.serve[gated_app](workers=WORKERS, _stage=stage)
+            server.serve[gated_app](workers=workers, _stage=stage)
         except e:
             print("workers child: serve failed:", e)
             if String(e) == "serve: a worker's make raised: not built":
                 exit(7)
-            exit(1)
+            exit(3)
         exit(0)
     _ = server^
     return pid
@@ -3039,6 +3072,35 @@ def test_a_stop_delivered_before_the_watcher_sees_it_keeps_the_window() raises:
     finally:
         if not reaped:
             _stop(pid)
+        _close(gate[1])
+
+
+def test_a_stop_delivered_as_the_last_worker_ends_returns() raises:
+    """With one worker, whose `make` raises after SIGTERM was delivered but
+    before the watcher saw it, `serve` waits for the watcher to act on that
+    stop and returns (exit 0), at once, since no worker is left to serve the
+    window; it does not send the signal again."""
+    var gate = _pipe()
+    var server = Server.bind("127.0.0.1", 0, shutdown_grace_ms=GRACE_MS)
+    var pid = _serve_gated(
+        server^, gate[0], _raise_term_when_a_worker_ended, workers=1
+    )
+    _close(gate[0])
+    try:
+        var raised_at = monotonic_now_ms()
+        _write_byte_of(gate[1], "x")
+        var ended = _reap_within(pid, GRACE_MS + STOP_BOUND_MS)
+        var after = monotonic_now_ms() - raised_at
+        print(
+            "observed: SIGTERM, then the only worker's make raised -> status",
+            ended[0],
+            "after",
+            after,
+            "ms",
+        )
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+        assert_true(after < GRACE_MS, "waited out the window with no worker")
+    finally:
         _close(gate[1])
 
 
@@ -3247,9 +3309,12 @@ def test_workers_stop_gracefully_while_connections_keep_arriving() raises:
 def test_the_largest_worker_count_serves_and_stops() raises:
     """`serve[make_app](workers=256)`, the largest count, builds every
     worker, answers, and stops on SIGTERM within the window and the bound
-    with status 0."""
+    with status 0. The child may hold 4096 open files (each worker's
+    reactor holds up to four descriptors on macOS)."""
     var child = _fork_workers[make_app](
-        Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS), 256
+        Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS),
+        256,
+        files=4096,
     )
     var reaped = False
     try:

@@ -405,8 +405,10 @@ comptime _LARGEST_IDLE_TIMEOUT_MS = 86_400_000
 
 comptime _REACTOR_STOP_MS = 1000
 """How long the watcher waits, after the grace window, for Flare's reactor to
-leave its loop before it ends the process with 128 + the signal. The reactor
-reads its stop flag at least every 100 ms, but not while a handler runs."""
+leave its loop before it ends the process with 128 + the signal, and how long
+`serve[make]`'s serving thread waits, after a hard stop began, for every
+worker to end before it ends the process with status 1. The reactor reads its
+stop flag at least every 100 ms, but not while a handler runs."""
 
 comptime _WATCH_POLL_MS = 50
 """How often the watcher looks for a stop signal."""
@@ -782,6 +784,14 @@ def _drain_workers(block: Int, mut server: HttpServer) raises:
     # true with a clock truncated to whole milliseconds.
     var deadline = monotonic_now_ms() + wait_ms + (1 if wait_ms > 0 else 0)
     while monotonic_now_ms() < deadline:
+        # Every worker has ended (a hard stop came first, or each one's
+        # `make` raised): no connection is left to serve.
+        var serving = False
+        for i in range(count):
+            if _load(_row(table, i), _W_STATE) == _W_SERVING:
+                serving = True
+        if not serving:
+            break
         _ = libc_nanosleep_ms(1)
     for i in range(count):
         store_stop_flag(_load(_row(table, i), _W_STOP), True)
@@ -1377,6 +1387,13 @@ struct Server(Movable):
                 var sig = watch.acted_on()
                 exit(128 + sig if sig > 0 else 1)
             _ = libc_nanosleep_ms(_WATCH_POLL_MS)
+        # Every worker ended with a stop signal delivered that the watcher
+        # may not have read yet: let it act, so this returns for that stop
+        # rather than `finish` sending the signal again.
+        if deadline < 0 and watch.stop_delivered():
+            var until = monotonic_now_ms() + 2 * _WATCH_POLL_MS
+            while watch.acted_on() == 0 and monotonic_now_ms() < until:
+                _ = libc_nanosleep_ms(1)
         for i in range(len(threads)):
             try:
                 threads[i].join()
