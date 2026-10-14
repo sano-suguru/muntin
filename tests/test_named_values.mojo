@@ -20,6 +20,7 @@ from named_value_handlers import (
     bodyless,
     make_app,
     misled,
+    same_names,
     named_one,
     named_optional,
     query_pair,
@@ -87,6 +88,14 @@ def test_param_holds_and_copies_its_value() raises:
     assert_equal(copy.value, 8)
     var text = Param["q", String]("mojo")
     assert_equal(text.value, "mojo")
+
+
+def test_repeated_names_bind_by_position() raises:
+    # Two placeholders with one name pass the name check whichever value is
+    # which; binding stays by position.
+    var app = App()
+    app.get["/x/{a}/{a}"](same_names)
+    _expect(app, "/x/1/2", 200, "1,2")
 
 
 def test_variable_names_are_not_compared() raises:

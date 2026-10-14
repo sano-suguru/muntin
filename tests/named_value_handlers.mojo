@@ -80,6 +80,10 @@ def named_optional(limit: Param["limit", Optional[Int]]) -> String:
     return String("limit ", limit.value.or_else(20))
 
 
+def same_names(first: Param["a", Int], second: Param["a", Int]) -> String:
+    return String(first.value, ",", second.value)
+
+
 def misled(pid: Param["uid", Int], uid: Param["pid", Int]) -> String:
     # Each variable is named after the other placeholder; only the `Param`
     # names are compared, so this registers on /users/{uid}/posts/{pid}.

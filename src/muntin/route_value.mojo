@@ -40,8 +40,8 @@ struct Param[name: StaticString, T: Movable & Deinitable](
     type. The value is `uid.value`. Values still bind by position, path
     placeholders left to right, then query placeholders left to right; the
     registration fails when `name` differs from the placeholder at the
-    value's position, so two `Param`s declared in the other order are a
-    compile error instead of each other's values. Of two route values, both
+    value's position, so two `Param`s whose names are in the other order
+    than the literal's are a compile error instead of each other's values. Of two route values, both
     or neither are `Param`s. The variable's own name is not compared.
     """
 
