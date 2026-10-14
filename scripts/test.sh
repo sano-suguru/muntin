@@ -3,6 +3,12 @@
 # files given as arguments, with --Werror in parallel, then runs each binary
 # in order. Exits nonzero if any test fails, any file fails to build, or no
 # test files are found.
+#
+# SANITIZE=address builds them with Mojo's AddressSanitizer: a heap
+# use-after-free or double free, and on Linux a leak at exit, makes the
+# binary exit nonzero, so the test fails even if every assertion passed.
+# This is the runtime evidence for the unsafe storage in
+# src/muntin/_handler_storage.mojo (docs/DEVELOPMENT.md, section 3).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
