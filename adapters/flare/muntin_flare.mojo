@@ -147,7 +147,7 @@ result is checked. What clients see: docs/DX.md section 1.
 from std.atomic import Atomic, Ordering
 from std.ffi import _get_global, c_int, external_call, get_errno
 from std.io import FileDescriptor
-from std.os import abort, getenv, stat
+from std.os import abort, getenv
 from std.sys import CompilationTarget
 
 from flare.http import (
@@ -858,11 +858,33 @@ def _at_fdcwd() -> c_int:
         return c_int(-100)
 
 
+def _fstat_mode(fd: Int) -> Int:
+    """`fstat(fd).st_mode`, or -1 when `fstat` fails. The standard library
+    has no `fstat`, so the `struct stat` is read at `st_mode`'s offset on
+    the two systems `Server` compiles for: 24 (32 bits) on Linux x86-64, 4
+    (16 bits) on macOS arm64. 256 bytes hold either `struct stat` (144)."""
+    var buf = List[UInt8](length=256, fill=0)
+    if (
+        Int(external_call["fstat", c_int](c_int(fd), Int(buf.unsafe_ptr())))
+        != 0
+    ):
+        return -1
+    comptime if CompilationTarget.is_macos():
+        return Int(buf[4]) | (Int(buf[5]) << 8)
+    else:
+        return (
+            Int(buf[24])
+            | (Int(buf[25]) << 8)
+            | (Int(buf[26]) << 16)
+            | (Int(buf[27]) << 24)
+        )
+
+
 def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
     """The file's bytes, if it is a regular file (a symbolic link to one
     included) of at most `_TLS_FILE_MAX_BYTES`. The path is opened once,
     without blocking, and the opened file itself is checked and read
-    (through `/dev/fd/<fd>`), so a device or a FIFO, even one put in its
+    (`fstat`), so a device or a FIFO, even one put in its
     place after any earlier look, cannot block or exhaust `Server.bind`."""
     var prefix = "TLS " + what + " file "
     var c_path = path.copy()
@@ -882,8 +904,17 @@ def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
             + ")"
         )
     try:
-        var st = stat("/dev/fd/" + String(fd))
-        if (Int(st.st_mode) & 0o170000) != 0o100000:
+        var mode = _fstat_mode(fd)
+        if mode < 0:
+            raise Error(
+                prefix
+                + "cannot be read: "
+                + path
+                + " ("
+                + String(get_errno())
+                + ")"
+            )
+        if (mode & 0o170000) != 0o100000:
             raise Error(prefix + "is not a regular file: " + path)
         var data = List[UInt8](length=_TLS_FILE_MAX_BYTES + 1, fill=0)
         var got = 0
