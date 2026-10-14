@@ -213,7 +213,12 @@ echo "ok: no server process left behind"
 # environment's OpenSSL: a self-signed certificate for 127.0.0.1 and its key,
 # the key in the older EC form, plain and encrypted, a key that does not
 # belong to it, that key encrypted, and the certificate
-# with a damaged byte in its PEM block.
+# with a damaged byte in its PEM block; a root CA, an intermediate it signs
+# and a certificate for 127.0.0.1 the intermediate signs, with that
+# certificate alone and followed by the intermediate; key files whose text
+# names an encrypted key outside a PEM block, or holds an encrypted key
+# before a plain one; a symbolic link to the certificate, a FIFO and a
+# file one byte over Server's 1 MiB limit.
 step "run Server TLS tests (HTTPS over HTTP/1.1 and HTTP/2, start-up errors, the three settings)"
 OPENSSL=(pixi run --frozen -e flare openssl)
 rm -rf build/tls
@@ -231,6 +236,35 @@ mkdir -p build/tls
 "${OPENSSL[@]}" pkey -in build/tls/key.pem -traditional -aes256 \
     -passout pass:muntin -out build/tls/traditional_encrypted_key.pem
 sed '2s/^./!/' build/tls/cert.pem >build/tls/damaged_cert.pem
+tls_ca() { # name, subject, signer (empty: self-signed), extensions
+    local d=build/tls
+    "${OPENSSL[@]}" genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+        -out "$d/$1_key.pem"
+    printf '%s\n' "$4" >"$d/$1.ext"
+    "${OPENSSL[@]}" req -new -key "$d/$1_key.pem" -subj "$2" -out "$d/$1.csr"
+    if [[ -z $3 ]]; then
+        "${OPENSSL[@]}" x509 -req -in "$d/$1.csr" -key "$d/$1_key.pem" \
+            -days 1 -extfile "$d/$1.ext" -out "$d/$1.pem" 2>"$tmp/openssl.log"
+    else
+        "${OPENSSL[@]}" x509 -req -in "$d/$1.csr" -CA "$d/$3.pem" \
+            -CAkey "$d/$3_key.pem" -CAcreateserial -days 1 \
+            -extfile "$d/$1.ext" -out "$d/$1.pem" 2>"$tmp/openssl.log"
+    fi || { cat "$tmp/openssl.log"; exit 1; }
+}
+ca_ext=$'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign'
+tls_ca root "/CN=Muntin test root" "" "$ca_ext"
+tls_ca intermediate "/CN=Muntin test intermediate" root "$ca_ext"
+tls_ca leaf /CN=127.0.0.1 intermediate \
+    $'basicConstraints=critical,CA:FALSE\nsubjectAltName=IP:127.0.0.1'
+cat build/tls/leaf.pem build/tls/intermediate.pem >build/tls/chain.pem
+{
+    echo "Not -----BEGIN ENCRYPTED PRIVATE KEY----- nor Proc-Type: 4,ENCRYPTED"
+    cat build/tls/key.pem build/tls/encrypted_key.pem
+} >build/tls/commented_key.pem
+cat build/tls/encrypted_key.pem build/tls/key.pem >build/tls/encrypted_first_key.pem
+ln -s cert.pem build/tls/cert_link.pem
+mkfifo build/tls/fifo.pem
+dd if=/dev/zero of=build/tls/big.pem bs=1 count=0 seek=1048577 2>/dev/null
 tls_status=0
 NO_PROXY=127.0.0.1 ./build/test_tls >"$tmp/tls.log" 2>&1 || tls_status=$?
 cat "$tmp/tls.log"

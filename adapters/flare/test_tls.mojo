@@ -5,9 +5,13 @@ Runs only in the `flare` pixi environment, after scripts/check_flare.sh has
 written the PEM files under `build/tls/` with the environment's `openssl`: a
 self-signed certificate for `127.0.0.1` and its key (PKCS#8, and in the
 older EC form, plain and encrypted), a key that does not belong to it, the
-same key encrypted, and a certificate whose PEM block is damaged. Every connection is a real TLS connection over loopback through
-Flare's `TlsStream`, which verifies the server's certificate against that
-certificate and offers the ALPN protocols each case names.
+same key encrypted, and a certificate whose PEM block is damaged; a root CA
+with an intermediate and a certificate the intermediate signs; and the odd
+files the start-up checks refuse (scripts/check_flare.sh lists them all).
+Every connection is a real TLS connection over loopback through Flare's
+`TlsStream`, which verifies the server's certificate against the CA each
+case names (the self-signed certificate unless it says otherwise) and offers
+the ALPN protocols each case names.
 
 As in `adapters/flare/test_server.mojo` (whose fork, pipe and reap helpers
 this file imports), each serving test binds in the parent, forks a child that
@@ -59,6 +63,15 @@ comptime DAMAGED_CERT = DIR + "damaged_cert.pem"
 comptime TRADITIONAL_KEY = DIR + "traditional_key.pem"
 comptime TRADITIONAL_ENCRYPTED_KEY = DIR + "traditional_encrypted_key.pem"
 comptime MISSING = DIR + "missing.pem"
+comptime ROOT = DIR + "root.pem"
+comptime LEAF = DIR + "leaf.pem"
+comptime LEAF_KEY = DIR + "leaf_key.pem"
+comptime CHAIN = DIR + "chain.pem"
+comptime COMMENTED_KEY = DIR + "commented_key.pem"
+comptime ENCRYPTED_FIRST_KEY = DIR + "encrypted_first_key.pem"
+comptime CERT_LINK = DIR + "cert_link.pem"
+comptime FIFO = DIR + "fifo.pem"
+comptime BIG = DIR + "big.pem"
 comptime READ_MS = 5_000
 comptime LIMIT = 100
 comptime IDLE_MS = 1_000
@@ -107,11 +120,15 @@ def _alpn(protocols: String) -> List[String]:
     return out^
 
 
-def _connect(port: Int, alpn: String) raises -> TlsStream:
+def _connect(
+    port: Int, alpn: String, ca: String = CERT, server_name: String = ""
+) raises -> TlsStream:
     """A verified TLS connection: the server's certificate must chain to
-    `CERT` and name `127.0.0.1`."""
+    `ca` and name `server_name`, or `127.0.0.1` when it is empty."""
     var stream = TlsStream.connect(
-        "127.0.0.1", UInt16(port), TlsConfig(ca_bundle=CERT, alpn=_alpn(alpn))
+        "127.0.0.1",
+        UInt16(port),
+        TlsConfig(ca_bundle=ca, server_name=server_name, alpn=_alpn(alpn)),
     )
     stream.set_recv_timeout(READ_MS)
     return stream^
@@ -345,6 +362,71 @@ def test_https_does_not_answer_cleartext() raises:
         _stop(child.pid)
 
 
+def _client_error(
+    port: Int, ca: String = CERT, server_name: String = ""
+) -> String:
+    """Why a verified connection failed, or `connected`."""
+    try:
+        var stream = _connect(port, "http/1.1", ca, server_name)
+        _ = stream^
+        return "connected"
+    except e:
+        return String(e)
+
+
+def test_https_sends_the_intermediate_certificate() raises:
+    """A `cert_file` holding a certificate and then its intermediate is sent
+    whole: a client that trusts only the root verifies the connection. The
+    same certificate without its intermediate is not verified, so the
+    intermediate the client needed came from the server."""
+    var app = https_app()
+    var child = _serve(
+        Server.bind(
+            "127.0.0.1", 0, tls=Tls(cert_file=CHAIN, key_file=LEAF_KEY)
+        ),
+        app,
+    )
+    try:
+        var stream = _connect(child.port, "http/1.1", ROOT)
+        stream.write_all(
+            "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection:"
+            " close\r\n\r\n".as_bytes()
+        )
+        var raw = _read_all(stream)[0]
+        assert_true(raw.startswith("HTTP/1.1 200"), raw)
+        assert_true(raw.endswith("\r\n\r\nhello"), raw)
+    finally:
+        _stop(child.pid)
+    child = _serve(
+        Server.bind("127.0.0.1", 0, tls=Tls(cert_file=LEAF, key_file=LEAF_KEY)),
+        app,
+    )
+    try:
+        var why = _client_error(child.port, ROOT)
+        assert_true(why.startswith("CertificateUntrusted"), why)
+    finally:
+        _stop(child.pid)
+
+
+def test_client_refuses_an_untrusted_or_misnamed_certificate() raises:
+    """The verification every other test relies on is real: the client
+    refuses the server's certificate when it trusts another CA, or when the
+    certificate does not name the host it asked for (it names only
+    `127.0.0.1`), and accepts it otherwise."""
+    var app = https_app()
+    var child = _serve(Server.bind("127.0.0.1", 0, tls=_tls()), app)
+    try:
+        assert_equal(_client_error(child.port), "connected")
+        var untrusted = _client_error(child.port, ROOT)
+        assert_true(untrusted.startswith("CertificateUntrusted"), untrusted)
+        var misnamed = _client_error(child.port, CERT, "localhost")
+        assert_true(
+            misnamed.startswith("CertificateHostnameMismatch"), misnamed
+        )
+    finally:
+        _stop(child.pid)
+
+
 # ── Start-up errors ────────────────────────────────────────────────────────
 
 
@@ -404,6 +486,76 @@ def test_bind_names_a_file_with_the_wrong_content() raises:
         "TLS key file holds an encrypted private key, which is not supported: "
         + TRADITIONAL_ENCRYPTED_KEY,
     )
+
+
+def test_bind_refuses_files_that_are_not_small_regular_files() raises:
+    """A device, a FIFO with no writer, a directory or a file over 1 MiB
+    raises naming it, without being read: `bind` neither blocks nor fills
+    memory. Run in a child that has a bound, so a hang fails the test."""
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        var cases = List[Tuple[String, String, String]]()
+        cases.append(
+            (
+                "/dev/zero",
+                KEY,
+                "TLS certificate file is not a regular file: /dev/zero",
+            )
+        )
+        cases.append(
+            (CERT, FIFO, "TLS key file is not a regular file: " + FIFO)
+        )
+        cases.append(
+            (DIR, KEY, "TLS certificate file is not a regular file: " + DIR)
+        )
+        cases.append(
+            (
+                BIG,
+                KEY,
+                "TLS certificate file is larger than 1048576 bytes: " + BIG,
+            )
+        )
+        cases.append(
+            (CERT, BIG, "TLS key file is larger than 1048576 bytes: " + BIG)
+        )
+        var failed = False
+        for c in cases:
+            var got = _bind_error(c[0], c[1])
+            if got != c[2]:
+                print("expected:", c[2], "got:", got)
+                failed = True
+        exit(1 if failed else 0)
+    var ended = _reap_within(pid, 5_000)
+    assert_equal(_exit_code(ended[0]), 0, "bind blocked or raised otherwise")
+
+
+def test_bind_reads_the_first_private_key_block_as_openssl_does() raises:
+    """Only a PEM block decides, the first private key one as OpenSSL loads
+    it: text that names an encrypted key outside a block, or an encrypted
+    key after the plain one, is served; an encrypted key before a plain one
+    is refused. A certificate reached through a symbolic link is served."""
+    assert_equal(
+        _bind_error(CERT, ENCRYPTED_FIRST_KEY),
+        "TLS key file holds an encrypted private key, which is not supported: "
+        + ENCRYPTED_FIRST_KEY,
+    )
+    var app = https_app()
+    var child = _serve(
+        Server.bind(
+            "127.0.0.1",
+            0,
+            tls=Tls(cert_file=CERT_LINK, key_file=COMMENTED_KEY),
+        ),
+        app,
+    )
+    try:
+        var raw = _h1(child.port, "http/1.1", "GET", "/hello")
+        assert_true(raw.endswith("\r\n\r\nhello"), raw)
+    finally:
+        _stop(child.pid)
 
 
 def test_https_serves_a_key_in_the_older_ec_form() raises:
