@@ -1,11 +1,12 @@
 # Route conflicts (M3-053, pull request #95): which registrations
-# `_conflict` refuses, and that the orders it accepts dispatch every request
-# to the most specific matching route. The abort itself is checked by
+# `_conflict` refuses, that `App`'s `_RouteIndex` answers as `_conflict`
+# does, and that the orders it accepts dispatch every request to the most
+# specific matching route. The abort itself is checked by
 # tests/route_conflict_abort.
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from muntin import App, Request, Response
-from muntin.app import _conflict, _covers, _overlaps
+from muntin.app import _RouteIndex, _conflict, _covers, _match, _overlaps
 from muntin.testing import TestClient
 
 
@@ -71,11 +72,18 @@ def _accepted() -> App:
     return app^
 
 
+def _refusal(app: App, method: String, path: String) raises -> String:
+    """The registration's answer, checked against `_conflict`."""
+    ref index = app._route_index
+    var answer = index.refusal(method, path)
+    assert_equal(answer, _conflict(index.methods, index.paths, method, path))
+    return answer
+
+
 def test_refused_registrations() raises:
     var app = _accepted()
-    ref routes = app._routes
     assert_equal(
-        _conflict(routes, "GET", "/users/{name}"),
+        _refusal(app, "GET", "/users/{name}"),
         (
             "route conflict: GET /users/{name} matches the same requests as GET"
             " /users/{id}, registered earlier (the query takes no part in"
@@ -83,7 +91,7 @@ def test_refused_registrations() raises:
         ),
     )
     assert_equal(
-        _conflict(routes, "GET", "/users/you"),
+        _refusal(app, "GET", "/users/you"),
         (
             "route conflict: GET /users/you is registered after GET"
             " /users/{id}, which matches every request it matches; register GET"
@@ -91,7 +99,7 @@ def test_refused_registrations() raises:
         ),
     )
     assert_equal(
-        _conflict(routes, "GET", "/users/me"),
+        _refusal(app, "GET", "/users/me"),
         (
             "route conflict: GET /users/me matches the same requests as GET"
             " /users/me, registered earlier (the query takes no part in"
@@ -99,7 +107,7 @@ def test_refused_registrations() raises:
         ),
     )
     assert_equal(
-        _conflict(routes, "GET", "/{y}/b"),
+        _refusal(app, "GET", "/{y}/b"),
         (
             "route conflict: GET /{y}/b and GET /users/{id}, registered"
             " earlier, both match some requests and neither is more specific"
@@ -107,7 +115,7 @@ def test_refused_registrations() raises:
     )
     # The first earlier route that conflicts is the one named.
     assert_equal(
-        _conflict(routes, "GET", "/raw/all"),
+        _refusal(app, "GET", "/raw/all"),
         (
             "route conflict: GET /raw/all is registered after GET /raw/{name},"
             " which matches every request it matches; register GET /raw/all"
@@ -118,13 +126,12 @@ def test_refused_registrations() raises:
 
 def test_accepted_registrations() raises:
     var app = _accepted()
-    ref routes = app._routes
     # A more general route after more specific ones.
-    assert_equal(_conflict(routes, "GET", "/{p}/{q}/{r}"), "")
+    assert_equal(_refusal(app, "GET", "/{p}/{q}/{r}"), "")
     # The same path for another method.
-    assert_equal(_conflict(routes, "PUT", "/users/{id}"), "")
+    assert_equal(_refusal(app, "PUT", "/users/{id}"), "")
     assert_equal(
-        _conflict(routes, "POST", "/users/me"),
+        _refusal(app, "POST", "/users/me"),
         (
             "route conflict: POST /users/me is registered after POST"
             " /users/{id}, which matches every request it matches; register"
@@ -133,8 +140,8 @@ def test_accepted_registrations() raises:
     )
     # No overlap: a different static segment or segment count, or an empty
     # segment where the earlier route has a placeholder.
-    assert_equal(_conflict(routes, "GET", "/users/{a}/comments/{b}"), "")
-    assert_equal(_conflict(routes, "GET", "/users/"), "")
+    assert_equal(_refusal(app, "GET", "/users/{a}/comments/{b}"), "")
+    assert_equal(_refusal(app, "GET", "/users/"), "")
 
 
 def test_first_match_is_the_most_specific() raises:
@@ -149,6 +156,81 @@ def test_first_match_is_the_most_specific() raises:
     assert_equal(client.get("/raw/me").text(), "raw /raw/me")
     assert_equal(client.get("/raw/you").text(), "name you")
     assert_equal(client.post("/users/me", "").status, 400)
+
+
+def _alphabet() -> List[String]:
+    """Every path of one to three segments from "", "a", "b" and "{x}"."""
+    var parts = ["", "a", "b", "{x}"]
+    var paths = List[String]()
+    for n in range(1, 4):
+        var count = 1
+        for _ in range(n):
+            count *= 4
+        for k in range(count):
+            var path = String()
+            var rest = k
+            for _ in range(n):
+                path += "/" + parts[rest % 4]
+                rest //= 4
+            paths.append(path)
+    return paths^
+
+
+def test_index_answers_as_the_reference_scan() raises:
+    # Pseudo-random registration sequences over `_alphabet()` and two
+    # methods: before each registration the index and `_conflict` give the
+    # same answer, and an accepted route is recorded in both.
+    var paths = _alphabet()
+    var methods = ["GET", "POST"]
+    var seed = 12345
+    var refused = 0
+    for _ in range(3000):
+        var index = _RouteIndex()
+        var done_methods = List[String]()
+        var done_paths = List[String]()
+        for _ in range(12):
+            seed = (seed * 1103515245 + 12345) % 2147483648
+            var path = paths[(seed // 8) % len(paths)]
+            var method = methods[(seed // 2) % 2]
+            var answer = index.refusal(method, path)
+            assert_equal(
+                answer, _conflict(done_methods, done_paths, method, path)
+            )
+            if answer.byte_length() > 0:
+                refused += 1
+                continue
+            index.add(method, path)
+            done_methods.append(method)
+            done_paths.append(path)
+    # The sequences exercise refusals too, not only acceptances.
+    assert_true(refused > 1000)
+
+
+def test_accepted_routes_match_most_specific_first() raises:
+    # Over the same sequences: for every request path, the first accepted
+    # route that matches it is covered by every later one that does.
+    var paths = _alphabet()
+    var seed = 777
+    var args = List[String]()
+    for _ in range(300):
+        var index = _RouteIndex()
+        for _ in range(12):
+            seed = (seed * 1103515245 + 12345) % 2147483648
+            var path = paths[(seed // 8) % len(paths)]
+            if index.refusal("GET", path).byte_length() == 0:
+                index.add("GET", path)
+        # Requests: the alphabet with "c" for each placeholder, so a
+        # placeholder's own text never decides a match.
+        for request in paths:
+            var target = request.replace("{x}", "c")
+            var first = -1
+            for i in range(len(index.paths)):
+                if not _match(index.paths[i], target, args):
+                    continue
+                if first < 0:
+                    first = i
+                else:
+                    assert_true(_covers(index.paths[i], index.paths[first]))
 
 
 def main() raises:

@@ -243,6 +243,10 @@ def stateful_post(keys: State[Keys], var body: Note) -> Echoed:
     return Echoed(body.text)
 
 
+def stateful_named(keys: State[Keys], name: String) -> String:
+    return "named " + name
+
+
 def _keys() -> State[Keys]:
     return State(Keys("sha256=k"))
 
@@ -466,14 +470,18 @@ def test_route_kinds_share_one_app() raises:
     post.post["/c"](later, keys)
     post.post["/d"](typed_post)
     post.post["/e"](stateful_post, keys)
+    # More general than every route above, so registered last.
+    post.post["/{name}"](stateful_named, keys)
     assert_equal(post.handle(Request("POST", "/a", "x")).text(), "plain raw x")
     assert_equal(post.handle(Request("POST", "/b", "x")).text(), "stateful raw")
     assert_equal(post.handle(Request("POST", "/c", "")).text(), "stateful raw")
     assert_equal(post.handle(Request("POST", "/d", "x")).text(), "typed post x")
     assert_equal(post.handle(Request("POST", "/e", "x")).text(), "typed x")
-    # A typed route answers its own 400.
+    # A typed route answers its own 400; it does not fall through to the
+    # later, more general stateful route, which accepts other paths.
     assert_equal(post.handle(Request("POST", "/d", "")).status, 400)
     assert_equal(post.handle(Request("POST", "/e", "")).status, 400)
+    assert_equal(post.handle(Request("POST", "/f", "")).text(), "named f")
 
     var get = App()
     get.get["/a"](plain_raw)
@@ -481,11 +489,13 @@ def test_route_kinds_share_one_app() raises:
     get.get["/c"](later, keys)
     get.get["/d"](typed_get)
     get.get["/e?{id}"](stateful_get, keys)
+    get.get["/{name}"](stateful_named, keys)
     assert_equal(get.handle(Request("GET", "/a")).text(), "plain raw ")
     assert_equal(get.handle(Request("GET", "/b")).text(), "stateful raw")
     assert_equal(get.handle(Request("GET", "/c")).text(), "stateful raw")
     assert_equal(get.handle(Request("GET", "/d")).text(), "typed get")
     assert_equal(get.handle(Request("GET", "/e")).status, 400)
+    assert_equal(get.handle(Request("GET", "/f")).text(), "named f")
     assert_equal(get.handle(Request("GET", "/e?id=3")).text(), "sha256=k 3")
 
 
