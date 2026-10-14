@@ -4,11 +4,10 @@
 Build Muntin: a small, Mojo-native, typed web application framework whose public API is owned by this repository and whose networking backends are replaceable.
 
 ## Where to look
-- `AGENT_PROGRESS.md`: what to do next. Read it first.
 - `docs/DX.md`: the user-facing API and its semantics; its examples are design constraints.
 - `docs/ARCHITECTURE.md`: how Muntin works now, its invariants and the revisit index.
 - `docs/history/architecture-decisions.md`: why, per decision; the contract of the next production item (its "Next production slice").
-- `docs/SPEC.md`: product scope and remaining capabilities.
+- `docs/SPEC.md`: product scope and remaining capabilities; "Remaining candidates" is in priority order, and its first entry is the next item unless the user asks for another.
 - `docs/DEVELOPMENT.md`: verification commands, CI, and which document owns which fact.
 
 If these disagree, do not silently pick one. Preserve established architecture and safety invariants, identify the inconsistency, and fix the owning document in the same verified change.

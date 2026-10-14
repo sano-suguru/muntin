@@ -2,7 +2,7 @@
 
 ## 1. Orient
 
-Read `AGENT_PROGRESS.md`, check `git status` and recent commits, and run the cheapest relevant check. Read the document that owns what the next change touches (section 7). Do not re-plan the project when the repository state is coherent.
+Check `git status` and recent commits, and run the cheapest relevant check. The item is the one the user asked for; without one, the first entry of `docs/SPEC.md`, "Remaining candidates". Read the document that owns what the next change touches (section 7). Do not re-plan the project when the repository state is coherent.
 
 ## 2. Pick one increment
 
@@ -21,7 +21,7 @@ A decision record has five parts, in this order: the question and what would set
 
 A decision whose choice is to build nothing now (an explicit deferral, no "Next production slice") gets no record: its contract is one or two lines under its candidate in `docs/SPEC.md`, "Remaining candidates": the choice, why, the revisit condition and its pull request. A test or fixture it adds to pin today's behavior names that pull request in its opening comment, and so does its revisit index row.
 
-A product item, decision or production, gets a milestone ID (`M3-017`) where it is first named: a decision record's title or its "Next production slice". A process or tooling decision gets none unless `docs/SPEC.md` tracks it as milestone work. `docs/SPEC.md` and `AGENT_PROGRESS.md` refer to it; nothing else tracks it.
+A product item, decision or production, gets a milestone ID (`M3-017`) where it is first named: a decision record's title or its "Next production slice". A process or tooling decision gets none unless `docs/SPEC.md` tracks it as milestone work. `docs/SPEC.md` refers to it; nothing else tracks it.
 
 ## 3. Verify with the strongest available oracle
 
@@ -54,7 +54,7 @@ For public API, architecture, ownership/lifetime, backend seam, unsafe code or d
 
 ## 6. Finish an item
 
-An item's pull request updates only the owners whose facts changed (section 7), in the same diff: `docs/ARCHITECTURE.md` when the current architecture changes (a revisit index row when the item pins fixtures: the pinned paths and a link to the decision record, or to the pull request for an explicit deferral without a record), `docs/DX.md` when user-visible semantics change, `docs/SPEC.md` when a capability's status or the product scope changes (one table row per capability, naming it and linking its decision, never restating its semantics), and `AGENT_PROGRESS.md` when the next action, a blocker or a temporary watch changes. `AGENT_PROGRESS.md` holds nothing else and stays short (about 40 lines): a fact that is easy to miss about the current code goes in `docs/ARCHITECTURE.md` or in a comment beside the code, once. A typo, script or test-speed fix usually touches none of them. The item is complete when the pull request merges; `main` requires CI to pass first, so nothing is recorded after CI. Test counts, mutation lists, review findings and CI runs go in the pull request description; a new decision or amendment record names its pull request.
+An item's pull request updates only the owners whose facts changed (section 7), in the same diff: `docs/ARCHITECTURE.md` when the current architecture changes (a revisit index row when the item pins fixtures: the pinned paths and a link to the decision record, or to the pull request for an explicit deferral without a record), `docs/DX.md` when user-visible semantics change, and `docs/SPEC.md` when a capability's status, the product scope or the candidates' order changes (one table row per capability, naming it and linking its decision, never restating its semantics). There is no separate handoff file: a fact that is easy to miss about the current code goes in `docs/ARCHITECTURE.md` or in a comment beside the code, once. A typo, script or test-speed fix usually touches none of them. The item is complete when the pull request merges; `main` requires CI to pass first, so nothing is recorded after CI. Test counts, mutation lists, review findings and CI runs go in the pull request description; a new decision or amendment record names its pull request.
 
 ## 7. Where information lives
 
@@ -67,7 +67,7 @@ Each fact has one owner. Other documents link to it instead of restating it.
 | why: the decision, candidates, costs, measured premises, revisit conditions; the next production item's contract | `docs/history/architecture-decisions.md`, one record per decision or amendment |
 | product scope: milestones, shipped and remaining capabilities, product boundaries, the M2 contract | `docs/SPEC.md` |
 | evidence that an item was verified | its pull request |
-| what to do next | `AGENT_PROGRESS.md` |
+| what to do next | the user's request; otherwise the first entry of `docs/SPEC.md`, "Remaining candidates" |
 | behavior and invariants | tests, fixtures, `scripts/` and CI |
 | upstream sources and the Flare pin | `docs/REFERENCES.md`, `pixi.lock` |
 

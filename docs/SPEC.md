@@ -98,7 +98,9 @@ What each capability does for an application: `docs/DX.md`; how and why: its dec
 
 ### Remaining candidates
 
-Each becomes its own item, a decision item first where it opens a design question.
+In priority order: the first entry is the next item unless the user asks for another. Each becomes its own item, a decision item first where it opens a design question.
+
+- **comparison with Flare alone**: the same applications written against Flare directly and with Muntin, to measure what Muntin's application layer adds (clearer, safer, more statically checked handler code) and what it costs (throughput, latency, allocations, the adapter's copies). Muntin's long-term success criterion (below) is what it tests. A decision item: its pull request first states the question and what would settle it;
 
 - **OpenAPI/schema output**: needs a type-to-format mapping; codecs are hand-mapped today, so a schema source waits for a derived codec;
 - **body limits beyond `FromBytes`** ([M3-043](history/architecture-decisions.md#typed-binary-request-body-size-limits-decision-m3-043)): a limit for text bodies (`FromBody`), an `App`-wide or per-registration limit; a per-route receive limit or one refusal status across protocols ([M3-044](history/architecture-decisions.md#server-receive-body-limit-decision-m3-044), which made the `Server`-wide receive limit configurable);
