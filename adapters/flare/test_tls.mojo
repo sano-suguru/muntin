@@ -328,12 +328,14 @@ def test_https_answers_http11() raises:
         _stop(child.pid)
 
 
-def test_alpn_with_no_common_protocol_is_not_refused() raises:
-    """A known deviation, pinned so a Flare change is noticed: a client that
-    offers only protocols the server does not serve is answered over
-    HTTP/1.1 with no protocol selected, where RFC 7301 section 3.2 requires
-    a `no_application_protocol` alert. Flare v0.12.0's ALPN selection
-    decides it, not Muntin (docs/DX.md section 1, "HTTPS")."""
+def test_known_flare_deviation_alpn_with_no_common_protocol_is_served() raises:
+    """Not Muntin's contract: a known deviation of Flare v0.12.0, pinned so
+    a Flare change is noticed. A client that offers only protocols the
+    server does not serve is answered over HTTP/1.1 with no protocol
+    selected; RFC 7301 section 3.2 requires a `no_application_protocol`
+    alert instead. When Flare refuses the handshake, this test fails: change
+    it to expect the refusal and drop the deviation from docs/DX.md section
+    1, "HTTPS", and the M3-051 record; do not restore the old behaviour."""
     var app = https_app()
     var child = _serve(Server.bind("127.0.0.1", 0, tls=_tls()), app)
     try:
@@ -591,10 +593,11 @@ def test_bind_names_a_file_with_the_wrong_content() raises:
     )
 
 
-def test_bind_refuses_files_that_are_not_small_regular_files() raises:
-    """A device, a FIFO with no writer, a directory or a file over 1 MiB
-    raises naming it, without being read: `bind` neither blocks nor fills
-    memory. Run in a child that has a bound, so a hang fails the test."""
+def test_bind_refuses_files_that_are_not_small_pem_files() raises:
+    """Whatever the path names, `bind` neither blocks nor fills memory, and
+    raises naming it: a device past 1 MiB, a FIFO with no writer (it reads
+    as empty), an empty file, a directory (it cannot be read) and a file over
+    1 MiB. Run in a child that has a bound, so a hang fails the test."""
     var pid = fork()
     if pid < 0:
         raise Error("fork() failed")
@@ -605,14 +608,19 @@ def test_bind_refuses_files_that_are_not_small_regular_files() raises:
             (
                 "/dev/zero",
                 KEY,
-                "TLS certificate file is not a regular file: /dev/zero",
+                "TLS certificate file is larger than 1048576 bytes: /dev/zero",
             )
         )
+        cases.append((CERT, FIFO, "TLS key file is empty: " + FIFO))
+        cases.append((CERT, "/dev/null", "TLS key file is empty: /dev/null"))
         cases.append(
-            (CERT, FIFO, "TLS key file is not a regular file: " + FIFO)
-        )
-        cases.append(
-            (DIR, KEY, "TLS certificate file is not a regular file: " + DIR)
+            (
+                DIR,
+                KEY,
+                "TLS certificate file cannot be read: "
+                + DIR
+                + " (Is a directory)",
+            )
         )
         cases.append(
             (
@@ -635,9 +643,9 @@ def test_bind_refuses_files_that_are_not_small_regular_files() raises:
     assert_equal(_exit_code(ended[0]), 0, "bind blocked or raised otherwise")
 
 
-def test_bind_reads_the_first_private_key_block_as_openssl_does() raises:
-    """Only a PEM block decides, the first private key one as OpenSSL loads
-    it: text that names an encrypted key outside a block, or an encrypted
+def test_bind_judges_the_first_private_key_block() raises:
+    """Only a line that begins a PEM block counts, and the key judged is the
+    first private key block: text that names an encrypted key outside a block, or an encrypted
     key after the plain one, is served; an encrypted key before a plain one
     is refused. A certificate reached through a symbolic link is served."""
     assert_equal(

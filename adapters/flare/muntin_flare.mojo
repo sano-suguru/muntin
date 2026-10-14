@@ -118,9 +118,9 @@ PEM certificate chain's and private key's paths, serves HTTPS instead of
 cleartext through Flare's `HttpServer.bind_tls`, offering `h2` then
 `http/1.1` (ALPN) and with the same `ServerConfig`, so the three settings
 and the stop apply unchanged. `_check_tls_files` reads both files first
-(regular files of at most 1 MiB) and raises naming the one that cannot be
-read, holds no PEM certificate, or whose first PEM private key is encrypted
-or missing; Flare's own load failure, which carries no reason, is raised
+(without blocking, at most 1 MiB each) and, as a best-effort diagnosis,
+raises naming the one that cannot be read, is empty, holds no PEM
+certificate, or whose first PEM private key is encrypted or missing; Flare's own load failure, which carries no reason, is raised
 naming both files and no cause. Flare takes paths, so OpenSSL reads the
 files again.
 
@@ -820,6 +820,7 @@ def _server_config(
 comptime _PEM_CERTIFICATE = "-----BEGIN CERTIFICATE-----"
 comptime _FLARE_TLS_LOAD_FAILED = "flare_ssl_ctx_new_server failed"
 comptime _TLS_FILE_MAX_BYTES = 1_048_576
+comptime _TLS_READ_CHUNK = 16_384
 """The largest certificate or key file `Server.bind` reads: far above a
 certificate chain's few kilobytes, small enough that a wrong path fails fast."""
 
@@ -858,34 +859,13 @@ def _at_fdcwd() -> c_int:
         return c_int(-100)
 
 
-def _fstat_mode(fd: Int) -> Int:
-    """`fstat(fd).st_mode`, or -1 when `fstat` fails. The standard library
-    has no `fstat`, so the `struct stat` is read at `st_mode`'s offset on
-    the two systems `Server` compiles for: 24 (32 bits) on Linux x86-64, 4
-    (16 bits) on macOS arm64. 256 bytes hold either `struct stat` (144)."""
-    var buf = List[UInt8](length=256, fill=0)
-    if (
-        Int(external_call["fstat", c_int](c_int(fd), Int(buf.unsafe_ptr())))
-        != 0
-    ):
-        return -1
-    comptime if CompilationTarget.is_macos():
-        return Int(buf[4]) | (Int(buf[5]) << 8)
-    else:
-        return (
-            Int(buf[24])
-            | (Int(buf[25]) << 8)
-            | (Int(buf[26]) << 16)
-            | (Int(buf[27]) << 24)
-        )
-
-
 def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
-    """The file's bytes, if it is a regular file (a symbolic link to one
-    included) of at most `_TLS_FILE_MAX_BYTES`. The path is opened once,
-    without blocking, and the opened file itself is checked and read
-    (`fstat`), so a device or a FIFO, even one put in its
-    place after any earlier look, cannot block or exhaust `Server.bind`."""
+    """The file's bytes, at most `_TLS_FILE_MAX_BYTES` of them. The path is
+    opened once with `O_NONBLOCK` and read in chunks, so nothing it names can
+    block or exhaust `Server.bind`, whatever it is when opened: a FIFO with
+    no writer reads as empty, a device such as `/dev/zero` stops at the
+    bound, a directory fails to read. No file type is asked for, so no
+    platform's `struct stat` is read."""
     var prefix = "TLS " + what + " file "
     var c_path = path.copy()
     var fd = Int(
@@ -904,33 +884,26 @@ def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
             + ")"
         )
     try:
-        var mode = _fstat_mode(fd)
-        if mode < 0:
-            raise Error(
-                prefix
-                + "cannot be read: "
-                + path
-                + " ("
-                + String(get_errno())
-                + ")"
-            )
-        if (mode & 0o170000) != 0o100000:
-            raise Error(prefix + "is not a regular file: " + path)
-        var data = List[UInt8](length=_TLS_FILE_MAX_BYTES + 1, fill=0)
-        var got = 0
+        var data = List[UInt8]()
+        var chunk = List[UInt8](length=_TLS_READ_CHUNK, fill=0)
         var file = FileDescriptor(fd)
-        while got <= _TLS_FILE_MAX_BYTES:
+        while len(data) <= _TLS_FILE_MAX_BYTES:
             var n: Int
             try:
-                n = file.read_bytes(Span(data)[got:])
-            except e:
+                n = file.read_bytes(Span(chunk))
+            except:
                 raise Error(
-                    prefix + "cannot be read: " + path + " (" + String(e) + ")"
+                    prefix
+                    + "cannot be read: "
+                    + path
+                    + " ("
+                    + String(get_errno())
+                    + ")"
                 )
             if n == 0:
                 break
-            got += n
-        if got > _TLS_FILE_MAX_BYTES:
+            data.extend(Span(chunk)[:n])
+        if len(data) > _TLS_FILE_MAX_BYTES:
             raise Error(
                 prefix
                 + "is larger than "
@@ -938,7 +911,8 @@ def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
                 + " bytes: "
                 + path
             )
-        data.shrink(got)
+        if len(data) == 0:
+            raise Error(prefix + "is empty: " + path)
         return data^
     finally:
         _ = external_call["close", c_int](c_int(fd))
@@ -952,34 +926,66 @@ struct _PemBegin(Copyable, Movable):
     """Whether the next line is the older form's `Proc-Type: 4,ENCRYPTED`."""
 
 
+def _starts_with_at(data: List[UInt8], at: Int, prefix: StringSlice) -> Bool:
+    var m = prefix.as_bytes()
+    if at + len(m) > len(data):
+        return False
+    for j in range(len(m)):
+        if data[at + j] != m[j]:
+            return False
+    return True
+
+
 def _pem_begins(data: List[UInt8]) -> List[_PemBegin]:
-    """Every PEM block's BEGIN line, in order. As OpenSSL's PEM reader, only
-    a line that starts with `-----BEGIN ` begins a block; any other text,
-    a comment naming a block included, is not one."""
-    var lines = String(from_utf8_lossy=Span(data)).split("\n")
+    """Every line that starts with `-----BEGIN ` and ends with `-----`, in
+    order, by its label. Only those lines and the line after each are
+    looked at, in place: the file's other bytes, a private key's included,
+    are not copied."""
     var out = List[_PemBegin]()
-    for i in range(len(lines)):
-        var line = String(lines[i]).removesuffix("\r")
-        if not (line.startswith("-----BEGIN ") and line.endswith("-----")):
-            continue
-        var label = String(line[byte = 11 : line.byte_length() - 5])
-        var encrypted = i + 1 < len(lines) and String(lines[i + 1]).startswith(
-            "Proc-Type: 4,ENCRYPTED"
-        )
-        out.append(_PemBegin(label, encrypted))
+    var start = 0
+    var n = len(data)
+    while start < n:
+        var end = start
+        while end < n and data[end] != 10:
+            end += 1
+        var stop = end
+        if stop > start and data[stop - 1] == 13:
+            stop -= 1
+        if (
+            _starts_with_at(data, start, "-----BEGIN ")
+            and stop - start >= 16
+            and _starts_with_at(data, stop - 5, "-----")
+        ):
+            out.append(
+                _PemBegin(
+                    String(from_utf8_lossy=Span(data)[start + 11 : stop - 5]),
+                    _starts_with_at(data, end + 1, "Proc-Type: 4,ENCRYPTED"),
+                )
+            )
+        start = end + 1
     return out^
 
 
 def _check_tls_files(tls: Tls) raises:
-    """Raises, naming the file, when a file cannot be read, when the
-    certificate file holds no PEM certificate block, or when the key file's
-    first PEM private key block (the one OpenSSL loads) is encrypted (OpenSSL
-    would ask for its passphrase on the terminal) or there is none. What only
-    OpenSSL can tell (a damaged PEM block, a key that does not belong to the
-    certificate) is `Server`'s check after Flare's. OpenSSL opens the paths
-    again, so a file replaced in between is loaded unchecked (M3-051)."""
+    """A best-effort start-up diagnosis of the common mistakes, not a
+    guarantee: raises, naming the file, when a file cannot be read or is
+    empty, when the certificate file has no PEM certificate block, or when
+    the key file's first private key block is encrypted (OpenSSL would ask
+    for its passphrase on the terminal) or there is none. It looks only at
+    the lines that begin PEM blocks; whether the files load is OpenSSL's
+    decision, made after this when Flare opens the paths again, so a file
+    replaced in between is loaded unchecked (M3-051). The key's bytes are
+    overwritten with zeros before this returns or raises."""
     var cert = _read_tls_file("certificate", tls.cert_file)
     var key = _read_tls_file("key", tls.key_file)
+    try:
+        _check_tls_contents(tls, cert, key)
+    finally:
+        for i in range(len(key)):
+            key[i] = 0
+
+
+def _check_tls_contents(tls: Tls, cert: List[UInt8], key: List[UInt8]) raises:
     var has_cert = False
     for b in _pem_begins(cert):
         if b.label == "CERTIFICATE":
