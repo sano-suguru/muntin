@@ -4392,3 +4392,47 @@ These are the two forms of one shared set that were tested; sharing more of the 
 - after a Mojo upgrade, repeating the measurement shows the declared overload set or the slot arity costing build time distinguishable from noise.
 
 **Next production slice:** none (a standing constraint, `docs/DEVELOPMENT.md` section 2). Its owner is `docs/ARCHITECTURE.md`, "Registration surface", which this record's pull request writes, with the two new fixtures in its revisit index.
+
+### Streaming responses and cancellation decision (M3-053)
+
+Status: **decision, proposed** (M3-053, pull request #PR; `src/muntin` unchanged). Not accepted until the owner approves it in that pull request. The Flare reading, the probe's observations and the storage spike are in the pull request.
+
+**Question and what settles it.** `App.handle(Request) -> Response` returns a whole body, so a handler cannot send a body it produces over time or one larger than memory (a long download, server-sent events), and it cannot learn that the client has gone. An outside review asked to settle the requirements for streaming responses and cancellation before any wider layer of optional capabilities; WebSocket, protocol-specific control and streamed request bodies are out of scope. Settled by: what Flare v0.12.0 delivers on the path `Server` serves (`HttpServer.serve` with a `Handler`; the same connection handles under the workers' loop), read in code and measured over loopback by `compat/flare/stream/stream_probe.mojo`; and whether Mojo 1.1.0 lets a `Copyable` `Response` carry a stream of an application type (a scratch spike).
+
+**Facts** (Flare v0.12.0; measured unless marked read):
+- A Flare `Response` holding a `ChunkSource` is sent with chunked framing over HTTP/1.1 (no `Content-Length`) and in DATA frames over HTTP/2, over TLS too (read). The source is pulled only when the connection is writable, at most 16 chunks or 64 KiB per writable edge (read): backpressure comes from the pull.
+- A stream holds the reactor only during a pull: another connection is answered while a quiet stream is open, unlike a running handler ([M3-046](#head-of-line-blocking-decision-m3-046)).
+- A source with nothing to send returns an empty chunk and is pulled again on the next writable edge, a busy loop (780,490 pulls in 1.5 s, one Linux run); so the idle timer does not close a quiet stream.
+- When the client goes away (HTTP/1.1 close, h2c connection close, h2c `RST_STREAM`), Flare destroys the source without pulling it again and never sets its `Cancel`; the server keeps serving.
+- A pull that raises ends the response after its status and fields: over HTTP/1.1 the connection closes without the last chunk, and the chunks pulled earlier in the same batch are lost; over HTTP/2 Flare closes the whole connection (read).
+- `Cancel` reaches a handler only through `serve_cancellable` (HTTP/1.1, one thread, no TLS), and is never set while a handler runs: a peer close is acted on only before the handler is called, the handler timeout is "not enforced yet" (`ServerConfig.handler_timeout_ms`), and a drain sets it after the loop has stopped (read). Handlers run inline, so nothing could interrupt one.
+- Mojo 1.1.0: a `Copyable` struct can hold a type-erased, reference-counted box of a move-only source of any type, pulled through a borrowed handle and destroyed once, after its last handle, with unsafe operations of the kind `_Shared` already confines (spike).
+
+**Choice: stream response bodies from a Muntin-owned pull source that `Response` carries; offer no cancellation API.**
+- A Muntin trait, `BodySource`, with `def next(mut self) raises -> Optional[List[UInt8]]`: a chunk, an empty chunk for "nothing now", or `None` at the end. `Response.stream(source^, status=200)` builds a response with an empty `body`, that source and fields set as on any `Response`. For every backend, Muntin promises that a source is pulled only when the backend can send more; never again once it has returned `None` or raised, or once the client has gone; and destroyed exactly once. So a client that went away is a source destroyed before it returned `None`: the cancellation the measured backend can deliver, with no new type.
+- The seam does not change: the stream travels inside the `Response` `App.handle` returns, through middleware. Copies of a streamed `Response` share one stream, sent once.
+- A raise ends the response incomplete (the status has gone out, so no 500), and the error is dropped unread, as a handler's is. `HEAD` through a streamed `GET` route sends the status and fields with no content and no `Content-Length`, and the source is destroyed unpulled.
+- Cancelling a running handler is not offered: no backend Muntin has can signal one, and a token that never fires is a promise Muntin cannot keep (A4).
+- Stated cost: on Flare v0.12.0 a quiet source is a busy loop, so an event stream that waits costs a CPU core while it waits. Muntin adds no wakeup (A4, A6).
+
+**Rejected.**
+- Flare's `ChunkSource` or `Cancel` in application code: A1.
+- A cancellation token in Muntin handlers: no path `Server` uses ever sets one; dead API.
+- A move-only `Response` owning the source: reopens M2 (`Response` is `Copyable`) for nothing a shared handle lacks.
+- A second seam or handler kind for streams (`App.handle_stream`, a separate registration): routing, 404/405 and middleware would need a second path; `Response` can carry the stream.
+- A push writer (the handler calls `write(chunk)`): the handler must keep running while the backend sends, which needs a task model (A6) or holds the reactor ([M3-046](#head-of-line-blocking-decision-m3-046)).
+- Data-or-end only (no empty chunk): a source that has to wait would wait inside `next`, holding every connection of its worker, worse than the busy pull.
+- Flare's `serve_streaming`: raw bytes with no HTTP parsing and no TLS, which would replace Muntin's request model.
+
+**Revisit when:**
+- Flare sets `Cancel` while a handler runs, or wakes a quiet source instead of pulling it on every edge: re-run the probe on every Flare upgrade;
+- Mojo ships an async model a backend runs handlers on: a handler-level cancellation and a waiting source without a busy loop may become expressible;
+- streamed request bodies, WebSocket or trailers are taken up (the `Trailer` and `TE` fields: [M3-002](#headers-decision-m3-002));
+- `compat/flare/stream/stream_probe.mojo` changes its observations.
+
+**Next production slice (M3-054):**
+- `src/muntin`: `BodySource`, `Response.stream`, `Response.is_stream()` and `Response.next_chunk() raises -> Optional[List[UInt8]]` (the pull a backend, a middleware or a test makes; `None` on a buffered response); the erased shared box beside `_Shared` in `_handler_storage.mojo`, with `scripts/check_unsafe.sh` updated to allow it and nothing else.
+- Flare adapter: `to_flare_response` hands a streamed response to Flare's `stream_response` through an adapter-owned `ChunkSource` that pulls the Muntin stream and ignores `Cancel`; the `HEAD` rule above in `_serve_app`.
+- Evidence beyond `docs/DEVELOPMENT.md` section 3: an ownership oracle (one destruction, after the last copy; destruction unpulled when abandoned; no pull after `None` or a raise), also under `SANITIZE=address`; middleware passing a streamed response on; loopback cases over HTTP/1.1 and h2c for chunk order, a client that disconnects (the source destroyed) and `HEAD`.
+- `docs/DX.md` section 14 states the contract and its cost; `docs/ARCHITECTURE.md` the representation.
+- Not in the slice: streamed request bodies, an SSE event type or helper, WebSocket, a cancellation token, a wakeup, trailers, a `Content-Length` for a stream of known length.
