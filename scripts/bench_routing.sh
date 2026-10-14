@@ -4,11 +4,13 @@
 #
 #   ./scripts/bench_routing.sh [RUNS] [N...]
 #
-# RUNS is the number of timed runs per case (default 15); the route counts
+# RUNS is the number of timed runs per case (default 15; an even count
+# reports the mean of the two middle runs as the median); the route counts
 # (each at least 2) default to 10 100. 500 and 1000 are named explicitly:
-# bench_comptime_router.mojo alone builds for about 9 and 55 minutes there. For each N it writes the route table module
-# under build/bench_routing/N, builds both programs (default optimization,
-# -O3) in the `flare` environment, prints each build's time and runs them,
+# bench_comptime_router.mojo alone builds for about 9 and 55 minutes there.
+# For each N it writes the route table module under build/bench_routing/N,
+# builds both programs (default optimization, -O3) in the `flare`
+# environment, prints each build's time and runs them,
 # pinned with taskset, where it exists (Linux), to the last CPU this process
 # may run on (Cpus_allowed_list in /proc/self/status).
 set -euo pipefail
@@ -16,6 +18,11 @@ cd "$(dirname "$0")/.."
 
 runs="${1:-15}"
 shift || true
+# Decimal integers only, no leading zero: bash reads 08 as octal.
+if ! [[ $runs =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: RUNS must be an integer of at least 1: $runs" >&2
+    exit 1
+fi
 counts=("$@")
 if ((${#counts[@]} == 0)); then
     counts=(10 100)
@@ -26,7 +33,7 @@ FLARE=(pixi run --frozen -e flare mojo)
 pixi list --frozen -e flare '^flare$' | tail -n 1
 
 for n in "${counts[@]}"; do
-    if ! [[ $n =~ ^[0-9]+$ ]] || ((n < 2)); then
+    if ! [[ $n =~ ^[1-9][0-9]*$ ]] || ((n < 2)); then
         echo "error: route count must be an integer of at least 2: $n" >&2
         exit 1
     fi

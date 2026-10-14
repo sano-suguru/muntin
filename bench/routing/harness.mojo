@@ -38,6 +38,15 @@ def _run[D: Dispatch](d: D, iters: Int, want: Int) raises -> Int:
     return elapsed
 
 
+def _median(sorted: List[Int]) -> Int:
+    """The middle value of a sorted list; for an even count, the mean of the
+    two middle values, rounded down."""
+    var m = len(sorted) // 2
+    if len(sorted) % 2 == 1:
+        return sorted[m]
+    return (sorted[m - 1] + sorted[m]) // 2
+
+
 def measure[D: Dispatch](n: Int, name: String, c: Case, d: D, runs: Int) raises:
     """Checks one answer, its status and, where the case names one, its body
     (which route answered), before timing; then calibrates (which warms up),
@@ -81,7 +90,7 @@ def measure[D: Dispatch](n: Int, name: String, c: Case, d: D, runs: Int) raises:
         + "\t"
         + label
         + "\tmedian_ns="
-        + String(per[len(per) // 2])
+        + String(_median(per))
         + "\tmin_ns="
         + String(per[0])
         + "\titers="
@@ -127,8 +136,12 @@ def cases(n: Int) -> List[Case]:
 
 
 def runs_arg() raises -> Int:
-    """The number of timed runs per case: the first argument, default 15."""
+    """The number of timed runs per case: the first argument, default 15.
+    Raises unless it is at least 1."""
     from std.sys import argv
 
     var args = argv()
-    return Int(args[1]) if len(args) > 1 else 15
+    var runs = Int(args[1]) if len(args) > 1 else 15
+    if runs < 1:
+        raise Error("runs must be at least 1: " + String(runs))
+    return runs
