@@ -7,8 +7,8 @@
 # SANITIZE=address builds them with Mojo's AddressSanitizer: a heap
 # use-after-free or double free, and on Linux a leak at exit (forced on even
 # if ASAN_OPTIONS turns it off), makes the binary exit nonzero, so the test
-# fails even if every assertion passed; LSAN_OPTIONS is unset, so no
-# suppression hides a leak. Before building any test it builds and runs the
+# fails even if every assertion passed; reports go to stderr (log_path), and
+# LSAN_OPTIONS is unset, so no suppression from the environment applies. Before building any test it builds and runs the
 # positive controls in tests/sanitizer_controls, each of which must fail
 # with a sanitizer report of the kind its "# Expected report: " line names,
 # so a toolchain whose sanitizer stops seeing these errors stops the run
@@ -42,10 +42,13 @@ done
 controls=()
 if [[ "${SANITIZE:-}" == address ]]; then
     controls=(tests/sanitizer_controls/use_after_free.mojo tests/sanitizer_controls/double_free.mojo)
+    # Reports go to stderr, where the checks below read them, whatever
+    # log_path the environment sets.
+    export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}log_path=stderr"
     if [[ "$(uname -s)" == Linux ]]; then
         controls+=(tests/sanitizer_controls/leak.mojo)
         # Leak detection on, and no LeakSanitizer suppressions from the
-        # environment, so a passing run reports every leak LSan finds.
+        # environment (LSAN_OPTIONS).
         export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=1"
         unset LSAN_OPTIONS
     else
