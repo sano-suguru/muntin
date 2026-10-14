@@ -21,6 +21,9 @@ struct FlareComptime(Dispatch):
     def status(self) raises -> Int:
         return self.router.serve(self.request).status
 
+    def body(self) raises -> String:
+        return self.router.serve(self.request).text()
+
 
 def main() raises:
     var runs = runs_arg()
@@ -28,8 +31,7 @@ def main() raises:
         measure(
             N,
             "flare-comptime",
-            c.label,
+            c,
             FlareComptime(c.method, c.path),
-            c.want,
             runs,
         )

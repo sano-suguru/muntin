@@ -15,6 +15,10 @@ trait Dispatch:
         """Dispatches the request once and returns the answer's status."""
         ...
 
+    def body(self) raises -> String:
+        """Dispatches the request once and returns the answer's body."""
+        ...
+
 
 def route_path(i: Int) -> String:
     """The path of the `i`-th generated route."""
@@ -34,11 +38,13 @@ def _run[D: Dispatch](d: D, iters: Int, want: Int) raises -> Int:
     return elapsed
 
 
-def measure[
-    D: Dispatch
-](n: Int, name: String, label: String, d: D, want: Int, runs: Int) raises:
-    """Checks one answer, calibrates (which warms up), times `runs` runs and
-    prints one line: nanoseconds per request, median and minimum."""
+def measure[D: Dispatch](n: Int, name: String, c: Case, d: D, runs: Int) raises:
+    """Checks one answer, its status and, where the case names one, its body
+    (which route answered), before timing; then calibrates (which warms up),
+    times `runs` runs and prints one line: nanoseconds per request, median
+    and minimum. Timed answers are checked by status only."""
+    var label = c.label
+    var want = c.want
     var got = d.status()
     if got != want:
         raise Error(
@@ -49,6 +55,16 @@ def measure[
             + String(got)
             + ", expected "
             + String(want)
+        )
+    if c.want_body and d.body() != c.want_body.value():
+        raise Error(
+            name
+            + " "
+            + label
+            + ": body "
+            + d.body()
+            + ", expected "
+            + c.want_body.value()
         )
     var iters = 1
     while _run(d, iters, want) < MIN_RUN_NS:
@@ -74,27 +90,37 @@ def measure[
 
 
 struct Case(Copyable):
-    """One request shape and the status every implementation must answer."""
+    """One request shape, the status every implementation must answer and,
+    for `first` and `last`, the body of the route that must answer it."""
 
     var label: String
     var method: String
     var path: String
     var want: Int
+    var want_body: Optional[String]
 
     def __init__(
-        out self, label: String, method: String, path: String, want: Int
+        out self,
+        label: String,
+        method: String,
+        path: String,
+        want: Int,
+        want_body: Optional[String] = None,
     ):
         self.label = label
         self.method = method
         self.path = path
         self.want = want
+        self.want_body = want_body
 
 
 def cases(n: Int) -> List[Case]:
-    """`first`, `last`, `404` and `405` for a table of `n` routes."""
+    """`first`, `last`, `404` and `405` for a table of `n` routes. The first
+    and last routes answer `first` and `last`, every other route `ok`
+    (`scripts/bench_routing.sh`)."""
     return [
-        Case("first", "GET", route_path(0), 200),
-        Case("last", "GET", route_path(n - 1), 200),
+        Case("first", "GET", route_path(0), 200, String("first")),
+        Case("last", "GET", route_path(n - 1), 200, String("last")),
         Case("404", "GET", "/api/missing/items", 404),
         Case("405", "POST", route_path(n - 1), 405),
     ]

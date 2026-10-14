@@ -5,11 +5,12 @@
 #   ./scripts/bench_routing.sh [RUNS] [N...]
 #
 # RUNS is the number of timed runs per case (default 15); the route counts
-# default to 10 100 500 1000. For each N it writes the route table module
+# (each at least 2) default to 10 100. 500 and 1000 are named explicitly:
+# bench_comptime_router.mojo alone builds for about 9 and 55 minutes there. For each N it writes the route table module
 # under build/bench_routing/N, builds both programs (default optimization,
 # -O3) in the `flare` environment, prints each build's time and runs them,
-# pinned to one CPU with taskset where it exists (Linux). Building
-# bench_comptime_router.mojo grows steeply with N: minutes at 500 routes.
+# pinned with taskset, where it exists (Linux), to the last CPU this process
+# may run on (Cpus_allowed_list in /proc/self/status).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,12 +18,29 @@ runs="${1:-15}"
 shift || true
 counts=("$@")
 if ((${#counts[@]} == 0)); then
-    counts=(10 100 500 1000)
+    counts=(10 100)
 fi
 
 FLARE=(pixi run --frozen -e flare mojo)
 "${FLARE[@]}" --version
 pixi list --frozen -e flare '^flare$' | tail -n 1
+
+for n in "${counts[@]}"; do
+    if ! [[ $n =~ ^[0-9]+$ ]] || ((n < 2)); then
+        echo "error: route count must be an integer of at least 2: $n" >&2
+        exit 1
+    fi
+done
+
+body_of() { # I N: the body route I of N answers
+    if (($1 == 0)); then
+        echo first
+    elif (($1 == $2 - 1)); then
+        echo last
+    else
+        echo ok
+    fi
+}
 
 gen_routes() { # N DIR: writes DIR/routes.mojo with N GET routes
     local n=$1 dir=$2
@@ -37,28 +55,45 @@ gen_routes() { # N DIR: writes DIR/routes.mojo with N GET routes
         echo
         echo "comptime N = $n"
         echo
-        echo 'def muntin_ok() -> String:'
-        echo '    return "ok"'
-        echo
-        echo 'def flare_ok(req: FlareRequest) raises -> FlareResponse:'
-        echo '    return ok("ok")'
+        # The first and last routes answer their own body, so the benchmark
+        # checks which route answered (harness.cases).
+        for body in first ok last; do
+            echo "def muntin_$body() -> String:"
+            echo "    return \"$body\""
+            echo
+            echo "def flare_$body(req: FlareRequest) raises -> FlareResponse:"
+            echo "    return ok(\"$body\")"
+            echo
+        done
+        echo 'def flare_handler(i: Int) -> def(FlareRequest) raises thin -> FlareResponse:'
+        echo '    if i == 0:'
+        echo '        return flare_first'
+        echo "    if i == $((n - 1)):"
+        echo '        return flare_last'
+        echo '    return flare_ok'
         echo
         echo 'def register(mut app: App):'
         for ((i = 0; i < n; i++)); do
-            echo "    app.get[\"/api/r$i/items\"](muntin_ok)"
+            echo "    app.get[\"/api/r$i/items\"](muntin_$(body_of "$i" "$n"))"
         done
         echo
         echo 'comptime FLARE_ROUTES: List[ComptimeRoute] = ['
         for ((i = 0; i < n; i++)); do
-            echo "    ComptimeRoute(\"GET\", \"/api/r$i/items\", flare_ok),"
+            echo "    ComptimeRoute(\"GET\", \"/api/r$i/items\", flare_$(body_of "$i" "$n")),"
         done
         echo ']'
     } >"$dir/routes.mojo"
 }
 
 pin=()
-if command -v taskset >/dev/null; then
-    pin=(taskset -c "$(($(nproc) - 1))")
+if command -v taskset >/dev/null && [[ -r /proc/self/status ]]; then
+    # The allowed set, such as 0-3 or 24-27,30: its last CPU. nproc counts
+    # the allowed CPUs and is not one of their numbers.
+    allowed="$(sed -n 's/^Cpus_allowed_list:[[:space:]]*//p' /proc/self/status)"
+    cpu="${allowed##*[,-]}"
+    if [[ $cpu =~ ^[0-9]+$ ]]; then
+        pin=(taskset -c "$cpu")
+    fi
 fi
 
 for n in "${counts[@]}"; do
