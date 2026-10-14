@@ -4,11 +4,10 @@
 Build Muntin: a small, Mojo-native, typed web application framework whose public API is owned by this repository and whose networking backends are replaceable.
 
 ## Where to look
-- `AGENT_PROGRESS.md`: what to do next. Read it first.
 - `docs/DX.md`: the user-facing API and its semantics; its examples are design constraints.
 - `docs/ARCHITECTURE.md`: how Muntin works now, its invariants and the revisit index.
 - `docs/history/architecture-decisions.md`: why, per decision; the contract of the next production item (its "Next production slice").
-- `docs/SPEC.md`: product scope and remaining capabilities.
+- `docs/SPEC.md`: product scope and remaining capabilities; "Remaining candidates" is in priority order, and its first entry is the next item unless the user asks for another.
 - `docs/DEVELOPMENT.md`: verification commands, CI, and which document owns which fact.
 
 If these disagree, do not silently pick one. Preserve established architecture and safety invariants, identify the inconsistency, and fix the owning document in the same verified change.
@@ -21,9 +20,10 @@ If these disagree, do not silently pick one. Preserve established architecture a
 - Do not weaken, delete, or rewrite acceptance criteria or tests merely to make them pass.
 - Never report an item done until a real executable check exercises it successfully. Syntax-only checks, commands that failed to start, and inspection alone are not passing evidence. An item is complete when its pull request merges; `main` requires CI to pass first.
 - When CI fails, first classify the cause (Muntin bug, toolchain bug, packaging, runner/image). Do not change Muntin core to work around a non-Muntin cause.
+- Write current stable Mojo: `def`, not the deprecated `fn`, except in a minimal reproduction that documents why. Keep third-party backend imports out of `src/muntin`.
 - When current Mojo or dependency behavior matters, verify it with the installed toolchain or authoritative upstream documentation instead of guessing. If a `docs/DX.md` example cannot be expressed, prove the limitation with a minimal reproduction and implement the closest type-safe alternative.
 - For architecture, ownership/lifetime, backend-seam, or public-API changes, use a fresh-context skeptical review when practical.
-- Each fact has one owner (`docs/DEVELOPMENT.md`, "Where information lives"). Update the owner; elsewhere link to it rather than copying it.
+- Each fact has one owner (`docs/DEVELOPMENT.md`, "Where information lives"). Update the owner; elsewhere link to it rather than copying it. Do not restate a fact to make it easier to find: a growing handoff or summary means an owner is missing or unclear, so fix the owner instead. A decision record follows the shape and size in `docs/DEVELOPMENT.md` section 2.
 - Commit coherent verified increments. Pushing your own working branch and opening a pull request from it to `main` are allowed. Never merge, push to `main`, force-push, publish, release, or change CI, branch rules or other remote infrastructure without explicit user instruction.
 
 ## Completion behavior
