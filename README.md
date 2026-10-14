@@ -116,25 +116,44 @@ In production, use a certificate from your certificate authority; a wrong file s
 
 ### From your own project
 
-Until Muntin is packaged, your project uses a clone of it and passes its sources to `mojo` with `-I`. Next to the clone, in your own pixi workspace, `pixi.toml` needs Muntin's channels and Mojo; Flare is needed only to serve with `Server`, at the tag Muntin's own `pixi.toml` pins:
+Until Muntin is packaged, your project uses a clone of it and passes its sources to `mojo` with `-I`. Put the clone next to your project; your program then runs against whatever commit the clone has checked out:
+
+```text
+workspace/
+├── muntin/      git clone https://github.com/sano-suguru/muntin.git
+└── myapp/
+    ├── pixi.toml
+    └── app.mojo
+```
+
+`myapp/pixi.toml` needs Muntin's channels and Mojo, in the range Muntin's own `pixi.toml` declares (Muntin is checked only with the toolchain named under [Development](#development); your `pixi.lock` records the version you get):
 
 ```toml
 [workspace]
 name = "myapp"
 channels = ["https://conda.modular.com/max", "conda-forge"]
 platforms = ["linux-64", "osx-arm64"]
-preview = ["pixi-build"]   # pixi builds Flare from its git source
 
 [dependencies]
 mojo = ">=1.1.0,<2"
+```
+
+```sh
+pixi run mojo run -I ../muntin/src app.mojo    # App and TestClient
+```
+
+To serve with `muntin_flare`'s `Server`, also add Flare, at the tag Muntin's own `pixi.toml` pins, and pass the adapter's directory too:
+
+```toml
+[workspace]
+preview = ["pixi-build"]   # pixi builds Flare from its git source
+
+[dependencies]
 flare = { git = "https://github.com/ehsanmok/flare.git", tag = "v0.12.0" }
 ```
 
-With your program in `app.mojo` and the clone in `../muntin`:
-
 ```sh
-pixi run mojo run -I ../muntin/src app.mojo                                # App and TestClient
-pixi run mojo run -I ../muntin/src -I ../muntin/adapters/flare app.mojo    # also muntin_flare's Server
+pixi run mojo run -I ../muntin/src -I ../muntin/adapters/flare app.mojo
 ```
 
 `mojo build` takes the same `-I` paths.
