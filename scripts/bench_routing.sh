@@ -16,28 +16,28 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-runs="${1:-15}"
+runs="${1-15}" # an empty RUNS is refused, not defaulted
 shift || true
-# Decimal integers only, no leading zero: bash reads 08 as octal.
-if ! [[ $runs =~ ^[1-9][0-9]*$ ]]; then
-    echo "error: RUNS must be an integer of at least 1: $runs" >&2
+# Decimal integers only, no leading zero (bash reads 08 as octal), and at
+# most 6 digits, so no count overflows bash or Mojo's Int before the builds.
+if ! [[ $runs =~ ^[1-9][0-9]{0,5}$ ]]; then
+    echo "error: RUNS must be an integer from 1 to 999999: $runs" >&2
     exit 1
 fi
 counts=("$@")
 if ((${#counts[@]} == 0)); then
     counts=(10 100)
 fi
+for n in "${counts[@]}"; do
+    if ! [[ $n =~ ^[1-9][0-9]{0,5}$ ]] || ((n < 2)); then
+        echo "error: route count must be an integer from 2 to 999999: $n" >&2
+        exit 1
+    fi
+done
 
 FLARE=(pixi run --frozen -e flare mojo)
 "${FLARE[@]}" --version
 pixi list --frozen -e flare '^flare$' | tail -n 1
-
-for n in "${counts[@]}"; do
-    if ! [[ $n =~ ^[1-9][0-9]*$ ]] || ((n < 2)); then
-        echo "error: route count must be an integer of at least 2: $n" >&2
-        exit 1
-    fi
-done
 
 body_of() { # I N: the body route I of N answers
     if (($1 == 0)); then
