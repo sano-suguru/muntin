@@ -111,6 +111,7 @@ from muntin_flare import (
     _STAGE_SERVED,
     _STAGE_WATCHING,
     _STAGE_WORKER_ENDED,
+    _STAGE_WORKER_STARTED,
     _W_FD,
     _W_LEN,
     _W_STOP,
@@ -2508,7 +2509,11 @@ is free."""
 def _fork_workers[
     make: def() thin raises -> App
 ](
-    var server: Server, workers: Int, built_fd: Int = -1, files: Int = 0
+    var server: Server,
+    workers: Int,
+    built_fd: Int = -1,
+    files: Int = 0,
+    stage: def(Int) thin -> None = _no_stage,
 ) raises -> _Child:
     """A child that serves with `server.serve[make](workers=workers)`. With
     `built_fd` >= 0 it first sets `MUNTIN_TEST_BUILT_FD` to it, for
@@ -2530,7 +2535,7 @@ def _fork_workers[
         var term = _handler_word(SIGTERM)
         var int = _handler_word(SIGINT)
         try:
-            server.serve[make](workers=workers)
+            server.serve[make](workers=workers, _stage=stage)
         except e:
             print("workers child: serve failed:", e)
             exit(1)
@@ -3164,6 +3169,54 @@ def test_a_reactor_returning_before_a_stop_makes_serve_raise() raises:
     _ = stream^
     var ended = _reap_within(pid, STOP_BOUND_MS * 5)
     assert_equal(_exit_code(ended[0]), 7, "serve did not raise")
+
+
+def _term_when_a_worker_started(stage: Int):
+    """SIGTERM once the first worker thread is started, then waits (up to
+    2 s) until the watcher has acted on it (it resets SIGINT to `SIG_DFL`
+    right before its drain), so the other workers start during the stop."""
+    if stage == _STAGE_WORKER_STARTED:
+        _ = external_call["kill", c_int](
+            external_call["getpid", c_int](), c_int(SIGTERM)
+        )
+        var start = monotonic_now_ms()
+        while _handler_word(SIGINT) != 0 and monotonic_now_ms() - start < 2000:
+            _ = libc_nanosleep_ms(5)
+        _ = libc_nanosleep_ms(50)
+
+
+def test_a_stop_while_workers_start_returns() raises:
+    """SIGTERM acted on after the first of 4 workers started and before the
+    others: the workers started during the stop still build their `App`
+    (their stop byte is already set, so their reactors leave at once), and
+    `serve` returns (exit 0) within the window and the bound, with the
+    listener closed."""
+    var built = _pipe()
+    var child = _fork_workers[who_app](
+        Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS),
+        4,
+        built[1],
+        stage=_term_when_a_worker_started,
+    )
+    _close(built[1])
+    try:
+        # `_reap_within` kills and reaps a child that outlives the bound.
+        var ended = _reap_within(
+            child.pid, 2000 + SHORT_GRACE_MS + STOP_BOUND_MS
+        )
+        var builds = _rest_of_pipe(built[0])
+        print(
+            "observed: SIGTERM while workers start -> status",
+            ended[0],
+            "; builds",
+            repr(builds),
+        )
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+        assert_equal(builds, "mmmm")
+        var again = Server.bind("127.0.0.1", child.port)
+        assert_equal(again.port(), child.port)
+    finally:
+        _close(built[0])
 
 
 def spawn() raises -> String:
