@@ -42,6 +42,14 @@ has no Muntin code, with its default configuration (where waiting keep-alive
 and h2c requests are dropped once a hold outlasts the idle timeout) and with a
 long idle timeout (where they are only serialized).
 
+Workers (M3-049, decided in docs/history/architecture-decisions.md
+"Multi-worker serving decision (M3-049)"): children serve with
+`server.serve[make](workers=n)`; with one worker's handler held, a connection
+opened meanwhile is answered by another (the order pipe reads `b` before `a`),
+while the held h2c connection's other streams still wait; each worker builds
+its own `App`; the stop, the range, a raising `make` and the buffer-ring
+refusal are as for `serve(app)`.
+
 Idle timeout (M3-047, decided in docs/history/architecture-decisions.md
 "Server idle timeout decision (M3-047)"): the head-of-line blocking cases run
 again on a `Server` bound with a long `idle_timeout_ms`, where the waiting
@@ -81,9 +89,10 @@ from flare.http2 import (
 from flare.net import SocketAddr
 from flare.net._libc_event import _pipe as _flare_pipe
 from flare.runtime import libc_nanosleep_ms, monotonic_now_ms
+from flare.runtime._thread import current_thread_id
 from flare.tcp import TcpStream
 from flare.utils import SIGINT, SIGKILL, SIGTERM, exit, fork, kill, waitpid
-from muntin import App, Request, Response
+from muntin import App, Request, Response, State
 from muntin.testing import TestClient
 from muntin_flare import (
     Server,
@@ -1655,12 +1664,20 @@ comptime _FLARE_PATIENT = 2
 comptime _MUNTIN_PATIENT = 3
 """`_serve_blocking`: the adapter's `Server` bound with
 `idle_timeout_ms=PATIENT_IDLE_MS` (M3-047), served as `_MUNTIN`."""
+comptime _WORKERS = 4
+"""`_serve_blocking`: the adapter's `Server` with Flare's default
+`idle_timeout_ms`, served by `serve[blocking_app](workers=WORKERS)`
+(M3-049)."""
+comptime _WORKERS_PATIENT = 5
+"""`_serve_blocking`: as `_WORKERS`, bound with
+`idle_timeout_ms=PATIENT_IDLE_MS`."""
 
 
 def _serve_blocking(kind: Int) raises -> _Child:
     """A child serving the blocking routes on an ephemeral loopback port:
     with `_MUNTIN` or `_MUNTIN_PATIENT`, as `_serve_stoppable` (it exits 0
-    after a graceful stop); otherwise Flare's single-worker `serve` (ended by
+    after a graceful stop); with `_WORKERS` or `_WORKERS_PATIENT`, as
+    `_fork_workers`; otherwise Flare's single-worker `serve` (ended by
     `_end_blocking`)."""
     if kind == _MUNTIN:
         return _serve_stoppable(blocking_app(), SHORT_GRACE_MS)
@@ -1673,6 +1690,21 @@ def _serve_blocking(kind: Int) raises -> _Child:
                 idle_timeout_ms=PATIENT_IDLE_MS,
             ),
             blocking_app(),
+        )
+    if kind == _WORKERS:
+        return _fork_workers[blocking_app](
+            Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS),
+            WORKERS,
+        )
+    if kind == _WORKERS_PATIENT:
+        return _fork_workers[blocking_app](
+            Server.bind(
+                "127.0.0.1",
+                0,
+                shutdown_grace_ms=SHORT_GRACE_MS,
+                idle_timeout_ms=PATIENT_IDLE_MS,
+            ),
+            WORKERS,
         )
     var config = ServerConfig()
     if kind == _FLARE_PATIENT:
@@ -1695,11 +1727,11 @@ def _serve_blocking(kind: Int) raises -> _Child:
 
 def _end_blocking(kind: Int, pid: Int) raises -> Bool:
     """Ends a `_serve_blocking` child within a bound and says whether it was
-    reaped: `_MUNTIN` and `_MUNTIN_PATIENT` by SIGTERM, which must end it
+    reaped: a `Server` child by SIGTERM, which must end it
     with status 0 (it was still serving normally); Flare's own server, which
     has no graceful stop here, by SIGKILL, which must end it by that
     signal."""
-    if kind == _MUNTIN or kind == _MUNTIN_PATIENT:
+    if kind != _FLARE and kind != _FLARE_PATIENT:
         assert_equal(kill(pid, SIGTERM), 0)
         var ended = _reap_within(pid, SHORT_GRACE_MS + STOP_BOUND_MS)
         assert_equal(_exit_code(ended[0]), 0, "the server did not stop")
@@ -1775,7 +1807,11 @@ def _h1_blocks_other_connections(kind: Int) raises:
     answered; with `_FLARE_PATIENT` or `_MUNTIN_PATIENT` both are answered.
     Either way no handler runs before A's returned: the order pipe reads `a`
     first."""
-    var patient = kind == _FLARE_PATIENT or kind == _MUNTIN_PATIENT
+    var patient = (
+        kind == _FLARE_PATIENT
+        or kind == _MUNTIN_PATIENT
+        or kind == _WORKERS_PATIENT
+    )
     var pipes = _held_pipes()
     var child = _serve_blocking(kind)
     _close(pipes[1])
@@ -1986,7 +2022,11 @@ def _h2c_blocks_streams(kind: Int, same_connection: Bool) raises:
     with `_FLARE_PATIENT` or `_MUNTIN_PATIENT` the light stream is answered
     after stream 1. No handler runs before stream 1's returned: the order
     pipe reads `a` first."""
-    var patient = kind == _FLARE_PATIENT or kind == _MUNTIN_PATIENT
+    var patient = (
+        kind == _FLARE_PATIENT
+        or kind == _MUNTIN_PATIENT
+        or kind == _WORKERS_PATIENT
+    )
     var pipes = _held_pipes()
     var child = _serve_blocking(kind)
     _close(pipes[1])
@@ -2441,6 +2481,449 @@ def test_sigterm_drains_within_its_window_with_a_longer_idle_timeout() raises:
 
 comptime _WATCH_SLACK_MS = 100
 """The watcher's 50 ms poll and the parent's 5 ms reap poll, with room."""
+
+
+# ── Workers (M3-049) ───────────────────────────────────────────────────────
+
+
+comptime WORKERS = 2
+"""The worker count of the head-of-line cases: one worker is held, the other
+is free."""
+
+
+def _fork_workers[
+    make: def() thin raises -> App
+](var server: Server, workers: Int, built_fd: Int = -1) raises -> _Child:
+    """A child that serves with `server.serve[make](workers=workers)`. With
+    `built_fd` >= 0 it first sets `MUNTIN_TEST_BUILT_FD` to it, for
+    `who_app`. It exits 0 when `serve` returns with the SIGTERM and SIGINT
+    dispositions it had before, 1 when `serve` raises (the error is
+    printed), 4 when the dispositions differ. The parent's copy of the
+    listener is dropped when this returns."""
+    var port = server.port()
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        _default_sigpipe()
+        if built_fd >= 0:
+            _ = setenv("MUNTIN_TEST_BUILT_FD", String(built_fd))
+        var term = _handler_word(SIGTERM)
+        var int = _handler_word(SIGINT)
+        try:
+            server.serve[make](workers=workers)
+        except e:
+            print("workers child: serve failed:", e)
+            exit(1)
+        if _handler_word(SIGTERM) != term or _handler_word(SIGINT) != int:
+            exit(4)
+        exit(0)
+    return _Child(pid, port)
+
+
+def _workers_answer_during_a_hold(h2: Bool) raises:
+    """With `WORKERS` workers, while one handler is held, a light request on
+    a connection opened during the hold is answered before the held handler
+    returns: over HTTP/1.1 a new connection, over h2c a new connection whose
+    SETTINGS are exchanged during the hold. The held worker does not poll,
+    so the free one accepts it. The order pipe reads `b` before `a`, where
+    `serve(app)` reads `a` first (M3-046)."""
+    var pipes = _held_pipes()
+    var child = _serve_blocking(_WORKERS)
+    _close(pipes[1])
+    _close(pipes[2])
+    var held = pipes[0].copy()
+    var reaped = False
+    try:
+        var mark_path = "/mark/" + String(pipes[1])
+        var hold_path = held.path.replace("/held/", "/hold/")
+        var early: String
+        var light: String
+        var first_answer: String
+        if h2:
+            var first = _H2Client(child.port)
+            first.get(1, hold_path)
+            assert_equal(
+                _read_byte(held.started), 1, "the handler never started"
+            )
+            var other = _H2Client(child.port)
+            other.get(1, mark_path)
+            other.set_timeout(HOLD_PROBE_MS)
+            early = other.read_within(1)
+            light = other.answers[0]
+            other.set_timeout(TIMEOUT_MS)
+            _write_byte(held.release)
+            _ = first.read_within(1)
+            first_answer = first.answers[0]
+        else:
+            var a = _send(child.port, _request("GET", hold_path))
+            assert_equal(
+                _read_byte(held.started), 1, "the handler never started"
+            )
+            var fresh = _send(child.port, _request("GET", mark_path))
+            fresh.set_recv_timeout(HOLD_PROBE_MS)
+            var got = _read_all(fresh)
+            early = got[1]
+            light = _content(got[0])
+            _write_byte(held.release)
+            first_answer = _content(_read_all(a)[0])
+        reaped = _end_blocking(_WORKERS, child.pid)
+        var order = _rest_of_pipe(held.started)
+        print(
+            "observed: workers",
+            WORKERS,
+            "h2c" if h2 else "h1",
+            "new connection while held:",
+            early,
+            repr(light),
+            "| held:",
+            repr(first_answer),
+            "| handler order",
+            repr(order),
+        )
+        assert_equal(early, "ended" if h2 else "eof")
+        assert_equal(light, "200 marked" if h2 else "marked")
+        assert_equal(first_answer, "200 released" if h2 else "released")
+        assert_equal(order, "ba")
+    finally:
+        if not reaped:
+            _stop(child.pid)
+        _close(held.started)
+        _close(held.release)
+
+
+def test_h1_workers_answer_a_new_connection_during_a_hold() raises:
+    _workers_answer_during_a_hold(False)
+
+
+def test_h2c_workers_answer_a_new_connection_during_a_hold() raises:
+    _workers_answer_during_a_hold(True)
+
+
+def test_h2c_workers_still_serialize_streams_of_one_connection() raises:
+    """All streams of an h2c connection run on the worker that accepted it,
+    one at a time: more workers do not change M3-046's case."""
+    _h2c_blocks_streams(_WORKERS_PATIENT, True)
+
+
+def test_h2c_workers_still_drop_a_waiting_stream_after_a_long_hold() raises:
+    """With Flare's default idle timeout, the held worker's idle timer still
+    closes the held stream's connection after its answer (M3-046)."""
+    _h2c_blocks_streams(_WORKERS, True)
+
+
+@fieldwise_init
+struct BuiltOn(Movable):
+    """The thread `who_app` built its `App` on."""
+
+    var thread: UInt64
+
+
+def who(state: State[BuiltOn]) -> String:
+    """`<thread the App was built on> <thread serving this request>`."""
+    return String(state[].thread) + " " + String(current_thread_id())
+
+
+def who_app() raises -> App:
+    """Writes `m` to the pipe `MUNTIN_TEST_BUILT_FD` names (one byte per
+    `App` built), then builds an `App` whose state is the building thread."""
+    var out = FileDescriptor(Int(getenv("MUNTIN_TEST_BUILT_FD")))
+    out.write_bytes("m".as_bytes())
+    var app = App()
+    app.get["/who"](who, State(BuiltOn(current_thread_id())))
+    return app^
+
+
+def test_workers_each_build_and_serve_their_own_app() raises:
+    """`serve[who_app](workers=3)` calls `who_app` once per worker, and
+    every request is answered on the thread that built the `App` (and the
+    `State`) answering it."""
+    var built = _pipe()
+    var child = _fork_workers[who_app](
+        Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS),
+        3,
+        built[1],
+    )
+    _close(built[1])
+    var reaped = False
+    try:
+        var streams = List[TcpStream]()
+        for _ in range(6):
+            streams.append(_send(child.port, _request("GET", "/who")))
+        for i in range(len(streams)):
+            var answer = _content(_read_all(streams[i])[0])
+            var parts = answer.split(" ")
+            assert_equal(len(parts), 2, answer)
+            assert_equal(parts[0], parts[1], "answered off its App's thread")
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+        var builds = _rest_of_pipe(built[0])
+        print("observed: workers 3 -> builds", repr(builds))
+        assert_equal(builds, "mmm")
+    finally:
+        if not reaped:
+            _stop(child.pid)
+        _close(built[0])
+
+
+def test_workers_stop_gracefully() raises:
+    """SIGTERM stops `serve[make]` as it stops `serve(app)` (M3-045): new
+    connections are refused at once, a request whose handler is held is
+    answered after the stop began, an idle keep-alive connection stays open
+    through the window (the idle timeout is longer) and is closed at its end, and the child exits 0 after
+    the window and within the bound; the port can be bound again."""
+    var pipes = _held_pipes()
+    var child = _fork_workers[stoppable_app](
+        Server.bind(
+            "127.0.0.1",
+            0,
+            shutdown_grace_ms=GRACE_MS,
+            idle_timeout_ms=PATIENT_IDLE_MS,
+        ),
+        WORKERS,
+    )
+    _close(pipes[1])
+    _close(pipes[2])
+    var held = pipes[0].copy()
+    var reaped = False
+    try:
+        var ka = _send(
+            child.port, "GET /hello HTTP/1.1\r\nHost: muntin\r\n\r\n"
+        )
+        assert_equal(_content(_one_response(ka)), "hello")
+        var in_flight = _send(child.port, _request("GET", held.path))
+        assert_equal(_read_byte(held.started), 1, "the handler never started")
+        var signaled_at = monotonic_now_ms()
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        var refused = _refused_within(child.port, 1000)
+        assert_true(refused >= 0, "a new connection was still accepted")
+        _write_byte(held.release)
+        var got = _read_all(in_flight)
+        var idle = _read_all(ka)
+        var idle_closed = monotonic_now_ms() - signaled_at
+        var ended = _reap_within(child.pid, GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        var after = monotonic_now_ms() - signaled_at
+        print(
+            "observed: workers",
+            WORKERS,
+            "SIGTERM -> refused after",
+            refused,
+            "ms; in flight",
+            repr(_content(got[0])),
+            got[1],
+            "; idle keep-alive",
+            idle[1],
+            "after",
+            idle_closed,
+            "ms; status",
+            ended[0],
+            "after",
+            after,
+            "ms",
+        )
+        assert_equal(_status_line(got[0]), "HTTP/1.1 200 OK")
+        assert_equal(_content(got[0]), "released after the stop")
+        assert_equal(idle[0], "", "an answer after the first")
+        assert_true(idle[1] == "eof" or idle[1] == "reset", idle[1])
+        assert_true(idle_closed >= GRACE_MS, "closed before the window ended")
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+        assert_true(after >= GRACE_MS, "ended before the window")
+        assert_true(
+            after <= _WATCH_SLACK_MS + GRACE_MS + STOP_BOUND_MS,
+            "ended after the bound",
+        )
+        var again = Server.bind("127.0.0.1", child.port)
+        assert_equal(again.port(), child.port)
+    finally:
+        if not reaped:
+            _stop(child.pid)
+        _close(held.started)
+        _close(held.release)
+
+
+def test_serve_workers_raises_for_a_count_out_of_range() raises:
+    """`workers` outside 1 to 256 raises before anything is served or any
+    signal is touched; the process's serving claim stays free."""
+    var server = Server.bind("127.0.0.1", 0)
+    for n in [0, -1, 257]:
+        var got = String("served")
+        try:
+            server.serve[borrowed_app](workers=n)
+        except e:
+            got = String(e)
+        assert_equal(got, "workers out of range: " + String(n))
+        assert_false(_serving_held(), "the serving claim was taken")
+
+
+def no_app() raises -> App:
+    raise Error("no app")
+
+
+def test_a_raising_make_stops_every_worker() raises:
+    """When `make` raises on the workers, `serve[make]` stops them all and
+    raises the error, with both stop dispositions back."""
+    var server = Server.bind("127.0.0.1", 0)
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
+        _default_sigpipe()
+        var term = _handler_word(SIGTERM)
+        var int = _handler_word(SIGINT)
+        try:
+            server.serve[no_app](workers=WORKERS)
+            exit(9)
+        except e:
+            print("observed: raising make ->", e)
+            if _handler_word(SIGTERM) != term or _handler_word(SIGINT) != int:
+                exit(4)
+            if String(e) == "serve: a worker's make raised: no app":
+                exit(7)
+            exit(8)
+    _ = server^
+    var ended = _reap_within(pid, STOP_BOUND_MS * 5)
+    assert_equal(_exit_code(ended[0]), 7, "serve did not raise make's error")
+
+
+def test_serve_workers_refuses_flare_bufring_handler() raises:
+    """`serve[make]` refuses `FLARE_BUFRING_HANDLER=1` as `serve(app)` does,
+    before serving."""
+    var server = Server.bind("127.0.0.1", 0)
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
+        _default_sigpipe()
+        _ = setenv("FLARE_BUFRING_HANDLER", "1")
+        try:
+            server.serve[borrowed_app](workers=WORKERS)
+        except e:
+            if (
+                String(e)
+                == "FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare"
+                " v0.12.0"
+            ):
+                exit(7)
+            exit(8)
+        exit(9)
+    _ = server^
+    var ended = _reap_within(pid, STOP_BOUND_MS * 5)
+    assert_equal(_exit_code(ended[0]), 7, "serve did not refuse")
+
+
+def gated_app() raises -> App:
+    """`borrowed_app`, built once a byte arrives on the pipe
+    `MUNTIN_TEST_GATE_FD` names: `r` builds it, any other byte raises. Each
+    worker reads its own byte, so the test decides when, and whether, each
+    one starts serving."""
+    var gate = FileDescriptor(Int(getenv("MUNTIN_TEST_GATE_FD")))
+    var byte = List[UInt8](length=1, fill=0)
+    if gate.read_bytes(byte) != 1 or Int(byte[0]) != ord("r"):
+        raise Error("not built")
+    return borrowed_app()
+
+
+def test_a_make_ending_after_the_stop_keeps_the_window() raises:
+    """With one worker serving an idle keep-alive connection and the other
+    still in `make` when SIGTERM arrives, `make` raising during the window
+    does not cut the stop short: the connection stays open until the window
+    ends, and `serve` returns (exit 0) after it."""
+    var gate = _pipe()
+    var server = Server.bind(
+        "127.0.0.1",
+        0,
+        shutdown_grace_ms=GRACE_MS,
+        idle_timeout_ms=PATIENT_IDLE_MS,
+    )
+    var port = server.port()
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        _default_sigpipe()
+        _ = setenv("MUNTIN_TEST_GATE_FD", String(gate[0]))
+        try:
+            server.serve[gated_app](workers=WORKERS)
+        except e:
+            print("workers child: serve failed:", e)
+            exit(1)
+        exit(0)
+    _ = server^
+    _close(gate[0])
+    var reaped = False
+    try:
+        # One worker builds its App; the other waits in `make`.
+        _write_byte_of(gate[1], "r")
+        var ka = _send(port, "GET /hello HTTP/1.1\r\nHost: muntin\r\n\r\n")
+        assert_equal(_content(_one_response(ka)), "hello")
+        var signaled_at = monotonic_now_ms()
+        assert_equal(kill(pid, SIGTERM), 0)
+        assert_true(_refused_within(port, 1000) >= 0, "still accepting")
+        # The waiting worker's `make` now raises, inside the window.
+        _write_byte_of(gate[1], "x")
+        var idle = _read_all(ka)
+        var closed = monotonic_now_ms() - signaled_at
+        var ended = _reap_within(pid, GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        var after = monotonic_now_ms() - signaled_at
+        print(
+            "observed: make raising after the stop -> keep-alive",
+            idle[1],
+            "after",
+            closed,
+            "ms; status",
+            ended[0],
+            "after",
+            after,
+            "ms",
+        )
+        assert_true(idle[1] == "eof" or idle[1] == "reset", idle[1])
+        assert_true(closed >= GRACE_MS, "closed before the window ended")
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+        assert_true(after >= GRACE_MS, "ended before the window")
+    finally:
+        if not reaped:
+            _stop(pid)
+        _close(gate[1])
+
+
+def _write_byte_of(fd: Int, byte: String) raises:
+    var out = FileDescriptor(fd)
+    out.write_bytes(byte.as_bytes())
+
+
+def make_app() -> App:
+    """`docs/DX.md` section 1's workers example, as written."""
+    var app = App()
+    app.get["/"](hello)
+    return app^
+
+
+def test_docs_workers_example() raises:
+    """`docs/DX.md` section 1's `server.serve[make_app](workers=4)` serves,
+    on port 0, and stops on SIGTERM with status 0."""
+    var child = _fork_workers[make_app](
+        Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS), 4
+    )
+    var reaped = False
+    try:
+        var raw = _exchange(child.port, _request("GET", "/"))
+        assert_equal(_status_line(raw), "HTTP/1.1 200 OK")
+        assert_equal(_content(raw), "hello")
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+    finally:
+        if not reaped:
+            _stop(child.pid)
 
 
 def main() raises:
