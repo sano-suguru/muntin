@@ -12,6 +12,7 @@ from std.testing import assert_equal, assert_true, TestSuite
 from muntin import (
     App,
     Headers,
+    Param,
     Request,
     Response,
     State,
@@ -74,8 +75,8 @@ def optional_int(n: Optional[Int]) -> String:
     return String("o ", n.value()) if n else "o none"
 
 
-def int_text(a: Int, b: String) -> String:
-    return String("it ", a, " ", b)
+def int_text(a: Param["a", Int], b: Param["b", String]) -> String:
+    return String("it ", a.value, " ", b.value)
 
 
 def headers_only(headers: Headers) -> String:
@@ -86,8 +87,10 @@ def int_headers(id: Int, headers: Headers) -> String:
     return String("ih ", id, " ", _fields(headers))
 
 
-def two_ints_headers(a: Int, b: Int, var headers: Headers) -> String:
-    return String("iih ", a, " ", b, " ", _fields(headers))
+def two_ints_headers(
+    a: Param["a", Int], b: Param["b", Int], var headers: Headers
+) -> String:
+    return String("iih ", a.value, " ", b.value, " ", _fields(headers))
 
 
 def created() -> Created:
@@ -122,15 +125,27 @@ def state_headers(db: State[Db], headers: Headers) -> String:
     return "sh " + db[].name + " " + _fields(headers)
 
 
-def state_int_text(db: State[Db], a: Int, b: String) -> String:
-    return String("sit ", db[].name, " ", a, " ", b)
+def state_int_text(
+    db: State[Db], a: Param["a", Int], b: Param["b", String]
+) -> String:
+    return String("sit ", db[].name, " ", a.value, " ", b.value)
 
 
 def state_two_headers(
-    db: State[Db], a: Int, b: Optional[Int], headers: Headers
+    db: State[Db],
+    a: Param["a", Int],
+    b: Param["b", Optional[Int]],
+    headers: Headers,
 ) -> String:
     return String(
-        "sooh ", db[].name, " ", a, " ", b.or_else(-1), " ", _fields(headers)
+        "sooh ",
+        db[].name,
+        " ",
+        a.value,
+        " ",
+        b.value.or_else(-1),
+        " ",
+        _fields(headers),
     )
 
 
@@ -477,5 +492,20 @@ def test_dx_example() raises:
     assert_equal(other.headers.get("allow").value(), "POST")
 
 
+def _tests() -> TestSuite:
+    """This module's tests, registered by hand: discovering them
+    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
+    because a handler here declares a `Param` (M3-050;
+    tests/named_values_api_fail/discover_tests_crash.mojo).
+    `scripts/check.sh` checks that every `test_` function is listed."""
+    var suite = TestSuite()
+    suite.test[test_every_bodyless_shape_answers_as_on_get]()
+    suite.test[test_answers_are_the_handlers]()
+    suite.test[test_bodyless_route_is_selected_by_method_and_path]()
+    suite.test[test_typed_value_and_generic_forwarding]()
+    suite.test[test_dx_example]()
+    return suite^
+
+
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    _tests().run()

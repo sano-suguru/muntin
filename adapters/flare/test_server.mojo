@@ -83,7 +83,7 @@ from flare.net._libc_event import _pipe as _flare_pipe
 from flare.runtime import libc_nanosleep_ms, monotonic_now_ms
 from flare.tcp import TcpStream
 from flare.utils import SIGINT, SIGKILL, SIGTERM, exit, fork, kill, waitpid
-from muntin import App, Request, Response
+from muntin import App, Param, Request, Response
 from muntin.testing import TestClient
 from muntin_flare import (
     Server,
@@ -542,14 +542,16 @@ def test_serve_refuses_flare_bufring_handler() raises:
 # ── Graceful shutdown (M3-045) ─────────────────────────────────────────────
 
 
-def held(started: Int, release: Int) raises -> String:
+def held(
+    started: Param["started", Int], release: Param["release", Int]
+) raises -> String:
     """Writes one byte to the pipe `started` and waits for one on the pipe
     `release` (both inherited from the parent through `fork`), so the test
     decides when this request finishes. Only a released handler answers."""
-    var out = FileDescriptor(started)
+    var out = FileDescriptor(started.value)
     out.write_bytes("s".as_bytes())
     var byte = List[UInt8](length=1, fill=0)
-    var source = FileDescriptor(release)
+    var source = FileDescriptor(release.value)
     if source.read_bytes(byte) != 1:
         raise Error("held: not released")
     return "released after the stop"
@@ -1598,13 +1600,15 @@ comptime PATIENT_IDLE_MS = 60_000
 than any test's hold, so Flare's idle timer closes no connection during it."""
 
 
-def held_in_order(started: Int, release: Int) raises -> String:
+def held_in_order(
+    started: Param["started", Int], release: Param["release", Int]
+) raises -> String:
     """As `held`, and writes `a` to the pipe `started` once released, just
     before it returns."""
-    var out = FileDescriptor(started)
+    var out = FileDescriptor(started.value)
     out.write_bytes("s".as_bytes())
     var byte = List[UInt8](length=1, fill=0)
-    var source = FileDescriptor(release)
+    var source = FileDescriptor(release.value)
     if source.read_bytes(byte) != 1:
         raise Error("held_in_order: not released")
     out.write_bytes("a".as_bytes())
@@ -1637,7 +1641,10 @@ struct _FlareHold(Handler):
         var parts = request.url.split("/")
         var body = String("hello")
         if len(parts) == 4 and parts[1] == "hold":
-            body = held_in_order(Int(parts[2]), Int(parts[3]))
+            body = held_in_order(
+                Param["started", Int](Int(parts[2])),
+                Param["release", Int](Int(parts[3])),
+            )
         elif len(parts) == 3 and parts[1] == "mark":
             body = mark(Int(parts[2]))
         return FlareResponse(status=200, body=List(body.as_bytes()))
@@ -2443,11 +2450,80 @@ comptime _WATCH_SLACK_MS = 100
 """The watcher's 50 ms poll and the parent's 5 ms reap poll, with room."""
 
 
+def _tests() -> TestSuite:
+    """This module's tests, registered by hand: discovering them
+    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
+    because a handler here declares a `Param` (M3-050;
+    tests/named_values_api_fail/discover_tests_crash.mojo).
+    `scripts/check.sh` checks that every `test_` function is listed."""
+    var suite = TestSuite()
+    suite.test[test_bind_port_zero_reports_the_bound_port]()
+    suite.test[test_serve_answers_right_after_bind]()
+    suite.test[test_bind_raises_for_a_port_a_child_serves]()
+    suite.test[test_bind_raises_for_a_port_out_of_range]()
+    suite.test[test_bind_raises_for_a_host_name]()
+    suite.test[test_bind_ipv4_any]()
+    suite.test[test_bind_ipv6_loopback]()
+    suite.test[test_dropping_a_server_releases_its_port]()
+    suite.test[test_bind_raises_for_a_body_limit_out_of_range]()
+    suite.test[test_bind_accepts_the_body_limit_range_ends]()
+    suite.test[test_server_config_sets_both_body_limits]()
+    suite.test[test_docs_receive_limit_example]()
+    suite.test[test_serve_refuses_flare_bufring_handler]()
+    suite.test[test_sigterm_finishes_the_request_in_flight]()
+    suite.test[test_sigint_finishes_the_request_in_flight]()
+    suite.test[test_sigterm_stops_an_idle_server]()
+    suite.test[test_sigint_stops_an_idle_server]()
+    suite.test[test_zero_grace_stops_at_the_next_turn]()
+    suite.test[test_a_handler_can_stop_its_own_server]()
+    suite.test[test_stop_is_bounded_with_a_stalled_client]()
+    suite.test[test_stop_is_bounded_with_a_handler_that_does_not_return]()
+    suite.test[test_a_second_stop_signal_ends_the_process_at_once]()
+    suite.test[test_keep_alive_connection_during_the_window]()
+    suite.test[test_h2c_request_in_flight_finishes]()
+    suite.test[test_a_built_program_finishes_the_request_in_flight]()
+    suite.test[test_a_built_program_stops_on_an_inherited_ignored_sigint]()
+    suite.test[test_a_second_serve_in_the_process_is_refused]()
+    suite.test[test_a_stop_before_the_watcher_starts_is_acted_on]()
+    suite.test[test_a_stop_before_flare_serves_returns]()
+    suite.test[test_a_stop_as_flare_serve_ends_is_not_lost]()
+    suite.test[test_a_stop_after_the_watcher_is_joined_is_sent_again]()
+    suite.test[test_a_stop_sent_again_is_sent_before_the_claim_is_released]()
+    suite.test[test_bind_raises_for_a_grace_out_of_range]()
+    suite.test[test_server_config_sets_the_grace]()
+    suite.test[test_h1_a_held_handler_blocks_other_connections]()
+    suite.test[test_h1_flare_alone_blocks_other_connections]()
+    suite.test[test_h1_flare_alone_serializes_handlers]()
+    suite.test[test_h2c_a_held_stream_blocks_its_connection]()
+    suite.test[test_h2c_a_held_stream_blocks_other_connections]()
+    suite.test[test_h2c_flare_alone_blocks_its_connection]()
+    suite.test[test_h2c_flare_alone_blocks_other_connections]()
+    suite.test[test_h2c_flare_alone_serializes_streams]()
+    suite.test[test_h2c_flare_alone_serializes_connections]()
+    suite.test[
+        test_h1_a_longer_idle_timeout_answers_waiting_requests_after_the_hold
+    ]()
+    suite.test[
+        test_h2c_a_longer_idle_timeout_answers_its_connection_after_the_hold
+    ]()
+    suite.test[
+        test_h2c_a_longer_idle_timeout_answers_other_connections_after_the_hold
+    ]()
+    suite.test[test_bind_raises_for_an_idle_timeout_out_of_range]()
+    suite.test[test_server_config_sets_the_idle_timeout]()
+    suite.test[test_idle_timeout_closes_silent_partial_and_h2c_connections]()
+    suite.test[test_servers_keep_their_own_idle_timeouts]()
+    suite.test[
+        test_sigterm_drains_within_its_window_with_a_longer_idle_timeout
+    ]()
+    return suite^
+
+
 def main() raises:
     # A stop test writes to a pipe whose reader may be a child that already
     # ended; that must fail the test (EPIPE), not end the runner.
     _ = external_call["signal", Int](c_int(SIGPIPE), Int(1))  # SIG_IGN
-    var suite = TestSuite.discover_tests[__functions_in_module()]()
+    var suite = _tests()
     if _host_has_no_ipv6():
         if getenv("CI") != "":
             print("observed: no IPv6 on this host; CI is set, so ::1 runs")

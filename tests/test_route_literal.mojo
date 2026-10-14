@@ -8,7 +8,7 @@
 
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
-from muntin import App, Request, Response
+from muntin import App, Param, Request, Response
 from muntin._handler_storage import _Erased
 from muntin._registration_rules import (
     _distinct_query_keys,
@@ -155,8 +155,10 @@ def test_query_keys_compare_whole() raises:
     comptime assert _distinct_query_keys("/a")
 
 
-def _value_and_optional(id: Int, q: Optional[Int]) -> String:
-    return String(id, " ", q.or_else(-1))
+def _value_and_optional(
+    id: Param["id", Int], q: Param["q", Optional[Int]]
+) -> String:
+    return String(id.value, " ", q.value.or_else(-1))
 
 
 def test_optional_key_is_indexed_after_the_path_values() raises:
@@ -170,5 +172,22 @@ def test_optional_key_is_indexed_after_the_path_values() raises:
     assert_equal(app.handle(Request("GET", "/u/4?q=9")).text(), "4 9")
 
 
+def _tests() -> TestSuite:
+    """This module's tests, registered by hand: discovering them
+    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
+    because a handler here declares a `Param` (M3-050;
+    tests/named_values_api_fail/discover_tests_crash.mojo).
+    `scripts/check.sh` checks that every `test_` function is listed."""
+    var suite = TestSuite()
+    suite.test[test_well_formed_literals_agree]()
+    suite.test[test_static_and_empty_segments_do_not_match]()
+    suite.test[test_malformed_literals]()
+    suite.test[test_query_items_tell_no_query_from_an_empty_one]()
+    suite.test[test_param_name_strips_what_is_param_recognizes]()
+    suite.test[test_query_keys_compare_whole]()
+    suite.test[test_optional_key_is_indexed_after_the_path_values]()
+    return suite^
+
+
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    _tests().run()

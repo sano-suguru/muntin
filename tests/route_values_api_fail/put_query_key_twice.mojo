@@ -1,10 +1,10 @@
 # Must not compile: a literal that repeats a query key: both parameters
 # would read the one key, so no request could give them different values. The
-# shape passes every other rule. Decision:
+# shape passes every other rule, its names (M3-050) included. Decision:
 # docs/history/architecture-decisions.md, "Several route values decision
 # (M3-022)".
 # Expected diagnostic (checked by scripts/check.sh): constraint failed: route declares a query parameter twice
-from muntin import App, FromBody
+from muntin import App, FromBody, Param
 
 
 struct Note(FromBody, Movable):
@@ -18,8 +18,8 @@ struct Note(FromBody, Movable):
         return Self(body)
 
 
-def h(a: String, b: String, body: Note) -> String:
-    return a + b
+def h(a: Param["a", String], b: Param["a", String], body: Note) -> String:
+    return a.value + b.value
 
 
 def main():

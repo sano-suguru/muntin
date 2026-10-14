@@ -20,6 +20,7 @@ from muntin import (
     Json,
     JsonValue,
     Next,
+    Param,
     Request,
     Response,
     State,
@@ -281,12 +282,20 @@ def s_value(id: Int, input: WithHeaders[Blob]) -> String:
     return _summary(String(id), input.headers, input.body.data)
 
 
-def r_two(id: Int, tag: String, input: WithHeaders[Blob]) -> Response:
-    return _echo(String(id, " ", tag), input.headers, input.body.data)
+def r_two(
+    id: Param["id", Int], tag: Param["tag", String], input: WithHeaders[Blob]
+) -> Response:
+    return _echo(
+        String(id.value, " ", tag.value), input.headers, input.body.data
+    )
 
 
-def s_two(id: Int, tag: String, input: WithHeaders[Blob]) -> String:
-    return _summary(String(id, " ", tag), input.headers, input.body.data)
+def s_two(
+    id: Param["id", Int], tag: Param["tag", String], input: WithHeaders[Blob]
+) -> String:
+    return _summary(
+        String(id.value, " ", tag.value), input.headers, input.body.data
+    )
 
 
 def r_optional(tag: Optional[String], input: WithHeaders[Blob]) -> Response:
@@ -317,18 +326,28 @@ def s_state_value(
 
 
 def r_state_two(
-    store: State[Store], a: Int, b: Int, input: WithHeaders[Blob]
+    store: State[Store],
+    a: Param["a", Int],
+    b: Param["b", Int],
+    input: WithHeaders[Blob],
 ) -> Response:
     return _echo(
-        String(store[].prefix, " ", a, " ", b), input.headers, input.body.data
+        String(store[].prefix, " ", a.value, " ", b.value),
+        input.headers,
+        input.body.data,
     )
 
 
 def s_state_two(
-    store: State[Store], a: Int, b: Int, input: WithHeaders[Blob]
+    store: State[Store],
+    a: Param["a", Int],
+    b: Param["b", Int],
+    input: WithHeaders[Blob],
 ) -> String:
     return _summary(
-        String(store[].prefix, " ", a, " ", b), input.headers, input.body.data
+        String(store[].prefix, " ", a.value, " ", b.value),
+        input.headers,
+        input.body.data,
     )
 
 
@@ -807,5 +826,32 @@ def test_text_json_bare_and_raw_routes_are_unchanged() raises:
     )
 
 
+def _tests() -> TestSuite:
+    """This module's tests, registered by hand: discovering them
+    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
+    because a handler here declares a `Param` (M3-050;
+    tests/named_values_api_fail/discover_tests_crash.mojo).
+    `scripts/check.sh` checks that every `test_` function is listed."""
+    var suite = TestSuite()
+    suite.test[test_dx_example]()
+    suite.test[test_every_shape_receives_the_fields_and_the_bytes]()
+    suite.test[test_from_bytes_borrows_request_body_itself]()
+    suite.test[
+        test_int_max_is_no_cap_and_no_content_type_rule_on_a_bytes_carrier
+    ]()
+    suite.test[test_from_bytes_raise_is_400_and_the_handler_is_not_called]()
+    suite.test[test_bad_route_value_is_400_before_the_fields_and_from_bytes]()
+    suite.test[
+        test_invalid_in_memory_fields_are_the_fixed_500_before_from_bytes
+    ]()
+    suite.test[test_404_405_and_head_convert_nothing]()
+    suite.test[test_middleware_rejects_before_from_bytes]()
+    suite.test[test_middleware_replacement_reaches_the_carrier]()
+    suite.test[test_a_carrier_built_by_hand_takes_explicit_headers]()
+    suite.test[test_generic_code_builds_a_carrier_from_either_bound]()
+    suite.test[test_text_json_bare_and_raw_routes_are_unchanged]()
+    return suite^
+
+
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    _tests().run()

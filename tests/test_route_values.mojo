@@ -3,7 +3,7 @@
 # then query placeholders left to right), on every registration method.
 # Through `App.handle` and `TestClient`: two path values, a path and a query
 # value, two query values in either request order, every `Int`/`String` mix,
-# duplicate path names, binding by position whatever the parameter names, one
+# duplicate path names, each value a `Param` named after its placeholder (M3-050), one
 # decoding per value and each value's own 400 before the handler and the body,
 # `Headers` after two values on `get` and `delete`, a body after two values on
 # `post`, `put` and `patch` (`Json[T]` and `WithHeaders[B]` included), the
@@ -24,6 +24,7 @@ from muntin import (
     Json,
     JsonValue,
     JsonWriter,
+    Param,
     Request,
     Response,
     State,
@@ -134,32 +135,34 @@ struct Unauthorized(ToErrorResponse):
         return Response.text("Unauthorized", status=401)
 
 
-def post_of(uid: Int, pid: Int) -> String:
-    return String("post ", pid, " of user ", uid)
+def post_of(uid: Param["uid", Int], pid: Param["pid", Int]) -> String:
+    return String("post ", pid.value, " of user ", uid.value)
 
 
-def user_fields(id: Int, fields: String) -> String:
-    return String("user ", id, ": ", fields)
+def user_fields(
+    id: Param["id", Int], fields: Param["fields", String]
+) -> String:
+    return String("user ", id.value, ": ", fields.value)
 
 
-def search(q: String, limit: Int) -> String:
-    return String(limit, " results for ", q)
+def search(q: Param["q", String], limit: Param["limit", Int]) -> String:
+    return String(limit.value, " results for ", q.value)
 
 
-def edit_post(uid: Int, pid: Int, body: Json[Edit]) -> Json[Post]:
-    return Json(Post(uid, pid, body.value.title))
+def edit_post(
+    uid: Param["uid", Int], pid: Param["pid", Int], body: Json[Edit]
+) -> Json[Post]:
+    return Json(Post(uid.value, pid.value, body.value.title))
 
 
 def remove_post(
-    uid: Int, pid: Int, headers: Headers
+    uid: Param["uid", Int],
+    pid: Param["pid", Int],
+    headers: Headers,
 ) raises Unauthorized -> String:
     if not headers.get("authorization"):
         raise Unauthorized()
-    return String("removed post ", pid, " of user ", uid)
-
-
-def post_of_swapped(pid: Int, uid: Int) -> String:  # names in the other order
-    return String("post ", pid, " of user ", uid)
+    return String("removed post ", pid.value, " of user ", uid.value)
 
 
 def _dx_app() -> App:
@@ -176,88 +179,137 @@ def _dx_app() -> App:
 # Handlers.
 
 
-def two_ints(a: Int, b: Int) -> String:
-    return String("ints ", a, ",", b)
+def named_one(id: Param["id", Int]) -> String:
+    return String("named ", id.value)
 
 
-def int_str(a: Int, b: String) -> String:
-    return String("int-str ", a, ",", b)
+def named_optional(limit: Param["limit", Optional[Int]]) -> String:
+    return String("limit ", limit.value.or_else(20))
 
 
-def str_int(a: String, b: Int) -> String:
-    return String("str-int ", a, ",", b)
+def two_ints(a: Param["a", Int], b: Param["b", Int]) -> String:
+    return String("ints ", a.value, ",", b.value)
 
 
-def two_strs(a: String, b: String) -> String:
-    return String("strs ", a, ",", b)
+def int_str(a: Param["a", Int], b: Param["b", String]) -> String:
+    return String("int-str ", a.value, ",", b.value)
 
 
-def owned(var a: String, var b: Int) -> String:
-    a += "!"  # the handler's own values
-    b += 1
-    return String(a, b)
+def str_int(a: Param["a", String], b: Param["b", Int]) -> String:
+    return String("str-int ", a.value, ",", b.value)
+
+
+def two_strs(a: Param["a", String], b: Param["b", String]) -> String:
+    return String("strs ", a.value, ",", b.value)
+
+
+def id_fields(a: Param["id", Int], b: Param["fields", String]) -> String:
+    return String("int-str ", a.value, ",", b.value)
+
+
+def q_limit(a: Param["q", String], b: Param["limit", Int]) -> String:
+    return String("str-int ", a.value, ",", b.value)
+
+
+def dup_strs(a: Param["a", String], b: Param["a", String]) -> String:
+    return String("strs ", a.value, ",", b.value)
+
+
+def owned(var a: Param["a", String], var b: Param["b", Int]) -> String:
+    a.value += "!"  # the handler's own values
+    b.value += 1
+    return String(a.value, b.value)
 
 
 def one_value(pid: Int) -> String:
     return String("me, post ", pid)
 
 
-def counted(a: Int, b: Int) -> String:
+def counted(a: Param["a", Int], b: Param["b", Int]) -> String:
     _bump(HANDLER_CALLS)
-    return String(a + b)
+    return String(a.value + b.value)
 
 
-def counted_body(a: Int, b: String, body: Note) -> String:
+def counted_body(
+    a: Param["a", Int], b: Param["b", String], body: Note
+) -> String:
     _bump(HANDLER_CALLS)
-    return String(a, b, body.text)
+    return String(a.value, b.value, body.text)
 
 
-def with_headers(a: Int, b: String, headers: Headers) -> String:
-    return String(a, ",", b, " ", len(headers))
+def with_headers(
+    a: Param["a", Int], b: Param["b", String], headers: Headers
+) -> String:
+    return String(a.value, ",", b.value, " ", len(headers))
 
 
-def with_body(a: Int, b: String, body: Note) -> String:
-    return String(a, ",", b, "=", body.text)
+def with_body(a: Param["a", Int], b: Param["b", String], body: Note) -> String:
+    return String(a.value, ",", b.value, "=", body.text)
 
 
-def with_json(a: Int, b: Int, body: Json[Name]) -> String:
-    return String(a, ",", b, "=", body.value.name)
+def with_json(
+    a: Param["a", Int], b: Param["b", Int], body: Json[Name]
+) -> String:
+    return String(a.value, ",", b.value, "=", body.value.name)
 
 
-def carried(a: String, b: Int, input: WithHeaders[Note]) -> String:
-    return String(a, ",", b, "=", input.body.text, " ", len(input.headers))
-
-
-def carried_json(a: Int, b: String, input: WithHeaders[Json[Name]]) -> String:
+def carried(
+    a: Param["a", String], b: Param["b", Int], input: WithHeaders[Note]
+) -> String:
     return String(
-        a, ",", b, "=", input.body.value.name, " ", len(input.headers)
+        a.value, ",", b.value, "=", input.body.text, " ", len(input.headers)
     )
 
 
-def stateful(p: State[Prefix], a: Int, b: String) -> String:
-    return String(p[].text, a, ",", b)
+def carried_json(
+    a: Param["a", Int], b: Param["b", String], input: WithHeaders[Json[Name]]
+) -> String:
+    return String(
+        a.value,
+        ",",
+        b.value,
+        "=",
+        input.body.value.name,
+        " ",
+        len(input.headers),
+    )
+
+
+def stateful(
+    p: State[Prefix], a: Param["a", Int], b: Param["b", String]
+) -> String:
+    return String(p[].text, a.value, ",", b.value)
 
 
 def stateful_headers(
-    p: State[Prefix], a: String, b: Int, headers: Headers
+    p: State[Prefix],
+    a: Param["a", String],
+    b: Param["b", Int],
+    headers: Headers,
 ) -> String:
-    return String(p[].text, a, ",", b, " ", len(headers))
+    return String(p[].text, a.value, ",", b.value, " ", len(headers))
 
 
-def stateful_body(p: State[Prefix], a: Int, b: Int, var body: Note) -> String:
-    return String(p[].text, a, ",", b, "=", body.text)
+def stateful_body(
+    p: State[Prefix], a: Param["a", Int], b: Param["b", Int], var body: Note
+) -> String:
+    return String(p[].text, a.value, ",", b.value, "=", body.text)
 
 
 def raw(req: Request) -> Response:
     return Response.text("raw " + req.path + "|" + req.query)
 
 
-def typed_headers(var a: Int, var b: String, var headers: Headers) -> String:
-    return String("typed ", a, ",", b, " ", len(headers))
+def typed_headers(
+    var a: Param["a", Int], var b: Param["b", String], var headers: Headers
+) -> String:
+    return String("typed ", a.value, ",", b.value, " ", len(headers))
 
 
-def typed_body(var a: String, var b: String, var body: Note) -> String:
-    return String("typed ", a, ",", b, "=", body.text)
+def typed_body(
+    var a: Param["a", String], var b: Param["b", String], var body: Note
+) -> String:
+    return String("typed ", a.value, ",", b.value, "=", body.text)
 
 
 # Generic forwarding (M3-015 edge 4) reaching the slot-arity-3 overloads.
@@ -301,13 +353,11 @@ def _app() -> App:
     app.get["/si/{a}/{b}"](str_int)
     app.get["/ss/{a}/{b}"](two_strs)
     # A path and a query value; two query values.
-    app.get["/pq/{id}?{fields}"](int_str)
-    app.get["/q?{q}&{limit}"](str_int)
+    app.get["/pq/{id}?{fields}"](id_fields)
+    app.get["/q?{q}&{limit}"](q_limit)
     # Duplicate path names register and bind by position.
-    app.get["/dup/{a}/{a}"](two_strs)
-    app.get["/dupq/{a}?{a}"](two_strs)
-    # Parameter names in the other order receive the values by position.
-    app.get["/rev/{uid}/posts/{pid}"](post_of_swapped)
+    app.get["/dup/{a}/{a}"](dup_strs)
+    app.get["/dupq/{a}?{a}"](dup_strs)
     app.get["/owned/{a}?{b}"](owned)
     # First registration wins; a 400 never falls through.
     app.get["/users/me/posts/{pid}"](one_value)
@@ -342,11 +392,11 @@ def _app() -> App:
     app.patch["/st/{a}?{b}"](stateful_body, prefix)
     # A typed function value and generic forwarding.
     var f: def(
-        var Int, var String, var Headers
+        var Param["a", Int], var Param["b", String], var Headers
     ) thin raises Never -> String = typed_headers
     app.get["/typed/{a}/{b}"](f)
     var g: def(
-        var String, var String, var Note
+        var Param["a", String], var Param["b", String], var Note
     ) thin raises Never -> String = typed_body
     app.post["/typed?{a}&{b}"](g)
     fwd_three(app, with_body)
@@ -390,15 +440,6 @@ def test_dx_examples() raises:
     r = client.delete("/users/1/posts/2")
     assert_equal(r.status, 401)
     assert_equal(r.text(), "Unauthorized")
-
-
-def test_swapped_names_bind_by_position() raises:
-    # DX's caveat: a handler that declares two values of one type in the
-    # other order compiles and receives each other's values.
-    var app = App()
-    app.get["/users/{uid}/posts/{pid}"](post_of_swapped)
-    _expect(app, "/users/1/posts/2", 200, "post 1 of user 2")
-    _expect(_app(), "/rev/1/posts/2", 200, "post 1 of user 2")
 
 
 def test_two_path_values_in_every_mix() raises:
@@ -592,5 +633,57 @@ def test_typed_values_and_forwarding() raises:
     assert_equal(r.status, 400)
 
 
+def test_one_value_may_be_named() raises:
+    # One value binds the only placeholder whatever its name, so it may be
+    # plain; a `Param` converts as its bare type would (M3-050).
+    var app = App()
+    app.get["/n/{id}"](named_one)
+    app.get["/o?{limit}"](named_optional)
+    app.get["/p/{pid}"](one_value)
+    _expect(app, "/n/042", 200, "named 42")
+    _bad(app, "/n/x")
+    _expect(app, "/o", 200, "limit 20")
+    _expect(app, "/o?limit=5", 200, "limit 5")
+    _bad(app, "/o?limit=x")
+    _expect(app, "/p/3", 200, "me, post 3")
+
+
+def test_param_holds_and_copies_its_value() raises:
+    var id = Param["id", Int](7)
+    var copy = id.copy()
+    copy.value += 1
+    assert_equal(id.value, 7)
+    assert_equal(copy.value, 8)
+    var text = Param["q", String]("mojo")
+    assert_equal(text.value, "mojo")
+
+
+def _tests() -> TestSuite:
+    """This module's tests, registered by hand: discovering them
+    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
+    because a handler here declares a `Param` (M3-050;
+    tests/named_values_api_fail/discover_tests_crash.mojo).
+    `scripts/check.sh` checks that every `test_` function is listed."""
+    var suite = TestSuite()
+    suite.test[test_dx_examples]()
+    suite.test[test_two_path_values_in_every_mix]()
+    suite.test[test_path_then_query_value]()
+    suite.test[test_two_query_values_bind_in_the_literals_order]()
+    suite.test[test_duplicate_path_names_bind_by_position]()
+    suite.test[test_each_value_is_decoded_once]()
+    suite.test[test_each_value_has_its_own_bad_request]()
+    suite.test[test_bad_request_calls_neither_handler_nor_from_body]()
+    suite.test[test_headers_after_two_values]()
+    suite.test[test_body_after_two_values]()
+    suite.test[test_json_and_carrier_after_two_values_reject_the_values_first]()
+    suite.test[test_stateful_forms]()
+    suite.test[test_first_registration_wins]()
+    suite.test[test_raw_handler_is_unaffected]()
+    suite.test[test_typed_values_and_forwarding]()
+    suite.test[test_one_value_may_be_named]()
+    suite.test[test_param_holds_and_copies_its_value]()
+    return suite^
+
+
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    _tests().run()

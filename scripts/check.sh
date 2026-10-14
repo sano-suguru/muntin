@@ -44,6 +44,22 @@ for s in "${sources[@]}"; do
 done
 echo "ok"
 
+# A test module that defines a handler with a `Param` cannot discover its
+# tests on Mojo 1.1.0 (tests/named_values_api_fail/discover_tests_crash.mojo)
+# and lists them in `_tests()`; every `test_` function must be listed there.
+step "hand-registered tests"
+for f in tests/test_*.mojo adapters/flare/test_*.mojo; do
+    grep -q '^def _tests() -> TestSuite:' "$f" || continue
+    flat="$(tr -d ' \n' <"$f")" # the formatter may wrap a long entry
+    for t in $(sed -n 's/^def \(test_[A-Za-z0-9_]*\)(.*/\1/p' "$f"); do
+        if [[ "$flat" != *"suite.test[$t]()"* ]]; then
+            echo "error: $f: $t is not listed in _tests()" >&2
+            exit 1
+        fi
+    done
+done
+echo "ok"
+
 step "architecture boundary"
 ./scripts/check_boundaries.sh src/muntin
 
@@ -123,7 +139,7 @@ for t in tests/compile_fail/*.mojo; do fixtures+=(route "$t"); done
 # Must-not-build fixtures whose expected text is the compiler's own
 # diagnostic. Each file states what it pins; docs/ARCHITECTURE.md's revisit
 # index maps each directory to the decision it protects.
-must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail tests/header_access_fail tests/with_headers_api_fail tests/registration_fail tests/registration_api_fail tests/get_headers_api_fail tests/string_route_api_fail tests/methods_api_fail tests/bodyless_api_fail tests/route_values_api_fail tests/optional_values_api_fail tests/middleware_fail tests/middleware_api_fail tests/body_bytes_api_fail tests/from_bytes_api_fail tests/bytes_headers_api_fail tests/bytes_limit_api_fail)
+must_fail_dirs=(tests/spike_fail tests/storage_fail tests/extraction_fail tests/body_fail tests/response_fail tests/error_fail tests/error_response_fail tests/raw_fail tests/state_fail tests/state_storage_fail tests/state_get_fail tests/state_post_fail tests/state_raw_fail tests/headers_fail tests/headers_api_fail tests/json_fail tests/json_api_fail tests/testclient_headers_api_fail tests/header_access_fail tests/with_headers_api_fail tests/registration_fail tests/registration_api_fail tests/get_headers_api_fail tests/string_route_api_fail tests/methods_api_fail tests/bodyless_api_fail tests/route_values_api_fail tests/optional_values_api_fail tests/named_values_api_fail tests/middleware_fail tests/middleware_api_fail tests/body_bytes_api_fail tests/from_bytes_api_fail tests/bytes_headers_api_fail tests/bytes_limit_api_fail)
 for dir in "${must_fail_dirs[@]}"; do
     for t in "$dir"/*.mojo; do fixtures+=(must_fail "$t"); done
 done
