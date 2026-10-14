@@ -113,7 +113,7 @@ def show_item(name: String) -> String:
 def premise_app() -> App:
     """The measured premise's `App`, registered in its order, except that
     its repeated `get` on `/items/{name}` is now `/items/new` first
-    (M3-052)."""
+    (M3-053)."""
     var app = App()
     app.get["/users/me"](me)
     app.delete["/users/{id}"](delete_user)
@@ -125,7 +125,7 @@ def premise_app() -> App:
     app.post["/hooks"](hook)
     app.put["/items/{name}"](put_item)
     # Two `get` routes match `/items/new`; a repeated path would be a route
-    # conflict (M3-052), so the more specific one comes first.
+    # conflict (M3-053), so the more specific one comes first.
     app.get["/items/new"](me)
     app.get["/items/{name}"](show_item)
     return app^

@@ -68,7 +68,7 @@ Semantics:
 - Arity is checked at compile time at the registration call: `app.get["/users/{id}"](hello)` fails with `constraint failed: route declares a path parameter but the handler takes none`; `app.get["/users"](get_user)` and `app.get["/users/{id}/posts/{post}"](get_user)` fail with `constraint failed: handler takes one Int parameter; route must declare exactly one path or query parameter`.
 - Routes match the path only (below): `/users/42?x=1` passes `Int(42)` and `/hello?x=1` is 200. Matching uses the raw path; the matched value is then percent-decoded before conversion ("`String` route values and decoding", below), so `/users/%34%32` passes `Int(42)`.
 
-Route conflicts ([M3-052](history/architecture-decisions.md#route-conflict-decision-m3-052)), proven by `tests/test_route_conflicts.mojo` and `tests/route_conflict_abort/` (via `./scripts/check.sh`, which runs each fixture and expects its abort):
+Route conflicts ([M3-053](history/architecture-decisions.md#route-conflict-decision-m3-053)), proven by `tests/test_route_conflicts.mojo` and `tests/route_conflict_abort/` (via `./scripts/check.sh`, which runs each fixture and expects its abort):
 
 ```mojo
 app.get["/users/me"](me)              # the more specific route first

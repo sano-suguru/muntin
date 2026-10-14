@@ -374,7 +374,7 @@ def test_first_registration_wins() raises:
     _bad(app, "/users/alice")
     _bad(app, "/users/%zz")
     # The Int route answers; a 400 never falls through to a later, more
-    # general `String` route (a repeated path is a route conflict, M3-052).
+    # general `String` route (a repeated path is a route conflict, M3-053).
     var general = App()
     general.get["/users/{id}"](get_user)
     general.get["/{p}/{name}"](two_names)

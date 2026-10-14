@@ -179,7 +179,7 @@ def test_exact_and_typed_routes_share_one_app() raises:
 
 def test_first_registered_matching_route_wins() raises:
     # A static route registered before the parameter route that covers it;
-    # the other order aborts at registration (M3-052,
+    # the other order aborts at registration (M3-053,
     # tests/route_conflict_abort).
     var app = App()
     app.get["/users/me"](me)
@@ -327,7 +327,7 @@ def test_query_does_not_take_part_in_route_selection() raises:
 
     # The first route matches on path alone; a missing key is 400 there, not
     # a fall-through to the later, more general route. A second `get` route
-    # on `/items` would be a route conflict (M3-052).
+    # on `/items` would be a route conflict (M3-053).
     assert_equal(client.get("/items?limit=5").text(), "items 5")
     assert_equal(client.get("/items").status, 400)
     assert_equal(client.get("/other").text(), "named other")

@@ -325,7 +325,7 @@ def test_first_registration_wins_and_never_falls_through() raises:
     app.get["/b/{id}"](first)
     app.delete["/b/{id}"](removed)
     # A get route that answers 400 does not fall through to the next, more
-    # general one (a repeated path is a route conflict, M3-052).
+    # general one (a repeated path is a route conflict, M3-053).
     app.get["/c/x?{id}"](first)
     app.get["/c/{name}"](by_name)
     _same_as_get(app, "/a/1", 200, "first 1")

@@ -303,7 +303,7 @@ def test_testclient_headers() raises:
 
 def test_route_kinds_share_one_app() raises:
     # Each kind on a path of its own: a second route on one path is a route
-    # conflict whatever the kinds (M3-052, tests/route_conflict_abort).
+    # conflict whatever the kinds (M3-053, tests/route_conflict_abort).
     var app = App()
     app.get["/a/{id}"](plain_id)
     app.get["/b/{id}"](by_id)

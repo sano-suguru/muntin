@@ -1,4 +1,4 @@
-# Route conflicts (M3-052, pull request #95): which registrations
+# Route conflicts (M3-053, pull request #95): which registrations
 # `_conflict` refuses, and that the orders it accepts dispatch every request
 # to the most specific matching route. The abort itself is checked by
 # tests/route_conflict_abort.

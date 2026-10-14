@@ -103,7 +103,7 @@ def _app() -> App:
     app.get["/items?{limit}"](list_items)
     # Later registrations grow the route list, moving the first three
     # routes (and their boxes) to new buffers.
-    # Distinct paths: a repeated one is a route conflict (M3-052).
+    # Distinct paths: a repeated one is a route conflict (M3-053).
     app.get["/other"](other)
     app.get["/other1"](other)
     app.get["/other2"](other)

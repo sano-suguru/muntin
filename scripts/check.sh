@@ -128,7 +128,7 @@ for dir in "${must_fail_dirs[@]}"; do
     for t in "$dir"/*.mojo; do fixtures+=(must_fail "$t"); done
 done
 
-# Registrations that must abort when run (M3-052): each builds, aborts, and
+# Registrations that must abort when run (M3-053): each builds, aborts, and
 # states its expected abort message on the expected-diagnostic line.
 for t in tests/route_conflict_abort/*.mojo; do fixtures+=(must_abort "$t"); done
 

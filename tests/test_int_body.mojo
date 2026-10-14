@@ -250,7 +250,7 @@ def second_note(name: String, body: Note) -> String:
 def test_matched_route_failing_conversion_does_not_fall_through() raises:
     # Both routes match path /notes; the first, more specific one selects
     # the request, and its missing `a` is 400 even though the second route
-    # would accept it (a repeated path is a route conflict, M3-052).
+    # would accept it (a repeated path is a route conflict, M3-053).
     var app = App()
     app.post["/notes?{a}"](update_note)
     app.post["/{name}"](second_note)

@@ -541,7 +541,7 @@ def test_first_registration_wins_and_never_falls_through() raises:
     assert_equal(app.handle(Request("PUT", "/f", "x")).text(), "first x")
     assert_equal(app.handle(Request("PUT", "/h", "x")).text(), "s h x")
     # The `patch` route's 400 does not fall through to the later, more
-    # general `patch` route (a repeated path is a route conflict, M3-052),
+    # general `patch` route (a repeated path is a route conflict, M3-053),
     # nor to the `delete` route before it.
     var bad = app.handle(Request("PATCH", "/g/abc", "x"))
     assert_equal(bad.status, 400)

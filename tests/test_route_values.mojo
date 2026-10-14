@@ -310,7 +310,7 @@ def _app() -> App:
     app.get["/rev/{uid}/posts/{pid}"](post_of_swapped)
     app.get["/owned/{a}?{b}"](owned)
     # The more specific route first; a 400 never falls through to a more
-    # general one. A repeated path is a route conflict (M3-052).
+    # general one. A repeated path is a route conflict (M3-053).
     app.get["/users/me/posts/{pid}"](one_value)
     app.get["/users/{uid}/posts/{pid}"](post_of)
     app.get["/fw/x/{pid}"](one_value)

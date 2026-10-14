@@ -258,7 +258,7 @@ def _allowed(routes: List[_Route], path: String) -> List[String]:
 
 def _covers(general: String, specific: String) -> Bool:
     """Whether route path `general` matches every request path `specific`
-    matches (M3-052): the same number of segments, and at each position the
+    matches (M3-053): the same number of segments, and at each position the
     same static text in both, or a placeholder in `general` and a placeholder
     or a non-empty static segment in `specific` (a placeholder matches no
     empty segment, `_match`). Placeholder names are not compared."""
@@ -277,7 +277,7 @@ def _covers(general: String, specific: String) -> Bool:
 
 def _overlaps(a: String, b: String) -> Bool:
     """Whether some request path matches both route paths `a` and `b`
-    (M3-052): the same number of segments, and at each position the same
+    (M3-053): the same number of segments, and at each position the same
     static text in both, or a placeholder in one and a placeholder or a
     non-empty static segment in the other."""
     var x = a.split("/")
@@ -299,7 +299,7 @@ def _overlaps(a: String, b: String) -> Bool:
 
 def _conflict(routes: List[_Route], method: String, path: String) -> String:
     """Why a route for `method` and `path` cannot be registered after
-    `routes`, or empty if it can (M3-052). It can when every earlier route of
+    `routes`, or empty if it can (M3-053). It can when every earlier route of
     the same method whose path overlaps `path` is more specific than it, so
     the first match `App.handle` selects is always the most specific one.
     The query takes no part, as in selection."""
@@ -1076,7 +1076,7 @@ struct App(Movable):
     def _add(mut self, var route: _Route):
         """Appends `route` to the routes, or aborts at this registration with
         `_conflict`'s message when an earlier route of the same method
-        overlaps it and is not more specific (M3-052)."""
+        overlaps it and is not more specific (M3-053)."""
         var refused = _conflict(self._routes, route.method, route.path)
         if refused.byte_length() > 0:
             abort(refused)
@@ -2467,7 +2467,7 @@ struct App(Movable):
         The first registered route whose method and path match handles the
         request, raw or typed; the query takes no part in selecting it.
         Registration refuses a route that an earlier, not more specific route
-        of its method overlaps (`_add`, M3-052), so that route is the most
+        of its method overlaps (`_add`, M3-053), so that route is the most
         specific match. Methods match
         byte for byte, except that a `HEAD` request also matches a `GET`
         route and runs the `GET` route's steps: a typed handler receives the

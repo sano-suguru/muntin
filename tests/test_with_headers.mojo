@@ -583,7 +583,7 @@ def test_routes_without_a_carrier_are_unchanged_with_fields_present() raises:
 
 def test_route_kinds_share_one_app() raises:
     # Each kind on a path of its own: a second route on one path is a route
-    # conflict whatever the kinds (M3-052, tests/route_conflict_abort).
+    # conflict whatever the kinds (M3-053, tests/route_conflict_abort).
     var prefix = State(Prefix("p:"))
     var app = App()
     app.post["/a"](s_body)

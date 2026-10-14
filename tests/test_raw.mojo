@@ -448,7 +448,7 @@ def test_typed_shapes_are_unchanged_beside_raw() raises:
 def test_first_registered_route_wins_across_kinds() raises:
     # Raw and typed routes are routes alike: the more specific one,
     # registered first, answers. A repeated path, the query aside, or the
-    # other order is a route conflict whatever the kinds (M3-052,
+    # other order is a route conflict whatever the kinds (M3-053,
     # tests/route_conflict_abort).
     var raw_post = App()
     raw_post.post["/same"](raw_first)

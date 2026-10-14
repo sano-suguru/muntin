@@ -366,7 +366,7 @@ def test_errors_use_the_m2_model() raises:
 
 def test_route_kinds_share_one_app() raises:
     # Each kind on a path of its own: a second route on one path is a route
-    # conflict whatever the kinds (M3-052, tests/route_conflict_abort).
+    # conflict whatever the kinds (M3-053, tests/route_conflict_abort).
     _reset()
     var users = _users()
     var app = App()

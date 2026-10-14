@@ -331,7 +331,7 @@ def _app() -> App:
     app.get["/d?{limit}"](defaulted)
     app.get["/sd?{query}&{limit}"](search_defaulted)
     # An optional and a required value on paths of their own: a second
-    # route on either path would be a route conflict (M3-052).
+    # route on either path would be a route conflict (M3-053).
     app.get["/first?{limit}"](opt_int)
     app.get["/req?{limit}"](required)
     # A raw handler is never decoded and never gets `None`.

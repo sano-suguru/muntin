@@ -374,7 +374,7 @@ def test_answers_are_the_handlers() raises:
 def test_bodyless_route_is_selected_by_method_and_path() raises:
     """A bodyless `post` route is one route of method `POST`: another
     method on its path is 405 with its `Allow`; a second `post` route on
-    the same path is a route conflict (M3-052)."""
+    the same path is a route conflict (M3-053)."""
     var app = App()
     app.post["/x/{id}"](one_int)
     var client = TestClient(app)
