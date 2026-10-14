@@ -75,10 +75,10 @@ listener. `server.port()` is the bound port. `server.serve(app)` borrows
 `_BorrowedHandler`, which answers through `_serve_app` as `MuntinHandler`
 does; a raise propagates and a return returns, with one exception: a raise
 after a stop signal (below) returns. It returns after a graceful stop or
-when the reactor stopped on a failed poll. There is no stop call, worker count or backend configuration
+when the reactor stopped on a failed poll. There is no stop call or backend configuration
 other than the body limit, the grace window and the idle timeout below.
 `_BorrowedHandler` is not `Copyable`, which keeps Flare's multi-worker
-`serve` out of reach. `Server`'s one initializer takes keyword-only `_host`,
+`serve` out of reach: workers (below) never share an `App`. `Server`'s one initializer takes keyword-only `_host`,
 `_port`, `_max_body_bytes`, `_shutdown_grace_ms` and `_idle_timeout_ms`, so
 `Server.bind` is the one public spelling.
 `MuntinHandler` stays for the adapter's own tests and probes.
@@ -111,6 +111,29 @@ both read: how long a connection stays open while nothing arrives on it.
 `_server_config` checks it after the grace window and before the host is
 parsed: 1 to 86,400,000 (`idle_timeout_ms out of range: <value>`
 otherwise), since Flare reads 0 and negative values as no idle timer.
+
+Workers (M3-049, decided in docs/history/architecture-decisions.md
+"Multi-worker serving decision (M3-049)"): `server.serve[make](workers=n)`
+(1 to 256) starts one thread per worker; each calls `make`, a `thin`
+function (it captures nothing, and Mojo 1.1.0 has no module-level `var`),
+builds its own `App` on its thread and serves it with Flare's reactor loop
+(`run_unified_reactor_loop_shared`, the loop Flare's `Scheduler` runs per
+worker) on its own close-on-exec copy of the bound listener, through
+`_BorrowedHandler`.
+No `App` or `State` value is reached from two threads. Flare's own
+multi-worker `serve` is not used: its handler is copied before the workers
+start and serves through `self`, so an `App` could not be built on its
+worker, and its stop has no window for every worker. The stop watcher drains
+every worker (`_drain_workers`): it parks every copy on a pipe that never
+becomes readable (`dup2`) and closes the `Server`'s listener, waits the
+grace window, then sets every worker's stop byte; a copy it cannot park
+stays open until the joins, and the stop becomes a hard one that raises. A
+worker that ends on its own (`make` or its loop raised, or its loop
+returned) before a stop signal was delivered, as the serving thread sees it
+at its next look, stops the others at once; one
+that has not ended `_REACTOR_STOP_MS` later (a `make` or a handler that
+does not return) ends the process with status 1. `serve[make]` refuses a
+TLS server.
 
 TLS (M3-051, decided in docs/history/architecture-decisions.md "Server TLS
 decision (M3-051)"): `Server.bind`'s keyword-only `tls`, a `Tls` holding a
@@ -146,10 +169,17 @@ result is checked. What clients see: docs/DX.md section 1.
 """
 
 from std.atomic import Atomic, Ordering
-from std.ffi import _get_global, c_int, external_call, get_errno
+from std.ffi import (
+    _get_global,
+    c_int,
+    c_ulong,
+    external_call,
+    get_errno,
+    set_errno,
+)
 from std.io import FileDescriptor
 from std.os import abort, getenv
-from std.sys import CompilationTarget
+from std.sys import CompilationTarget, stderr
 
 from flare.http import (
     Handler,
@@ -160,8 +190,18 @@ from flare.http import (
 )
 from flare.net import IpAddr, SocketAddr
 from flare.runtime import libc_nanosleep_ms, monotonic_now_ms
-from flare.runtime._thread import ThreadHandle, _OpaquePtr
 from flare.utils import exit
+from flare_internals import (
+    OpaquePtr as _OpaquePtr,
+    ThreadHandle,
+    close_listener,
+    flare_pipe,
+    has_tls,
+    listener_fd,
+    run_worker_loop,
+    set_listener_nonblocking,
+    set_stop,
+)
 from muntin import App, Headers, Request, Response
 
 
@@ -341,8 +381,10 @@ struct MuntinHandler(Handler):
 
 
 struct _BorrowedHandler[origin: Origin[mut=False]](Handler):
-    """Serves a borrowed `App` as a Flare handler, for `Server.serve`. Not
-    `Copyable` on purpose: Flare's multi-worker `serve` requires it."""
+    """Serves a borrowed `App` as a Flare handler, for `Server.serve` (and for
+    each worker of `serve[make]` over that worker's own `App`). Not
+    `Copyable` on purpose: Flare's multi-worker `serve` requires it, and an
+    `App` is never shared by two threads (M3-049)."""
 
     var _app: Pointer[App, Self.origin]
 
@@ -390,8 +432,10 @@ comptime _LARGEST_IDLE_TIMEOUT_MS = 86_400_000
 
 comptime _REACTOR_STOP_MS = 1000
 """How long the watcher waits, after the grace window, for Flare's reactor to
-leave its loop before it ends the process with 128 + the signal. The reactor
-reads its stop flag at least every 100 ms, but not while a handler runs."""
+leave its loop before it ends the process with 128 + the signal, and how long
+`serve[make]`'s serving thread waits, after a hard stop began, for every
+worker to end before it ends the process with status 1. The reactor reads its
+stop flag at least every 100 ms, but not while a handler runs."""
 
 comptime _WATCH_POLL_MS = 50
 """How often the watcher looks for a stop signal."""
@@ -429,6 +473,12 @@ comptime _STAGE_JOINED = 4
 comptime _STAGE_RESTORED = 5
 """`_stage`: the dispositions are restored and a stop signal the watcher did
 not act on is sent again; the serving claim is not yet released."""
+comptime _STAGE_WORKER_ENDED = 6
+"""`_stage`, `serve[make]` only: the serving thread first saw a worker end
+before a stop, and has not yet looked for a delivered stop signal."""
+comptime _STAGE_WORKER_STARTED = 7
+"""`_stage`, `serve[make]` only: the first worker thread is started and the
+others are not yet."""
 
 comptime _CB_DONE = 0
 """Control block cell: 1 once Flare's `serve` has returned or raised."""
@@ -444,7 +494,70 @@ Flare's `drain` error into; set to 1 in `_CB_DRAIN_FAILED` after it."""
 comptime _CB_DRAIN_FAILED = 5
 """Control block cell: 1 when Flare's `drain` raised and the watcher fell
 back to `close` (a hard stop)."""
-comptime _CB_LEN = 6
+comptime _CB_WORKERS = 6
+"""Control block cell: the address of `serve[make]`'s worker table, or 0 for
+`serve(app)`'s one reactor (M3-049)."""
+comptime _CB_NWORKERS = 7
+"""Control block cell: the worker table's row count."""
+comptime _CB_PARKED = 8
+"""Control block cell: the read end of `serve[make]`'s parking pipe, whose
+write end stays open, so it never becomes readable."""
+comptime _CB_LEN = 9
+
+comptime _WORKERS_TLS_UNSUPPORTED = (
+    "serve: workers are unsupported on a TLS server"
+)
+"""What `serve[make]` raises, before serving, for a `Server` with a TLS
+context: its workers' reactor loop is not given one, and no test covers a
+TLS handshake on a worker (M3-049)."""
+
+comptime _O_CLOEXEC_LINUX = 0o2000000
+comptime _FIOCLEX_MACOS: c_ulong = 0x20006601
+"""`FIOCLEX` on macOS (`_IO('f', 1)`), the request Flare uses there too."""
+comptime _F_DUPFD_CLOEXEC_LINUX = 1030
+comptime _EINTR = 4
+
+comptime _LARGEST_WORKERS = 256
+"""The largest worker count `serve[make]` takes: the bound Flare v0.12.0's own
+multi-worker `serve` takes (M3-049)."""
+
+# The worker table (M3-049) is shared by address between the serving thread,
+# the workers and the watcher, so its safety rests on these invariants rather
+# than on the type system:
+# - `serve[make]` allocates the table and the `stops`, `errors` and `configs`
+#   lists at their final length before any address is taken, and never
+#   appends to them after, so no element moves while another thread may read
+#   it.
+# - They are freed only after every worker is joined and the watcher is
+#   joined (`finish`); a worker that cannot be joined aborts the process, and
+#   the deadline path ends it with `_exit`, which runs no destructor.
+# - Every table cell is an `Int64` read with an acquire load and written with
+#   a release store (`_load`, `_store`), and each stop byte with Flare's
+#   release store (`set_stop`) and its reactor's acquire load. A worker writes
+#   its error string before its release store of `_W_STATE`, and the error is
+#   read only after an acquire load shows a raised state, so the string is
+#   complete when read.
+# - Each `ServerConfig` and error string is written by one thread only (the
+#   serving thread before the spawn, its worker after).
+comptime _W_FD = 0
+"""Worker table cell: the worker's close-on-exec copy of the listener, or -1
+once it is closed."""
+comptime _W_STOP = 1
+"""Worker table cell: the address of the worker's stop byte, which its
+reactor loop reads every turn."""
+comptime _W_STATE = 2
+"""Worker table cell: `_W_SERVING`, `_W_RETURNED`, `_W_MAKE_RAISED` or
+`_W_LOOP_RAISED`."""
+comptime _W_ERROR = 3
+"""Worker table cell: the address of the `String` a raise is written to."""
+comptime _W_CONFIG = 4
+"""Worker table cell: the address of the worker's own `ServerConfig`."""
+comptime _W_LEN = 5
+
+comptime _W_SERVING = 0
+comptime _W_RETURNED = 1
+comptime _W_MAKE_RAISED = 2
+comptime _W_LOOP_RAISED = 3
 
 
 def _no_stage(stage: Int):
@@ -591,7 +704,13 @@ def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
         unsafe_from_address=_load(block, _CB_SERVER)
     )
     try:
-        _ = server[].drain(_load(block, _CB_GRACE))
+        if _load(block, _CB_WORKERS) != 0:
+            _drain_workers(block, server[])
+        else:
+            try:
+                _ = server[].drain(_load(block, _CB_GRACE))
+            except e:
+                raise Error("Flare's drain raised: " + String(e))
     except e:
         Pointer[String, MutUntrackedOrigin](
             unsafe_from_address=_load(block, _CB_DRAIN_ERROR)
@@ -605,6 +724,195 @@ def _watch_for_stop(arg: _OpaquePtr) -> _OpaquePtr:
         _ = libc_nanosleep_ms(5)
     _ = seen^
     _ = default^
+    return arg
+
+
+def _row(table: Int, i: Int) -> Int:
+    """The address of row `i` of a worker table."""
+    return table + 8 * _W_LEN * i
+
+
+def _close_fd(fd: Int):
+    _ = external_call["close", c_int](c_int(fd))
+
+
+def _dup_cloexec(fd: Int) -> Int:
+    """A close-on-exec copy of `fd`, so a program the application starts
+    with `exec` cannot keep the listening socket open after `serve` ends
+    (`dup` clears the flag on its copy). A child forked without `exec`
+    still inherits it, with the `Server`'s own listener: -1 with `errno` set if it failed. Linux sets the
+    flag in the same call (`F_DUPFD_CLOEXEC`); macOS sets it just after
+    `dup`, as Flare does for its own sockets there (`fcntl` is variadic and
+    `external_call` corrupts its third argument on macOS arm64), so a fork
+    and exec on another thread in between can still inherit it."""
+    comptime if CompilationTarget.is_linux():
+        return Int(
+            external_call["fcntl", c_int](
+                c_int(fd), c_int(_F_DUPFD_CLOEXEC_LINUX), c_int(0)
+            )
+        )
+    else:
+        var copy = Int(external_call["dup", c_int](c_int(fd)))
+        if copy < 0:
+            return -1
+        if not _mark_cloexec_macos(copy):
+            var failure = get_errno()
+            _close_fd(copy)
+            set_errno(failure)
+            return -1
+        return copy
+
+
+def _mark_cloexec_macos(fd: Int) -> Bool:
+    """Sets close-on-exec on `fd` with `ioctl(fd, FIOCLEX)` (no third
+    argument, so `external_call`'s variadic bug on macOS arm64 does not
+    apply): whether it succeeded, with `errno` set if not."""
+    return Int(external_call["ioctl", c_int](c_int(fd), _FIOCLEX_MACOS)) == 0
+
+
+def _dup_over_cloexec(src: Int, dst: Int) -> Int:
+    """`dup2(src, dst)`, retried on `EINTR`, leaving `dst` close-on-exec
+    (`dup2` clears the flag): 0, or -1 with `errno` set. Linux sets the
+    flag in the same call (`dup3`), and on failure `dst` is untouched;
+    macOS sets it just after, as `_dup_cloexec`, and if only that fails
+    `dst` is already the copy of `src`, without the flag."""
+    while True:
+        var done: Int
+        comptime if CompilationTarget.is_linux():
+            done = Int(
+                external_call["dup3", c_int](
+                    c_int(src), c_int(dst), c_int(_O_CLOEXEC_LINUX)
+                )
+            )
+        else:
+            done = Int(external_call["dup2", c_int](c_int(src), c_int(dst)))
+            if done >= 0 and not _mark_cloexec_macos(dst):
+                return -1
+        if done >= 0:
+            return 0
+        if Int(get_errno().value) != _EINTR:
+            return -1
+
+
+def _pipe_cloexec(fds: Pointer[c_int, _]) -> Int:
+    """`pipe` with both ends close-on-exec: 0, or -1 with `errno` set. Linux
+    sets the flag in the same call (`pipe2`); macOS just after, as
+    `_dup_cloexec`."""
+    comptime if CompilationTarget.is_linux():
+        return Int(external_call["pipe2", c_int](fds, c_int(_O_CLOEXEC_LINUX)))
+    else:
+        if flare_pipe(fds) != 0:
+            return -1
+        var read_end = Int(fds[])
+        var write_end = Int(fds.unsafe_offset(1)[])
+        if not _mark_cloexec_macos(read_end) or not _mark_cloexec_macos(
+            write_end
+        ):
+            var failure = get_errno()
+            _close_fd(read_end)
+            _close_fd(write_end)
+            set_errno(failure)
+            return -1
+        return 0
+
+
+def _drain_workers(block: Int, mut server: HttpServer) raises:
+    """The watcher's graceful stop for `serve[make]` (M3-049), Flare's
+    single-reactor `drain` done for every worker: it replaces every worker's
+    copy of the listener with the parking pipe (`dup2`, so the number stays
+    taken and no reactor can register or accept on a reused one; the serving
+    thread closes it after the joins) and closes the `Server`'s own, so the
+    socket stops listening and new connections are refused, keeps every reactor serving
+    its open connections for the grace window, then sets every worker's stop
+    byte. Flare's multi-worker stop does neither: `HttpServer.drain` does not
+    reach the workers' listeners, and `Scheduler.drain` stops every reactor
+    at once, with no window (M3-046).
+
+    A copy that cannot be parked is not closed: its reactor may still have
+    the number registered, so it stays open, and the socket listening, until
+    the serving thread closes it after the joins. The others are still
+    parked and the `Server`'s listener closed, then every stop byte is set at
+    once (no window) and this raises, which makes the stop a hard one that
+    `serve` raises for."""
+    var table = _load(block, _CB_WORKERS)
+    var count = _load(block, _CB_NWORKERS)
+    var parked = _load(block, _CB_PARKED)
+    var failure = String()
+    for i in range(count):
+        var fd = _load(_row(table, i), _W_FD)
+        # Every copy is tried, a failed one included; the first failure is
+        # the one reported.
+        if fd >= 0 and _dup_over_cloexec(parked, fd) != 0:
+            if not failure:
+                failure = (
+                    "parking worker "
+                    + String(i)
+                    + "'s copy of the listener failed (dup2: "
+                    + _errno()
+                    + ")"
+                )
+    close_listener(server)
+    if failure:
+        _stop_workers(table, count)
+        raise Error(failure)
+    var wait_ms = _load(block, _CB_GRACE)
+    # As Flare's `drain`: one extra millisecond keeps "at least the window"
+    # true with a clock truncated to whole milliseconds.
+    var deadline = monotonic_now_ms() + wait_ms + (1 if wait_ms > 0 else 0)
+    while monotonic_now_ms() < deadline:
+        # Every worker has ended (a hard stop came first, or each one's
+        # `make` raised): no connection is left to serve.
+        var serving = False
+        for i in range(count):
+            if _load(_row(table, i), _W_STATE) == _W_SERVING:
+                serving = True
+        if not serving:
+            break
+        _ = libc_nanosleep_ms(1)
+    for i in range(count):
+        set_stop(_load(_row(table, i), _W_STOP))
+
+
+def _serve_worker[
+    make: def() thin raises -> App
+](arg: _OpaquePtr) -> _OpaquePtr:
+    """One worker thread of `serve[make]` (M3-049): builds its own `App` with
+    `make`, on this thread, and serves it with Flare's reactor loop on its
+    copy of the listener until its stop byte is set. The `App` is borrowed
+    by this thread's reactor only and destroyed here, so no value of it,
+    `State` values included, is reached from another thread. Records how it
+    ended in its row, once its `App` is destroyed. Never raises (a pthread start routine).
+    """
+    var row = Int(arg)
+    var error = Pointer[String, MutUntrackedOrigin](
+        unsafe_from_address=_load(row, _W_ERROR)
+    )
+    var app: App
+    try:
+        app = make()
+    except e:
+        error[] = String(e)
+        _store(row, _W_STATE, _W_MAKE_RAISED)
+        return arg
+    var config = Pointer[ServerConfig, MutUntrackedOrigin](
+        unsafe_from_address=_load(row, _W_CONFIG)
+    )
+    var stop = Pointer[Bool, MutUntrackedOrigin](
+        unsafe_from_address=_load(row, _W_STOP)
+    )
+    var fd = _load(row, _W_FD)
+    var ended = _W_RETURNED
+    try:
+        if fd >= 0:
+            run_worker_loop(fd, config[], _BorrowedHandler(app), stop[])
+    except e:
+        error[] = String(e)
+        ended = _W_LOOP_RAISED
+    # Published once the `App` is destroyed: until then the worker is still
+    # serving to the serving thread, so `_REACTOR_STOP_MS` also bounds a
+    # destructor (a `State` value's included) that does not return.
+    _ = app^
+    _store(row, _W_STATE, ended)
     return arg
 
 
@@ -641,8 +949,9 @@ struct _StopWatch(Movable):
     """What `Server.serve` sets up around Flare's `serve` and undoes after it
     (M3-045): the process's serving claim, the stop handler on SIGTERM and
     SIGINT, the dispositions it replaced, and the watcher thread with its
-    control block. The block, the error string and the server it points to
-    outlive the thread, which `finish` joins before anything is freed."""
+    control block. The block, the error string, the server it points to and,
+    for `serve[make]`, the worker table outlive the thread, which `finish`
+    joins before anything is freed."""
 
     var _block: List[Int64]
     var _previous: List[UInt8]
@@ -654,6 +963,9 @@ struct _StopWatch(Movable):
         server_addr: Int,
         grace_ms: Int,
         stage: def(Int) thin -> None,
+        workers_addr: Int = 0,
+        workers: Int = 0,
+        parked: Int = -1,
     ) raises:
         """Claims the process's serving cell (raises `_ALREADY_SERVING`
         otherwise), installs the stop handler on SIGTERM then SIGINT and
@@ -679,6 +991,9 @@ struct _StopWatch(Movable):
         _store(block, _CB_SERVER, server_addr)
         _store(block, _CB_GRACE, grace_ms)
         _store(block, _CB_DRAIN_ERROR, Int(self._drain_error.unsafe_ptr()))
+        _store(block, _CB_WORKERS, workers_addr)
+        _store(block, _CB_NWORKERS, workers)
+        _store(block, _CB_PARKED, parked)
         var handler: def(c_int) thin abi("C") -> None = _stop_signal_seen
         var action = List[UInt8](length=_SIGACTION_BYTES, fill=0)
         var at = action.unsafe_ptr()
@@ -729,6 +1044,30 @@ struct _StopWatch(Movable):
                     + undo
                 )
             raise e^
+
+    def stop_delivered(self) -> Bool:
+        """Whether a stop signal was delivered: the watcher acted on one, or
+        SIGTERM's or SIGINT's disposition is back to `SIG_DFL`, which the
+        kernel does as it delivers one, before the watcher's next look
+        (a read that fails is not a delivery, as for the watcher). The
+        watcher then acts on it within `_WATCH_POLL_MS`."""
+        if _load(Int(self._block.unsafe_ptr()), _CB_SIGNAL) != 0:
+            return True
+        var seen = List[UInt8](length=_SIGACTION_BYTES, fill=0)
+        var delivered = False
+        for sig in [_SIGTERM, _SIGINT]:
+            if (
+                not delivered
+                and _sigaction(sig, 0, Int(seen.unsafe_ptr())) == 0
+                and seen.unsafe_ptr().unsafe_bitcast[Int]()[] == 0
+            ):
+                delivered = True
+        _ = seen^
+        return delivered
+
+    def acted_on(self) -> Int:
+        """The stop signal the watcher acted on, or 0."""
+        return _load(Int(self._block.unsafe_ptr()), _CB_SIGNAL)
 
     def finish(mut self, stage: def(Int) thin -> None) raises -> Int:
         """Marks serving done, joins the watcher, puts the dispositions
@@ -782,7 +1121,7 @@ struct _StopWatch(Movable):
         if _load(block, _CB_DRAIN_FAILED) != 0:
             raise Error(
                 "serve: the graceful stop failed and open connections were"
-                " closed at once: Flare's drain raised: "
+                " closed at once: "
                 + self._drain_error[0]
             )
         return acted
@@ -816,6 +1155,54 @@ def _server_config(
     config.shutdown_timeout_ms = shutdown_grace_ms
     config.idle_timeout_ms = idle_timeout_ms
     return config^
+
+
+def _close_workers_fds(table: Int, count: Int):
+    """Closes the listener copies a worker table still holds."""
+    for i in range(count):
+        var fd = _load(_row(table, i), _W_FD)
+        if fd >= 0:
+            _store(_row(table, i), _W_FD, -1)
+            _close_fd(fd)
+
+
+def _close_parking(parking: List[c_int]):
+    _close_fd(Int(parking[0]))
+    _close_fd(Int(parking[1]))
+
+
+def _ended_on_its_own(table: Int, count: Int, errors: List[String]) -> String:
+    """`serve[make]`'s error for the first of `count` workers whose `make`
+    or reactor raised, or empty."""
+    for i in range(count):
+        var state = _load(_row(table, i), _W_STATE)
+        if state == _W_MAKE_RAISED:
+            return "serve: a worker's make raised: " + errors[i]
+        if state == _W_LOOP_RAISED:
+            return "serve: a worker's reactor raised: " + errors[i]
+    return String()
+
+
+def _why_ended(table: Int, count: Int, errors: List[String]) -> String:
+    """`serve[make]`'s error when a worker ended before a stop signal: the
+    first of `count` workers whose `make` or reactor raised, else
+    `serve: a worker's reactor returned before a stop signal` if one
+    returned, else empty. Read when that end is first seen, before the hard
+    stop makes the other reactors return too."""
+    var raised = _ended_on_its_own(table, count, errors)
+    if raised:
+        return raised
+    for i in range(count):
+        if _load(_row(table, i), _W_STATE) == _W_RETURNED:
+            return "serve: a worker's reactor returned before a stop signal"
+    return String()
+
+
+def _stop_workers(table: Int, count: Int):
+    """Sets the stop byte of the first `count` workers: each reactor leaves
+    its loop at its next turn and closes its connections (no window)."""
+    for i in range(count):
+        set_stop(_load(_row(table, i), _W_STOP))
 
 
 comptime _PEM_CERTIFICATE = "-----BEGIN CERTIFICATE-----"
@@ -1220,3 +1607,202 @@ struct Server(Movable):
                 raise e^
             return
         _ = watch.finish(_stage)
+
+    def serve[
+        make: def() thin raises -> App
+    ](
+        mut self,
+        *,
+        workers: Int,
+        _stage: def(Int) thin -> None = _no_stage,
+    ) raises:
+        """Serves with `workers` threads (1 to 256), each with its own `App`
+        built by `make` on that thread (M3-049; docs/DX.md section 1). It
+        does not return while serving. `make` is a `thin` function: it can
+        capture nothing, and Mojo 1.1.0 has no module-level `var`, so two
+        workers share no value of their `App`s, `State` values included,
+        unless `make` reaches one through an unsafe pointer or a C call.
+        Every worker accepts on the bound listener; a connection stays on
+        the worker that accepted it, and each worker runs its handlers one
+        at a time, as `serve(app)` does.
+
+        Raises `workers out of range: <value>` outside 1 to 256, then
+        `FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare v0.12.0`,
+        `serve: workers are unsupported on a TLS server`, and `Server.serve
+        is already serving in this process` as `serve(app)` does, all before
+        serving. If `make` raises on a worker, or a worker's reactor raises
+        or returns on its own, before a stop signal was delivered (as this
+        thread sees it at its next look, not when the worker ended), every
+        worker is stopped at once (no grace window) and this raises `serve:
+        a worker's make raised: <error>`, `serve: a worker's reactor
+        raised: <error>` or `serve: a worker's reactor returned before a
+        stop signal`, for what ended first; a worker that has not ended
+        `_REACTOR_STOP_MS` later (a `make` or a handler that does not
+        return cannot be interrupted) ends the process with status 1 after
+        printing that error. After a stop signal the stop goes on and this
+        returns. SIGTERM and SIGINT stop it as
+        they stop `serve(app)`: the listener closes, so new connections are
+        refused, every worker serves its open connections for
+        `shutdown_grace_ms`, then each closes what is left and this returns.
+
+        `_stage` is not API: the stop tests pass a hook called at the
+        `_STAGE_*` points."""
+        if workers < 1 or workers > _LARGEST_WORKERS:
+            raise Error("workers out of range: " + String(workers))
+        if getenv("FLARE_BUFRING_HANDLER") == "1":
+            raise Error(_BUFRING_UNSUPPORTED)
+        if has_tls(self._server):
+            raise Error(_WORKERS_TLS_UNSUPPORTED)
+        var listener = listener_fd(self._server)
+        var table = List[Int64](length=workers * _W_LEN, fill=0)
+        var stops = List[Bool](length=workers, fill=False)
+        var errors = List[String](length=workers, fill=String())
+        var configs = List[ServerConfig]()
+        var base = Int(table.unsafe_ptr())
+        for i in range(workers):
+            configs.append(self._server.config.copy())
+            _store(_row(base, i), _W_FD, -1)
+        for i in range(workers):
+            var row = _row(base, i)
+            var fd = _dup_cloexec(listener)
+            if fd < 0:
+                var failure = _errno()
+                _close_workers_fds(base, workers)
+                raise Error("serve: dup of the listener failed: " + failure)
+            _store(row, _W_FD, fd)
+            _store(row, _W_STOP, Int(stops.unsafe_ptr().unsafe_offset(i)))
+            _store(row, _W_ERROR, Int(errors.unsafe_ptr().unsafe_offset(i)))
+            _store(row, _W_CONFIG, Int(configs.unsafe_ptr().unsafe_offset(i)))
+        # A worker's reactor polls its copy without blocking.
+        try:
+            set_listener_nonblocking(listener)
+        except e:
+            _close_workers_fds(base, workers)
+            raise e^
+        var parking = List[c_int](length=2, fill=0)
+        if _pipe_cloexec(parking.unsafe_ptr()) != 0:
+            var failure = _errno()
+            _close_workers_fds(base, workers)
+            raise Error("serve: pipe() failed: " + failure)
+        var watch: _StopWatch
+        try:
+            watch = _StopWatch(
+                Int(Pointer(to=self._server)),
+                self._server.config.shutdown_timeout_ms,
+                _stage,
+                base,
+                workers,
+                Int(parking[0]),
+            )
+        except e:
+            _close_workers_fds(base, workers)
+            _close_parking(parking)
+            raise e^
+        _stage(_STAGE_WATCHING)
+        var threads = List[ThreadHandle]()
+        var failure = String()
+        for i in range(workers):
+            try:
+                threads.append(
+                    ThreadHandle.spawn_os[_serve_worker[make]](
+                        _OpaquePtr(unsafe_from_address=_row(base, i))
+                    )
+                )
+            except e:
+                failure = "serve: starting a worker failed: " + String(e)
+                break
+            if i == 0:
+                _stage(_STAGE_WORKER_STARTED)
+        # The time by which a hard stop must have ended every worker, or -1.
+        var deadline = -1
+        if failure:
+            _stop_workers(base, len(threads))
+            deadline = monotonic_now_ms() + _REACTOR_STOP_MS
+        var told = False
+        while True:
+            var running = 0
+            for i in range(len(threads)):
+                if _load(_row(base, i), _W_STATE) == _W_SERVING:
+                    running += 1
+            if running < len(threads) and deadline < 0:
+                if not told:
+                    told = True
+                    _stage(_STAGE_WORKER_ENDED)
+                # A worker ended on its own, not because of a stop (a worker
+                # whose `make` ends after a stop signal serves nothing):
+                # stop the others at once. A signal already delivered, even
+                # one the watcher has not seen yet, makes it part of that
+                # graceful stop instead.
+                if not watch.stop_delivered():
+                    failure = _why_ended(base, len(threads), errors)
+                    _stop_workers(base, len(threads))
+                    deadline = monotonic_now_ms() + _REACTOR_STOP_MS
+            if running == 0:
+                break
+            if deadline >= 0 and monotonic_now_ms() >= deadline:
+                # A `make` or a handler that does not return cannot be
+                # interrupted, so `serve` cannot raise: end the process, as
+                # the watcher does past its own bound.
+                print(
+                    "Server."
+                    + failure
+                    + "; a worker did not stop within "
+                    + String(_REACTOR_STOP_MS)
+                    + " ms, so the process ends",
+                    file=stderr,
+                )
+                var sig = watch.acted_on()
+                exit(128 + sig if sig > 0 else 1)
+            _ = libc_nanosleep_ms(_WATCH_POLL_MS)
+        # Every worker ended with a stop signal delivered that the watcher
+        # may not have read yet: let it act, so this returns for that stop
+        # rather than `finish` sending the signal again. Its next turn does,
+        # however late the system wakes it (macOS sleeps past 50 ms); the
+        # bound only covers a watcher that cannot read the dispositions.
+        if deadline < 0 and watch.stop_delivered():
+            var until = monotonic_now_ms() + _REACTOR_STOP_MS
+            while watch.acted_on() == 0 and monotonic_now_ms() < until:
+                _ = libc_nanosleep_ms(1)
+        for i in range(len(threads)):
+            try:
+                threads[i].join()
+            except e:
+                abort(
+                    "Server.serve: a worker could not be joined ("
+                    + String(e)
+                    + ")"
+                )
+        var acted: Int
+        try:
+            acted = watch.finish(_stage)
+        except e:
+            _close_workers_fds(base, workers)
+            _close_parking(parking)
+            raise e^
+        _close_workers_fds(base, workers)
+        _close_parking(parking)
+        var outcome = String()
+        if acted == 0:
+            outcome = failure
+            if not outcome:
+                outcome = _ended_on_its_own(base, len(threads), errors)
+        else:
+            # After a stop signal, a worker's raise is part of the stop and
+            # `serve` returns; say so, so it is not lost.
+            var raised = _ended_on_its_own(base, len(threads), errors)
+            if raised:
+                print(
+                    "Server."
+                    + raised
+                    + " (during the stop on signal "
+                    + String(acted)
+                    + "; serve returns)",
+                    file=stderr,
+                )
+        # The workers and the watcher read these by address until here.
+        _ = table^
+        _ = stops^
+        _ = errors^
+        _ = configs^
+        if outcome:
+            raise Error(outcome)
