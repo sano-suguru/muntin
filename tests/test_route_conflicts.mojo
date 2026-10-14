@@ -158,6 +158,35 @@ def test_first_match_is_the_most_specific() raises:
     assert_equal(client.post("/users/me", "").status, 400)
 
 
+def test_index_names_the_first_conflicting_route() raises:
+    # Routes of another method or segment count between the conflicting
+    # one and the new route are passed over, and of two conflicting
+    # earlier routes, the one without a placeholder found through `shapes`
+    # and a later one with a placeholder, the earlier is named.
+    var app = App()
+    app.get["/a/{x}"](name_of)
+    app.post["/a/{x}"](name_of)
+    app.get["/a/b/c"](me)
+    assert_equal(
+        _refusal(app, "GET", "/a/b"),
+        (
+            "route conflict: GET /a/b is registered after GET /a/{x}, which"
+            " matches every request it matches; register GET /a/b first"
+        ),
+    )
+    var both = App()
+    both.get["/a/b"](me)
+    both.post["/c/{x}"](name_of)
+    both.get["/{p}/{q}"](pair)
+    assert_equal(
+        _refusal(both, "GET", "/a/b"),
+        (
+            "route conflict: GET /a/b matches the same requests as GET /a/b,"
+            " registered earlier (the query takes no part in selection)"
+        ),
+    )
+
+
 def _alphabet() -> List[String]:
     """Every path of one to three segments from "", "a", "b" and "{x}"."""
     var parts = ["", "a", "b", "{x}"]
