@@ -51,7 +51,8 @@ its own `App`; the stop, the range, a raising `make` and the buffer-ring
 refusal are as for `serve(app)`. A raising `make` with another worker that
 does not stop ends the process; a stop signal delivered before the watcher
 sees it keeps its window; a process a handler starts does not keep the port;
-a listener copy that cannot be parked stays open; a TLS server is refused.
+a listener copy that cannot be parked stays open and the copies after it
+are parked; a TLS server is refused.
 
 Idle timeout (M3-047, decided in docs/history/architecture-decisions.md
 "Server idle timeout decision (M3-047)"): the head-of-line blocking cases run
@@ -3303,6 +3304,61 @@ def test_a_listener_copy_that_cannot_be_parked_stays_open() raises:
     var probe = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     _ = probe^
     _close(copy)
+    _ = table^
+    _ = stop^
+    _ = block^
+
+
+def test_the_copies_after_one_that_cannot_be_parked_are_parked() raises:
+    """When `dup2` cannot park one worker's copy of the listener (here the
+    middle worker's number is out of range), the watcher's drain still parks
+    the copies after it: with the `Server`'s listener closed and both
+    working copies parked, no descriptor of the socket is left and a new
+    connection is refused. It reports the first failure and sets every stop
+    byte."""
+    var server = Server.bind("127.0.0.1", 0)
+    var port = server.port()
+    var raw = Int(server._server._listener.as_raw_fd())
+    var first = Int(external_call["dup", c_int](c_int(raw)))
+    var last = Int(external_call["dup", c_int](c_int(raw)))
+    assert_true(first >= 0 and last >= 0, "dup failed")
+    var parking = List[c_int](length=2, fill=0)
+    assert_equal(Int(_flare_pipe(parking.unsafe_ptr())), 0, "pipe failed")
+    var stop = List[Bool](length=3, fill=False)
+    var table = List[Int64](length=3 * _W_LEN, fill=0)
+    table[_W_FD] = Int64(first)
+    table[_W_LEN + _W_FD] = Int64(1 << 30)
+    table[2 * _W_LEN + _W_FD] = Int64(last)
+    for i in range(3):
+        table[i * _W_LEN + _W_STOP] = Int64(Int(stop.unsafe_ptr()) + i)
+    var block = List[Int64](length=_CB_LEN, fill=0)
+    block[_CB_GRACE] = 0
+    block[_CB_WORKERS] = Int64(Int(table.unsafe_ptr()))
+    block[_CB_NWORKERS] = 3
+    block[_CB_PARKED] = Int64(Int(parking[0]))
+    var got = String("returned")
+    try:
+        _drain_workers(Int(block.unsafe_ptr()), server._server)
+    except e:
+        got = String(e)
+    print("observed: middle copy unparkable ->", got)
+    assert_true(
+        got.startswith("parking worker 1's copy of the listener failed (dup2:"),
+        got,
+    )
+    for i in range(3):
+        assert_true(stop[i], "a worker's stop byte is not set")
+    var connected = True
+    try:
+        var probe = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+        _ = probe^
+    except:
+        connected = False
+    assert_false(connected, "a copy after the failed one was not parked")
+    _close(first)
+    _close(last)
+    _close(Int(parking[0]))
+    _close(Int(parking[1]))
     _ = table^
     _ = stop^
     _ = block^

@@ -129,7 +129,8 @@ becomes readable (`dup2`) and closes the `Server`'s listener, waits the
 grace window, then sets every worker's stop byte; a copy it cannot park
 stays open until the joins, and the stop becomes a hard one that raises. A
 worker that ends on its own (`make` or its loop raised, or its loop
-returned) before a stop signal was delivered stops the others at once; one
+returned) before a stop signal was delivered, as the serving thread sees it
+at its next look, stops the others at once; one
 that has not ended `_REACTOR_STOP_MS` later (a `make` or a handler that
 does not return) ends the process with status 1. `serve[make]` refuses a
 TLS server.
@@ -825,14 +826,17 @@ def _drain_workers(block: Int, mut server: HttpServer) raises:
     var failure = String()
     for i in range(count):
         var fd = _load(_row(table, i), _W_FD)
-        if fd >= 0 and _dup_over_cloexec(parked, fd) != 0 and not failure:
-            failure = (
-                "parking worker "
-                + String(i)
-                + "'s copy of the listener failed (dup2: "
-                + _errno()
-                + ")"
-            )
+        # Every copy is tried, a failed one included; the first failure is
+        # the one reported.
+        if fd >= 0 and _dup_over_cloexec(parked, fd) != 0:
+            if not failure:
+                failure = (
+                    "parking worker "
+                    + String(i)
+                    + "'s copy of the listener failed (dup2: "
+                    + _errno()
+                    + ")"
+                )
     close_listener(server)
     if failure:
         _stop_workers(table, count)
@@ -1331,7 +1335,8 @@ struct Server(Movable):
         `serve: workers are unsupported on a TLS server`, and `Server.serve
         is already serving in this process` as `serve(app)` does, all before
         serving. If `make` raises on a worker, or a worker's reactor raises
-        or returns on its own, before a stop signal was delivered, every
+        or returns on its own, before a stop signal was delivered (as this
+        thread sees it at its next look, not when the worker ended), every
         worker is stopped at once (no grace window) and this raises `serve:
         a worker's make raised: <error>`, `serve: a worker's reactor
         raised: <error>` or `serve: a worker's reactor returned before a
