@@ -867,7 +867,8 @@ def _serve_worker[
     copy of the listener until its stop byte is set. The `App` is borrowed
     by this thread's reactor only and destroyed here, so no value of it,
     `State` values included, is reached from another thread. Records how it
-    ended in its row. Never raises (a pthread start routine)."""
+    ended in its row, once its `App` is destroyed. Never raises (a pthread start routine).
+    """
     var row = Int(arg)
     var error = Pointer[String, MutUntrackedOrigin](
         unsafe_from_address=_load(row, _W_ERROR)
@@ -886,14 +887,18 @@ def _serve_worker[
         unsafe_from_address=_load(row, _W_STOP)
     )
     var fd = _load(row, _W_FD)
+    var ended = _W_RETURNED
     try:
         if fd >= 0:
             run_worker_loop(fd, config[], _BorrowedHandler(app), stop[])
-        _store(row, _W_STATE, _W_RETURNED)
     except e:
         error[] = String(e)
-        _store(row, _W_STATE, _W_LOOP_RAISED)
+        ended = _W_LOOP_RAISED
+    # Published once the `App` is destroyed: until then the worker is still
+    # serving to the serving thread, so `_REACTOR_STOP_MS` also bounds a
+    # destructor (a `State` value's included) that does not return.
     _ = app^
+    _store(row, _W_STATE, ended)
     return arg
 
 

@@ -49,7 +49,8 @@ opened meanwhile is answered by another (the order pipe reads `b` before `a`),
 while the held h2c connection's other streams still wait; each worker builds
 its own `App`; the stop, the range, a raising `make` and the buffer-ring
 refusal are as for `serve(app)`. A raising `make` with another worker that
-does not stop ends the process; a stop signal delivered before the watcher
+does not stop (in `make`, a handler or its `App`'s destructor) ends the
+process; a stop signal delivered before the watcher
 sees it keeps its window; a process a handler starts does not keep the port;
 a listener copy that cannot be parked stays open and the copies after it
 are parked; a TLS server is refused.
@@ -3025,6 +3026,81 @@ def test_a_raising_make_ends_the_process_with_a_worker_stuck_in_a_handler() rais
     _a_raising_make_with_a_worker_that_does_not_stop(True)
 
 
+struct SlowDrop(Movable):
+    """A `State` value whose destructor does not return for 10 s."""
+
+    def __init__(out self):
+        pass
+
+    def __deinit__(deinit self):
+        _ = libc_nanosleep_ms(10_000)
+
+
+def slow_drop(state: State[SlowDrop]) -> String:
+    return "slow drop"
+
+
+def slow_drop_app() raises -> App:
+    """`gated_app`, with a `State` whose destructor does not return."""
+    var gate = FileDescriptor(Int(getenv("MUNTIN_TEST_GATE_FD")))
+    var byte = List[UInt8](length=1, fill=0)
+    if gate.read_bytes(byte) != 1 or Int(byte[0]) != ord("r"):
+        raise Error("not built")
+    var app = stoppable_app()
+    app.get["/slow-drop"](slow_drop, State(SlowDrop()))
+    return app^
+
+
+def test_a_raising_make_ends_the_process_with_an_app_that_does_not_drop() raises:
+    """A worker whose loop returned but whose `App` is still being destroyed
+    (a `State` destructor that does not return) has not ended: with the
+    other worker's `make` raising, the process ends with status 1
+    `_REACTOR_STOP_MS` after the hard stop began, not after the destructor
+    returns."""
+    var gate = _pipe()
+    var server = Server.bind("127.0.0.1", 0)
+    var port = server.port()
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(CHILD_LIFETIME_S))
+        _default_sigpipe()
+        _ = setenv("MUNTIN_TEST_GATE_FD", String(gate[0]))
+        try:
+            server.serve[slow_drop_app](workers=WORKERS)
+        except e:
+            print("workers child: serve failed:", e)
+            exit(7)
+        exit(0)
+    _ = server^
+    _close(gate[0])
+    var reaped = False
+    try:
+        _write_byte_of(gate[1], "r")
+        var ka = _send(port, "GET /slow-drop HTTP/1.1\r\nHost: muntin\r\n\r\n")
+        assert_equal(_content(_one_response(ka)), "slow drop")
+        _ = ka^
+        var raised_at = monotonic_now_ms()
+        _write_byte_of(gate[1], "x")
+        var ended = _reap_within(pid, 3 * STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        var after = monotonic_now_ms() - raised_at
+        print(
+            "observed: raising make, other App not dropping -> status",
+            ended[0],
+            "after",
+            after,
+            "ms",
+        )
+        assert_equal(_exit_code(ended[0]), 1, "the process did not end")
+        assert_true(after >= STOP_BOUND_MS, "ended before the bound")
+    finally:
+        if not reaped:
+            _stop(pid)
+        _close(gate[1])
+
+
 def _raise_term_when_a_worker_ended(stage: Int):
     """SIGTERM to the serving thread (`raise`, so it is delivered before
     this returns) once that thread saw a worker end, before it looks for a
@@ -3113,7 +3189,10 @@ def test_a_stop_delivered_as_the_last_worker_ends_returns() raises:
 def close_pollers() raises -> String:
     """Closes every epoll descriptor of this process (Linux), so each
     worker's reactor poll fails and its loop returns without a stop signal,
-    as Flare v0.12.0's loop does on a failed poll."""
+    as Flare v0.12.0's loop does on a failed poll. It then waits 300 ms (six
+    of the serving thread's looks) before returning: this worker's reactor
+    raises once the handler returns (it cannot register the connection
+    again), and the other's return must be seen first."""
     var closed = 0
     var link = List[UInt8](length=64, fill=0)
     for fd in range(3, 1024):
@@ -3129,6 +3208,7 @@ def close_pollers() raises -> String:
         ):
             _close(fd)
             closed += 1
+    _ = libc_nanosleep_ms(300)
     return "closed " + String(closed)
 
 
