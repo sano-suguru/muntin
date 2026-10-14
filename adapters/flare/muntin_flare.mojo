@@ -1014,15 +1014,21 @@ def _check_tls_files(tls: Tls) raises:
     for its passphrase on the terminal) or there is none. It looks only at
     the lines that begin PEM blocks; whether the files load is OpenSSL's
     decision, made after this when Flare opens the paths again, so a file
-    replaced in between is loaded unchecked (M3-051). Every buffer Muntin
-    read the key into is overwritten with zeros before this returns or
-    raises; the copies OpenSSL makes when it loads the key are OpenSSL's."""
+    replaced in between is loaded unchecked (M3-051). Both files are read
+    before either's content is checked, so an unreadable key file is
+    reported before a certificate file with no certificate. Both buffers are
+    overwritten with zeros before this returns or raises, the certificate's
+    too, since a key given as `cert_file` or a file holding both lands
+    there; the copies OpenSSL makes when it loads the key are OpenSSL's."""
     var cert = _read_tls_file("certificate", tls.cert_file)
-    var key = _read_tls_file("key", tls.key_file)
     try:
-        _check_tls_contents(tls, cert, key)
+        var key = _read_tls_file("key", tls.key_file)
+        try:
+            _check_tls_contents(tls, cert, key)
+        finally:
+            _wipe(key)
     finally:
-        _wipe(key)
+        _wipe(cert)
 
 
 def _check_tls_contents(tls: Tls, cert: List[UInt8], key: List[UInt8]) raises:

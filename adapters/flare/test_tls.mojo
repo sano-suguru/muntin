@@ -554,7 +554,8 @@ def _bind_error(cert: String, key: String, port: Int = 0) -> String:
 def test_bind_names_a_file_it_cannot_read() raises:
     """A missing file raises naming it, before anything is bound: on a port
     another `Server` holds, the TLS error comes first, not the address in
-    use."""
+    use. A missing key file is reported before a certificate file with no
+    certificate."""
     var held = Server.bind("127.0.0.1", 0)
     var port = held.port()
     var cert = _bind_error(MISSING, KEY, port)
@@ -567,6 +568,11 @@ def test_bind_names_a_file_it_cannot_read() raises:
     var key = _bind_error(CERT, MISSING, port)
     assert_true(
         key.startswith("TLS key file cannot be read: " + MISSING + " ("), key
+    )
+    # Both files are read before either's content is checked.
+    var both = _bind_error(KEY, MISSING, port)
+    assert_true(
+        both.startswith("TLS key file cannot be read: " + MISSING + " ("), both
     )
 
 
