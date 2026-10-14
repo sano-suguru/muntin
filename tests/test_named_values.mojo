@@ -34,7 +34,7 @@ struct Note(FromBody, Movable):
         return Self(body)
 
 
-# docs/DX.md, "Named route values", as written there.
+# docs/DX.md, "Named route values", as written there (its `make_app` too).
 
 
 def post_of(uid: Int, pid: Int) -> String:
@@ -45,8 +45,7 @@ def checked_post_of(uid: Param["uid", Int], pid: Param["pid", Int]) -> String:
     return String("post ", pid.value, " of user ", uid.value)
 
 
-def _dx_app() -> App:
-    """docs/DX.md's registrations, as written there, on its own `App`."""
+def make_app() -> App:
     var app = App()
     app.get["/users/{uid}/posts/{pid}"](post_of)
     app.get["/checked/{uid}/posts/{pid}"](checked_post_of)
@@ -100,7 +99,7 @@ def _expect(app: App, target: String, status: Int, body: String) raises:
 
 
 def test_dx_example() raises:
-    var app = _dx_app()
+    var app = make_app()
     _expect(app, "/users/1/posts/2", 200, "post 2 of user 1")
     _expect(app, "/checked/1/posts/2", 200, "post 2 of user 1")
     _expect(app, "/checked/1/posts/x", 400, "Bad Request")
@@ -168,8 +167,8 @@ def _tests() -> TestSuite:
     (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
     because a handler here declares a `Param` (M3-050;
     tests/named_values_api_fail/discover_tests_crash.mojo).
-    `scripts/check_test_lists.sh` checks that every `test_` function is
-    listed."""
+    `scripts/check_test_lists.sh` checks that every `test_` function has
+    its own `suite.test[...]()` line here."""
     var suite = TestSuite()
     suite.test[test_dx_example]()
     suite.test[test_two_params_on_every_method]()

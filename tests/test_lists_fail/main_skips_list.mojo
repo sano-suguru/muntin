@@ -1,6 +1,6 @@
 # Must fail scripts/check_test_lists.sh (scripts/check.sh runs it on this
 # file and is never asked to build it), with:
-# Expected error: main does not call _tests()
+# Expected error: main does not run _tests() as its own line
 from std.testing import TestSuite
 
 
