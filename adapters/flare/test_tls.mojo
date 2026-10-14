@@ -86,9 +86,14 @@ def length(var req: Request) -> Response:
     return Response(200, String(len(req.body)))
 
 
+def echo(var req: Request) -> Response:
+    return Response(200, req.body.copy())
+
+
 def https_app() -> App:
     var app = stoppable_app()
     app.post["/length"](length)
+    app.post["/echo"](echo)
     return app^
 
 
@@ -215,6 +220,11 @@ struct _H2Answer(Copyable):
     var body: String
     var reset_code: Int
     """The RST_STREAM error code, or -1 when the stream was not reset."""
+    var data: List[UInt8]
+    """The DATA frames' bytes, as received."""
+    var data_frames: Int
+    var content_length: String
+    """The `content-length` field, or empty when there is none."""
 
 
 def _h2_exchange(
@@ -227,8 +237,8 @@ def _h2_exchange(
     wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
     stream.write_all(Span[UInt8, _](wire))
     var answers = List[_H2Answer]()
-    answers.append(_H2Answer("", "", -1))
-    answers.append(_H2Answer("", "", -1))
+    for _ in range(2):
+        answers.append(_H2Answer("", "", -1, List[UInt8](), 0, ""))
     var ended = List[Bool](length=2, fill=False)
     var acc = List[UInt8]()
     var buf = List[UInt8](length=4096, fill=0)
@@ -271,9 +281,15 @@ def _h2_exchange(
         var i = (sid - 1) // 2
         if f.header.type.value == FrameType.HEADERS().value:
             var fields = decoder.decode(Span[UInt8, _](f.payload))
-            answers[i].status = fields[0].value
+            for field in fields:
+                if field.name == ":status":
+                    answers[i].status = field.value
+                elif field.name == "content-length":
+                    answers[i].content_length = field.value
         elif f.header.type.value == FrameType.DATA().value:
             answers[i].body += String(from_utf8_lossy=Span(f.payload))
+            answers[i].data.extend(Span(f.payload))
+            answers[i].data_frames += 1
         elif f.header.type.value == FrameType.RST_STREAM().value:
             var p = f.payload.copy()
             answers[i].reset_code = (
@@ -294,8 +310,7 @@ def _h2_exchange(
 
 def test_https_answers_http11() raises:
     """With `tls`, the same `App` answers over HTTP/1.1 inside TLS, whether
-    the client offers `http/1.1`, no ALPN at all, or only protocols the
-    server does not serve."""
+    the client offers `http/1.1` or no ALPN at all."""
     var app = https_app()
     var child = _serve(Server.bind("127.0.0.1", 0, tls=_tls()), app)
     try:
@@ -305,13 +320,26 @@ def test_https_answers_http11() raises:
         raw = _h1(child.port, "", "GET", "/users/7", selected="")
         assert_true(raw.startswith("HTTP/1.1 200"), raw)
         assert_true(raw.endswith("\r\n\r\nuser 7"), raw)
-        raw = _h1(child.port, "h3,foo", "GET", "/users/7", selected="")
-        assert_true(raw.startswith("HTTP/1.1 200"), raw)
-        assert_true(raw.endswith("\r\n\r\nuser 7"), raw)
         raw = _h1(child.port, "http/1.1", "GET", "/missing")
         assert_true(raw.startswith("HTTP/1.1 404"), raw)
         raw = _h1(child.port, "http/1.1", "DELETE", "/hello")
         assert_true(raw.startswith("HTTP/1.1 405"), raw)
+    finally:
+        _stop(child.pid)
+
+
+def test_alpn_with_no_common_protocol_is_not_refused() raises:
+    """A known deviation, pinned so a Flare change is noticed: a client that
+    offers only protocols the server does not serve is answered over
+    HTTP/1.1 with no protocol selected, where RFC 7301 section 3.2 requires
+    a `no_application_protocol` alert. Flare v0.12.0's ALPN selection
+    decides it, not Muntin (docs/DX.md section 1, "HTTPS")."""
+    var app = https_app()
+    var child = _serve(Server.bind("127.0.0.1", 0, tls=_tls()), app)
+    try:
+        var raw = _h1(child.port, "h3,foo", "GET", "/users/7", selected="")
+        assert_true(raw.startswith("HTTP/1.1 200"), raw)
+        assert_true(raw.endswith("\r\n\r\nuser 7"), raw)
     finally:
         _stop(child.pid)
 
@@ -331,6 +359,81 @@ def test_https_answers_http2() raises:
         assert_equal(answers[0].body, "hello")
         assert_equal(answers[1].status, "200")
         assert_equal(answers[1].body, "user 7")
+    finally:
+        _stop(child.pid)
+
+
+def _binary_body() -> List[UInt8]:
+    """Every byte value, 0x00 and 0x80 to 0xFF included: not UTF-8."""
+    var out = List[UInt8]()
+    for b in range(256):
+        out.append(UInt8(b))
+    return out^
+
+
+def _h1_body(raw: List[UInt8]) -> List[UInt8]:
+    """What follows the head of a whole HTTP/1.1 answer."""
+    for i in range(len(raw) - 3):
+        if (
+            raw[i] == 13
+            and raw[i + 1] == 10
+            and raw[i + 2] == 13
+            and raw[i + 3] == 10
+        ):
+            return List(Span(raw)[i + 4 :])
+    return List[UInt8]()
+
+
+def test_binary_bodies_and_head_over_https() raises:
+    """Over TLS, as in cleartext, a body that is not UTF-8 reaches the
+    handler and comes back byte for byte, over HTTP/1.1 and HTTP/2; and
+    `HEAD` on a `GET` route answers the GET's `Content-Length` with no
+    content (over HTTP/2, no DATA frame)."""
+    var app = https_app()
+    var child = _serve(Server.bind("127.0.0.1", 0, tls=_tls()), app)
+    try:
+        var body = _binary_body()
+        var stream = _connect(child.port, "http/1.1")
+        var wire = List(
+            (
+                "POST /echo HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection:"
+                + " close\r\nContent-Length: "
+                + String(len(body))
+                + "\r\n\r\n"
+            ).as_bytes()
+        )
+        wire.extend(Span(body))
+        stream.write_all(Span[UInt8, _](wire))
+        var raw = List[UInt8]()
+        var buf = List[UInt8](length=4096, fill=0)
+        while True:
+            var n = stream.read(buf.unsafe_ptr(), len(buf))
+            if n == 0:
+                break
+            raw.extend(Span(buf)[:n])
+        assert_true(_h1_body(raw) == body, "HTTP/1.1 echo changed the bytes")
+
+        var head = _h1(child.port, "http/1.1", "HEAD", "/hello")
+        assert_true(head.startswith("HTTP/1.1 200"), head)
+        assert_true("Content-Length: 5\r\n" in head, head)
+        assert_true(head.endswith("\r\n\r\n"), head)
+
+        var h2 = _connect(child.port, "h2")
+        var frames = _h2_headers(1, "POST", "/echo", False)
+        frames.extend(
+            Span(
+                _h2_frame(
+                    FrameType.DATA(), FrameFlags.END_STREAM(), 1, body.copy()
+                )
+            )
+        )
+        frames.extend(Span(_h2_headers(3, "HEAD", "/hello", True)))
+        var answers = _h2_exchange(h2, frames^)
+        assert_equal(answers[0].status, "200")
+        assert_true(answers[0].data == body, "HTTP/2 echo changed the bytes")
+        assert_equal(answers[1].status, "200")
+        assert_equal(answers[1].content_length, "5")
+        assert_equal(answers[1].data_frames, 0)
     finally:
         _stop(child.pid)
 
@@ -576,12 +679,10 @@ def test_https_serves_a_key_in_the_older_ec_form() raises:
 
 
 def test_bind_names_both_files_when_openssl_refuses_them() raises:
-    """What only OpenSSL can tell, a key that does not belong to the
-    certificate or a damaged PEM block, raises naming both files."""
-    var why = (
-        "TLS certificate and key could not be loaded (a damaged PEM block, or"
-        " a key that does not belong to the certificate): "
-    )
+    """When Flare cannot load the pair, here a key that does not belong to
+    the certificate or a damaged PEM block, `bind` raises naming both files
+    and no cause, since Flare reports none."""
+    var why = "TLS certificate or private key could not be loaded: "
     assert_equal(_bind_error(CERT, OTHER_KEY), why + CERT + ", " + OTHER_KEY)
     assert_equal(
         _bind_error(DAMAGED_CERT, KEY), why + DAMAGED_CERT + ", " + KEY
@@ -612,9 +713,9 @@ def _order_error(
         return String(e)
 
 
-def test_bind_checks_tls_files_after_the_settings_and_before_the_host() raises:
-    """The port and the settings are checked before the TLS files, the files
-    before the host; with good files the host is still checked."""
+def test_bind_checks_the_settings_and_the_host_before_the_tls_files() raises:
+    """The port, the settings and the host are checked before the TLS files
+    are opened."""
     assert_equal(
         _order_error(70000, 1, "localhost", MISSING), "port out of range: 70000"
     )
@@ -622,14 +723,14 @@ def test_bind_checks_tls_files_after_the_settings_and_before_the_host() raises:
         _order_error(0, 0, "localhost", MISSING),
         "idle_timeout_ms out of range: 0",
     )
-    var files = _order_error(0, 1, "localhost", MISSING)
+    var host = _order_error(0, 1, "localhost", MISSING)
+    assert_true(
+        not host.startswith("TLS") and not host.startswith("bound"), host
+    )
+    var files = _order_error(0, 1, "127.0.0.1", MISSING)
     assert_true(
         files.startswith("TLS certificate file cannot be read: " + MISSING),
         files,
-    )
-    var host = _order_error(0, 1, "localhost", CERT)
-    assert_true(
-        not host.startswith("TLS") and not host.startswith("bound"), host
     )
 
 

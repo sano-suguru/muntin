@@ -121,7 +121,8 @@ and the stop apply unchanged. `_check_tls_files` reads both files first
 (regular files of at most 1 MiB) and raises naming the one that cannot be
 read, holds no PEM certificate, or whose first PEM private key is encrypted
 or missing; Flare's own load failure, which carries no reason, is raised
-naming both files. Flare takes paths, so OpenSSL reads the files again.
+naming both files and no cause. Flare takes paths, so OpenSSL reads the
+files again.
 
 Graceful shutdown (M3-045, decided in docs/history/architecture-decisions.md
 "Graceful shutdown decision (M3-045)"): while `serve` runs, SIGTERM and
@@ -145,6 +146,7 @@ result is checked. What clients see: docs/DX.md section 1.
 
 from std.atomic import Atomic, Ordering
 from std.ffi import _get_global, c_int, external_call, get_errno
+from std.io import FileDescriptor
 from std.os import abort, getenv, stat
 from std.sys import CompilationTarget
 
@@ -838,48 +840,77 @@ struct Tls(Copyable, Movable):
         self.key_file = key_file
 
 
+def _open_flags() -> c_int:
+    """`O_RDONLY | O_NONBLOCK | O_CLOEXEC`: opening a FIFO with no writer
+    returns at once instead of waiting for one."""
+    comptime if CompilationTarget.is_macos():
+        return c_int(0x4 | 0x1000000)
+    else:
+        return c_int(0o4000 | 0o2000000)
+
+
+def _at_fdcwd() -> c_int:
+    """`AT_FDCWD`. `openat` is called rather than `open`, whose name the
+    standard library declares with another signature in the same program."""
+    comptime if CompilationTarget.is_macos():
+        return c_int(-2)
+    else:
+        return c_int(-100)
+
+
 def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
     """The file's bytes, if it is a regular file (a symbolic link to one
-    included) of at most `_TLS_FILE_MAX_BYTES`; it is not opened otherwise,
-    so a device or a FIFO cannot block or exhaust `Server.bind`."""
+    included) of at most `_TLS_FILE_MAX_BYTES`. The path is opened once,
+    without blocking, and the opened file itself is checked and read
+    (through `/dev/fd/<fd>`), so a device or a FIFO, even one put in its
+    place after any earlier look, cannot block or exhaust `Server.bind`."""
     var prefix = "TLS " + what + " file "
-    var mode: Int
-    var size: Int
-    try:
-        var st = stat(path)
-        mode = Int(st.st_mode)
-        size = Int(st.st_size)
-    except e:
+    var c_path = path.copy()
+    var fd = Int(
+        external_call["openat", c_int](
+            _at_fdcwd(), Int(c_path.as_c_string_span().ptr()), _open_flags()
+        )
+    )
+    _ = c_path^
+    if fd < 0:
         raise Error(
             prefix
             + "cannot be read: "
             + path
             + " ("
-            + String(e)
-            + ": "
             + String(get_errno())
             + ")"
         )
-    if (mode & 0o170000) != 0o100000:
-        raise Error(prefix + "is not a regular file: " + path)
-    var too_big = Error(
-        prefix
-        + "is larger than "
-        + String(_TLS_FILE_MAX_BYTES)
-        + " bytes: "
-        + path
-    )
-    if size > _TLS_FILE_MAX_BYTES:
-        raise too_big^
-    var data: List[UInt8]
     try:
-        with open(path, "r") as f:
-            data = f.read_bytes(_TLS_FILE_MAX_BYTES + 1)
-    except e:
-        raise Error(prefix + "cannot be read: " + path + " (" + String(e) + ")")
-    if len(data) > _TLS_FILE_MAX_BYTES:
-        raise too_big^
-    return data^
+        var st = stat("/dev/fd/" + String(fd))
+        if (Int(st.st_mode) & 0o170000) != 0o100000:
+            raise Error(prefix + "is not a regular file: " + path)
+        var data = List[UInt8](length=_TLS_FILE_MAX_BYTES + 1, fill=0)
+        var got = 0
+        var file = FileDescriptor(fd)
+        while got <= _TLS_FILE_MAX_BYTES:
+            var n: Int
+            try:
+                n = file.read_bytes(Span(data)[got:])
+            except e:
+                raise Error(
+                    prefix + "cannot be read: " + path + " (" + String(e) + ")"
+                )
+            if n == 0:
+                break
+            got += n
+        if got > _TLS_FILE_MAX_BYTES:
+            raise Error(
+                prefix
+                + "is larger than "
+                + String(_TLS_FILE_MAX_BYTES)
+                + " bytes: "
+                + path
+            )
+        data.shrink(got)
+        return data^
+    finally:
+        _ = external_call["close", c_int](c_int(fd))
 
 
 @fieldwise_init
@@ -983,8 +1014,8 @@ struct Server(Movable):
             )
             return
         ref tls = _tls.value()
-        _check_tls_files(tls)
         var addr = SocketAddr(IpAddr.parse(_host), UInt16(_port))
+        _check_tls_files(tls)
         try:
             self._server = HttpServer.bind_tls(
                 addr, tls.cert_file, tls.key_file, _tls_alpn(), config^
@@ -992,9 +1023,7 @@ struct Server(Movable):
         except e:
             if String(e).startswith(_FLARE_TLS_LOAD_FAILED):
                 raise Error(
-                    "TLS certificate and key could not be loaded (a damaged"
-                    " PEM block, or a key that does not belong to the"
-                    " certificate): "
+                    "TLS certificate or private key could not be loaded: "
                     + tls.cert_file
                     + ", "
                     + tls.key_file
@@ -1027,7 +1056,7 @@ struct Server(Movable):
         (M3-047; docs/DX.md section 1). With `tls`, it serves HTTPS
         instead, HTTP/1.1 and HTTP/2 chosen in the TLS handshake (ALPN), with
         the same three settings (M3-051; docs/DX.md section 1); the files are
-        read and checked here, before the host is parsed.
+        read and checked here, after the host is parsed.
         Raises for a port, limit, grace or idle timeout out of range, a TLS
         file that cannot be read or loaded (naming it), a host that is not
         an IP literal, an address in use or any other OS error."""

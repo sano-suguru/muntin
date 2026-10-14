@@ -284,6 +284,54 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/tls.log"; then
 fi
 echo "ok: no server process left behind"
 
+# M3-051: the TLS versions and ciphers a TLS Server accepts, asked of
+# examples/hello_https.mojo (run from build/tls, whose cert.pem and key.pem it
+# reads) by the flare environment's `openssl s_client`, which is told to
+# offer even what its own defaults refuse (SECLEVEL=0), so a refusal is the
+# server's alert.
+step "TLS versions and ciphers of a TLS Server (openssl s_client against examples/hello_https.mojo)"
+(cd build/tls && exec ../hello_https) >"$tmp/hello_https.log" 2>&1 &
+https_pid=$!
+s_client() { # name, s_client arguments...
+    local name=$1
+    shift
+    "${OPENSSL[@]}" s_client -connect 127.0.0.1:8443 -CAfile build/tls/cert.pem \
+        "$@" </dev/null >"$tmp/s_client_$name.log" 2>&1
+}
+for _ in $(seq 1 100); do
+    s_client ready -tls1_2 && break
+    sleep 0.1
+done
+tls_probe_status=0
+expect_s_client() { # name, ok|alert text, s_client arguments...
+    local name=$1 want=$2
+    shift 2
+    if s_client "$name" "$@"; then
+        if [[ $want == ok ]] && grep -q 'Verify return code: 0 (ok)' "$tmp/s_client_$name.log"; then
+            echo "ok: $name accepted and verified"
+            return
+        fi
+    elif [[ $want != ok ]] && grep -q "$want" "$tmp/s_client_$name.log"; then
+        echo "ok: $name refused by the server ($want)"
+        return
+    fi
+    cat "$tmp/s_client_$name.log"
+    echo "error: $name: expected $want" >&2
+    tls_probe_status=1
+}
+expect_s_client "TLS 1.0" "alert protocol version" -tls1 -cipher 'DEFAULT@SECLEVEL=0'
+expect_s_client "TLS 1.1" "alert protocol version" -tls1_1 -cipher 'DEFAULT@SECLEVEL=0'
+expect_s_client "TLS 1.2" ok -tls1_2
+expect_s_client "TLS 1.3" ok -tls1_3
+expect_s_client "TLS 1.2 with a CBC, SHA-1 cipher" "alert handshake failure" \
+    -tls1_2 -cipher 'ECDHE-ECDSA-AES128-SHA:@SECLEVEL=0'
+kill "$https_pid" 2>/dev/null || true
+wait "$https_pid" 2>/dev/null || true
+if ((tls_probe_status != 0)); then
+    cat "$tmp/hello_https.log"
+    exit 1
+fi
+
 step "Server must-not-build fixtures (M3-032, M3-044)"
 for fixture_s in "${serve_fixtures[@]}"; do
     expected_s="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check_flare.sh): //p' "$fixture_s")"
