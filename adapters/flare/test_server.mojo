@@ -53,7 +53,7 @@ does not stop (in `make`, a handler or its `App`'s destructor) ends the
 process; a stop signal delivered before the watcher
 sees it keeps its window; a process a handler starts does not keep the port;
 a listener copy that cannot be parked stays open and the copies after it
-are parked; a TLS server is refused.
+are parked (a TLS server's refusal is in `adapters/flare/test_tls.mojo`).
 
 Idle timeout (M3-047, decided in docs/history/architecture-decisions.md
 "Server idle timeout decision (M3-047)"): the head-of-line blocking cases run
@@ -99,7 +99,6 @@ from flare.tcp import TcpStream
 from flare.utils import SIGINT, SIGKILL, SIGTERM, exit, fork, kill, waitpid
 from muntin import App, Request, Response, State
 from muntin.testing import TestClient
-from flare.tls._server_ffi import ServerCtx
 from muntin_flare import (
     Server,
     _CB_GRACE,
@@ -3442,48 +3441,6 @@ def test_the_copies_after_one_that_cannot_be_parked_are_parked() raises:
     _ = table^
     _ = stop^
     _ = block^
-
-
-def test_serve_workers_refuses_a_tls_server() raises:
-    """`serve[make]` refuses a `Server` with a TLS context before serving or
-    taking the serving claim: its workers' reactor loop is not given the
-    context. The certificate is a throwaway self-signed one; the child
-    serves, so a missing refusal fails the test instead of hanging it."""
-    var command = _cstr(
-        "openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=muntin"
-        " -keyout build/test_workers_key.pem -out build/test_workers_cert.pem"
-        " >/dev/null 2>&1"
-    )
-    assert_equal(
-        Int(external_call["system", c_int](command.unsafe_ptr())),
-        0,
-        "openssl could not write a certificate",
-    )
-    var server = Server.bind("127.0.0.1", 0)
-    server._server._tls_ctx = Optional[ServerCtx](
-        ServerCtx.new(
-            "build/test_workers_cert.pem", "build/test_workers_key.pem"
-        )
-    )
-    var pid = fork()
-    if pid < 0:
-        raise Error("fork() failed")
-    if pid == 0:
-        _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
-        _default_sigpipe()
-        try:
-            server.serve[borrowed_app](workers=WORKERS)
-        except e:
-            print("observed: workers on a TLS server ->", e)
-            if _serving_held():
-                exit(4)
-            if String(e) == "serve: workers are unsupported on a TLS server":
-                exit(7)
-            exit(8)
-        exit(9)
-    _ = server^
-    var ended = _reap_within(pid, STOP_BOUND_MS * 5)
-    assert_equal(_exit_code(ended[0]), 7, "serve did not refuse")
 
 
 def test_workers_stop_gracefully_while_connections_keep_arriving() raises:

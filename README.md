@@ -75,7 +75,7 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON and binary bodies), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
-- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c on one thread, from an IP-literal host, and stops gracefully on SIGTERM or SIGINT. No TLS. Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
+- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)`, on one thread, from an IP-literal host, and stops gracefully on SIGTERM or SIGINT. Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
 - **Not yet:** see [`docs/SPEC.md`](docs/SPEC.md), "Remaining candidates".
 
 ## Try it
@@ -102,6 +102,17 @@ pixi run -e flare mojo run -I src -I adapters/flare examples/hello_server.mojo
 ```sh
 curl http://127.0.0.1:8080/   # Hello, Mojo!
 ```
+
+To serve the same app over HTTPS, give `Server.bind` a certificate and its key ([`examples/hello_https.mojo`](examples/hello_https.mojo)). For a local try, make a self-signed pair with the `flare` environment's OpenSSL, serve on `https://127.0.0.1:8443`, and trust that certificate in the client:
+
+```sh
+pixi run -e flare openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout key.pem -out cert.pem -days 30 -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1
+pixi run -e flare mojo run -I src -I adapters/flare examples/hello_https.mojo
+curl --cacert cert.pem https://127.0.0.1:8443/   # Hello, Mojo! (in another terminal)
+```
+
+In production, use a certificate from your certificate authority; a wrong file stops `Server.bind` with an error naming it ([`docs/DX.md`](docs/DX.md) section 1, "HTTPS").
 
 ## Documentation
 

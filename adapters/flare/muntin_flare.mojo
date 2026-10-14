@@ -135,6 +135,19 @@ that has not ended `_REACTOR_STOP_MS` later (a `make` or a handler that
 does not return) ends the process with status 1. `serve[make]` refuses a
 TLS server.
 
+TLS (M3-051, decided in docs/history/architecture-decisions.md "Server TLS
+decision (M3-051)"): `Server.bind`'s keyword-only `tls`, a `Tls` holding a
+PEM certificate chain's and private key's paths, serves HTTPS instead of
+cleartext through Flare's `HttpServer.bind_tls`, offering `h2` then
+`http/1.1` (ALPN) and with the same `ServerConfig`, so the three settings
+and the stop apply unchanged. `_check_tls_files` reads both files first
+(opened with `O_NONBLOCK`, at most 1 MiB each, both files' buffers wiped)
+and, as a best-effort diagnosis, raises naming the one that cannot be read,
+is empty, holds no PEM certificate, or whose first PEM private key is
+encrypted or missing; Flare's own load failure, which carries no reason, is
+raised naming both files and no cause. Flare takes paths, so OpenSSL reads
+the files again.
+
 Graceful shutdown (M3-045, decided in docs/history/architecture-decisions.md
 "Graceful shutdown decision (M3-045)"): while `serve` runs, SIGTERM and
 SIGINT stop it. `_StopWatch` installs `_stop_signal_seen`, a handler that
@@ -164,6 +177,7 @@ from std.ffi import (
     get_errno,
     set_errno,
 )
+from std.io import FileDescriptor
 from std.os import abort, getenv
 from std.sys import CompilationTarget, stderr
 
@@ -1191,6 +1205,259 @@ def _stop_workers(table: Int, count: Int):
         set_stop(_load(_row(table, i), _W_STOP))
 
 
+comptime _PEM_CERTIFICATE = "-----BEGIN CERTIFICATE-----"
+comptime _FLARE_TLS_LOAD_FAILED = "flare_ssl_ctx_new_server failed"
+comptime _TLS_FILE_MAX_BYTES = 1_048_576
+comptime _TLS_READ_CHUNK = 16_384
+"""The largest certificate or key file `Server.bind` reads: far above a
+certificate chain's few kilobytes, small enough that a wrong path fails fast."""
+
+
+struct Tls(Copyable, Movable):
+    """The certificate chain and private key a `Server` serves HTTPS with
+    (M3-051): paths to PEM files, which `Server.bind` checks and OpenSSL then
+    loads. Both are required and named, so neither can be left out or
+    swapped by position."""
+
+    var cert_file: String
+    """The server certificate, then any intermediates, in PEM."""
+    var key_file: String
+    """The certificate's private key in PEM, not encrypted."""
+
+    def __init__(out self, *, cert_file: String, key_file: String):
+        self.cert_file = cert_file
+        self.key_file = key_file
+
+
+def _open_flags() -> c_int:
+    """`O_RDONLY | O_NONBLOCK | O_CLOEXEC`: opening a FIFO with no writer
+    returns at once instead of waiting for one."""
+    comptime if CompilationTarget.is_macos():
+        return c_int(0x4 | 0x1000000)
+    else:
+        return c_int(0o4000 | 0o2000000)
+
+
+def _at_fdcwd() -> c_int:
+    """`AT_FDCWD`. `openat` is called rather than `open`, whose name the
+    standard library declares with another signature in the same program."""
+    comptime if CompilationTarget.is_macos():
+        return c_int(-2)
+    else:
+        return c_int(-100)
+
+
+def _wipe(mut data: List[UInt8]):
+    """Overwrites every byte `data` holds with zero through volatile stores,
+    which the compiler may not drop as dead writes."""
+    var p = data.unsafe_ptr()
+    for i in range(len(data)):
+        p.unsafe_offset(i).unsafe_store[volatile=True](UInt8(0))
+
+
+def _append_wiping(mut data: List[UInt8], more: Span[UInt8, _]):
+    """Appends `more` to `data`. When `data` must grow, its bytes are copied
+    into a larger buffer and the old one is wiped before it is freed. Not
+    `raises`: the compiler rejects any call in here that could raise, so no
+    error can leave a copy half made."""
+    if len(data) + len(more) > data.capacity():
+        var grown = List[UInt8](capacity=2 * (len(data) + len(more)))
+        grown.extend(Span(data))
+        _wipe(data)
+        data = grown^
+    data.extend(more)
+
+
+def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
+    """The file's bytes, at most `_TLS_FILE_MAX_BYTES` of them. The path is
+    opened once with `O_NONBLOCK` and read in chunks, never more than one
+    byte past the bound in all, so a FIFO with no writer reads as empty, a
+    device such as `/dev/zero` stops at the bound and a directory fails to
+    read. No file type is asked for, so no platform's `struct stat` is read.
+    `O_NONBLOCK` does not make every read immediate: a slow disk or network
+    file system can still delay `bind`.
+
+    Every buffer this reads the bytes into is overwritten with zeros before
+    it is freed, except the one it returns, which the caller wipes: the read
+    chunk always, a buffer outgrown before its successor takes over, and the
+    gathered bytes when this raises. Everything after the open, the buffers'
+    allocation included, runs inside the `try` whose `finally` closes the
+    descriptor, once: `FileDescriptor` reads through it without owning it,
+    which `adapters/flare/test_tls.mojo` checks against the installed Mojo."""
+    var prefix = "TLS " + what + " file "
+    var c_path = path.copy()
+    var fd = Int(
+        external_call["openat", c_int](
+            _at_fdcwd(), Int(c_path.as_c_string_span().ptr()), _open_flags()
+        )
+    )
+    _ = c_path^
+    if fd < 0:
+        raise Error(
+            prefix
+            + "cannot be read: "
+            + path
+            + " ("
+            + String(get_errno())
+            + ")"
+        )
+    try:
+        var data = List[UInt8](capacity=_TLS_READ_CHUNK)
+        var chunk = List[UInt8](length=_TLS_READ_CHUNK, fill=0)
+        try:
+            var file = FileDescriptor(fd)
+            while len(data) <= _TLS_FILE_MAX_BYTES:
+                var want = min(
+                    _TLS_READ_CHUNK, _TLS_FILE_MAX_BYTES + 1 - len(data)
+                )
+                var n: Int
+                try:
+                    n = file.read_bytes(Span(chunk)[:want])
+                except:
+                    raise Error(
+                        prefix
+                        + "cannot be read: "
+                        + path
+                        + " ("
+                        + String(get_errno())
+                        + ")"
+                    )
+                if n == 0:
+                    break
+                _append_wiping(data, Span(chunk)[:n])
+            if len(data) > _TLS_FILE_MAX_BYTES:
+                raise Error(
+                    prefix
+                    + "is larger than "
+                    + String(_TLS_FILE_MAX_BYTES)
+                    + " bytes: "
+                    + path
+                )
+            if len(data) == 0:
+                raise Error(prefix + "is empty: " + path)
+            return data^
+        except e:
+            _wipe(data)
+            raise e^
+        finally:
+            _wipe(chunk)
+    finally:
+        _ = external_call["close", c_int](c_int(fd))
+
+
+@fieldwise_init
+struct _PemBegin(Copyable, Movable):
+    var label: String
+    """What a `-----BEGIN <label>-----` line names."""
+    var encrypted_header: Bool
+    """Whether the next line is the older form's `Proc-Type: 4,ENCRYPTED`."""
+
+
+def _starts_with_at(data: List[UInt8], at: Int, prefix: StringSlice) -> Bool:
+    var m = prefix.as_bytes()
+    if at + len(m) > len(data):
+        return False
+    for j in range(len(m)):
+        if data[at + j] != m[j]:
+            return False
+    return True
+
+
+def _pem_begins(data: List[UInt8]) -> List[_PemBegin]:
+    """Every line that starts with `-----BEGIN ` and ends with `-----`, in
+    order, by its label. Only those lines and the line after each are
+    looked at, in place: the file's other bytes, a private key's included,
+    are not copied."""
+    var out = List[_PemBegin]()
+    var start = 0
+    var n = len(data)
+    while start < n:
+        var end = start
+        while end < n and data[end] != 10:
+            end += 1
+        var stop = end
+        if stop > start and data[stop - 1] == 13:
+            stop -= 1
+        if (
+            _starts_with_at(data, start, "-----BEGIN ")
+            and stop - start >= 16
+            and _starts_with_at(data, stop - 5, "-----")
+        ):
+            out.append(
+                _PemBegin(
+                    String(from_utf8_lossy=Span(data)[start + 11 : stop - 5]),
+                    _starts_with_at(data, end + 1, "Proc-Type: 4,ENCRYPTED"),
+                )
+            )
+        start = end + 1
+    return out^
+
+
+def _check_tls_files(tls: Tls) raises:
+    """A best-effort start-up diagnosis of the common mistakes, not a
+    guarantee: raises, naming the file, when a file cannot be read or is
+    empty, when the certificate file has no PEM certificate block, or when
+    the key file's first private key block is encrypted (OpenSSL would ask
+    for its passphrase on the terminal) or there is none. It looks only at
+    the lines that begin PEM blocks; whether the files load is OpenSSL's
+    decision, made after this when Flare opens the paths again, so a file
+    replaced in between is loaded unchecked (M3-051). Both files are read
+    before either's content is checked, so an unreadable key file is
+    reported before a certificate file with no certificate. Both buffers are
+    overwritten with zeros before this returns or raises, the certificate's
+    too, since a key given as `cert_file` or a file holding both lands
+    there. Not covered: the copies OpenSSL makes when it loads the key, and
+    any temporary copy the compiler or runtime makes, which is not checked."""
+    var cert = _read_tls_file("certificate", tls.cert_file)
+    try:
+        var key = _read_tls_file("key", tls.key_file)
+        try:
+            _check_tls_contents(tls, cert, key)
+        finally:
+            _wipe(key)
+    finally:
+        _wipe(cert)
+
+
+def _check_tls_contents(tls: Tls, cert: List[UInt8], key: List[UInt8]) raises:
+    var has_cert = False
+    for b in _pem_begins(cert):
+        if b.label == "CERTIFICATE":
+            has_cert = True
+    if not has_cert:
+        raise Error(
+            "TLS certificate file has no PEM certificate ("
+            + _PEM_CERTIFICATE
+            + "): "
+            + tls.cert_file
+        )
+    for b in _pem_begins(key):
+        if b.label == "ENCRYPTED PRIVATE KEY" or (
+            b.label.endswith("PRIVATE KEY") and b.encrypted_header
+        ):
+            raise Error(
+                "TLS key file holds an encrypted private key, which is not"
+                " supported: "
+                + tls.key_file
+            )
+        if (
+            b.label == "PRIVATE KEY"
+            or b.label == "RSA PRIVATE KEY"
+            or b.label == "EC PRIVATE KEY"
+        ):
+            return
+    raise Error("TLS key file has no PEM private key: " + tls.key_file)
+
+
+def _tls_alpn() -> List[String]:
+    """The protocols a TLS `Server` offers in the handshake, in preference
+    order: the ones its cleartext listener serves (M3-051)."""
+    var alpn = List[String]()
+    alpn.append("h2")
+    alpn.append("http/1.1")
+    return alpn^
+
+
 struct Server(Movable):
     """A listening socket that serves a Muntin `App` over HTTP through Flare
     (M3-033). `Server.bind` is the one public spelling."""
@@ -1205,15 +1472,34 @@ struct Server(Movable):
         _max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
         _shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
         _idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
+        _tls: Optional[Tls] = None,
     ) raises:
         if _port < 0 or _port > 65535:
             raise Error("port out of range: " + String(_port))
         var config = _server_config(
             _max_body_bytes, _shutdown_grace_ms, _idle_timeout_ms
         )
-        self._server = HttpServer.bind(
-            SocketAddr(IpAddr.parse(_host), UInt16(_port)), config^
-        )
+        if not _tls:
+            self._server = HttpServer.bind(
+                SocketAddr(IpAddr.parse(_host), UInt16(_port)), config^
+            )
+            return
+        ref tls = _tls.value()
+        var addr = SocketAddr(IpAddr.parse(_host), UInt16(_port))
+        _check_tls_files(tls)
+        try:
+            self._server = HttpServer.bind_tls(
+                addr, tls.cert_file, tls.key_file, _tls_alpn(), config^
+            )
+        except e:
+            if String(e).startswith(_FLARE_TLS_LOAD_FAILED):
+                raise Error(
+                    "TLS certificate or private key could not be loaded: "
+                    + tls.cert_file
+                    + ", "
+                    + tls.key_file
+                )
+            raise e^
 
     @staticmethod
     def bind(
@@ -1223,6 +1509,7 @@ struct Server(Movable):
         max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
         shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
         idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
+        tls: Optional[Tls] = None,
     ) raises -> Server:
         """Binds and listens on `host` (an IPv4 or IPv6 literal) and `port`
         (0 to 65535; 0 lets the system choose). A client may connect once it
@@ -1237,16 +1524,20 @@ struct Server(Movable):
         or SIGINT (M3-045; docs/DX.md section 1). `idle_timeout_ms` (1 to
         86,400,000; 500 when not given) is how long Flare keeps a
         connection open, over HTTP/1.1 and h2c, while nothing arrives on it
-        (M3-047; docs/DX.md section 1).
-        Raises for a port, limit, grace or idle timeout out of range, a host
-        that is not an IP literal, an address in use or any other OS
-        error."""
+        (M3-047; docs/DX.md section 1). With `tls`, it serves HTTPS
+        instead, HTTP/1.1 and HTTP/2 chosen in the TLS handshake (ALPN), with
+        the same three settings (M3-051; docs/DX.md section 1); the files are
+        read and checked here, after the host is parsed.
+        Raises for a port, limit, grace or idle timeout out of range, a TLS
+        file that cannot be read or loaded (naming it), a host that is not
+        an IP literal, an address in use or any other OS error."""
         return Server(
             _host=host,
             _port=port,
             _max_body_bytes=max_body_bytes,
             _shutdown_grace_ms=shutdown_grace_ms,
             _idle_timeout_ms=idle_timeout_ms,
+            _tls=tls,
         )
 
     def port(self) -> Int:
