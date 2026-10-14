@@ -24,7 +24,7 @@ If these disagree, do not silently pick one. Preserve established architecture a
 - When current Mojo or dependency behavior matters, verify it with the installed toolchain or authoritative upstream documentation instead of guessing. If a `docs/DX.md` example cannot be expressed, prove the limitation with a minimal reproduction and implement the closest type-safe alternative.
 - For architecture, ownership/lifetime, backend-seam, or public-API changes, use a fresh-context skeptical review when practical.
 - Each fact has one owner (`docs/DEVELOPMENT.md`, "Where information lives"). Update the owner; elsewhere link to it rather than copying it.
-- Commit coherent verified increments locally. Never push, publish, release, or change remote infrastructure without explicit user instruction.
+- Commit coherent verified increments. Pushing your own working branch and opening a pull request from it to `main` are allowed. Never merge, push to `main`, force-push, publish, release, or change CI, branch rules or other remote infrastructure without explicit user instruction.
 
 ## Completion behavior
 Keep working while the active goal has unmet, unblocked criteria. A progress summary is not proof of completion.
