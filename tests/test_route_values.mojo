@@ -139,6 +139,12 @@ def post_of(uid: Param["uid", Int], pid: Param["pid", Int]) -> String:
     return String("post ", pid.value, " of user ", uid.value)
 
 
+def misled(pid: Param["uid", Int], uid: Param["pid", Int]) -> String:
+    # Each variable is named after the other placeholder; only the `Param`
+    # names are compared, so this registers on /users/{uid}/posts/{pid}.
+    return String("post ", pid.value, " of user ", uid.value)
+
+
 def user_fields(
     id: Param["id", Int], fields: Param["fields", String]
 ) -> String:
@@ -658,6 +664,19 @@ def test_param_holds_and_copies_its_value() raises:
     assert_equal(text.value, "mojo")
 
 
+def test_variable_names_are_not_compared() raises:
+    # Known constraint (M3-050): Mojo 1.1.0 cannot reflect a parameter's name,
+    # so a variable named after another placeholder registers and receives the
+    # value its `Param` name binds, and a lone bare value binds the only
+    # placeholder whatever both are called. If either stops registering or
+    # binding this way, the record's "Revisit when" has fired.
+    var app = App()
+    app.get["/users/{uid}/posts/{pid}"](misled)
+    app.get["/p/{uid}"](one_value)
+    _expect(app, "/users/1/posts/2", 200, "post 1 of user 2")
+    _expect(app, "/p/3", 200, "me, post 3")
+
+
 def _tests() -> TestSuite:
     """This module's tests, registered by hand: discovering them
     (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
@@ -682,6 +701,7 @@ def _tests() -> TestSuite:
     suite.test[test_typed_values_and_forwarding]()
     suite.test[test_one_value_may_be_named]()
     suite.test[test_param_holds_and_copies_its_value]()
+    suite.test[test_variable_names_are_not_compared]()
     return suite^
 
 

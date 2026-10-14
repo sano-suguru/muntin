@@ -48,15 +48,17 @@ echo "ok"
 # tests on Mojo 1.1.0 (tests/named_values_api_fail/discover_tests_crash.mojo)
 # and lists them in `_tests()`; every `test_` function must be listed there.
 step "hand-registered tests"
-for f in tests/test_*.mojo adapters/flare/test_*.mojo; do
-    grep -q '^def _tests() -> TestSuite:' "$f" || continue
-    flat="$(tr -d ' \n' <"$f")" # the formatter may wrap a long entry
-    for t in $(sed -n 's/^def \(test_[A-Za-z0-9_]*\)(.*/\1/p' "$f"); do
-        if [[ "$flat" != *"suite.test[$t]()"* ]]; then
-            echo "error: $f: $t is not listed in _tests()" >&2
-            exit 1
-        fi
-    done
+./scripts/check_test_lists.sh tests/test_*.mojo adapters/flare/test_*.mojo
+# Each module here has a gap the check must report, with the text on its
+# "# Expected error: " line.
+for f in tests/test_lists_fail/*.mojo; do
+    expected="$(sed -n 's/^# Expected error: //p' "$f")"
+    if out="$(./scripts/check_test_lists.sh "$f" 2>&1)" ||
+        [[ -z "$expected" || "$out" != *"$expected"* ]]; then
+        echo "$out"
+        echo "error: scripts/check_test_lists.sh did not report $f with: $expected" >&2
+        exit 1
+    fi
 done
 echo "ok"
 
