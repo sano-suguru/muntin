@@ -7,11 +7,12 @@
 # SANITIZE=address builds them with Mojo's AddressSanitizer: a heap
 # use-after-free or double free, and on Linux a leak at exit (forced on even
 # if ASAN_OPTIONS turns it off), makes the binary exit nonzero, so the test
-# fails even if every assertion passed. It first builds and runs the
+# fails even if every assertion passed; LSAN_OPTIONS is unset, so no
+# suppression hides a leak. Before building any test it builds and runs the
 # positive controls in tests/sanitizer_controls, each of which must fail
-# with the report its "# Expected report: " line names, so a toolchain
-# whose sanitizer stops seeing these errors fails the run instead of
-# passing it. The leak control runs on Linux only. This is the runtime
+# with a sanitizer report of the kind its "# Expected report: " line names,
+# so a toolchain whose sanitizer stops seeing these errors stops the run
+# there. The leak control runs on Linux only. This is the runtime
 # evidence for the unsafe storage in src/muntin/_handler_storage.mojo
 # (docs/DEVELOPMENT.md, section 3).
 set -euo pipefail
@@ -34,58 +35,74 @@ for f in "${files[@]}"; do
     fi
 done
 
+# The positive controls, named so that a deleted one fails the run. The leak
+# control needs LeakSanitizer, which macOS ASan does not have.
 controls=()
 if [[ "${SANITIZE:-}" == address ]]; then
-    for c in tests/sanitizer_controls/*.mojo; do
-        if [[ "$(uname -s)" != Linux ]] && grep -q '^# Expected report: LeakSanitizer' "$c"; then
-            echo "note: $c skipped: no leak detection on $(uname -s)"
-            continue
-        fi
-        controls+=("$c")
-    done
-    if (( ${#controls[@]} == 0 )); then
-        echo "error: no tests/sanitizer_controls/*.mojo files found" >&2
-        exit 1
-    fi
+    controls=(tests/sanitizer_controls/use_after_free.mojo tests/sanitizer_controls/double_free.mojo)
     if [[ "$(uname -s)" == Linux ]]; then
+        controls+=(tests/sanitizer_controls/leak.mojo)
+        # Leak detection on, and no LeakSanitizer suppressions from the
+        # environment, so a passing run reports every leak LSan finds.
         export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=1"
+        unset LSAN_OPTIONS
+    else
+        echo "note: tests/sanitizer_controls/leak.mojo skipped: no leak detection on $(uname -s)"
     fi
+    for c in "${controls[@]}"; do
+        if [[ ! -f "$c" ]]; then
+            echo "error: $c not found" >&2
+            exit 1
+        fi
+    done
 fi
 
 pixi run --frozen mojo --version
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 jobs="$(getconf _NPROCESSORS_ONLN)"
-# A failed build is reported below, next to its file.
-printf 'test\0%s\0' ${controls[@]+"${controls[@]}"} "${files[@]}" | xargs -0 -n 2 -P "$jobs" ./scripts/build_one.sh "$tmp" || true
 
 failed=0
-for c in ${controls[@]+"${controls[@]}"}; do
-    printf '\n== %s (must fail)\n' "$c"
-    name="${c//\//_}"
-    expected="$(sed -n 's/^# Expected report: //p' "$c")"
-    if [[ -z "$expected" ]]; then
-        echo "error: $c has no expected report" >&2
-        failed=1
-        continue
+# The controls are built and run before any test is built: if the sanitizer
+# misses one, the run stops here.
+if (( ${#controls[@]} > 0 )); then
+    printf 'test\0%s\0' "${controls[@]}" | xargs -0 -n 2 -P "$jobs" ./scripts/build_one.sh "$tmp" || true
+    for c in "${controls[@]}"; do
+        printf '\n== %s (must fail)\n' "$c"
+        name="${c//\//_}"
+        expected="$(sed -n 's/^# Expected report: //p' "$c")"
+        if [[ -z "$expected" ]]; then
+            echo "error: $c has no expected report" >&2
+            failed=1
+            continue
+        fi
+        if [[ ! -x "$tmp/$name.bin" ]]; then
+            cat "$tmp/$name.log" 2>/dev/null || echo "error: $c was not built"
+            failed=1
+            continue
+        fi
+        # A sanitizer report starts "==PID==ERROR: <sanitizer>: <kind>".
+        if out="$("$tmp/$name.bin" 2>&1)"; then
+            printf '%s\n' "$out"
+            echo "error: $c exited 0; the sanitizer did not report it" >&2
+            failed=1
+        elif ! grep -qE "^==[0-9]+==ERROR: $expected" <<<"$out"; then
+            printf '%s\n' "$out"
+            echo "error: $c failed without a '==PID==ERROR: $expected' report" >&2
+            failed=1
+        else
+            echo "ok: $c -> $expected"
+        fi
+    done
+    if (( failed )); then
+        echo "error: a sanitizer positive control failed; no test was built" >&2
+        exit 1
     fi
-    if [[ ! -x "$tmp/$name.bin" ]]; then
-        cat "$tmp/$name.log" 2>/dev/null || echo "error: $c was not built"
-        failed=1
-        continue
-    fi
-    if out="$("$tmp/$name.bin" 2>&1)"; then
-        printf '%s\n' "$out"
-        echo "error: $c exited 0; the sanitizer did not report it" >&2
-        failed=1
-    elif ! grep -qF "$expected" <<<"$out"; then
-        printf '%s\n' "$out"
-        echo "error: $c failed without '$expected'" >&2
-        failed=1
-    else
-        echo "ok: $c -> $expected"
-    fi
-done
+fi
+
+# A failed build is reported below, next to its file.
+printf 'test\0%s\0' "${files[@]}" | xargs -0 -n 2 -P "$jobs" ./scripts/build_one.sh "$tmp" || true
+
 for f in "${files[@]}"; do
     printf '\n== %s\n' "$f"
     name="${f//\//_}"
