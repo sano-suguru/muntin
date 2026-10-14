@@ -23,10 +23,10 @@ registration; and `_match` in `app.mojo` classifies each route segment with
 `_path_params` and in `_match`, which splits the request path with it too.
 """
 
-from .body import FromBody, FromBytes
+from .body import FromBody, FromBytes, _FromBodyOrBytes
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response
-from .route_value import Param, _NamedValue
+from .route_value import FromRouteValue, Param, _NamedValue
 from .state import _InjectedState
 
 
@@ -157,6 +157,8 @@ comptime _OPT_INT = 8
 comptime _OPT_TEXT = 9
 comptime _TWO_BODIES = 10
 comptime _NEGATIVE_LIMIT = 11
+comptime _APP_VALUE = 12  # a `FromRouteValue` type (M3-055)
+comptime _VALUE_AND_BODY = 13  # a `FromRouteValue` that is also a body
 
 
 def _kind[A: AnyType]() -> Int:
@@ -172,7 +174,12 @@ def _kind[A: AnyType]() -> Int:
     `FromBytes` body, bare or carried, whose `max_bytes` is negative is a
     body with no valid limit (`_NEGATIVE_LIMIT`, M3-043), which the rules
     reject where a body is accepted. A `Param[name, T]` (M3-050) has the
-    kind of its `T` when that is a route value (`_named_kind`)."""
+    kind of its `T` when that is a route value (`_named_kind`). A
+    `FromRouteValue` type is an application route value (`_APP_VALUE`,
+    M3-055), unless it is also a `FromBody` or a `FromBytes`: then it is a
+    kind of its own (`_VALUE_AND_BODY`), which `_rule` rejects wherever it
+    is, so neither conversion is picked by this function's order; so is a
+    carrier around one (`_HeaderCarrier._carries_route_value`)."""
     comptime if A == _NoSlot:
         return _ABSENT
     elif A == Int:
@@ -191,9 +198,16 @@ def _kind[A: AnyType]() -> Int:
         return _named_kind[A]()
     elif conforms_to(A, _InjectedState):
         return _STATE
+    elif conforms_to(A, FromRouteValue):
+        comptime if conforms_to(A, _FromBodyOrBytes):
+            return _VALUE_AND_BODY
+        else:
+            return _APP_VALUE
     elif conforms_to(A, FromBody) and conforms_to(A, FromBytes):
         return _TWO_BODIES
     elif conforms_to(A, _HeaderCarrier):
+        if A._carries_route_value():
+            return _VALUE_AND_BODY
         var conversions = A._conversions()
         if conversions == 2:
             return _TWO_BODIES
@@ -212,13 +226,14 @@ def _named_kind[A: _NamedValue]() -> Int:
     """The kind of a named route value (M3-050): its value type's kind when
     `A` is a `Param` (exactly, so another type conforming to the private
     marker is no route value) and its value type a route value that is not
-    itself named; otherwise `_OTHER`."""
+    itself named, or a type that is both a route value and a body, which
+    `_rule` rejects as it does bare; otherwise `_OTHER`."""
     comptime if A != Param[A._placeholder, A._Value] or conforms_to(
         A._Value, _NamedValue
     ):
         return _OTHER
     var k = _kind[A._Value]()
-    return k if _is_value(k) else _OTHER
+    return k if _is_value(k) or k == _VALUE_AND_BODY else _OTHER
 
 
 def _is_named[A: AnyType]() -> Bool:
@@ -325,6 +340,9 @@ comptime _BODY_TWO_CONVERSIONS = 36
 comptime _BODY_NEGATIVE_LIMIT = 37
 comptime _NAMES_MIXED = 38
 comptime _NAME_MISMATCH = 39
+comptime _VALUE_OR_BODY = 40
+comptime _GET_VALUE_PLACES = 41
+comptime _POST_VALUE_BODY_PLACES = 42
 
 
 def _takes_none(paths: Int, queries: Int) -> Int:
@@ -343,9 +361,9 @@ def _is_body(k: Int) -> Bool:
 
 
 def _is_value(k: Int) -> Bool:
-    """Whether slot kind `k` is a route value (`Int`, `String` or an
-    `Optional` of either)."""
-    return k == _INT or k == _TEXT or _is_optional(k)
+    """Whether slot kind `k` is a route value (`Int`, `String`, an
+    `Optional` of either, or a `FromRouteValue` type)."""
+    return k == _INT or k == _TEXT or k == _APP_VALUE or _is_optional(k)
 
 
 def _is_optional(k: Int) -> Bool:
@@ -377,14 +395,15 @@ def _get_rule(
     """`get`'s rules for slot kinds `k1`, `k2`, `k3` (`_ABSENT` when
     missing): `def()` or `def(Headers)` with no placeholder, `def(V)` or
     `def(V, Headers)` with exactly one, `def(V, V)` or `def(V, V, Headers)`
-    with exactly two (M3-022), `V` an `Int` or `String` route value or an
-    `Optional` of either (M3-024), or the raw `def(Request) -> Response`
+    with exactly two (M3-022), `V` an `Int` or `String` route value, an
+    `Optional` of either (M3-024) or a `FromRouteValue` type (M3-055), or
+    the raw `def(Request) -> Response`
     with none. A `State` slot comes first, then a `Request` anywhere, a
     body, a parameter of no kind, a misplaced `Headers`, three route values,
-    then the placeholder count: for one value with the `Int`, `String` or
-    `Optional` message (an optional value needs exactly one query
-    placeholder and no path one), for two with one message whatever their
-    types, then an optional value at a path position."""
+    then the placeholder count: for one value with the `Int`, `String`,
+    `Optional` or application-value message (an optional value needs
+    exactly one query placeholder and no path one), for two with one
+    message whatever their types, then an optional value at a path position."""
     if k1 == _STATE or k2 == _STATE or k3 == _STATE:
         return _ONE_STATE if stateful else _GET_STATE_ARGUMENT
     if k1 == _RAW or k2 == _RAW or k3 == _RAW:
@@ -413,6 +432,8 @@ def _get_rule(
             return _GET_OPTIONAL_PLACES
         if paths + queries == 1:
             return _OK
+        if k1 == _APP_VALUE:
+            return _GET_VALUE_PLACES
         return _GET_INT_PLACES if k1 == _INT else _GET_TEXT_PLACES
     return _takes_none(paths, queries)
 
@@ -431,7 +452,8 @@ def _post_rule(
     `Headers` (`_bodyless`), takes `get`'s rules and messages (M3-048).
     Otherwise: `def(B)` with no placeholder, `def(V, B)` with exactly one,
     `def(V, V, B)` with exactly two (M3-022), `V` an `Int` or `String` route
-    value or an `Optional` of either (M3-024), or the raw
+    value, an `Optional` of either (M3-024) or a `FromRouteValue` type
+    (M3-055), or the raw
     `def(Request) -> Response` with none. The order
     decides which message a shape that breaks several rules gets: a raw
     handler returning `Response` gets the raw placeholder messages; for any
@@ -439,10 +461,10 @@ def _post_rule(
     and then `X`. With more slots, each rule is checked over every slot
     before the last before the next rule: a `Request`, a `State`, a body, a
     slot of no kind or a `Headers`; then the placeholders, with the `Int`,
-    `String` or `Optional` message for one value, and for two one message,
-    then an optional value at a path position; then the last slot `X`,
-    which is the body position (never a route value there, as such a
-    shape is bodyless), where a type with two body conversions
+    `String`, `Optional` or application-value message for one value, and
+    for two one message, then an optional value at a path position; then
+    the last slot `X`, which is the body position (never a route value
+    there, as such a shape is bodyless), where a type with two body conversions
     (`_TWO_BODIES`) and a `FromBytes` with a negative `max_bytes`
     (`_NEGATIVE_LIMIT`, M3-043) each get their own message."""
     if _bodyless(k1) and _bodyless(k2) and _bodyless(k3):
@@ -475,6 +497,8 @@ def _post_rule(
             if paths != 0 or queries != 1:
                 return _POST_OPTIONAL_BODY_PLACES
         elif paths + queries != 1:
+            if k1 == _APP_VALUE:
+                return _POST_VALUE_BODY_PLACES
             return (
                 _POST_INT_BODY_PLACES if k1 == _INT else _POST_TEXT_BODY_PLACES
             )
@@ -508,7 +532,9 @@ def _rule[
     type. `"GET"` and `"DELETE"` take `get`'s rules, `"POST"`, `"PUT"` and
     `"PATCH"` take `post`'s (M3-020). A shape that passes them all on a
     literal that repeats a query key breaks the last rule (M3-022). The
-    result rule itself is each overload's `where` clause. A shape the family
+    result rule itself is each overload's `where` clause. A slot that is
+    both a route value and a body (`_VALUE_AND_BODY`, M3-055) breaks a rule
+    before the family rules, wherever it is. A shape the family
     rule accepts is then checked for names (M3-050): of two route values,
     both or neither are `Param`s, and each `Param` must name the placeholder
     at its position."""
@@ -519,6 +545,8 @@ def _rule[
     var k1 = _kind[A]()
     var k2 = _kind[B]()
     var k3 = _kind[C]()
+    if k1 == _VALUE_AND_BODY or k2 == _VALUE_AND_BODY or k3 == _VALUE_AND_BODY:
+        return _VALUE_OR_BODY
     var rule: Int
     if method == "GET" or method == "DELETE":
         rule = _get_rule(stateful, k1, k2, k3, R == Response, paths, queries)
@@ -596,7 +624,8 @@ def _check[
         "a "
         + name
         + " handler's parameter is an Int or String route value, an Optional"
-        " of one, the request Headers or, for a raw handler, the Request"
+        " of one, a FromRouteValue type, the request Headers or, for a raw"
+        " handler, the Request"
     )
     comptime assert rule != _POST_BODY_PLACES, (
         "handler takes only the request body; route must declare no path"
@@ -647,7 +676,7 @@ def _check[
         "a "
         + name
         + " handler's parameter before the body is a route value: an Int, a"
-        " String or an Optional of either"
+        " String, an Optional of either or a FromRouteValue type"
     )
     comptime assert rule != _GET_HEADERS_LAST, (
         "a " + name + " handler takes one Headers, as its last parameter"
@@ -700,4 +729,16 @@ def _check[
         " neither"
     )
     comptime assert rule != _NAME_MISMATCH, _misnamed_message[path, A, B]()
+    comptime assert rule != _VALUE_OR_BODY, (
+        "a parameter's type conforms to FromRouteValue and to FromBody or"
+        " FromBytes; a type is a route value or a body, not both"
+    )
+    comptime assert rule != _GET_VALUE_PLACES, (
+        "handler takes one route value; route must declare exactly one"
+        " path or query parameter"
+    )
+    comptime assert rule != _POST_VALUE_BODY_PLACES, (
+        "handler takes one route value and the request body; route"
+        " must declare exactly one path or query parameter"
+    )
     comptime assert rule == _OK, "internal: a registration rule has no message"

@@ -14,6 +14,7 @@ type is.
 from .body import FromBody, FromBytes, _FromBodyOrBytes, _body_text
 from .http import Headers
 from .json import _JsonBody
+from .route_value import FromRouteValue
 
 
 trait _HeaderCarrier(Deinitable, Movable):
@@ -44,6 +45,13 @@ trait _HeaderCarrier(Deinitable, Movable):
         is rejected as such a body alone is (M3-041), and Muntin never picks
         a conversion silently; none (a type conforming only to the private
         bound) is rejected as a body of no conversion."""
+        ...
+
+    @staticmethod
+    def _carries_route_value() -> Bool:
+        """Whether the carried body type is also a `FromRouteValue`
+        (M3-055): `_kind` then rejects the carrier as it does such a type
+        bare, so neither conversion is picked silently."""
         ...
 
 
@@ -118,3 +126,7 @@ struct WithHeaders[B: _FromBodyOrBytes](
         return Int(conforms_to(Self.B, FromBody)) + Int(
             conforms_to(Self.B, FromBytes)
         )
+
+    @staticmethod
+    def _carries_route_value() -> Bool:
+        return conforms_to(Self.B, FromRouteValue)
