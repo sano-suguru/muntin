@@ -185,6 +185,25 @@ def test_first_registered_matching_route_wins() raises:
     assert_equal(client.get("/users/7").text(), "7")
 
 
+def test_parameter_route_registered_first_shadows_a_static_one() raises:
+    # Today's behavior, pinned before the route-conflict decision changes it:
+    # `/users/{id}` registered first takes `/users/me`, answers 400 for the
+    # `Int`, and never falls through to the later static route.
+    var app = App()
+    app.get["/users/{id}"](get_user)
+    app.get["/users/me"](me)
+    var client = TestClient(app)
+
+    var r = client.get("/users/me")
+    assert_equal(r.status, 400)
+    assert_equal(r.text(), "Bad Request")
+    assert_equal(client.get("/users/7").text(), "7")
+    var not_allowed = app.handle(Request("POST", "/users/me"))
+    assert_equal(not_allowed.status, 405)
+    assert_equal(_allow(not_allowed), "GET, HEAD")
+    assert_equal(client.get("/users/me/x").status, 404)
+
+
 def test_request_splits_target_at_first_question_mark() raises:
     var plain = Request("GET", "/users/42")
     assert_equal(plain.path, "/users/42")
