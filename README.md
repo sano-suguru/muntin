@@ -114,6 +114,31 @@ curl --cacert cert.pem https://127.0.0.1:8443/   # Hello, Mojo! (in another term
 
 In production, use a certificate from your certificate authority; a wrong file stops `Server.bind` with an error naming it ([`docs/DX.md`](docs/DX.md) section 1, "HTTPS").
 
+### From your own project
+
+Until Muntin is packaged, your project uses a clone of it and passes its sources to `mojo` with `-I`. Next to the clone, in your own pixi workspace, `pixi.toml` needs Muntin's channels and Mojo; Flare is needed only to serve with `Server`, at the tag Muntin's own `pixi.toml` pins:
+
+```toml
+[workspace]
+name = "myapp"
+channels = ["https://conda.modular.com/max", "conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+preview = ["pixi-build"]   # pixi builds Flare from its git source
+
+[dependencies]
+mojo = ">=1.1.0,<2"
+flare = { git = "https://github.com/ehsanmok/flare.git", tag = "v0.12.0" }
+```
+
+With your program in `app.mojo` and the clone in `../muntin`:
+
+```sh
+pixi run mojo run -I ../muntin/src app.mojo                                # App and TestClient
+pixi run mojo run -I ../muntin/src -I ../muntin/adapters/flare app.mojo    # also muntin_flare's Server
+```
+
+`mojo build` takes the same `-I` paths.
+
 ## Documentation
 
 - [`docs/DX.md`](docs/DX.md): how to write Muntin applications: API, examples, semantics.
