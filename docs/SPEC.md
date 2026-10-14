@@ -87,7 +87,6 @@ What each capability does for an application: `docs/DX.md`; how and why: its dec
 | 405 `Method Not Allowed` with `Allow` | [M3-030](history/architecture-decisions.md#method-not-allowed-decision-m3-030) | shipped |
 | serving an `App` over cleartext HTTP/1.1 and h2c (`Server`, one thread, IP literals) | [M3-032](history/architecture-decisions.md#serving-entrypoint-decision-m3-032) | shipped |
 | middleware functions (`app.use(f)`, compile-time configuration only) | [M3-034](history/architecture-decisions.md#middleware-decision-m3-034) | shipped |
-| request body bytes kept exactly through Flare (replaced by binary bodies) | [M3-038](history/architecture-decisions.md#request-body-bytes-decision-m3-038) | shipped |
 | request method and target bytes kept exactly through Flare | [M3-039](history/architecture-decisions.md#request-target-and-method-bytes-decision-m3-039) | shipped |
 | binary request and response bodies (`List[UInt8]`) | [M3-040](history/architecture-decisions.md#binary-request-and-response-bodies-decision-m3-040) | shipped |
 | typed binary request bodies (`FromBytes`) | [M3-041](history/architecture-decisions.md#typed-binary-request-bodies-decision-m3-041) | shipped |
