@@ -2,7 +2,7 @@
 
 Muntin is a typed application layer for building web services in Mojo. Your handlers depend on Muntin, not on Flare or another networking runtime.
 
-Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over cleartext HTTP on one thread, with an IP-literal host, stopping gracefully on SIGTERM or SIGINT. It is not production-ready.
+Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over HTTP or HTTPS, with an IP-literal host, stopping gracefully on SIGTERM or SIGINT. It is not production-ready.
 
 ```mojo
 from muntin import App
@@ -61,7 +61,7 @@ application code
          /             \
         v               v
   TestClient        Flare adapter
-  in memory         over HTTP (Server, one thread)
+  in memory         over HTTP (Server)
 ```
 
 Your handlers and routes stay independent of Flare or any other networking runtime, and Muntin adds no executor or async runtime that application code must adopt. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
@@ -75,7 +75,7 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON and binary bodies), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
-- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)`, on one thread, from an IP-literal host, and stops gracefully on SIGTERM or SIGINT. Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
+- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, on one thread or on several workers with one `App` each, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)` on one thread, from an IP-literal host, and stops gracefully on SIGTERM or SIGINT. Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
 - **Not yet:** see [`docs/SPEC.md`](docs/SPEC.md), "Remaining candidates".
 
 ## Try it
