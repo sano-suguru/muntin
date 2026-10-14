@@ -4371,7 +4371,7 @@ Status: **decision, standing constraint** (M3-052, pull request #96; `src/muntin
 - each method name has at most eight overloads, slot arities 0 to 3, in the stateless and the stateful family. This is a maintenance ceiling chosen here, not a compiler boundary: every candidate note is printed at eight, but a stateful call with a rejected result already loses a trailing sub-note;
 - a new request part is a slot kind or a rule when it can be one, which adds no overload;
 - raising the ceiling (slot arity 4, a third family, or anything else that adds overloads to existing names) is a decision of its own, taken when a concrete shape requires it. That decision compares adding the overloads with a carrier slot kind that holds several parts: application code for the shape, conversion and error order, diagnostics, and build time measured as in this record's pull request. It states the overload count before and after;
-- a method name beyond the five copies the `get` or the `post` set and adds no rule of its own (M3-020's pattern); its decision states the new count.
+- a method name beyond the five starts from a copy of the `get` or the `post` set (M3-020's pattern); a rule of its own (a method-specific constraint in `_rule`, which adds no overload) is decided with that method, and its decision states the new count.
 
 **Rejected.**
 - No budget (M3-014's and M3-022's accepted costs as the only guide): slot arity 4 adds ten overloads across the five names in one item, and nothing makes that a deliberate choice.
