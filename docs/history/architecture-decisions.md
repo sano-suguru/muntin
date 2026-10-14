@@ -4340,7 +4340,7 @@ Status: **decision and production** (M3-051, pull request to be linked on merge;
 
 ### Registration complexity budget decision (M3-052)
 
-Status: **decision** (M3-052, pull request to be linked on merge; `src/muntin` unchanged). The overload counts, build-time measurements and probes are in the pull request.
+Status: **decision** (M3-052, pull request #96; `src/muntin` unchanged). The overload counts, build-time measurements and probes are in the pull request.
 
 **Question and what settles it.** An outside review asked how much internal complexity typed registration may take for `app.get[path](handler)`: forty overloads (eight per method name, five names), and whether that makes new methods, new parameter kinds, more parameters, build time, diagnostics or Mojo upgrades harder, so that growth needs a limit. Settled by the overload count and its history; cold `mojo build` times on Mojo 1.1.0 as the number of routes, the slot arity, the methods used and the declared overload set vary; and whether Mojo 1.1.0 can express one shared registration mechanism behind the current spelling.
 
