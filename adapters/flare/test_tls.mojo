@@ -37,12 +37,15 @@ from flare.tcp import TcpStream
 from flare.tls import TlsConfig, TlsStream
 from flare.utils import SIGTERM, exit, fork, kill
 from muntin import App, Request, Response
-from muntin_flare import Server, Tls
+from muntin_flare import Server, Tls, _serving_held
 from test_server import (
     CHILD_LIFETIME_S,
+    REFUSAL_ALARM_S,
     STOP_BOUND_MS,
+    WORKERS,
     _Child,
     _close,
+    _default_sigpipe,
     _exit_code,
     _h2_frame,
     _held_pipes,
@@ -52,6 +55,7 @@ from test_server import (
     _refused_within,
     _stop,
     _write_byte,
+    borrowed_app,
     stoppable_app,
 )
 
@@ -840,6 +844,35 @@ def test_bind_checks_the_settings_and_the_host_before_the_tls_files() raises:
 
 
 # ── The three settings over TLS ────────────────────────────────────────────
+
+
+def test_serve_workers_refuses_a_tls_server() raises:
+    """`serve[make]` refuses a `Server` bound with `tls` (M3-049) before
+    serving or taking the serving claim: its workers' reactor loop is not
+    given the TLS context. The child would serve otherwise, so a missing
+    refusal fails the test instead of hanging it. `serve(app)` on the same
+    kind of `Server` serves HTTPS (the tests above), and `serve[make]`
+    without `tls` serves cleartext (`adapters/flare/test_server.mojo`)."""
+    var server = Server.bind("127.0.0.1", 0, tls=_tls())
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
+        _default_sigpipe()
+        try:
+            server.serve[borrowed_app](workers=WORKERS)
+        except e:
+            print("observed: workers on a TLS server ->", e)
+            if _serving_held():
+                exit(4)
+            if String(e) == "serve: workers are unsupported on a TLS server":
+                exit(7)
+            exit(8)
+        exit(9)
+    _ = server^
+    var ended = _reap_within(pid, STOP_BOUND_MS * 5)
+    assert_equal(_exit_code(ended[0]), 7, "serve did not refuse")
 
 
 def test_body_limit_over_https() raises:
