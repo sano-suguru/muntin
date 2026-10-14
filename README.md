@@ -74,11 +74,9 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 
 ## Status
 
-- **Today:** typed routing, typed request bodies and results (including JSON), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
-- **Serving:** `Server` in the Flare adapter module (`muntin_flare`) serves an `App` over cleartext HTTP/1.1 and HTTP/2 with prior knowledge, on one thread. On SIGTERM or SIGINT it refuses new connections and serves the open ones for a grace window (`shutdown_grace_ms`, 5 s unless set) before it returns; a stop always takes the whole window, and one `Server` serves at a time per process. It builds for Linux x86-64 and macOS arm64. Its limits: an IP literal as the host (`"127.0.0.1"`, `"0.0.0.0"`, `"::1"`; not `"localhost"`), no TLS or HTTP/3, three backend settings (an upper bound on the request body it receives, `max_body_bytes`, 10 MiB unless set, the grace window, and how long an idle connection stays open, `idle_timeout_ms`, 500 ms unless set) and Flare's defaults for the rest, and it runs from a clone with two `-I` paths, not from a published package. Details: [`docs/DX.md`](docs/DX.md) section 1.
-- **Not yet:** runtime-configured middleware and request-scoped context, and serving beyond those limits.
-
-Shipped and remaining capabilities: [`docs/SPEC.md`](docs/SPEC.md). Long-term API targets: [`docs/DX.md`](docs/DX.md).
+- **Today:** typed routing, typed request bodies and results (including JSON and binary bodies), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
+- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c on one thread, from an IP-literal host, and stops gracefully on SIGTERM or SIGINT. No TLS. Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
+- **Not yet:** see [`docs/SPEC.md`](docs/SPEC.md), "Remaining candidates".
 
 ## Try it
 
@@ -116,17 +114,7 @@ curl http://127.0.0.1:8080/   # Hello, Mojo!
 
 ## Development
 
-Toolchain: **Mojo 1.1.0 (8189361e)**, managed by pixi (pinned in `pixi.lock`; `scripts/check.sh` fails on any other Mojo version).
-
-```sh
-pixi install
-./scripts/check.sh   # toolchain version, formatting, architecture boundary, unsafe confinement, package + example build, must-not-compile fixtures
-./scripts/test.sh    # executable tests in tests/test_*.mojo
-git diff --check
-./scripts/check_flare.sh  # Flare compatibility + adapter contract tests (separate `flare` environment)
-```
-
-`pixi run check` and `pixi run test` run the same scripts. `pixi run format` formats sources.
+Toolchain: **Mojo 1.1.0 (8189361e)**, managed by pixi and pinned in `pixi.lock`. After `pixi install`, `./scripts/check.sh`, `./scripts/test.sh` and `./scripts/check_flare.sh` are the checks CI runs; what each covers and how to work on Muntin: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). `pixi run format` formats sources.
 
 ## License
 
