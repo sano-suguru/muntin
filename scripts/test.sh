@@ -12,7 +12,8 @@
 # positive controls in tests/sanitizer_controls, each of which must fail
 # with a sanitizer report of the kind its "# Expected report: " line names,
 # so a toolchain whose sanitizer stops seeing these errors stops the run
-# there. The leak control runs on Linux only. This is the runtime
+# there. The leak control runs on Linux only, the one platform where leak
+# detection is verified for this toolchain. This is the runtime
 # evidence for the unsafe storage in src/muntin/_handler_storage.mojo
 # (docs/DEVELOPMENT.md, section 3).
 set -euo pipefail
@@ -35,8 +36,9 @@ for f in "${files[@]}"; do
     fi
 done
 
-# The positive controls, named so that a deleted one fails the run. The leak
-# control needs LeakSanitizer, which macOS ASan does not have.
+# The positive controls, named so that a deleted one fails the run. Leak
+# detection is verified only on Linux for this Mojo toolchain, so the leak
+# control (and the forced detect_leaks=1) is skipped elsewhere.
 controls=()
 if [[ "${SANITIZE:-}" == address ]]; then
     controls=(tests/sanitizer_controls/use_after_free.mojo tests/sanitizer_controls/double_free.mojo)
@@ -47,7 +49,7 @@ if [[ "${SANITIZE:-}" == address ]]; then
         export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=1"
         unset LSAN_OPTIONS
     else
-        echo "note: tests/sanitizer_controls/leak.mojo skipped: no leak detection on $(uname -s)"
+        echo "note: tests/sanitizer_controls/leak.mojo skipped: leak detection is not verified on $(uname -s)"
     fi
     for c in "${controls[@]}"; do
         if [[ ! -f "$c" ]]; then
