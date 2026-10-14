@@ -5,7 +5,8 @@
 # caller to print in order, and exits nonzero on failure.
 #
 #   test        tests/test_*.mojo: must build with --Werror; the binary is
-#               left at OUTDIR/<name>.bin for test.sh to run.
+#               left at OUTDIR/<name>.bin for test.sh to run. With SANITIZE
+#               set (test.sh), it is built with `--sanitize "$SANITIZE"`.
 #   route       tests/compile_fail: must not build; the log must contain
 #               "constraint failed: <expected diagnostic>".
 #   must_fail   other must-not-build fixtures: must not build; the log must
@@ -36,7 +37,7 @@ expected_diagnostic() {
 
 case "$kind" in
 test)
-    if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$bin"; then
+    if ! "${MOJO[@]}" build --Werror ${SANITIZE:+--sanitize "$SANITIZE"} -I src -I tests "$t" -o "$bin"; then
         echo "error: $t failed to build"
         exit 1
     fi
