@@ -5,91 +5,29 @@
 # example as written, two `Param`s on every method (stateless and stateful,
 # with a body, `Headers`, query values and bodyless), a lone named value,
 # `Param` itself, and the known gap that a variable's own name is not
-# compared. Bare values are unchanged (tests/test_route_values.mojo).
+# compared. Bare values are unchanged (tests/test_route_values.mojo). The
+# handlers are in tests/named_value_handlers.mojo, so this module can
+# discover its tests.
 # Decision: docs/history/architecture-decisions.md, "Named route values
 # decision (M3-050)". Must-not-compile counterparts:
 # tests/named_values_api_fail.
 
 from std.testing import assert_equal, TestSuite
 
-from muntin import App, FromBody, Headers, Param, State
+from muntin import App, Headers, Param, State
+from named_value_handlers import (
+    Prefix,
+    bodyless,
+    make_app,
+    misled,
+    named_one,
+    named_optional,
+    query_pair,
+    stateful,
+    with_body,
+    with_headers,
+)
 from muntin.testing import TestClient
-
-
-struct Prefix(Movable):
-    var text: String
-
-    def __init__(out self, text: String):
-        self.text = text
-
-
-struct Note(FromBody, Movable):
-    var text: String
-
-    def __init__(out self, var text: String):
-        self.text = text^
-
-    @staticmethod
-    def from_body(body: String) raises -> Self:
-        return Self(body)
-
-
-# docs/DX.md, "Named route values", as written there (its `make_app` too).
-
-
-def post_of(uid: Int, pid: Int) -> String:
-    return String("post ", pid, " of user ", uid)
-
-
-def checked_post_of(uid: Param["uid", Int], pid: Param["pid", Int]) -> String:
-    return String("post ", pid.value, " of user ", uid.value)
-
-
-def make_app() -> App:
-    var app = App()
-    app.get["/users/{uid}/posts/{pid}"](post_of)
-    app.get["/checked/{uid}/posts/{pid}"](checked_post_of)
-    return app^
-
-
-def with_body(
-    uid: Param["uid", Int], pid: Param["pid", Int], body: Note
-) -> String:
-    return String(uid.value, ",", pid.value, "=", body.text)
-
-
-def query_pair(q: Param["q", String], limit: Param["limit", Int]) -> String:
-    return String(limit.value, " results for ", q.value)
-
-
-def bodyless(a: Param["a", String], b: Param["b", String]) -> String:
-    return String(a.value, ",", b.value)
-
-
-def with_headers(
-    uid: Param["uid", Int], pid: Param["pid", Int], headers: Headers
-) -> String:
-    return String(uid.value, ",", pid.value, " ", len(headers))
-
-
-def stateful(
-    p: State[Prefix], uid: Param["uid", Int], tag: Param["tag", String]
-) -> String:
-    return String(p[].text, uid.value, ",", tag.value)
-
-
-def named_one(id: Param["id", Int]) -> String:
-    return String("named ", id.value)
-
-
-def named_optional(limit: Param["limit", Optional[Int]]) -> String:
-    return String("limit ", limit.value.or_else(20))
-
-
-def misled(pid: Param["uid", Int], uid: Param["pid", Int]) -> String:
-    # Each variable is named after the other placeholder; only the `Param`
-    # names are compared, so this registers on /users/{uid}/posts/{pid}.
-    return String("post ", pid.value, " of user ", uid.value)
 
 
 def _expect(app: App, target: String, status: Int, body: String) raises:
@@ -162,21 +100,5 @@ def test_variable_names_are_not_compared() raises:
     _expect(app, "/users/1/posts/2", 200, "post 1 of user 2")
 
 
-def _tests() -> TestSuite:
-    """This module's tests, registered by hand: discovering them
-    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
-    because a handler here declares a `Param` (M3-050;
-    tests/named_values_api_fail/discover_tests_crash.mojo).
-    `scripts/check_test_lists.sh` checks that every `test_` function has
-    its own `suite.test[...]()` line here."""
-    var suite = TestSuite()
-    suite.test[test_dx_example]()
-    suite.test[test_two_params_on_every_method]()
-    suite.test[test_one_value_may_be_named]()
-    suite.test[test_param_holds_and_copies_its_value]()
-    suite.test[test_variable_names_are_not_compared]()
-    return suite^
-
-
 def main() raises:
-    _tests().run()
+    TestSuite.discover_tests[__functions_in_module()]().run()

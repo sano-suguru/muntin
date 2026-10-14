@@ -545,6 +545,9 @@ def _slot[
     """
     comptime if conforms_to(A, _NamedValue):
         # A `Param` (M3-050): its value converted as a bare slot of its type.
+        # Only an exact `Param` reaches here: `_kind` gives any other type
+        # conforming to the private marker no kind, so `_admits` refuses it
+        # (tests/named_values_api_fail/marker_only_type.mojo).
         var value = _slot[A._Value, at](args, body)
         return A._wrap(value^)
     elif A == Int:

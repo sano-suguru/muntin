@@ -44,24 +44,6 @@ for s in "${sources[@]}"; do
 done
 echo "ok"
 
-# A test module that defines a handler with a `Param` cannot discover its
-# tests on Mojo 1.1.0 (tests/named_values_api_fail/discover_tests_crash.mojo)
-# and lists them in `_tests()`; every `test_` function must be listed there.
-step "hand-registered tests"
-./scripts/check_test_lists.sh tests/test_*.mojo adapters/flare/test_*.mojo
-# Each module here has a gap the check must report, with the text on its
-# "# Expected error: " line.
-for f in tests/test_lists_fail/*.mojo; do
-    expected="$(sed -n 's/^# Expected error: //p' "$f")"
-    if out="$(./scripts/check_test_lists.sh "$f" 2>&1)" ||
-        [[ -z "$expected" || "$out" != *"$expected"* ]]; then
-        echo "$out"
-        echo "error: scripts/check_test_lists.sh did not report $f with: $expected" >&2
-        exit 1
-    fi
-done
-echo "ok"
-
 step "architecture boundary"
 ./scripts/check_boundaries.sh src/muntin
 

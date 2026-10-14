@@ -3,10 +3,10 @@
 # (`TestSuite.discover_tests[__functions_in_module()]`) segfaults when a
 # function in the module declares a parameter whose type has a string
 # parameter, as `Param["id", Int]` does (a bare `struct P[name: StaticString]`
-# crashes too; an `Int` parameter does not). A module that defines Param
-# handlers registers its tests by hand, or keeps the handlers in another
-# module. When this builds, the crash is fixed: drop the workaround in the
-# test modules that list their tests by hand. Decision:
+# crashes too; an `Int` parameter does not). Importing such a function does
+# not crash, so tests/test_named_values.mojo keeps its handlers in
+# tests/named_value_handlers.mojo. When this builds, the crash is fixed: the
+# handlers may move back into the test module. Decision:
 # docs/history/architecture-decisions.md, "Named route values decision
 # (M3-050)".
 # Expected diagnostic (checked by scripts/check.sh): Please submit a bug report to https://github.com/modular/modular/issues
