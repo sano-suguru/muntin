@@ -47,11 +47,23 @@
 - r.get("/users/:uid/posts/:pid", Extracted[GetPost]())
 + r.get("/users/:uid/posts", Extracted[GetPost]())
 
-# A query key is misspelled where it is declared.
+# A query key is misspelled in one place. Muntin names it once, in the route;
+# Flare names it three times (the field's type, its __init__ and the
+# registration's prototype), so each place is its own mistake there, and the
+# key misspelled the same way in all three is one more.
 == misspelled-query-key muntin GET /users?limit=1
 - app.get["/users?{limit}"](list_users, users)
 + app.get["/users?{limt}"](list_users, users)
 == misspelled-query-key flare GET /users?limit=1
+- var limit: OptionalQueryInt["limit"]
++ var limit: OptionalQueryInt["limt"]
+== misspelled-query-key-in-init flare GET /users?limit=1
+- self.limit = OptionalQueryInt["limit"]()
++ self.limit = OptionalQueryInt["limt"]()
+== misspelled-query-key-in-registration flare GET /users?limit=1
+- Extracted(ListUsers(users.copy(), OptionalQueryInt["limit"]())),
++ Extracted(ListUsers(users.copy(), OptionalQueryInt["limt"]())),
+== misspelled-query-key-everywhere flare GET /users?limit=1
 - var limit: OptionalQueryInt["limit"]
 + var limit: OptionalQueryInt["limt"]
 - self.limit = OptionalQueryInt["limit"]()

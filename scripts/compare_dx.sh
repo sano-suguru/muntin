@@ -15,8 +15,11 @@
 # 3. plants each mistake in bench/compare/mistakes.txt in a copy of the
 #    program it names and reports whether the copy builds: the compiler's
 #    first error if not, otherwise what the copy answers to the mistake's
-#    request.
-# Builds go under build/compare_dx. Needs curl and python3.
+#    request. It builds at most COMPARE_JOBS copies at once (default 4), and
+#    fails if a copy does not build without a compiler error (such as a
+#    compiler killed for lack of memory), which is not a rejected mistake.
+# Builds go under build/compare_dx. Every request has a 10 s limit. Needs curl,
+# cmp and python3.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,6 +31,12 @@ dir=bench/compare
 out=build/compare_dx
 rm -rf "$out"
 mkdir -p "$out"
+jobs_max="${COMPARE_JOBS:-4}"
+if ! [[ $jobs_max =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: COMPARE_JOBS must be a positive integer: $jobs_max" >&2
+    exit 1
+fi
+CURL=(curl -s --noproxy '*' --connect-timeout 2 --max-time 10)
 pids=()
 cleanup() {
     for pid in "${pids[@]}"; do
@@ -38,8 +47,11 @@ trap cleanup EXIT
 
 step() { printf '\n== %s\n' "$*"; }
 
-build() { # SRC OUT: builds SRC to OUT, the log in OUT.log
-    "${FLARE[@]}" build -I src -I adapters/flare "$1" -o "$2" >"$2.log" 2>&1
+build() { # SRC OUT: builds SRC to OUT, the log in OUT.log, the exit status in OUT.status
+    local status=0
+    "${FLARE[@]}" build -I src -I adapters/flare "$1" -o "$2" >"$2.log" 2>&1 || status=$?
+    echo "$status" >"$2.status"
+    return "$status"
 }
 
 free_port() {
@@ -52,7 +64,7 @@ start() { # BINARY VAR: serves BINARY on a free port, sets VAR to it once it ans
     "$1" "$p" >"$1.serve.log" 2>&1 &
     pids+=($!)
     for _ in $(seq 1 100); do
-        if curl -s --noproxy '*' -o /dev/null "http://127.0.0.1:$p/"; then
+        if "${CURL[@]}" -o /dev/null "http://127.0.0.1:$p/"; then
             printf -v "$2" "%s" "$p"
             return
         fi
@@ -63,10 +75,11 @@ start() { # BINARY VAR: serves BINARY on a free port, sets VAR to it once it ans
     exit 1
 }
 
-ask() { # PORT METHOD TARGET BODY CONTENT_TYPE: prints status, Content-Type, Allow and body, tab-separated
-    local args=(-s --noproxy '*' -X "$2" -D "$out/headers" -o "$out/body")
+ask() { # PORT METHOD TARGET BODY CONTENT_TYPE: prints status, Content-Type, Allow and body,
+    # tab-separated; the body exactly as received is left in $out/body
+    local args=(-X "$2" -D "$out/headers" -o "$out/body")
     if [[ $2 == HEAD ]]; then
-        args=(-s --noproxy '*' -I -D "$out/headers" -o /dev/null)
+        args=(-I -D "$out/headers" -o /dev/null)
         : >"$out/body"
     fi
     if [[ $4 != - ]]; then
@@ -78,7 +91,7 @@ ask() { # PORT METHOD TARGET BODY CONTENT_TYPE: prints status, Content-Type, All
         fi
     fi
     local status
-    status="$(curl "${args[@]}" -w '%{http_code}' "http://127.0.0.1:$1$3")"
+    status="$("${CURL[@]}" "${args[@]}" -w '%{http_code}' "http://127.0.0.1:$1$3" || true)"
     local ctype allow
     ctype="$(sed -n 's/^[Cc]ontent-[Tt]ype: *\(.*\)\r$/\1/p' "$out/headers")"
     allow="$(sed -n 's/^[Aa]llow: *\(.*\)\r$/\1/p' "$out/headers")"
@@ -93,10 +106,14 @@ import sys
 base = sys.argv[1]
 log = open(base + ".log").read().splitlines()
 src = open(base + ".mojo").read().split("\n")
-# The rule a registration check states, else the first error.
+# The rule a registration check states, else the first error at a source
+# location (path:line:column: error: ...).
 msg = next((l.split("note: ", 1)[1] for l in log if "note: constraint failed:" in l), None)
 if msg is None:
-    msg = next(l.split("error: ", 1)[1] for l in log if "error: " in l)
+    msg = next((l.split("error: ", 1)[1] for l in log if re.match(r"\S+:\d+:\d+: error: ", l)), None)
+if msg is None:
+    print(f"no compiler error in {base}.log: the build failed for another reason")
+    sys.exit(1)
 # The lines of the program the diagnostic names, in order.
 own = []
 for l in log:
@@ -154,7 +171,9 @@ while IFS=$'\t' read -r method target body status expected; do
     for prog in muntin flare; do
         port_var="${prog}_port"
         IFS=$'\t' read -r got_status _ _ got_body < <(ask "${!port_var}" "$method" "$target" "$body" application/json)
-        if [[ $got_status == "$status" && $got_body == "$expected" ]]; then
+        # The body is compared byte for byte, a trailing newline included.
+        printf '%s' "$expected" >"$out/expected"
+        if [[ $got_status == "$status" ]] && cmp -s "$out/body" "$out/expected"; then
             printf 'ok\t%s\t%s %s\t%s\n' "$prog" "$method" "$target" "$status"
         else
             printf 'FAIL\t%s\t%s %s\t%s %s, expected %s %s\n' "$prog" "$method" "$target" \
@@ -180,7 +199,7 @@ done <"$dir/defaults.tsv"
 cleanup
 pids=()
 
-step "mistakes (bench/compare/mistakes.txt), built in parallel"
+step "mistakes (bench/compare/mistakes.txt), built $jobs_max at a time"
 python3 -I - "$dir/mistakes.txt" "$dir" "$out" <<'PY'
 import sys
 
@@ -214,26 +233,22 @@ with open(f"{out_dir}/mistakes.tsv", "w") as listing:
         open(path, "w").write("\n".join(lines))
         listing.write("\t".join([b["name"], b["prog"], *b["probe"]]) + "\n")
 PY
-names=()
 while IFS=$'\t' read -r name prog _; do
-    names+=("${name}_$prog")
+    while (($(jobs -rp | wc -l) >= jobs_max)); do
+        wait -n || true
+    done
     build "$out/${name}_$prog.mojo" "$out/${name}_$prog" &
-    pids+=($!)
 done <"$out/mistakes.tsv"
-statuses=()
-for pid in "${pids[@]}"; do
-    if wait "$pid"; then statuses+=(0); else statuses+=(1); fi
-done
-pids=()
-i=0
+wait || true
+unexplained=0
 while IFS=$'\t' read -r name prog method target body; do
     printf '%s\t%s\t' "$name" "$prog"
     if [[ $(grep -c " $name " "$dir/mistakes.txt") -lt 2 ]]; then
         printf '(no counterpart in the other program)\t'
     fi
-    if ((statuses[i])); then
+    if [[ $(cat "$out/${name}_$prog.status") != 0 ]]; then
         printf 'does not build: '
-        diagnostic "$out/${name}_$prog"
+        diagnostic "$out/${name}_$prog" || unexplained=1
     else
         start "$out/${name}_$prog" port
         IFS=$'\t' read -r st _ _ got < <(ask "$port" "$method" "$target" "$body" application/json)
@@ -241,5 +256,8 @@ while IFS=$'\t' read -r name prog method target body; do
         cleanup
         pids=()
     fi
-    i=$((i + 1))
 done <"$out/mistakes.tsv"
+if ((unexplained)); then
+    echo "error: a mistaken copy failed to build without a compiler error; see its log under $out" >&2
+    exit 1
+fi
