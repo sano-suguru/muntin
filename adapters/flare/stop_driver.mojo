@@ -13,7 +13,7 @@ inherited pipe that it started and waits on another).
 from std.io.file_descriptor import FileDescriptor
 from std.sys import argv
 
-from muntin import App, Param
+from muntin import App
 from muntin_flare import Server
 
 
@@ -21,13 +21,11 @@ def hello() -> String:
     return "hello"
 
 
-def held(
-    started: Param["started", Int], release: Param["release", Int]
-) raises -> String:
-    var out = FileDescriptor(started.value)
+def held(started: Int, release: Int) raises -> String:
+    var out = FileDescriptor(started)
     out.write_bytes("s".as_bytes())
     var byte = List[UInt8](length=1, fill=0)
-    var source = FileDescriptor(release.value)
+    var source = FileDescriptor(release)
     if source.read_bytes(byte) != 1:
         raise Error("held: not released")
     return "released after the stop"

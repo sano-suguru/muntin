@@ -19,7 +19,6 @@ from muntin import (
     Headers,
     Json,
     JsonWriter,
-    Param,
     Request,
     Response,
     State,
@@ -89,8 +88,8 @@ def name_of(name: String) -> String:
     return "name " + name
 
 
-def field_of(id: Param["id", Int], field: Param["field", String]) -> String:
-    return String("field ", id.value, " ", field.value)
+def field_of(id: Int, field: String) -> String:
+    return String("field ", id, " ", field)
 
 
 def page_of(size: Optional[Int]) -> String:
@@ -385,22 +384,5 @@ def test_dx_example() raises:
     assert_equal(_dump(head.headers), _dump(handled.headers))
 
 
-def _tests() -> TestSuite:
-    """This module's tests, registered by hand: discovering them
-    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
-    because a handler here declares a `Param` (M3-050;
-    tests/named_values_api_fail/discover_tests_crash.mojo).
-    `scripts/check.sh` checks that every `test_` function is listed."""
-    var suite = TestSuite()
-    suite.test[test_head_answers_what_get_answers_on_every_get_shape]()
-    suite.test[test_head_converts_results_and_errors_as_get_does]()
-    suite.test[test_head_bad_request_calls_no_handler]()
-    suite.test[test_raw_get_handler_sees_head]()
-    suite.test[test_head_only_reaches_get_routes]()
-    suite.test[test_first_registration_wins_and_never_falls_through]()
-    suite.test[test_dx_example]()
-    return suite^
-
-
 def main() raises:
-    _tests().run()
+    TestSuite.discover_tests[__functions_in_module()]().run()

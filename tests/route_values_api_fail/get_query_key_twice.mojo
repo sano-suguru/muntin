@@ -3,11 +3,11 @@
 # docs/history/architecture-decisions.md, "Several route values decision
 # (M3-022)".
 # Expected diagnostic (checked by scripts/check.sh): constraint failed: route declares a query parameter twice
-from muntin import App, Param
+from muntin import App
 
 
-def h(a: Param["a", String], b: Param["a", String]) -> String:
-    return a.value + b.value
+def h(a: String, b: String) -> String:
+    return a + b
 
 
 def main():

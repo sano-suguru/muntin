@@ -24,7 +24,6 @@ from muntin import (
     Headers,
     Json,
     JsonValue,
-    Param,
     Request,
     Response,
     State,
@@ -126,18 +125,12 @@ def list_items(limit: Optional[Int]) -> String:
     return "items " + String(limit.or_else(20))
 
 
-def search(
-    q: Param["q", String], sort: Param["sort", Optional[String]]
-) -> String:
-    return "results for " + q.value + " by " + sort.value.or_else("relevance")
+def search(q: String, sort: Optional[String]) -> String:
+    return "results for " + q + " by " + sort.or_else("relevance")
 
 
-def posts(
-    uid: Param["uid", Int],
-    limit: Param["limit", Optional[Int]],
-    headers: Headers,
-) -> String:
-    return String("user ", uid.value, ": ", limit.value.or_else(20), " posts")
+def posts(uid: Int, limit: Optional[Int], headers: Headers) -> String:
+    return String("user ", uid, ": ", limit.or_else(20), " posts")
 
 
 def tag_user(tag: Optional[String], body: CreateUser) -> String:
@@ -181,48 +174,36 @@ def counted_body(a: Optional[String], body: Note) -> String:
     return "counted " + _show(a) + "=" + body.text
 
 
-def req_opt(
-    q: Param["q", String], sort: Param["sort", Optional[String]]
-) -> String:
-    return "q " + q.value + " sort " + _show(sort.value)
+def req_opt(q: String, sort: Optional[String]) -> String:
+    return "q " + q + " sort " + _show(sort)
 
 
-def opt_req(
-    limit: Param["limit", Optional[Int]], q: Param["q", String]
-) -> String:
-    return "limit " + _show(limit.value) + " q " + q.value
+def opt_req(limit: Optional[Int], q: String) -> String:
+    return "limit " + _show(limit) + " q " + q
 
 
-def path_opt(
-    uid: Param["uid", Int], limit: Param["limit", Optional[Int]]
-) -> String:
-    return String("uid ", uid.value, " limit ", _show(limit.value))
+def path_opt(uid: Int, limit: Optional[Int]) -> String:
+    return String("uid ", uid, " limit ", _show(limit))
 
 
-def two_opt(
-    a: Param["a", Optional[Int]], b: Param["b", Optional[String]]
-) -> String:
-    return "a " + _show(a.value) + " b " + _show(b.value)
+def two_opt(a: Optional[Int], b: Optional[String]) -> String:
+    return "a " + _show(a) + " b " + _show(b)
 
 
 def with_headers(a: Optional[Int], headers: Headers) -> String:
     return String(_show(a), " ", len(headers))
 
 
-def two_with_headers(
-    a: Param["a", Int], b: Param["b", Optional[String]], headers: Headers
-) -> String:
-    return String(a.value, ",", _show(b.value), " ", len(headers))
+def two_with_headers(a: Int, b: Optional[String], headers: Headers) -> String:
+    return String(a, ",", _show(b), " ", len(headers))
 
 
 def with_body(a: Optional[String], body: Note) -> String:
     return _show(a) + "=" + body.text
 
 
-def two_with_body(
-    a: Param["a", Int], b: Param["b", Optional[Int]], body: Note
-) -> String:
-    return String(a.value, ",", _show(b.value), "=", body.text)
+def two_with_body(a: Int, b: Optional[Int], body: Note) -> String:
+    return String(a, ",", _show(b), "=", body.text)
 
 
 def with_json(a: Optional[Int], body: Json[Name]) -> String:
@@ -234,14 +215,12 @@ def carried(a: Optional[String], input: WithHeaders[Note]) -> String:
 
 
 def carried_json(
-    a: Param["a", Optional[Int]],
-    b: Param["b", Optional[String]],
-    input: WithHeaders[Json[Name]],
+    a: Optional[Int], b: Optional[String], input: WithHeaders[Json[Name]]
 ) -> String:
     return String(
-        _show(a.value),
+        _show(a),
         ",",
-        _show(b.value),
+        _show(b),
         "=",
         input.body.value.name,
         " ",
@@ -254,12 +233,9 @@ def stateful(p: State[Prefix], a: Optional[Int]) -> String:
 
 
 def stateful_headers(
-    p: State[Prefix],
-    a: Param["a", Optional[String]],
-    b: Param["b", Int],
-    headers: Headers,
+    p: State[Prefix], a: Optional[String], b: Int, headers: Headers
 ) -> String:
-    return String(p[].text, _show(a.value), ",", b.value, " ", len(headers))
+    return String(p[].text, _show(a), ",", b, " ", len(headers))
 
 
 def stateful_body(
@@ -269,23 +245,17 @@ def stateful_body(
 
 
 def stateful_two_body(
-    p: State[Prefix],
-    a: Param["a", Int],
-    b: Param["b", Optional[Int]],
-    var body: Note,
+    p: State[Prefix], a: Int, b: Optional[Int], var body: Note
 ) -> String:
-    return String(p[].text, a.value, ",", _show(b.value), "=", body.text)
+    return String(p[].text, a, ",", _show(b), "=", body.text)
 
 
 def defaulted(limit: Int = 20) -> String:
     return String("defaulted ", limit)
 
 
-def search_defaulted(
-    query: Param["query", String],
-    limit: Param["limit", Int] = Param["limit", Int](20),
-) -> String:
-    return String(limit.value, " results for ", query.value)
+def search_defaulted(query: String, limit: Int = 20) -> String:
+    return String(limit, " results for ", query)
 
 
 def required(limit: Int) -> String:
@@ -300,10 +270,8 @@ def typed_one(var a: Optional[Int]) -> String:
     return "typed " + _show(a)
 
 
-def typed_body(
-    var b: Param["b", Int], var a: Param["a", Optional[String]], var body: Note
-) -> String:
-    return String("typed ", _show(a.value), ",", b.value, "=", body.text)
+def typed_body(var b: Int, var a: Optional[String], var body: Note) -> String:
+    return String("typed ", _show(a), ",", b, "=", body.text)
 
 
 # Generic forwarding (M3-015) reaching an optional slot.
@@ -373,7 +341,7 @@ def _app() -> App:
     var f: def(var Optional[Int]) thin raises Never -> String = typed_one
     app.get["/typed?{a}"](f)
     var g: def(
-        var Param["b", Int], var Param["a", Optional[String]], var Note
+        var Int, var Optional[String], var Note
     ) thin raises Never -> String = typed_body
     app.post["/typed/{b}?{a}"](g)
     fwd_one(app, opt_str)
@@ -655,29 +623,5 @@ def test_typed_values_and_forwarding() raises:
     _bad(app, "/typed?a=x")
 
 
-def _tests() -> TestSuite:
-    """This module's tests, registered by hand: discovering them
-    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
-    because a handler here declares a `Param` (M3-050;
-    tests/named_values_api_fail/discover_tests_crash.mojo).
-    `scripts/check.sh` checks that every `test_` function is listed."""
-    var suite = TestSuite()
-    suite.test[test_dx_examples]()
-    suite.test[test_absent_and_empty_are_none]()
-    suite.test[test_present_values_are_decoded_once]()
-    suite.test[test_present_values_keep_every_bad_request]()
-    suite.test[test_bad_request_calls_neither_handler_nor_from_body]()
-    suite.test[test_optional_beside_required_value]()
-    suite.test[test_headers_after_an_optional_value]()
-    suite.test[test_body_after_an_optional_value]()
-    suite.test[test_json_and_carrier_after_an_optional_value]()
-    suite.test[test_stateful_forms]()
-    suite.test[test_defaulted_int_parameter_stays_required]()
-    suite.test[test_first_registration_wins]()
-    suite.test[test_raw_handler_is_unaffected]()
-    suite.test[test_typed_values_and_forwarding]()
-    return suite^
-
-
 def main() raises:
-    _tests().run()
+    TestSuite.discover_tests[__functions_in_module()]().run()

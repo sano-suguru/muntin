@@ -323,7 +323,7 @@ comptime _POST_OPTIONAL_BODY_PLACES = 34
 comptime _OPTIONAL_AT_PATH = 35
 comptime _BODY_TWO_CONVERSIONS = 36
 comptime _BODY_NEGATIVE_LIMIT = 37
-comptime _NAMES_REQUIRED = 38
+comptime _NAMES_MIXED = 38
 comptime _NAME_MISMATCH = 39
 
 
@@ -509,9 +509,9 @@ def _rule[
     `"PATCH"` take `post`'s (M3-020). A shape that passes them all on a
     literal that repeats a query key breaks the last rule (M3-022). The
     result rule itself is each overload's `where` clause. A shape the family
-    rule accepts is then checked for names (M3-050): two route values must
-    both be `Param`s, and each `Param` must name the placeholder at its
-    position."""
+    rule accepts is then checked for names (M3-050): of two route values,
+    both or neither are `Param`s, and each `Param` must name the placeholder
+    at its position."""
     var paths = _path_params(path)
     var queries = _query_params(path)
     if paths < 0 or queries < 0:
@@ -527,9 +527,8 @@ def _rule[
     if rule != _OK:
         return rule
     # Route values are the leading slots; at most two pass the family rule.
-    if _is_value(k2):
-        if not _is_named[A]() or not _is_named[B]():
-            return _NAMES_REQUIRED
+    if _is_value(k2) and _is_named[A]() != _is_named[B]():
+        return _NAMES_MIXED
     if _misnamed[path, A, B]() >= 0:
         return _NAME_MISMATCH
     if not _distinct_query_keys(path):
@@ -695,9 +694,10 @@ def _check[
         "the request body's max_bytes is negative; a FromBytes type's"
         " max_bytes is a byte count, 0 or more"
     )
-    comptime assert rule != _NAMES_REQUIRED, (
-        "handler takes two route values; each is a Param named after the"
-        ' placeholder it binds, as Param["name", Int]'
+    comptime assert rule != _NAMES_MIXED, (
+        "handler takes two route values and only one is a Param; declare"
+        " both as Param, each named after the placeholder it binds, or"
+        " neither"
     )
     comptime assert rule != _NAME_MISMATCH, _misnamed_message[path, A, B]()
     comptime assert rule == _OK, "internal: a registration rule has no message"

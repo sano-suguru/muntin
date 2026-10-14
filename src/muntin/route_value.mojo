@@ -2,11 +2,11 @@
 
 `Param[name, T]` is a route value that names the placeholder it binds:
 `def post_of(uid: Param["uid", Int], pid: Param["pid", Int])` on
-`/users/{uid}/posts/{pid}`. Binding stays positional (M3-022); the
-registration rules compare each name with the placeholder at its position,
-at compile time, and a handler with two route values must name both
-(docs/history/architecture-decisions.md, "Named route values decision
-(M3-050)").
+`/users/{uid}/posts/{pid}`. It is opt-in: binding stays positional
+(M3-022), and the registration rules compare each `Param`'s name with the
+placeholder at its position at compile time; of a handler's two route
+values, both or neither are `Param`s (docs/history/architecture-decisions.md,
+"Named route values decision (M3-050)").
 """
 
 
@@ -40,9 +40,9 @@ struct Param[name: StaticString, T: Movable & Deinitable](
     type. The value is `uid.value`. Values still bind by position, path
     placeholders left to right, then query placeholders left to right; the
     registration fails when `name` differs from the placeholder at the
-    value's position, and a handler that takes two route values must
-    declare both as `Param`, so two values declared in the other order are
-    a compile error instead of each other's values.
+    value's position, so two `Param`s declared in the other order are a
+    compile error instead of each other's values. Of two route values, both
+    or neither are `Param`s. The variable's own name is not compared.
     """
 
     comptime _placeholder = Self.name

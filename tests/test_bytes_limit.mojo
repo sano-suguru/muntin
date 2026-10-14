@@ -17,7 +17,6 @@ from muntin import (
     Json,
     JsonValue,
     Next,
-    Param,
     Request,
     Response,
     State,
@@ -340,10 +339,8 @@ def b_value(id: Int, var blob: Capped) -> String:
     return _summary(String(id), "", blob.data)
 
 
-def b_two(
-    id: Param["id", Int], tag: Param["tag", String], blob: Capped
-) -> Response:
-    return _echo(String(id.value, " ", tag.value), "", blob.data)
+def b_two(id: Int, tag: String, blob: Capped) -> Response:
+    return _echo(String(id, " ", tag), "", blob.data)
 
 
 def b_optional(tag: Optional[String], blob: Capped) -> Response:
@@ -358,12 +355,8 @@ def b_state_value(store: State[Store], id: Int, blob: Capped) -> Response:
     return _echo(String(store[].prefix, " ", id), "", blob.data)
 
 
-def b_state_two(
-    store: State[Store], a: Param["a", Int], b: Param["b", Int], blob: Capped
-) -> String:
-    return _summary(
-        String(store[].prefix, " ", a.value, " ", b.value), "", blob.data
-    )
+def b_state_two(store: State[Store], a: Int, b: Int, blob: Capped) -> String:
+    return _summary(String(store[].prefix, " ", a, " ", b), "", blob.data)
 
 
 def c_body(input: WithHeaders[Capped]) -> Response:
@@ -374,14 +367,8 @@ def c_value(id: Int, var input: WithHeaders[Capped]) -> String:
     return _summary(String(id), _fields(input.headers), input.body.data)
 
 
-def c_two(
-    id: Param["id", Int], tag: Param["tag", String], input: WithHeaders[Capped]
-) -> Response:
-    return _echo(
-        String(id.value, " ", tag.value),
-        _fields(input.headers),
-        input.body.data,
-    )
+def c_two(id: Int, tag: String, input: WithHeaders[Capped]) -> Response:
+    return _echo(String(id, " ", tag), _fields(input.headers), input.body.data)
 
 
 def c_optional(tag: Optional[String], input: WithHeaders[Capped]) -> Response:
@@ -403,13 +390,10 @@ def c_state_value(
 
 
 def c_state_two(
-    store: State[Store],
-    a: Param["a", Int],
-    b: Param["b", Int],
-    input: WithHeaders[Capped],
+    store: State[Store], a: Int, b: Int, input: WithHeaders[Capped]
 ) -> String:
     return _summary(
-        String(store[].prefix, " ", a.value, " ", b.value),
+        String(store[].prefix, " ", a, " ", b),
         _fields(input.headers),
         input.body.data,
     )
@@ -919,30 +903,5 @@ def test_text_json_raw_and_unlimited_routes_are_unchanged() raises:
     assert_equal(client.get("/hello").text(), "hello")
 
 
-def _tests() -> TestSuite:
-    """This module's tests, registered by hand: discovering them
-    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
-    because a handler here declares a `Param` (M3-050;
-    tests/named_values_api_fail/discover_tests_crash.mojo).
-    `scripts/check.sh` checks that every `test_` function is listed."""
-    var suite = TestSuite()
-    suite.test[test_dx_examples]()
-    suite.test[
-        test_within_the_limit_every_body_reaches_from_bytes_byte_for_byte
-    ]()
-    suite.test[test_one_byte_over_the_limit_is_413_before_from_bytes]()
-    suite.test[test_exactly_the_limit_is_accepted]()
-    suite.test[test_a_zero_limit_accepts_only_the_empty_body]()
-    suite.test[test_the_largest_int_is_no_limit]()
-    suite.test[test_a_refining_trait_gives_a_family_default]()
-    suite.test[test_a_bad_route_value_is_400_before_the_limit]()
-    suite.test[test_404_405_and_head_convert_nothing]()
-    suite.test[test_the_carrier_answers_413_before_its_field_rebuild]()
-    suite.test[test_a_from_bytes_raise_within_the_limit_is_still_400]()
-    suite.test[test_the_limit_measures_the_body_after_middleware]()
-    suite.test[test_text_json_raw_and_unlimited_routes_are_unchanged]()
-    return suite^
-
-
 def main() raises:
-    _tests().run()
+    TestSuite.discover_tests[__functions_in_module()]().run()

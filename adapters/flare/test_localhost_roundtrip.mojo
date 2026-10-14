@@ -299,15 +299,14 @@ from flare.net import SocketAddr
 from flare.utils import SIGKILL, exit, fork, kill, waitpid
 from muntin import (
     App,
+    Headers,
     FromBody,
     FromBytes,
     FromJson,
-    Headers,
     Json,
     JsonValue,
     JsonWriter,
     Next,
-    Param,
     Request,
     Response,
     State,
@@ -343,12 +342,12 @@ def search(q: String) -> String:
     return "results for " + q
 
 
-def pair_of(a: Param["a", Int], b: Param["b", String]) -> String:
-    return String("pair ", a.value, " ", b.value)
+def pair_of(a: Int, b: String) -> String:
+    return String("pair ", a, " ", b)
 
 
-def field_of(id: Param["id", Int], field: Param["field", String]) -> String:
-    return String("field ", id.value, " ", field.value)
+def field_of(id: Int, field: String) -> String:
+    return String("field ", id, " ", field)
 
 
 def page_of(size: Optional[Int]) -> String:
@@ -4123,34 +4122,5 @@ def test_largest_receive_limit_keeps_chunk_sizes_from_overflowing() raises:
         waitpid(child.pid)
 
 
-def _tests() -> TestSuite:
-    """This module's tests, registered by hand: discovering them
-    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
-    because a handler here declares a `Param` (M3-050;
-    tests/named_values_api_fail/discover_tests_crash.mojo).
-    `scripts/check.sh` checks that every `test_` function is listed."""
-    var suite = TestSuite()
-    suite.test[test_get_hello_over_localhost_matches_test_client]()
-    suite.test[test_typed_route_over_localhost_matches_test_client]()
-    suite.test[test_headers_over_localhost_match_app_handle]()
-    suite.test[test_stateful_raw_over_localhost_matches_app_handle]()
-    suite.test[test_headers_over_h2c_follow_the_same_rules]()
-    suite.test[test_json_over_localhost_matches_app_handle]()
-    suite.test[test_with_headers_over_localhost_matches_app_handle]()
-    suite.test[test_get_headers_over_localhost_match_app_handle]()
-    suite.test[test_request_and_response_body_bytes_over_http1_and_h2c]()
-    suite.test[test_typed_bytes_limit_over_http1_and_h2c]()
-    suite.test[test_request_target_and_method_bytes_over_h2c_and_http1]()
-    suite.test[test_h2_client_decodes_rst_stream_codes_with_every_bit]()
-    suite.test[test_server_receive_limit_over_http1_and_h2c]()
-    suite.test[test_receive_limit_and_max_bytes_are_told_apart]()
-    suite.test[test_http1_receive_limit_counts_buffered_bytes]()
-    suite.test[test_receive_limit_on_flare_bufring_path]()
-    suite.test[test_receive_limit_zero_takes_only_empty_bodies]()
-    suite.test[test_default_receive_limit_is_ten_mib_on_both_protocols]()
-    suite.test[test_largest_receive_limit_keeps_chunk_sizes_from_overflowing]()
-    return suite^
-
-
 def main() raises:
-    _tests().run()
+    TestSuite.discover_tests[__functions_in_module()]().run()

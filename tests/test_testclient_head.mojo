@@ -13,7 +13,7 @@
 from std.memory import ArcPointer
 from std.testing import assert_equal, assert_true, TestSuite
 
-from muntin import App, Headers, Next, Param, Request, Response, State
+from muntin import App, Headers, Next, Request, Response, State
 from muntin.testing import TestClient
 
 
@@ -39,8 +39,8 @@ def get_user(id: Int) -> String:
     return String("user ", id)
 
 
-def field_of(id: Param["id", Int], field: Param["field", String]) -> String:
-    return String("field ", id.value, " ", field.value)
+def field_of(id: Int, field: String) -> String:
+    return String("field ", id, " ", field)
 
 
 def fields_of(id: Int, headers: Headers) -> String:
@@ -376,23 +376,5 @@ def test_every_method_sends_its_own_method() raises:
         assert_true(len(row[0].headers) == 0, row[1])
 
 
-def _tests() -> TestSuite:
-    """This module's tests, registered by hand: discovering them
-    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
-    because a handler here declares a `Param` (M3-050;
-    tests/named_values_api_fail/discover_tests_crash.mojo).
-    `scripts/check.sh` checks that every `test_` function is listed."""
-    var suite = TestSuite()
-    suite.test[test_head_is_app_handle_unchanged]()
-    suite.test[test_head_sends_head]()
-    suite.test[test_head_keeps_a_body_that_differs_from_get]()
-    suite.test[test_head_equals_get_on_typed_routes]()
-    suite.test[test_head_applies_no_status_rule_and_adds_no_length]()
-    suite.test[test_head_sends_the_given_fields_and_splits_the_target]()
-    suite.test[test_head_through_middleware]()
-    suite.test[test_every_method_sends_its_own_method]()
-    return suite^
-
-
 def main() raises:
-    _tests().run()
+    TestSuite.discover_tests[__functions_in_module()]().run()

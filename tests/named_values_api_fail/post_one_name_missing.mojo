@@ -1,7 +1,7 @@
-# Must not compile: two route values before a body, only the first named.
+# Must not compile: two route values before a body, only the first a Param.
 # Decision: docs/history/architecture-decisions.md, "Named route values
 # decision (M3-050)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: handler takes two route values; each is a Param named after the placeholder it binds, as Param["name", Int]
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: handler takes two route values and only one is a Param; declare both as Param, each named after the placeholder it binds, or neither
 from muntin import App, FromBody, Param
 
 

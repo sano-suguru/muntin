@@ -58,7 +58,7 @@ Later items changed the contract. An amendment adds to it; a reopen changes what
 - M3-042 amended it (`WithHeaders[B]` around a `FromBytes`): [Typed binary request bodies with header fields decision (M3-042)](history/architecture-decisions.md#typed-binary-request-bodies-with-header-fields-decision-m3-042);
 - M3-043 amended it (required `FromBytes.max_bytes` and its 413): [Typed binary request body size limits decision (M3-043)](history/architecture-decisions.md#typed-binary-request-body-size-limits-decision-m3-043);
 - M3-048 amended it (bodyless typed `post`, `put` and `patch` handlers): [Bodyless typed post, put and patch handlers decision (M3-048)](history/architecture-decisions.md#bodyless-typed-post-put-and-patch-handlers-decision-m3-048);
-- M3-050 amended it (two route values are both `Param`s named after their placeholders; two bare values no longer register): [Named route values decision (M3-050)](history/architecture-decisions.md#named-route-values-decision-m3-050).
+- M3-050 amended it (an opt-in `Param` names a route value's placeholder, checked at compile time; of two values both or neither are `Param`s, and two bare values register as before): [Named route values decision (M3-050)](history/architecture-decisions.md#named-route-values-decision-m3-050).
 
 Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it, except one: the contract's opening sentence holds for `HEAD`'s answer but not for its content. The in-memory response to `HEAD` keeps the body, and keeping it off the wire, with the length, is each network backend's obligation ([HEAD decision (M3-026)](history/architecture-decisions.md#head-decision-m3-026)). What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
 
@@ -82,7 +82,7 @@ What each capability does for an application: `docs/DX.md`; how and why: its dec
 | `PUT`, `PATCH` and `DELETE` | [M3-020](history/architecture-decisions.md#http-methods-decision-m3-020) | shipped |
 | bodyless typed `post`, `put` and `patch` handlers | [M3-048](history/architecture-decisions.md#bodyless-typed-post-put-and-patch-handlers-decision-m3-048) | shipped |
 | two route values on every method | [M3-022](history/architecture-decisions.md#several-route-values-decision-m3-022) | shipped |
-| route values named after their placeholders (`Param`), required for two | [M3-050](history/architecture-decisions.md#named-route-values-decision-m3-050) | shipped |
+| route values named after their placeholders (`Param`), opt-in | [M3-050](history/architecture-decisions.md#named-route-values-decision-m3-050) | shipped |
 | optional query values (`Optional[Int]`, `Optional[String]`) | [M3-024](history/architecture-decisions.md#optional-query-values-decision-m3-024) | shipped |
 | `HEAD` through `get` routes | [M3-026](history/architecture-decisions.md#head-decision-m3-026) | shipped |
 | `TestClient.head` | [M3-036](history/architecture-decisions.md#testclient-head-decision-m3-036) | shipped |

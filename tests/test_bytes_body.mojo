@@ -17,7 +17,6 @@ from muntin import (
     Json,
     JsonValue,
     Next,
-    Param,
     Request,
     Response,
     State,
@@ -237,13 +236,9 @@ def echo_owned(id: Int, var blob: Blob) -> Response:
     return Response(200, _prefixed(String(id, "|"), blob^.take()))
 
 
-def echo_two(
-    id: Param["id", Int], tag: Param["tag", String], blob: Blob
-) -> Response:
+def echo_two(id: Int, tag: String, blob: Blob) -> Response:
     _bump(HANDLER_CALLS)
-    return Response(
-        200, _prefixed(String(id.value, " ", tag.value, "|"), blob.data)
-    )
+    return Response(200, _prefixed(String(id, " ", tag, "|"), blob.data))
 
 
 def echo_optional(tag: Optional[String], blob: Blob) -> Response:
@@ -263,15 +258,10 @@ def echo_state_value(store: State[Store], id: Int, var blob: Blob) -> Response:
     )
 
 
-def echo_state_two(
-    store: State[Store], a: Param["a", Int], b: Param["b", Int], blob: Blob
-) -> Response:
+def echo_state_two(store: State[Store], a: Int, b: Int, blob: Blob) -> Response:
     _bump(HANDLER_CALLS)
     return Response(
-        200,
-        _prefixed(
-            String(store[].prefix, " ", a.value, " ", b.value, "|"), blob.data
-        ),
+        200, _prefixed(String(store[].prefix, " ", a, " ", b, "|"), blob.data)
     )
 
 
@@ -607,25 +597,5 @@ def test_text_json_and_raw_routes_are_unchanged() raises:
     assert_equal(client.head("/raw").status, 200)
 
 
-def _tests() -> TestSuite:
-    """This module's tests, registered by hand: discovering them
-    (`TestSuite.discover_tests[__functions_in_module()]`) crashes Mojo 1.1.0
-    because a handler here declares a `Param` (M3-050;
-    tests/named_values_api_fail/discover_tests_crash.mojo).
-    `scripts/check.sh` checks that every `test_` function is listed."""
-    var suite = TestSuite()
-    suite.test[test_dx_example]()
-    suite.test[test_every_body_reaches_from_bytes_byte_for_byte]()
-    suite.test[test_route_values_and_state_then_bytes]()
-    suite.test[test_from_bytes_borrows_request_body_itself]()
-    suite.test[test_int_max_is_no_muntin_cap_on_a_bytes_body]()
-    suite.test[test_from_bytes_raise_is_400_and_the_handler_is_not_called]()
-    suite.test[test_bad_route_value_is_400_before_from_bytes]()
-    suite.test[test_404_405_and_head_convert_nothing]()
-    suite.test[test_middleware_replacement_reaches_from_bytes]()
-    suite.test[test_text_json_and_raw_routes_are_unchanged]()
-    return suite^
-
-
 def main() raises:
-    _tests().run()
+    TestSuite.discover_tests[__functions_in_module()]().run()
