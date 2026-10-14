@@ -4337,3 +4337,33 @@ Status: **decision and production** (M3-051, pull request to be linked on merge;
 - `Tls` and `Server.bind`'s `tls` in `adapters/flare/muntin_flare.mojo`, checked after `idle_timeout_ms` and the host; `examples/hello_https.mojo`, built by `scripts/check_flare.sh`.
 - `adapters/flare/test_tls.mojo`, run by `scripts/check_flare.sh` against PEM files it writes with the `flare` environment's `openssl`: HTTP/1.1 (with and without ALPN) and HTTP/2 over verified TLS connections, the verification itself (an untrusted CA and a host the certificate does not name are refused); a certificate's intermediate sent from `cert_file`; no answer to cleartext on the TLS port; each start-up message, the file checks before anything is bound, a device, FIFO, empty file, directory or oversized file refused without waiting, files of 16384, 16385 and 1048576 bytes accepted and 1048577 refused, every opened file closed once whatever `bind` does, `std.io.FileDescriptor` leaving the descriptor it wraps open, and the first private key block deciding; `max_body_bytes` over HTTP/1.1 (413) and HTTP/2 (reset stream, next stream answered); `idle_timeout_ms` on a connection that never handshakes and on an idle handshaken one; a request in flight answered through a SIGTERM stop, new connections refused, exit 0; a body that is not UTF-8 echoed byte for byte and `HEAD` answered with no content, over both protocols; Flare's ALPN deviation pinned. `scripts/check_flare.sh` also asks a TLS `Server` (`adapters/flare/tls_probe.mojo`, on a port the system chooses) with `openssl s_client`: TLS 1.0, 1.1 and a CBC SHA-1 cipher refused, 1.2 and 1.3 accepted.
 - Docs: `docs/DX.md` section 1, `docs/ARCHITECTURE.md` (Flare adapter, limits, revisit index), `docs/SPEC.md`, and `README.md` (the shortest HTTPS steps).
+
+### Registration complexity budget decision (M3-052)
+
+Status: **decision** (M3-052, pull request to be linked on merge; `src/muntin` unchanged). The overload counts, build-time measurements and probes are in the pull request.
+
+**Question and what settles it.** An outside review asked how much internal complexity typed registration may take for `app.get[path](handler)`: forty overloads (eight per method name, five names), and whether that makes new methods, new parameter kinds, more parameters, build time, diagnostics or Mojo upgrades harder, so that growth needs a limit. Settled by the overload count and its history; cold `mojo build` times on Mojo 1.1.0 as the number of routes, the slot arity, the methods used and the declared overload set vary; and whether Mojo 1.1.0 can express one shared registration mechanism behind the current spelling.
+
+**Choice: keep the structure ([M3-014](#registration-structure-decision-m3-014), [M3-020](#http-methods-decision-m3-020), [M3-022](#several-route-values-decision-m3-022)) and bound its growth.** The count went 20, 12 (M3-015), 30 (M3-020's methods), 40 (M3-022's slot arity 3), and has not moved since, while optional values, typed binary bodies, binary bodies with header fields, byte limits, bodyless `post`, `put` and `patch` and named values shipped as slot kinds or rules. The build measurements show the overloads cost source size and diagnostics, not build time: a program's build grows with its routes, not with the overloads declared (eight or forty give the same time) or the slot arity used. The budget keeps every axis that multiplies the count fixed, so the count grows only linearly, with method names:
+- each method name keeps at most eight overloads, slot arities 0 to 3, stateless and stateful. A new request part is a slot kind or a rule (no overload). A shape that needs a fourth request part gets a slot kind that carries several parts, as `WithHeaders[B]` carries a body and the header fields, not slot arity 4;
+- there are two families. Another injected value travels in an existing slot kind or in `State[S]`, not in a third family, which would double every name's overloads past Mojo 1.1.0's ten-note cap;
+- a method name beyond the five copies the `get` or the `post` set and adds no rule of its own (M3-020's pattern);
+- a change to these bounds is its own decision, which states the overload count before and after and repeats this record's build measurement.
+
+**Rejected.**
+- No budget (M3-014's and M3-022's accepted costs as the only guide): slot arity 4 would add ten overloads across the five names at once and lose a candidate note on a rejected result, and nothing in the docs stops it.
+- One registration over every handler arity: Mojo 1.1.0 has no variadic function types (`state_fail/variadic_handler_type.mojo`).
+- One overload per method name forwarding a generic handler `H` to a shared overload set: `H` does not convert to a function type whose parameters must be inferred (`registration_fail/generic_handler_cannot_forward.mojo`).
+- Method names as comptime members binding the method of one shared registration method (`comptime get = Self.route["GET", ...]`): the member is not a method, so `app.get[path](handler)` does not compile (`registration_fail/method_alias_drops_self.mojo`); only `App.get[path](app, handler)` does, a spelling change for every route.
+- A generic `app.route[method, path]` beside or instead of the names: rejected by M3-014 (C4b) and M3-020 (C) for its second spelling; nothing here changes that.
+- Generating the overload sets with a script: each body is three calls and the docstrings differ per method, so a generator adds a build step and a second source of truth while the compiler and the reader see the same forty overloads. Worth it only past the budget.
+- A build-time budget: the measured cost follows the application's routes, not the overloads, so no limit on overloads would lower it.
+
+**Revisit when:**
+- `state_fail/variadic_handler_type.mojo`, `registration_fail/generic_handler_cannot_forward.mojo` or `registration_fail/method_alias_drops_self.mojo` compiles: re-measure the shared mechanism it allows, against the diagnostics the fixtures under `tests/` pin;
+- Mojo reflects function parameters (types or names): one generic entry point over the handler's own type may become expressible;
+- `header_access_fail/eleven_candidates_drop_a_note.mojo` changes its text: the ten-note cap behind the budget moved;
+- a needed shape cannot be a slot kind or a rule within slot arity 3, or a second injected kind is proposed: decide it against this budget;
+- after a Mojo upgrade, repeating the measurement shows the declared overload set costing build time, or the per-route cost doubling.
+
+**Next production slice:** none. This record's pull request writes the budget into `docs/ARCHITECTURE.md` ("Registration surface") and pins the two new fixtures in its revisit index.
