@@ -23,6 +23,7 @@ from .body import FromBody, FromBytes, _body_text
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
+from .route_value import _NamedValue
 from .state import State
 
 # Tags such as (M3-014) name the item whose decision, in
@@ -542,7 +543,14 @@ def _slot[
     explicit body type to a callee that requires `FromBody` fails on Mojo
     1.1.0 (docs/history/architecture-decisions.md, "Argument extraction decision (M2-005)").
     """
-    comptime if A == Int:
+    comptime if conforms_to(A, _NamedValue):
+        # A `Param` (M3-050): its value converted as a bare slot of its type.
+        # Only an exact `Param` reaches here: `_kind` gives any other type
+        # conforming to the private marker no kind, so `_admits` refuses it
+        # (tests/named_values_api_fail/marker_only_type.mojo).
+        var value = _slot[A._Value, at](args, body)
+        return A._wrap(value^)
+    elif A == Int:
         try:
             return _as[Int, A](_parse_int(args[at]))
         except:
