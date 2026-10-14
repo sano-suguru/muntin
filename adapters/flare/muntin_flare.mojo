@@ -118,7 +118,7 @@ PEM certificate chain's and private key's paths, serves HTTPS instead of
 cleartext through Flare's `HttpServer.bind_tls`, offering `h2` then
 `http/1.1` (ALPN) and with the same `ServerConfig`, so the three settings
 and the stop apply unchanged. `_check_tls_files` reads both files first
-(opened with `O_NONBLOCK`, at most 1 MiB each, the key's buffers wiped)
+(opened with `O_NONBLOCK`, at most 1 MiB each, both files' buffers wiped)
 and, as a best-effort diagnosis, raises naming the one that cannot be read,
 is empty, holds no PEM certificate, or whose first PEM private key is
 encrypted or missing; Flare's own load failure, which carries no reason, is
@@ -1019,7 +1019,8 @@ def _check_tls_files(tls: Tls) raises:
     reported before a certificate file with no certificate. Both buffers are
     overwritten with zeros before this returns or raises, the certificate's
     too, since a key given as `cert_file` or a file holding both lands
-    there; the copies OpenSSL makes when it loads the key are OpenSSL's."""
+    there. Not covered: the copies OpenSSL makes when it loads the key, and
+    any temporary copy the compiler or runtime makes, which is not checked."""
     var cert = _read_tls_file("certificate", tls.cert_file)
     try:
         var key = _read_tls_file("key", tls.key_file)
