@@ -3104,6 +3104,68 @@ def test_a_stop_delivered_as_the_last_worker_ends_returns() raises:
         _close(gate[1])
 
 
+def close_pollers() raises -> String:
+    """Closes every epoll descriptor of this process (Linux), so each
+    worker's reactor poll fails and its loop returns without a stop signal,
+    as Flare v0.12.0's loop does on a failed poll."""
+    var closed = 0
+    var link = List[UInt8](length=64, fill=0)
+    for fd in range(3, 1024):
+        var path = _cstr("/proc/self/fd/" + String(fd))
+        var n = Int(
+            external_call["readlink", Int](
+                path.unsafe_ptr(), link.unsafe_ptr(), 63
+            )
+        )
+        if (
+            n > 0
+            and String(from_utf8=Span(link)[:n]) == "anon_inode:[eventpoll]"
+        ):
+            _close(fd)
+            closed += 1
+    return "closed " + String(closed)
+
+
+def polls_closing_app() -> App:
+    var app = App()
+    app.get["/close-pollers"](close_pollers)
+    return app^
+
+
+def test_a_reactor_returning_before_a_stop_makes_serve_raise() raises:
+    """A worker's reactor that returns without a stop signal (here: every
+    epoll descriptor closed, so its poll fails and Flare's loop returns)
+    makes `serve` raise `serve: a worker's reactor returned before a stop
+    signal`, though the hard stop then makes every reactor return. The
+    reactor's poll is epoll on Linux only, so macOS skips the wire part."""
+    comptime if not CompilationTarget.is_linux():
+        return
+    var server = Server.bind("127.0.0.1", 0)
+    var port = server.port()
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
+        _default_sigpipe()
+        try:
+            server.serve[polls_closing_app](workers=WORKERS)
+            exit(9)
+        except e:
+            print("observed: reactors returning ->", e)
+            if (
+                String(e)
+                == "serve: a worker's reactor returned before a stop signal"
+            ):
+                exit(7)
+            exit(8)
+    _ = server^
+    var stream = _send(port, _request("GET", "/close-pollers"))
+    _ = stream^
+    var ended = _reap_within(pid, STOP_BOUND_MS * 5)
+    assert_equal(_exit_code(ended[0]), 7, "serve did not raise")
+
+
 def spawn() raises -> String:
     """Starts `sleep 5` in the background through the shell, a process that
     inherits every descriptor of this one not marked close-on-exec."""
@@ -3307,29 +3369,46 @@ def test_workers_stop_gracefully_while_connections_keep_arriving() raises:
 
 
 def test_the_largest_worker_count_serves_and_stops() raises:
-    """`serve[make_app](workers=256)`, the largest count, builds every
-    worker, answers, and stops on SIGTERM within the window and the bound
-    with status 0. The child may hold 4096 open files (each worker's
-    reactor holds up to four descriptors on macOS)."""
-    var child = _fork_workers[make_app](
+    """`serve[who_app](workers=256)`, the largest count, calls `who_app`
+    on all 256 workers, answers on the thread that built the answering
+    `App`, and stops on SIGTERM within the window and the bound with status
+    0. The child may hold 4096 open files (each worker's reactor holds up to
+    four descriptors on macOS)."""
+    var built = _pipe()
+    var child = _fork_workers[who_app](
         Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS),
         256,
+        built[1],
         files=4096,
     )
+    _close(built[1])
     var reaped = False
     try:
-        var raw = _exchange(child.port, _request("GET", "/"))
-        assert_equal(_content(raw), "hello")
+        var answer = _content(_exchange(child.port, _request("GET", "/who")))
+        var parts = answer.split(" ")
+        assert_equal(len(parts), 2, answer)
+        assert_equal(parts[0], parts[1], "answered off its App's thread")
         var signaled_at = monotonic_now_ms()
         assert_equal(kill(child.pid, SIGTERM), 0)
         var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
         reaped = ended[0] >= 0
         var after = monotonic_now_ms() - signaled_at
-        print("observed: 256 workers -> status", ended[0], "after", after, "ms")
+        var builds = _rest_of_pipe(built[0])
+        print(
+            "observed: 256 workers ->",
+            builds.byte_length(),
+            "builds; status",
+            ended[0],
+            "after",
+            after,
+            "ms",
+        )
         assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+        assert_equal(builds, "m" * 256)
     finally:
         if not reaped:
             _stop(child.pid)
+        _close(built[0])
 
 
 def _write_byte_of(fd: Int, byte: String) raises:

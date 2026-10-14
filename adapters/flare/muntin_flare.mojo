@@ -687,9 +687,10 @@ def _close_fd(fd: Int):
 
 
 def _dup_cloexec(fd: Int) -> Int:
-    """A close-on-exec copy of `fd`, so a process the application starts
-    cannot keep the listening socket open after `serve` ends (`dup` clears
-    the flag on its copy): -1 with `errno` set if it failed. Linux sets the
+    """A close-on-exec copy of `fd`, so a program the application starts
+    with `exec` cannot keep the listening socket open after `serve` ends
+    (`dup` clears the flag on its copy). A child forked without `exec`
+    still inherits it, with the `Server`'s own listener: -1 with `errno` set if it failed. Linux sets the
     flag in the same call (`F_DUPFD_CLOEXEC`); macOS sets it just after
     `dup`, as Flare does for its own sockets there (`fcntl` is variadic and
     `external_call` corrupts its third argument on macOS arm64), so a fork
@@ -1104,6 +1105,21 @@ def _ended_on_its_own(table: Int, count: Int, errors: List[String]) -> String:
     return String()
 
 
+def _why_ended(table: Int, count: Int, errors: List[String]) -> String:
+    """`serve[make]`'s error when a worker ended before a stop signal: the
+    first of `count` workers whose `make` or reactor raised, else
+    `serve: a worker's reactor returned before a stop signal` if one
+    returned, else empty. Read when that end is first seen, before the hard
+    stop makes the other reactors return too."""
+    var raised = _ended_on_its_own(table, count, errors)
+    if raised:
+        return raised
+    for i in range(count):
+        if _load(_row(table, i), _W_STATE) == _W_RETURNED:
+            return "serve: a worker's reactor returned before a stop signal"
+    return String()
+
+
 def _stop_workers(table: Int, count: Int):
     """Sets the stop byte of the first `count` workers: each reactor leaves
     its loop at its next turn and closes its connections (no window)."""
@@ -1262,8 +1278,9 @@ struct Server(Movable):
         serving. If `make` raises on a worker, or a worker's reactor raises
         or returns on its own, before a stop signal was delivered, every
         worker is stopped at once (no grace window) and this raises `serve:
-        a worker's make raised: <error>` or `serve: a worker's reactor
-        raised: <error>`, or returns; a worker that has not ended
+        a worker's make raised: <error>`, `serve: a worker's reactor
+        raised: <error>` or `serve: a worker's reactor returned before a
+        stop signal`, for what ended first; a worker that has not ended
         `_REACTOR_STOP_MS` later (a `make` or a handler that does not
         return cannot be interrupted) ends the process with status 1 after
         printing that error. After a stop signal the stop goes on and this
@@ -1363,6 +1380,7 @@ struct Server(Movable):
                 # one the watcher has not seen yet, makes it part of that
                 # graceful stop instead.
                 if not watch.stop_delivered():
+                    failure = _why_ended(base, len(threads), errors)
                     _stop_workers(base, len(threads))
                     deadline = monotonic_now_ms() + _REACTOR_STOP_MS
             if running == 0:
@@ -1371,14 +1389,9 @@ struct Server(Movable):
                 # A `make` or a handler that does not return cannot be
                 # interrupted, so `serve` cannot raise: end the process, as
                 # the watcher does past its own bound.
-                var outcome = failure
-                if not outcome:
-                    outcome = _ended_on_its_own(base, len(threads), errors)
-                if not outcome:
-                    outcome = "serve: a worker's reactor returned on its own"
                 print(
                     "Server."
-                    + outcome
+                    + failure
                     + "; a worker did not stop within "
                     + String(_REACTOR_STOP_MS)
                     + " ms, so the process ends",
