@@ -76,10 +76,10 @@ listener. `server.port()` is the bound port. `server.serve(app)` borrows
 does; a raise propagates and a return returns, with one exception: a raise
 after a stop signal (below) returns. It returns after a graceful stop or
 when the reactor stopped on a failed poll. There is no stop call or backend configuration
-other than the body limit, the grace window and the idle timeout below.
+other than the body limit, the grace window, the idle timeout and TLS below.
 `_BorrowedHandler` is not `Copyable`, which keeps Flare's multi-worker
 `serve` out of reach: workers (below) never share an `App`. `Server`'s one initializer takes keyword-only `_host`,
-`_port`, `_max_body_bytes`, `_shutdown_grace_ms` and `_idle_timeout_ms`, so
+`_port`, `_max_body_bytes`, `_shutdown_grace_ms`, `_idle_timeout_ms` and `_tls`, so
 `Server.bind` is the one public spelling.
 `MuntinHandler` stays for the adapter's own tests and probes.
 
