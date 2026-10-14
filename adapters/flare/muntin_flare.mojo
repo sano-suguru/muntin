@@ -1389,9 +1389,11 @@ struct Server(Movable):
             _ = libc_nanosleep_ms(_WATCH_POLL_MS)
         # Every worker ended with a stop signal delivered that the watcher
         # may not have read yet: let it act, so this returns for that stop
-        # rather than `finish` sending the signal again.
+        # rather than `finish` sending the signal again. Its next turn does,
+        # however late the system wakes it (macOS sleeps past 50 ms); the
+        # bound only covers a watcher that cannot read the dispositions.
         if deadline < 0 and watch.stop_delivered():
-            var until = monotonic_now_ms() + 2 * _WATCH_POLL_MS
+            var until = monotonic_now_ms() + _REACTOR_STOP_MS
             while watch.acted_on() == 0 and monotonic_now_ms() < until:
                 _ = libc_nanosleep_ms(1)
         for i in range(len(threads)):
