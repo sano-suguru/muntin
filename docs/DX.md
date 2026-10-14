@@ -61,7 +61,7 @@ app.get["/users/{id}"](get_user)      # same registration syntax
 Semantics:
 
 - A route literal starts with `/` and is `/`-separated segments. A segment is either static (matched byte for byte) or `{name}`, which matches one non-empty segment; `name` is any non-empty text without braces and is not otherwise validated. A missing leading `/`, `{}`, or braces anywhere else are a compile error (`constraint failed: malformed route literal`). This also applies to `def() -> String` routes: `app.get["hello"](hello)` compiled in M0 and is now rejected.
-- Binding is positional. The handler's one `Int` parameter receives the one `{name}` segment; the name is not compared with the handler's parameter name, because Mojo 1.1.0 reflection does not expose function parameter names. `app.get["/users/{user}"](get_user)` is accepted.
+- Binding is positional. The handler's one `Int` parameter receives the one `{name}` segment; the name is not compared with the handler's parameter name, because Mojo 1.1.0 reflection does not expose function parameter names. `app.get["/users/{user}"](get_user)` is accepted. A handler that wants the name checked declares `user: Param["user", Int]` ("Named route values", below).
 - `Int` conversion: an optional `-` followed by one or more ASCII digits, within `Int` range (`-9223372036854775808` to `9223372036854775807`); leading zeros are allowed (`/users/042` -> `Int(42)`). Anything else, including forms Mojo's `Int(String)` accepts (`+42`, ` 42`, `4_2`), returns 400 `Bad Request` without calling the handler.
 - The first registered route whose method and path match handles the request: with `/users/me` registered before `/users/{id}`, `GET /users/me` goes to the former. A conversion failure is 400; it does not fall through to later routes.
 - Arity is checked at compile time at the registration call: `app.get["/users/{id}"](hello)` fails with `constraint failed: route declares a path parameter but the handler takes none`; `app.get["/users"](get_user)` and `app.get["/users/{id}/posts/{post}"](get_user)` fail with `constraint failed: handler takes one Int parameter; route must declare exactly one path or query parameter`.
@@ -449,10 +449,59 @@ Semantics:
 
 - Shapes: `get` and `delete` take `def(V, V)` and `def(V, V, Headers)`; `post`, `put` and `patch` take `def(V, V, B)` with `B` a `FromBody`, a `FromBytes`, a `Json[T]` or a `WithHeaders[B2]`; each also after a leading `State[S]` (section 8). `V` is an `Int` or a `String`, or an `Optional` of either ("Optional query values", below), in any combination. The route literal declares exactly two placeholders: two `{name}` segments, two `{key}` items, or one of each. Every zero- and one-value shape is unchanged.
 - Binding is by position: the path placeholders left to right, then the query placeholders left to right, fill the route-value parameters in order; then the body or the `Headers`. The request's query order does not matter (`/search?limit=5&q=mojo` gives `search("mojo", 5)`). Names are never compared with the handler's parameters, because Mojo 1.1.0 cannot reflect them.
-- The swap caveat: two values of one type that the handler declares in the other order compile and receive each other's values. `def post_of(pid: Int, uid: Int)` on `/users/{uid}/posts/{pid}` gets `pid == 1` for `/users/1/posts/2`. A swapped `Int` and `String` fails only at request time, when the text is not an `Int` (400). For two values of one type, section 2's "a route declaring `{id}` should not silently bind to an unrelated handler parameter" is not met; the parameter order is the application's to keep ([why](history/architecture-decisions.md#several-route-values-decision-m3-022)).
+- The swap caveat: two values of one type that the handler declares in the other order compile and receive each other's values. `def post_of(pid: Int, uid: Int)` on `/users/{uid}/posts/{pid}` gets `pid == 1` for `/users/1/posts/2`. A swapped `Int` and `String` fails only at request time, when the text is not an `Int` (400). For two values of one type, section 2's "a route declaring `{id}` should not silently bind to an unrelated handler parameter" is not met; the parameter order is the application's to keep ([why](history/architecture-decisions.md#several-route-values-decision-m3-022)), or the handler declares both values as `Param`s, which makes swapped placeholder names in the annotations a compile error; variable names stay unchecked ("Named route values", below).
 - Query keys in one literal must differ: `app.put["/x?{a}&{a}"](h)` is `constraint failed: route declares a query parameter twice`, because both parameters would read the one key. Path names are not checked: `/x/{a}/{a}` and `/x/{a}?{a}` register, and each parameter gets its own value by position.
 - Each value follows the one-value rules (sections above): captured and percent-decoded once in `App.handle`, non-empty (for an optional value, a missing or empty one is `None`: "Optional query values", below), the same invalid set, query keys matched undecoded. The values convert in order, so the first invalid one answers 400 and nothing later is converted. Order: 404 or 405; a duplicated query value, a missing or empty required value, a bad escape or text that is not UTF-8, 400; an `Int` that does not parse, 400; then the body steps (415 and 413 for `Json[T]`, then the UTF-8 read, then `from_body`) or the `Headers` rebuild; then the handler. A 400 calls neither `from_body` nor the handler, and there is no new status.
 - Compile-time errors: two values with another placeholder count are `constraint failed: handler takes two route values; route must declare exactly two path or query parameters` on `get` and `delete`, and `constraint failed: handler takes two route values and the request body; route must declare exactly two path or query parameters` on `post`, `put` and `patch`, whatever the values' types. Three route values are `constraint failed: a get handler takes at most two route values` (or `delete`), whatever the literal declares. A handler with four request parameters matches no overload (`no matching method in call to 'get'`, or the other method).
+
+
+Named route values, proven by `tests/test_named_values.mojo` (which calls this example's `make_app`, compiled as written in `tests/named_value_handlers.mojo`) and `tests/named_values_api_fail/` (via `./scripts/check.sh`). A route value may be declared as `Param["name", T]`, which names the placeholder it binds; the registration then checks the name at compile time. It is opt-in: bare values keep working as above, unchecked, so a new handler with two route values should declare both as `Param`s.
+
+**`Param` checks the name written in its type annotation, not the handler's variable name.** Binding stays by position; the check is that the annotation's name equals the placeholder at that position. A variable named after the other placeholder (`pid: Param["uid", Int]`) still receives the other value, and nothing is checked for a value declared without `Param`.
+
+```mojo
+from muntin import App, Param
+
+
+def post_of(uid: Int, pid: Int) -> String:              # bare: bound by position, not checked
+    return String("post ", pid, " of user ", uid)
+
+
+def checked_post_of(uid: Param["uid", Int], pid: Param["pid", Int]) -> String:
+    return String("post ", pid.value, " of user ", uid.value)
+
+
+def make_app() -> App:
+    var app = App()
+    app.get["/users/{uid}/posts/{pid}"](post_of)
+    app.get["/checked/{uid}/posts/{pid}"](checked_post_of)
+    return app^
+# GET /users/1/posts/2, /checked/1/posts/2 -> 200 "post 2 of user 1"
+# GET /checked/1/posts/x                   -> 400 "Bad Request"
+```
+
+Intentionally does not compile (`tests/named_values_api_fail/get_swapped_names.mojo`, `get_mixed_values.mojo`):
+
+```mojo
+def wrong(pid: Param["pid", Int], uid: Param["uid", Int]) -> String: ...
+app.get["/users/{uid}/posts/{pid}"](wrong)
+# compile error: route value 1 is Param["pid"] but binds {uid}; route values bind the
+#   path parameters left to right, then the query parameters
+
+def mixed(uid: Param["uid", Int], pid: Int) -> String: ...
+app.get["/users/{uid}/posts/{pid}"](mixed)
+# compile error: handler takes two route values and only one is a Param; declare both
+#   as Param, each named after the placeholder it binds, or neither
+```
+
+Semantics:
+
+- What is checked: with `Param["name", T]`, the name written in the type annotation must equal the placeholder the value binds (path placeholders left to right, then query placeholders left to right), or the registration is `constraint failed: route value 1 is Param["pid"] but binds {uid}; route values bind the path parameters left to right, then the query parameters` (with the position and both names). This holds on every method, stateless and stateful, before a body or `Headers` and on a bodyless `post`, `put` or `patch` handler.
+- What is not checked: Mojo 1.1.0 cannot reflect a handler's parameter names, so a variable's name is never compared with its `Param`'s name. `def post_of(pid: Param["uid", Int], uid: Param["pid", Int])` on `/users/{uid}/posts/{pid}` compiles, and its `pid` holds the user's id (`test_variable_names_are_not_compared`). Two placeholders with one name (`/x/{a}/{a}`) take two `Param["a", T]`s, which their names do not tell apart; they bind by position (`test_repeated_names_bind_by_position`). Bare route values bind by position, and an order mistake among them is not detected (the swap caveat above).
+- Of a handler's two route values, both are bare or both are `Param`s; one of each is `constraint failed: handler takes two route values and only one is a Param; declare both as Param, each named after the placeholder it binds, or neither`. A lone value may be either; a lone `Param` is checked too.
+- `Param[name, T]` holds a `T` that is `Int`, `String`, `Optional[Int]` or `Optional[String]`, read as `uid.value`; `Param["uid", Int](1)` builds one, and it is copyable. It follows every rule of a bare `T`: the same decoding, conversion and 400s, an `Optional` binding a query placeholder only. `Param["x", Float64]`, or a `Param` around a `Param`, is `constraint failed: a get handler's parameter is an Int or String route value, an Optional of one, the request Headers or, for a raw handler, the Request` (or the method's message).
+- The name rules run after every other registration rule and before the repeated query key, so a shape that breaks another rule reports that rule whether or not its values are named, and every message above is unchanged.
+- Mojo 1.1.0 crashes (a segmentation fault in the compiler) when a module that discovers its tests with `TestSuite.discover_tests[__functions_in_module()]()` also defines a function with a `Param` parameter; any struct with a `StaticString` parameter in a signature does the same (`tests/named_values_api_fail/discover_tests_crash.mojo`). Importing such a function does not crash, so a test module that discovers its tests keeps its `Param` handlers in another module (as `tests/test_named_values.mojo` imports them from `tests/named_value_handlers.mojo`); other test modules are unaffected.
 
 Optional query values, proven by `tests/test_optional_values.mojo` (which runs this example as written), `tests/optional_values_api_fail/` (via `./scripts/check.sh`) and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. An `Optional[Int]` or `Optional[String]` parameter is a route value that may be absent; the handler supplies any default:
 
@@ -499,9 +548,9 @@ Semantics:
 - Compile-time errors: one optional value on a literal with a path placeholder or with other than one query placeholder is `constraint failed: handler takes one Optional route value; route must declare exactly one query parameter and no path parameter` on `get` and `delete`, and `constraint failed: handler takes one Optional route value and the request body; route must declare exactly one query parameter and no path parameter` on `post`, `put` and `patch`. Two values whose count matches, one of them optional at a path position (`def(Optional[Int], Int)` on `/users/{uid}?{limit}`, which would bind `uid`'s segment to the optional parameter), are `constraint failed: an Optional route value binds a query parameter; route values bind the path parameters first, then the query parameters` on every method.
 - An explicitly typed function value spells it `var Optional[Int]` (`def(var Optional[Int]) thin raises Never -> String`), and a generic helper forwards an optional-value handler as it does any other.
 
-Current argument shapes are exactly `def()`, `def(V)`, `def(Headers)`, `def(V, Headers)`, `def(V, V)` and `def(V, V, Headers)` for `app.get` (section 9), and `def(B)`, `def(V, B)` and `def(V, V, B)` with `B` a `FromBody` or a `FromBytes` (or a `WithHeaders[B]` around one, section 4) for `app.post`, where `V` is an `Int` or `String` route value or an `Optional` of either (a query value only), plus, on both, the raw `def(req: Request) -> Response` (section 9); `app.delete` takes `app.get`'s shapes and `app.put` and `app.patch` take `app.post`'s (above). Each may be non-raising or declare `raises` or `raises T` (section 6), and returns `String`, `StaticString` (or a string literal) or a type conforming to `ToResponse`, including `Response` (section 5). With a state as the registration's second argument, each shape also takes a leading `State[S]` (section 8). `Json[T]` (sections 4 and 5) is a body or a result type on these shapes, not a new shape.
+Current argument shapes are exactly `def()`, `def(V)`, `def(Headers)`, `def(V, Headers)`, `def(V, V)` and `def(V, V, Headers)` for `app.get` (section 9), and `def(B)`, `def(V, B)` and `def(V, V, B)` with `B` a `FromBody` or a `FromBytes` (or a `WithHeaders[B]` around one, section 4) for `app.post`, where `V` is an `Int` or `String` route value or an `Optional` of either (a query value only), bare or in a `Param` (both or neither of two values), plus, on both, the raw `def(req: Request) -> Response` (section 9); `app.delete` takes `app.get`'s shapes and `app.put` and `app.patch` take `app.post`'s (above). Each may be non-raising or declare `raises` or `raises T` (section 6), and returns `String`, `StaticString` (or a string literal) or a type conforming to `ToResponse`, including `Response` (section 5). With a state as the registration's second argument, each shape also takes a leading `State[S]` (section 8). `Json[T]` (sections 4 and 5) is a body or a result type on these shapes, not a new shape.
 
-Registration rules, proven by `tests/test_registration.mojo`, `tests/registration_api_fail/` and every test and fixture above. `app.get`, `app.post`, `app.put`, `app.patch` and `app.delete` each have one overload per number of request parameters (0 to 3), stateless and stateful; the kind of each parameter (`Int`, `String`, `Optional[Int]` or `Optional[String]` route value, body, `Request`, `Headers`) is decided from its type, and the result type through a `where` clause on each overload.
+Registration rules, proven by `tests/test_registration.mojo`, `tests/registration_api_fail/` and every test and fixture above. `app.get`, `app.post`, `app.put`, `app.patch` and `app.delete` each have one overload per number of request parameters (0 to 3), stateless and stateful; the kind of each parameter (`Int`, `String`, `Optional[Int]` or `Optional[String]` route value, bare or in a `Param`, body, `Request`, `Headers`) is decided from its type, and the result type through a `where` clause on each overload.
 
 - An owned route value registers: `def get_user(var id: Int)` on `get`, `def update(var id: Int, body: Note)` on `post`.
 - A rejected shape that has an accepted parameter count reports the rule it breaks: `constraint failed: <rule>`, after `function instantiation failed` at the enclosing function and the registration call in the next note. Besides the messages above: `a get handler takes no request body`, `a get handler takes at most two route values`, `a get handler's parameter is an Int or String route value, an Optional of one, the request Headers or, for a raw handler, the Request` (a `Float64` or `StaticString` parameter, for example), `a get handler takes one Headers, as its last parameter`, `a raw get handler takes only the Request and returns Response` (of these, only the route-value count and `Headers` position messages also occur on a bodyless `post`, `put` or `patch` handler, naming its method: three route values, or `Headers` before a route value), `a post handler takes one request body, as its last parameter`, `a raw post handler takes only the Request and returns Response`, and the stateful and `State` variants in section 8.
@@ -657,7 +706,7 @@ get_user(id=42)
 
 Application code should not manually parse common path types.
 
-Status: `app.get["/users/{id}"](get_user)` with an `Int` parameter is production, and so is a `String` parameter (`app.get["/users/{name}"](profile)`, the value percent-decoded); see "Proven vs. target status" for matching and conversion rules, and section 5 for returning `User`. Two route values are production too (`app.get["/users/{uid}/posts/{pid}"](post_of)`), bound by position in the literal's order; two values of one type declared in the other order compile and receive each other's values, so for them the name rule above is not met ("Two route values" in "Proven vs. target status").
+Status: `app.get["/users/{id}"](get_user)` with an `Int` parameter is production, and so is a `String` parameter (`app.get["/users/{name}"](profile)`, the value percent-decoded); see "Proven vs. target status" for matching and conversion rules, and section 5 for returning `User`. Two route values are production too (`app.get["/users/{uid}/posts/{pid}"](post_of)`), bound by position in the literal's order; two values of one type declared in the other order compile and receive each other's values, so for them the name rule above is not met ("Two route values" in "Proven vs. target status") unless the handler opts in with `Param["uid", Int]`, whose name is checked against the placeholder at compile time ("Named route values").
 
 Where Mojo makes it practical, route/handler mismatches should be diagnosed at compile time. A route declaring `{id}` should not silently bind to an unrelated handler parameter. If compile-time name matching is not practical, fail as early and clearly as the language permits.
 
@@ -1552,7 +1601,7 @@ but handler "get_user" has no compatible input for it
 
 over an opaque generic type-mismatch message when Muntin can provide context.
 
-Status: a handler whose parameter count its registration method (`get`, `post`, `put`, `patch` or `delete`) accepts but whose shape breaks a registration rule gets that rule as `constraint failed: <rule>` (under `function instantiation failed` at the enclosing function, with the registration call in the next note) instead of up to ten candidate notes (section 3, "Registration rules"). A call no overload takes (a wrong number of parameters, a misdeclared `State`, an unaccepted result type) still gets the compiler's candidate notes. Names are not compared: the route literal and the handler bind by position.
+Status: a handler whose parameter count its registration method (`get`, `post`, `put`, `patch` or `delete`) accepts but whose shape breaks a registration rule gets that rule as `constraint failed: <rule>` (under `function instantiation failed` at the enclosing function, with the registration call in the next note) instead of up to ten candidate notes (section 3, "Registration rules"). A call no overload takes (a wrong number of parameters, a misdeclared `State`, an unaccepted result type) still gets the compiler's candidate notes. The route literal and the handler bind by position; names are compared only through `Param` ("Named route values" in "Proven vs. target status").
 
 ## 17. Boilerplate budget
 
