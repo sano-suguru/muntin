@@ -205,6 +205,37 @@ def _alphabet() -> List[String]:
     return paths^
 
 
+def test_overlaps_and_covers_agree_with_match() raises:
+    # Independently of `_conflict`: over every pair of `_alphabet()` paths,
+    # `_overlaps` holds exactly when some request path matches both under
+    # `_match`, and `_covers(a, b)` exactly when every request path `b`
+    # matches, `a` matches too. The request paths are the alphabet with "c"
+    # for each placeholder, which stands for any other non-empty segment.
+    var paths = _alphabet()
+    var requests = List[String]()
+    for path in paths:
+        requests.append(path.replace("{x}", "c"))
+    var args = List[String]()
+    var matches = List[List[Bool]]()
+    for path in paths:
+        var row = List[Bool]()
+        for request in requests:
+            row.append(_match(path, request, args))
+        matches.append(row^)
+    for i in range(len(paths)):
+        for j in range(len(paths)):
+            var both = False
+            var covers = True
+            for k in range(len(requests)):
+                if matches[i][k] and matches[j][k]:
+                    both = True
+                if matches[j][k] and not matches[i][k]:
+                    covers = False
+            var pair = paths[i] + " " + paths[j]
+            assert_equal(_overlaps(paths[i], paths[j]), both, pair)
+            assert_equal(_covers(paths[i], paths[j]), covers, pair)
+
+
 def test_index_answers_as_the_reference_scan() raises:
     # Pseudo-random registration sequences over `_alphabet()` and two
     # methods: before each registration the index and `_conflict` give the

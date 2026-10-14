@@ -383,8 +383,8 @@ struct _RouteIndex(Movable):
     with an earlier route without a placeholder only when its shape (its
     path with every placeholder written `{}`) is the same (`shapes`), and is
     compared one by one only with the earlier routes that have a placeholder
-    (`patterns`). Registration cost is then linear in the routes without a
-    placeholder and in those with one."""
+    (`patterns`), of any method. Each registration then costs one lookup
+    plus one comparison per earlier route with a placeholder."""
 
     var methods: List[String]
     """Each registered route's method, in registration order."""
