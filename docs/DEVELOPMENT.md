@@ -31,6 +31,8 @@ A change is not complete because the code looks plausible. Use, as applicable: a
 - `./scripts/test.sh [FILE...]`: builds each `tests/test_*.mojo` (or the named files) with `--Werror` in parallel, then runs them one at a time.
 - `./scripts/check_flare.sh`: the Flare adapter, its `Server` tests and localhost round trips, the serving must-not-build fixtures and the serving example's build, in the `flare` environment.
 
+`./scripts/bench_routing.sh [RUNS] [N...]` is a measurement, not a check, and CI does not run it: routing cost by route count, Muntin against Flare alone (`bench/routing/bench_routing.mojo` says what it measures). Its results go in the pull request that relies on them, with the machine and the versions the script prints.
+
 A must-not-build fixture states its expected diagnostic on a line starting `# Expected diagnostic (checked by scripts/check.sh): `; `scripts/build_one.sh` reads it.
 
 CI runs all three scripts on every pull request that changes code (section 4); a passing `ci-ok` on the final HEAD is the evidence that they pass, and running them locally first is the author's choice. Beyond that, a production item adds the following ([why](history/architecture-decisions.md#production-verification-policy-decision)):
