@@ -118,11 +118,12 @@ PEM certificate chain's and private key's paths, serves HTTPS instead of
 cleartext through Flare's `HttpServer.bind_tls`, offering `h2` then
 `http/1.1` (ALPN) and with the same `ServerConfig`, so the three settings
 and the stop apply unchanged. `_check_tls_files` reads both files first
-(without blocking, at most 1 MiB each) and, as a best-effort diagnosis,
-raises naming the one that cannot be read, is empty, holds no PEM
-certificate, or whose first PEM private key is encrypted or missing; Flare's own load failure, which carries no reason, is raised
-naming both files and no cause. Flare takes paths, so OpenSSL reads the
-files again.
+(opened with `O_NONBLOCK`, at most 1 MiB each, the key's buffers wiped)
+and, as a best-effort diagnosis, raises naming the one that cannot be read,
+is empty, holds no PEM certificate, or whose first PEM private key is
+encrypted or missing; Flare's own load failure, which carries no reason, is
+raised naming both files and no cause. Flare takes paths, so OpenSSL reads
+the files again.
 
 Graceful shutdown (M3-045, decided in docs/history/architecture-decisions.md
 "Graceful shutdown decision (M3-045)"): while `serve` runs, SIGTERM and
@@ -859,13 +860,29 @@ def _at_fdcwd() -> c_int:
         return c_int(-100)
 
 
+def _wipe(mut data: List[UInt8]):
+    """Overwrites every byte `data` holds with zero through volatile stores,
+    which the compiler may not drop as dead writes."""
+    var p = data.unsafe_ptr()
+    for i in range(len(data)):
+        p.unsafe_offset(i).unsafe_store[volatile=True](UInt8(0))
+
+
 def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
     """The file's bytes, at most `_TLS_FILE_MAX_BYTES` of them. The path is
-    opened once with `O_NONBLOCK` and read in chunks, so nothing it names can
-    block or exhaust `Server.bind`, whatever it is when opened: a FIFO with
-    no writer reads as empty, a device such as `/dev/zero` stops at the
-    bound, a directory fails to read. No file type is asked for, so no
-    platform's `struct stat` is read."""
+    opened once with `O_NONBLOCK` and read in chunks, never more than one
+    byte past the bound in all, so a FIFO with no writer reads as empty, a
+    device such as `/dev/zero` stops at the bound and a directory fails to
+    read. No file type is asked for, so no platform's `struct stat` is read.
+    `O_NONBLOCK` does not make every read immediate: a slow disk or network
+    file system can still delay `bind`.
+
+    Every buffer this reads the bytes into is overwritten with zeros before
+    it is freed, except the one it returns, which the caller wipes: the read
+    chunk always, a buffer outgrown before its successor takes over, and the
+    gathered bytes when this raises. The descriptor is closed once, in
+    `finally`: `FileDescriptor` reads through it without owning it, which
+    `adapters/flare/test_tls.mojo` checks against the installed Mojo."""
     var prefix = "TLS " + what + " file "
     var c_path = path.copy()
     var fd = Int(
@@ -883,14 +900,15 @@ def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
             + String(get_errno())
             + ")"
         )
+    var data = List[UInt8](capacity=_TLS_READ_CHUNK)
+    var chunk = List[UInt8](length=_TLS_READ_CHUNK, fill=0)
     try:
-        var data = List[UInt8]()
-        var chunk = List[UInt8](length=_TLS_READ_CHUNK, fill=0)
         var file = FileDescriptor(fd)
         while len(data) <= _TLS_FILE_MAX_BYTES:
+            var want = min(_TLS_READ_CHUNK, _TLS_FILE_MAX_BYTES + 1 - len(data))
             var n: Int
             try:
-                n = file.read_bytes(Span(chunk))
+                n = file.read_bytes(Span(chunk)[:want])
             except:
                 raise Error(
                     prefix
@@ -902,6 +920,11 @@ def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
                 )
             if n == 0:
                 break
+            if len(data) + n > data.capacity():
+                var grown = List[UInt8](capacity=2 * (len(data) + n))
+                grown.extend(Span(data))
+                _wipe(data)
+                data = grown^
             data.extend(Span(chunk)[:n])
         if len(data) > _TLS_FILE_MAX_BYTES:
             raise Error(
@@ -914,7 +937,11 @@ def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
         if len(data) == 0:
             raise Error(prefix + "is empty: " + path)
         return data^
+    except e:
+        _wipe(data)
+        raise e^
     finally:
+        _wipe(chunk)
         _ = external_call["close", c_int](c_int(fd))
 
 
@@ -974,15 +1001,15 @@ def _check_tls_files(tls: Tls) raises:
     for its passphrase on the terminal) or there is none. It looks only at
     the lines that begin PEM blocks; whether the files load is OpenSSL's
     decision, made after this when Flare opens the paths again, so a file
-    replaced in between is loaded unchecked (M3-051). The key's bytes are
-    overwritten with zeros before this returns or raises."""
+    replaced in between is loaded unchecked (M3-051). Every buffer Muntin
+    read the key into is overwritten with zeros before this returns or
+    raises; the copies OpenSSL makes when it loads the key are OpenSSL's."""
     var cert = _read_tls_file("certificate", tls.cert_file)
     var key = _read_tls_file("key", tls.key_file)
     try:
         _check_tls_contents(tls, cert, key)
     finally:
-        for i in range(len(key)):
-            key[i] = 0
+        _wipe(key)
 
 
 def _check_tls_contents(tls: Tls, cert: List[UInt8], key: List[UInt8]) raises:

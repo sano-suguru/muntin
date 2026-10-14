@@ -268,6 +268,24 @@ cat build/tls/encrypted_key.pem build/tls/key.pem >build/tls/encrypted_first_key
 ln -s cert.pem build/tls/cert_link.pem
 mkfifo build/tls/fifo.pem
 dd if=/dev/zero of=build/tls/big.pem bs=1 count=0 seek=1048577 2>/dev/null
+# pad_to SOURCE BYTES TARGET: SOURCE, then comment lines up to BYTES in all.
+pad_to() {
+    local need=$(($2 - $(wc -c <"$1")))
+    {
+        cat "$1"
+        awk -v n="$need" 'BEGIN {
+            line = "# padding after the PEM block"
+            while (n > length(line) + 1) { print line; n -= length(line) + 1 }
+            s = ""; while (n > 1) { s = s "#"; n-- }; print s
+        }'
+    } >"$3"
+    [[ $(wc -c <"$3") -eq $2 ]] || { echo "pad_to: $3 is not $2 bytes"; exit 1; }
+}
+pad_to build/tls/cert.pem 16384 build/tls/cert_16384.pem
+pad_to build/tls/key.pem 16385 build/tls/key_16385.pem
+pad_to build/tls/cert.pem 1048576 build/tls/cert_1048576.pem
+pad_to build/tls/key.pem 1048576 build/tls/key_1048576.pem
+pad_to build/tls/cert.pem 1048577 build/tls/cert_1048577.pem
 tls_status=0
 NO_PROXY=127.0.0.1 ./build/test_tls >"$tmp/tls.log" 2>&1 || tls_status=$?
 cat "$tmp/tls.log"

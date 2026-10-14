@@ -19,6 +19,7 @@ calls `server.serve(app)` and reaps it within a bound.
 """
 
 from std.ffi import c_int, c_uint, external_call
+from std.io import FileDescriptor
 from std.testing import assert_equal, assert_true, TestSuite
 
 from flare.http2 import (
@@ -72,6 +73,11 @@ comptime ENCRYPTED_FIRST_KEY = DIR + "encrypted_first_key.pem"
 comptime CERT_LINK = DIR + "cert_link.pem"
 comptime FIFO = DIR + "fifo.pem"
 comptime BIG = DIR + "big.pem"
+comptime CERT_16K = DIR + "cert_16384.pem"
+comptime KEY_16K1 = DIR + "key_16385.pem"
+comptime CERT_1M = DIR + "cert_1048576.pem"
+comptime KEY_1M = DIR + "key_1048576.pem"
+comptime CERT_1M1 = DIR + "cert_1048577.pem"
 comptime READ_MS = 5_000
 comptime LIMIT = 100
 comptime IDLE_MS = 1_000
@@ -594,10 +600,11 @@ def test_bind_names_a_file_with_the_wrong_content() raises:
 
 
 def test_bind_refuses_files_that_are_not_small_pem_files() raises:
-    """Whatever the path names, `bind` neither blocks nor fills memory, and
-    raises naming it: a device past 1 MiB, a FIFO with no writer (it reads
-    as empty), an empty file, a directory (it cannot be read) and a file over
-    1 MiB. Run in a child that has a bound, so a hang fails the test."""
+    """For each of these paths `bind` returns without waiting and without
+    reading past the bound, raising naming it: a device past 1 MiB, a FIFO
+    with no writer (it reads as empty), an empty file, a directory (it cannot
+    be read), a sparse file over 1 MiB and a PEM file one byte over 1 MiB.
+    Run in a child that has a bound, so a hang fails the test."""
     var pid = fork()
     if pid < 0:
         raise Error("fork() failed")
@@ -632,6 +639,14 @@ def test_bind_refuses_files_that_are_not_small_pem_files() raises:
         cases.append(
             (CERT, BIG, "TLS key file is larger than 1048576 bytes: " + BIG)
         )
+        cases.append(
+            (
+                CERT_1M1,
+                KEY,
+                "TLS certificate file is larger than 1048576 bytes: "
+                + CERT_1M1,
+            )
+        )
         var failed = False
         for c in cases:
             var got = _bind_error(c[0], c[1])
@@ -641,6 +656,82 @@ def test_bind_refuses_files_that_are_not_small_pem_files() raises:
         exit(1 if failed else 0)
     var ended = _reap_within(pid, 5_000)
     assert_equal(_exit_code(ended[0]), 0, "bind blocked or raised otherwise")
+
+
+def test_bind_reads_files_up_to_one_mebibyte() raises:
+    """Files on the read chunk's edge (16384 bytes, and a key of 16385) and
+    of exactly 1 MiB, each a PEM file followed by comment lines, are read
+    whole, accepted and served; one byte more is refused (above)."""
+    var pairs = List[Tuple[String, String]]()
+    pairs.append((CERT_16K, KEY_16K1))
+    pairs.append((CERT_1M, KEY_1M))
+    var app = https_app()
+    for pair in pairs:
+        var child = _serve(
+            Server.bind(
+                "127.0.0.1", 0, tls=Tls(cert_file=pair[0], key_file=pair[1])
+            ),
+            app,
+        )
+        try:
+            var raw = _h1(child.port, "http/1.1", "GET", "/hello")
+            assert_true(raw.endswith("\r\n\r\nhello"), pair[0] + ": " + raw)
+        finally:
+            _stop(child.pid)
+
+
+def _wrap_and_drop(fd: Int) raises:
+    var file = FileDescriptor(fd)
+    file.write("")
+
+
+def test_file_descriptor_does_not_close_what_it_wraps() raises:
+    """`_read_tls_file` reads through `std.io.FileDescriptor` and closes the
+    descriptor itself, once, in `finally`. That is a single close only while
+    `FileDescriptor` leaves the descriptor open when it goes out of use
+    (Mojo 1.1.0 declares it a trivial register type, with no destructor),
+    which this pins for the installed Mojo."""
+    var fd = Int(external_call["dup", c_int](c_int(2)))
+    assert_true(fd >= 0, "dup failed")
+    _wrap_and_drop(fd)
+    var again = Int(external_call["dup", c_int](c_int(fd)))
+    assert_true(again >= 0, "FileDescriptor closed the descriptor it wrapped")
+    _ = external_call["close", c_int](c_int(again))
+    assert_equal(Int(external_call["close", c_int](c_int(fd))), 0)
+
+
+def _lowest_free_descriptor() raises -> Int:
+    var fd = Int(external_call["dup", c_int](c_int(2)))
+    assert_true(fd >= 0, "dup failed")
+    _ = external_call["close", c_int](c_int(fd))
+    return fd
+
+
+def test_bind_leaves_no_descriptor_open() raises:
+    """Each file `bind` reads is closed whether `bind` raised or bound: the
+    lowest free descriptor is the same before and after every case. A first
+    `bind` that loads a key runs before, since OpenSSL may keep a random
+    device open from then on."""
+    _ = _bind_error(CERT, KEY)
+    var pairs = List[Tuple[String, String]]()
+    pairs.append((MISSING, KEY))
+    pairs.append((DIR, KEY))
+    pairs.append((CERT, FIFO))
+    pairs.append((CERT, "/dev/null"))
+    pairs.append((CERT, BIG))
+    pairs.append((CERT_1M1, KEY))
+    pairs.append((KEY, CERT))
+    pairs.append((CERT, ENCRYPTED_KEY))
+    pairs.append((CERT, OTHER_KEY))
+    pairs.append((CERT, KEY))
+    for pair in pairs:
+        var before = _lowest_free_descriptor()
+        var got = _bind_error(pair[0], pair[1])
+        assert_equal(
+            _lowest_free_descriptor(),
+            before,
+            pair[0] + ", " + pair[1] + ": " + got,
+        )
 
 
 def test_bind_judges_the_first_private_key_block() raises:
