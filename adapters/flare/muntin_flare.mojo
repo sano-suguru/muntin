@@ -868,6 +868,19 @@ def _wipe(mut data: List[UInt8]):
         p.unsafe_offset(i).unsafe_store[volatile=True](UInt8(0))
 
 
+def _append_wiping(mut data: List[UInt8], more: Span[UInt8, _]):
+    """Appends `more` to `data`. When `data` must grow, its bytes are copied
+    into a larger buffer and the old one is wiped before it is freed. Not
+    `raises`: the compiler rejects any call in here that could raise, so no
+    error can leave a copy half made."""
+    if len(data) + len(more) > data.capacity():
+        var grown = List[UInt8](capacity=2 * (len(data) + len(more)))
+        grown.extend(Span(data))
+        _wipe(data)
+        data = grown^
+    data.extend(more)
+
+
 def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
     """The file's bytes, at most `_TLS_FILE_MAX_BYTES` of them. The path is
     opened once with `O_NONBLOCK` and read in chunks, never more than one
@@ -880,9 +893,10 @@ def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
     Every buffer this reads the bytes into is overwritten with zeros before
     it is freed, except the one it returns, which the caller wipes: the read
     chunk always, a buffer outgrown before its successor takes over, and the
-    gathered bytes when this raises. The descriptor is closed once, in
-    `finally`: `FileDescriptor` reads through it without owning it, which
-    `adapters/flare/test_tls.mojo` checks against the installed Mojo."""
+    gathered bytes when this raises. Everything after the open, the buffers'
+    allocation included, runs inside the `try` whose `finally` closes the
+    descriptor, once: `FileDescriptor` reads through it without owning it,
+    which `adapters/flare/test_tls.mojo` checks against the installed Mojo."""
     var prefix = "TLS " + what + " file "
     var c_path = path.copy()
     var fd = Int(
@@ -900,48 +914,47 @@ def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
             + String(get_errno())
             + ")"
         )
-    var data = List[UInt8](capacity=_TLS_READ_CHUNK)
-    var chunk = List[UInt8](length=_TLS_READ_CHUNK, fill=0)
     try:
-        var file = FileDescriptor(fd)
-        while len(data) <= _TLS_FILE_MAX_BYTES:
-            var want = min(_TLS_READ_CHUNK, _TLS_FILE_MAX_BYTES + 1 - len(data))
-            var n: Int
-            try:
-                n = file.read_bytes(Span(chunk)[:want])
-            except:
+        var data = List[UInt8](capacity=_TLS_READ_CHUNK)
+        var chunk = List[UInt8](length=_TLS_READ_CHUNK, fill=0)
+        try:
+            var file = FileDescriptor(fd)
+            while len(data) <= _TLS_FILE_MAX_BYTES:
+                var want = min(
+                    _TLS_READ_CHUNK, _TLS_FILE_MAX_BYTES + 1 - len(data)
+                )
+                var n: Int
+                try:
+                    n = file.read_bytes(Span(chunk)[:want])
+                except:
+                    raise Error(
+                        prefix
+                        + "cannot be read: "
+                        + path
+                        + " ("
+                        + String(get_errno())
+                        + ")"
+                    )
+                if n == 0:
+                    break
+                _append_wiping(data, Span(chunk)[:n])
+            if len(data) > _TLS_FILE_MAX_BYTES:
                 raise Error(
                     prefix
-                    + "cannot be read: "
+                    + "is larger than "
+                    + String(_TLS_FILE_MAX_BYTES)
+                    + " bytes: "
                     + path
-                    + " ("
-                    + String(get_errno())
-                    + ")"
                 )
-            if n == 0:
-                break
-            if len(data) + n > data.capacity():
-                var grown = List[UInt8](capacity=2 * (len(data) + n))
-                grown.extend(Span(data))
-                _wipe(data)
-                data = grown^
-            data.extend(Span(chunk)[:n])
-        if len(data) > _TLS_FILE_MAX_BYTES:
-            raise Error(
-                prefix
-                + "is larger than "
-                + String(_TLS_FILE_MAX_BYTES)
-                + " bytes: "
-                + path
-            )
-        if len(data) == 0:
-            raise Error(prefix + "is empty: " + path)
-        return data^
-    except e:
-        _wipe(data)
-        raise e^
+            if len(data) == 0:
+                raise Error(prefix + "is empty: " + path)
+            return data^
+        except e:
+            _wipe(data)
+            raise e^
+        finally:
+            _wipe(chunk)
     finally:
-        _wipe(chunk)
         _ = external_call["close", c_int](c_int(fd))
 
 
