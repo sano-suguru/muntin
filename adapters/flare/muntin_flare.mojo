@@ -112,6 +112,16 @@ both read: how long a connection stays open while nothing arrives on it.
 parsed: 1 to 86,400,000 (`idle_timeout_ms out of range: <value>`
 otherwise), since Flare reads 0 and negative values as no idle timer.
 
+TLS (M3-051, decided in docs/history/architecture-decisions.md "Server TLS
+decision (M3-051)"): `Server.bind`'s keyword-only `tls`, a `Tls` holding a
+PEM certificate chain's and private key's paths, serves HTTPS instead of
+cleartext through Flare's `HttpServer.bind_tls`, offering `h2` then
+`http/1.1` (ALPN) and with the same `ServerConfig`, so the three settings
+and the stop apply unchanged. `_check_tls_files` reads both files first and
+raises naming the one that cannot be read, holds no PEM certificate, or holds
+an encrypted or no PEM private key; Flare's own load failure, which carries
+no reason, is raised naming both files.
+
 Graceful shutdown (M3-045, decided in docs/history/architecture-decisions.md
 "Graceful shutdown decision (M3-045)"): while `serve` runs, SIGTERM and
 SIGINT stop it. `_StopWatch` installs `_stop_signal_seen`, a handler that
@@ -804,6 +814,98 @@ def _server_config(
     return config^
 
 
+comptime _PEM_CERTIFICATE = "-----BEGIN CERTIFICATE-----"
+comptime _FLARE_TLS_LOAD_FAILED = "flare_ssl_ctx_new_server failed"
+"""The start of the error Flare v0.12.0's `HttpServer.bind_tls` raises when
+OpenSSL refuses the certificate or key; it carries no reason."""
+
+
+struct Tls(Copyable, Movable):
+    """The certificate chain and private key a `Server` serves HTTPS with
+    (M3-051): paths to PEM files, read once by `Server.bind`. Both are
+    required and named, so neither can be left out or swapped by position."""
+
+    var cert_file: String
+    """The server certificate, then any intermediates, in PEM."""
+    var key_file: String
+    """The certificate's private key in PEM, not encrypted."""
+
+    def __init__(out self, *, cert_file: String, key_file: String):
+        self.cert_file = cert_file
+        self.key_file = key_file
+
+
+def _contains(data: List[UInt8], marker: StringSlice) -> Bool:
+    var m = marker.as_bytes()
+    var n = len(m)
+    if n == 0 or len(data) < n:
+        return n == 0
+    for i in range(len(data) - n + 1):
+        var j = 0
+        while j < n and data[i + j] == m[j]:
+            j += 1
+        if j == n:
+            return True
+    return False
+
+
+def _read_tls_file(what: String, path: String) raises -> List[UInt8]:
+    try:
+        with open(path, "r") as f:
+            return f.read_bytes()
+    except e:
+        raise Error(
+            "TLS "
+            + what
+            + " file cannot be read: "
+            + path
+            + " ("
+            + String(e)
+            + ")"
+        )
+
+
+def _check_tls_files(tls: Tls) raises:
+    """Raises, naming the file, when a file cannot be read, when the
+    certificate file holds no PEM certificate, or when the key file holds an
+    encrypted key (OpenSSL would ask for its passphrase on the terminal) or
+    no PEM private key. What only OpenSSL can tell (a damaged PEM block, a
+    key that does not belong to the certificate) is `Server`'s check after
+    Flare's."""
+    var cert = _read_tls_file("certificate", tls.cert_file)
+    var key = _read_tls_file("key", tls.key_file)
+    if not _contains(cert, _PEM_CERTIFICATE):
+        raise Error(
+            "TLS certificate file has no PEM certificate ("
+            + _PEM_CERTIFICATE
+            + "): "
+            + tls.cert_file
+        )
+    if _contains(key, "-----BEGIN ENCRYPTED PRIVATE KEY-----") or _contains(
+        key, "Proc-Type: 4,ENCRYPTED"
+    ):
+        raise Error(
+            "TLS key file holds an encrypted private key, which is not"
+            " supported: "
+            + tls.key_file
+        )
+    if not (
+        _contains(key, "-----BEGIN PRIVATE KEY-----")
+        or _contains(key, "-----BEGIN RSA PRIVATE KEY-----")
+        or _contains(key, "-----BEGIN EC PRIVATE KEY-----")
+    ):
+        raise Error("TLS key file has no PEM private key: " + tls.key_file)
+
+
+def _tls_alpn() -> List[String]:
+    """The protocols a TLS `Server` offers in the handshake, in preference
+    order: the ones its cleartext listener serves (M3-051)."""
+    var alpn = List[String]()
+    alpn.append("h2")
+    alpn.append("http/1.1")
+    return alpn^
+
+
 struct Server(Movable):
     """A listening socket that serves a Muntin `App` over HTTP through Flare
     (M3-033). `Server.bind` is the one public spelling."""
@@ -818,15 +920,36 @@ struct Server(Movable):
         _max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
         _shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
         _idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
+        _tls: Optional[Tls] = None,
     ) raises:
         if _port < 0 or _port > 65535:
             raise Error("port out of range: " + String(_port))
         var config = _server_config(
             _max_body_bytes, _shutdown_grace_ms, _idle_timeout_ms
         )
-        self._server = HttpServer.bind(
-            SocketAddr(IpAddr.parse(_host), UInt16(_port)), config^
-        )
+        if not _tls:
+            self._server = HttpServer.bind(
+                SocketAddr(IpAddr.parse(_host), UInt16(_port)), config^
+            )
+            return
+        ref tls = _tls.value()
+        _check_tls_files(tls)
+        var addr = SocketAddr(IpAddr.parse(_host), UInt16(_port))
+        try:
+            self._server = HttpServer.bind_tls(
+                addr, tls.cert_file, tls.key_file, _tls_alpn(), config^
+            )
+        except e:
+            if String(e).startswith(_FLARE_TLS_LOAD_FAILED):
+                raise Error(
+                    "TLS certificate and key could not be loaded (a damaged"
+                    " PEM block, or a key that does not belong to the"
+                    " certificate): "
+                    + tls.cert_file
+                    + ", "
+                    + tls.key_file
+                )
+            raise e^
 
     @staticmethod
     def bind(
@@ -836,6 +959,7 @@ struct Server(Movable):
         max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
         shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
         idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
+        tls: Optional[Tls] = None,
     ) raises -> Server:
         """Binds and listens on `host` (an IPv4 or IPv6 literal) and `port`
         (0 to 65535; 0 lets the system choose). A client may connect once it
@@ -850,16 +974,20 @@ struct Server(Movable):
         or SIGINT (M3-045; docs/DX.md section 1). `idle_timeout_ms` (1 to
         86,400,000; 500 when not given) is how long Flare keeps a
         connection open, over HTTP/1.1 and h2c, while nothing arrives on it
-        (M3-047; docs/DX.md section 1).
-        Raises for a port, limit, grace or idle timeout out of range, a host
-        that is not an IP literal, an address in use or any other OS
-        error."""
+        (M3-047; docs/DX.md section 1). With `tls`, it serves HTTPS
+        instead, HTTP/1.1 and HTTP/2 chosen in the TLS handshake (ALPN), with
+        the same three settings (M3-051; docs/DX.md section 1); the files are
+        read and checked here, before the host is parsed.
+        Raises for a port, limit, grace or idle timeout out of range, a TLS
+        file that cannot be read or loaded (naming it), a host that is not
+        an IP literal, an address in use or any other OS error."""
         return Server(
             _host=host,
             _port=port,
             _max_body_bytes=max_body_bytes,
             _shutdown_grace_ms=shutdown_grace_ms,
             _idle_timeout_ms=idle_timeout_ms,
+            _tls=tls,
         )
 
     def port(self) -> Int:

@@ -17,9 +17,12 @@ adapter_tests=$adapter/test_muntin_flare.mojo
 serve_probe=$adapter/serve_probe.mojo
 roundtrip=$adapter/test_localhost_roundtrip.mojo
 server_tests=$adapter/test_server.mojo
+# M3-051: Server over TLS; reads the PEM files written under build/tls below.
+tls_tests=$adapter/test_tls.mojo
 # M3-045: the program test_server.mojo execs for its stop tests.
 stop_driver=$adapter/stop_driver.mojo
 example=examples/hello_server.mojo
+tls_example=examples/hello_https.mojo
 # M3-032's must-not-build fixtures for Server (docs/history/architecture-decisions.md
 # "Serving entrypoint decision (M3-032)") and M3-044's ("Server receive body
 # limit decision (M3-044)"), built with -I src -I $adapter.
@@ -58,12 +61,14 @@ if ! diff -ru "$adapter" "$tmp/adapter"; then
     echo "error: $adapter is not formatted; run: pixi run -e flare mojo format $adapter" >&2
     exit 1
 fi
-cp "$example" "$tmp/example.mojo"
-"${FLARE[@]}" format --quiet "$tmp/example.mojo"
-if ! diff -u "$example" "$tmp/example.mojo"; then
-    echo "error: $example is not formatted; run: pixi run -e flare mojo format $example" >&2
-    exit 1
-fi
+for ex in "$example" "$tls_example"; do
+    cp "$ex" "$tmp/example.mojo"
+    "${FLARE[@]}" format --quiet "$tmp/example.mojo"
+    if ! diff -u "$ex" "$tmp/example.mojo"; then
+        echo "error: $ex is not formatted; run: pixi run -e flare mojo format $ex" >&2
+        exit 1
+    fi
+done
 echo "ok"
 
 # Every Flare binary is built here at once; the steps below run them in order.
@@ -101,7 +106,9 @@ build_bg serve_probe -I src -I "$adapter" "$serve_probe"
 build_bg_known test_localhost_roundtrip -I src -I "$adapter" "$roundtrip"
 build_bg test_server -I src -I "$adapter" "$server_tests"
 build_bg stop_driver -I src -I "$adapter" "$stop_driver"
+build_bg test_tls -I src -I "$adapter" "$tls_tests"
 build_bg hello_server -I src -I "$adapter" "$example"
+build_bg hello_https -I src -I "$adapter" "$tls_example"
 build_bg flare_header_probe -I src -I "$adapter" compat/flare/headers/flare_header_probe.mojo
 build_bg inbound_rebuild -I src -I tests -I "$adapter" compat/flare/headers/inbound_rebuild.mojo
 build_bg_known json_loopback_probe -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo
@@ -198,6 +205,47 @@ if ((server_status != 0)); then
 fi
 if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/server.log"; then
     echo "error: $server_tests ran no tests" >&2
+    exit 1
+fi
+echo "ok: no server process left behind"
+
+# M3-051: the PEM files test_tls reads, made fresh with the flare
+# environment's OpenSSL: a self-signed certificate for 127.0.0.1 and its key,
+# the key in the older EC form, plain and encrypted, a key that does not
+# belong to it, that key encrypted, and the certificate
+# with a damaged byte in its PEM block.
+step "run Server TLS tests (HTTPS over HTTP/1.1 and HTTP/2, start-up errors, the three settings)"
+OPENSSL=(pixi run --frozen -e flare openssl)
+rm -rf build/tls
+mkdir -p build/tls
+"${OPENSSL[@]}" req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout build/tls/key.pem -out build/tls/cert.pem -days 1 \
+    -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1 2>"$tmp/openssl.log" ||
+    { cat "$tmp/openssl.log"; exit 1; }
+"${OPENSSL[@]}" genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+    -out build/tls/other_key.pem
+"${OPENSSL[@]}" pkey -in build/tls/key.pem -aes256 -passout pass:muntin \
+    -out build/tls/encrypted_key.pem
+"${OPENSSL[@]}" pkey -in build/tls/key.pem -traditional \
+    -out build/tls/traditional_key.pem
+"${OPENSSL[@]}" pkey -in build/tls/key.pem -traditional -aes256 \
+    -passout pass:muntin -out build/tls/traditional_encrypted_key.pem
+sed '2s/^./!/' build/tls/cert.pem >build/tls/damaged_cert.pem
+tls_status=0
+NO_PROXY=127.0.0.1 ./build/test_tls >"$tmp/tls.log" 2>&1 || tls_status=$?
+cat "$tmp/tls.log"
+leftover_tls='^\./build/test_tls$'
+if pgrep -f "$leftover_tls"; then
+    pkill -KILL -f "$leftover_tls" || true
+    echo "error: $tls_tests left a server process behind" >&2
+    exit 1
+fi
+if ((tls_status != 0)); then
+    echo "error: Server TLS tests failed" >&2
+    exit 1
+fi
+if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/tls.log"; then
+    echo "error: $tls_tests ran no tests" >&2
     exit 1
 fi
 echo "ok: no server process left behind"
@@ -329,7 +377,7 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/body_probe.log"; then
 fi
 
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$stop_driver" "$example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo compat/flare/body/body_probe.mojo; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$tls_tests" "$stop_driver" "$example" "$tls_example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo compat/flare/body/body_probe.mojo; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1

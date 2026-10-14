@@ -75,7 +75,7 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
-- **Serving:** `Server` in the Flare adapter module (`muntin_flare`) serves an `App` over cleartext HTTP/1.1 and HTTP/2 with prior knowledge, on one thread. On SIGTERM or SIGINT it refuses new connections and serves the open ones for a grace window (`shutdown_grace_ms`, 5 s unless set) before it returns; a stop always takes the whole window, and one `Server` serves at a time per process. It builds for Linux x86-64 and macOS arm64. Its limits: an IP literal as the host (`"127.0.0.1"`, `"0.0.0.0"`, `"::1"`; not `"localhost"`), no TLS or HTTP/3, three backend settings (an upper bound on the request body it receives, `max_body_bytes`, 10 MiB unless set, the grace window, and how long an idle connection stays open, `idle_timeout_ms`, 500 ms unless set) and Flare's defaults for the rest, and it runs from a clone with two `-I` paths, not from a published package. Details: [`docs/DX.md`](docs/DX.md) section 1.
+- **Serving:** `Server` in the Flare adapter module (`muntin_flare`) serves an `App` over cleartext HTTP/1.1 and HTTP/2 with prior knowledge, on one thread. On SIGTERM or SIGINT it refuses new connections and serves the open ones for a grace window (`shutdown_grace_ms`, 5 s unless set) before it returns; a stop always takes the whole window, and one `Server` serves at a time per process. It builds for Linux x86-64 and macOS arm64. With `tls=Tls(cert_file=..., key_file=...)` it serves the same `App` over HTTPS (HTTP/1.1 and HTTP/2 inside TLS) instead. Its limits: an IP literal as the host (`"127.0.0.1"`, `"0.0.0.0"`, `"::1"`; not `"localhost"`), no HTTP/3, mTLS or certificate reload, three backend settings (an upper bound on the request body it receives, `max_body_bytes`, 10 MiB unless set, the grace window, and how long an idle connection stays open, `idle_timeout_ms`, 500 ms unless set) and Flare's defaults for the rest, and it runs from a clone with two `-I` paths, not from a published package. Details: [`docs/DX.md`](docs/DX.md) section 1.
 - **Not yet:** runtime-configured middleware and request-scoped context, and serving beyond those limits.
 
 Shipped and remaining capabilities: [`docs/SPEC.md`](docs/SPEC.md). Long-term API targets: [`docs/DX.md`](docs/DX.md).
@@ -104,6 +104,17 @@ pixi run -e flare mojo run -I src -I adapters/flare examples/hello_server.mojo
 ```sh
 curl http://127.0.0.1:8080/   # Hello, Mojo!
 ```
+
+To serve the same app over HTTPS, give `Server.bind` a certificate and its key ([`examples/hello_https.mojo`](examples/hello_https.mojo)). For a local try, make a self-signed pair with the `flare` environment's OpenSSL, serve on `https://127.0.0.1:8443`, and trust that certificate in the client:
+
+```sh
+pixi run -e flare openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout key.pem -out cert.pem -days 30 -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1
+pixi run -e flare mojo run -I src -I adapters/flare examples/hello_https.mojo
+curl --cacert cert.pem https://127.0.0.1:8443/   # Hello, Mojo! (in another terminal)
+```
+
+In production, use a certificate from your certificate authority; a wrong file stops `Server.bind` with an error naming it ([`docs/DX.md`](docs/DX.md) section 1, "HTTPS").
 
 ## Documentation
 

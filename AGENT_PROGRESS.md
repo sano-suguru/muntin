@@ -4,7 +4,7 @@ Current handoff only. Rewrite it when the work changes; history is git and the p
 
 ## Now
 
-M3-048 (bodyless typed `post`, `put` and `patch` handlers: [Bodyless typed post, put and patch handlers decision (M3-048)](docs/history/architecture-decisions.md#bodyless-typed-post-put-and-patch-handlers-decision-m3-048), decision and production) is on this branch and complete when its pull request merges. Next: no item is named next. Choose one coherent item from `docs/SPEC.md`, "Remaining candidates"; make it a decision item only if it opens a new design question (`docs/DEVELOPMENT.md` section 2). Blockers: none.
+M3-051 (HTTPS for `Server`: [Server TLS decision (M3-051)](docs/history/architecture-decisions.md#server-tls-decision-m3-051), decision and production) is on this branch and complete when its pull request merges. Next: no item is named next. Choose one coherent item from `docs/SPEC.md`, "Remaining candidates"; make it a decision item only if it opens a new design question (`docs/DEVELOPMENT.md` section 2). Blockers: none.
 
 ## Easy to miss
 
