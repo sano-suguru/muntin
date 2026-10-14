@@ -4393,9 +4393,9 @@ These are the two forms of one shared set that were tested; sharing more of the 
 
 **Next production slice:** none (a standing constraint, `docs/DEVELOPMENT.md` section 2). Its owner is `docs/ARCHITECTURE.md`, "Registration surface", which this record's pull request writes, with the two new fixtures in its revisit index.
 
-### Streaming responses and cancellation decision (M3-053)
+### Streaming responses and cancellation decision (M3-056)
 
-Status: **decision, proposed** (M3-053, pull request #101; `src/muntin` unchanged). Not accepted until the owner approves it in that pull request. The Flare reading, the probe's observations and the storage spike are in the pull request.
+Status: **decision, proposed** (M3-056, pull request #101; `src/muntin` unchanged). Not accepted until the owner approves it in that pull request. The Flare reading, the probe's observations and the storage spike are in the pull request.
 
 **Question and what settles it.** `App.handle(Request) -> Response` returns a whole body, so a handler cannot send a body it produces over time or one larger than memory (a long download, server-sent events), and it cannot learn that the client has gone. An outside review asked to settle the requirements for streaming responses and cancellation before any wider layer of optional capabilities; WebSocket, protocol-specific control and streamed request bodies are out of scope. Settled by: what Flare v0.12.0 delivers on the path `Server` serves (`HttpServer.serve` with a `Handler`; the same connection handles under the workers' loop), read in code and measured over loopback by `compat/flare/stream/stream_probe.mojo`; and whether Mojo 1.1.0 lets a `Copyable` `Response` carry a stream of an application type (a scratch spike).
 
@@ -4430,7 +4430,7 @@ Status: **decision, proposed** (M3-053, pull request #101; `src/muntin` unchange
 - streamed request bodies, WebSocket or trailers are taken up (the `Trailer` and `TE` fields: [M3-002](#headers-decision-m3-002));
 - `compat/flare/stream/stream_probe.mojo` changes its observations.
 
-**Next production slice (M3-054):**
+**Next production slice (M3-057):**
 - `src/muntin`: `BodySource`, `Response.stream`, `Response.is_stream()` and `Response.next_chunk() raises -> Optional[List[UInt8]]` (the pull a backend, a middleware or a test makes; `None` on a buffered response); the erased shared box beside `_Shared` in `_handler_storage.mojo`, with `scripts/check_unsafe.sh` updated to allow it and nothing else.
 - Flare adapter: `to_flare_response` hands a streamed response to Flare's `stream_response` through an adapter-owned `ChunkSource` that pulls the Muntin stream and ignores `Cancel`; the `HEAD` rule above in `_serve_app`.
 - Evidence beyond `docs/DEVELOPMENT.md` section 3: an ownership oracle (one destruction, after the last copy; destruction unpulled when abandoned; no pull after `None` or a raise), also under `SANITIZE=address`; middleware passing a streamed response on; loopback cases over HTTP/1.1 and h2c for chunk order, a client that disconnects (the source destroyed) and `HEAD`.

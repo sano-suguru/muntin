@@ -1,5 +1,5 @@
 """Flare streaming and cancellation probe (evidence for the streaming and
-cancellation decision, M3-053). Not Muntin.
+cancellation decision, M3-056). Not Muntin.
 
 Runs only in the `flare` pixi environment (scripts/check_flare.sh). It
 measures what the pinned Flare backend does with a streamed response on the

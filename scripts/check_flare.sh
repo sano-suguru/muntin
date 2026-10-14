@@ -490,11 +490,11 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/body_probe.log"; then
     exit 1
 fi
 
-# M3-053 streaming evidence (docs/history/architecture-decisions.md
-# "Streaming responses and cancellation decision (M3-053)"): what pinned
+# M3-056 streaming evidence (docs/history/architecture-decisions.md
+# "Streaming responses and cancellation decision (M3-056)"): what pinned
 # Flare does with a streamed response on the path Server serves: framing,
 # a client that goes away, other connections, a quiet source, a raise.
-step "Flare streaming probe (M3-053)"
+step "Flare streaming probe (M3-056)"
 stream_status=0
 ./build/stream_probe >"$tmp/stream_probe.log" 2>&1 || stream_status=$?
 cat "$tmp/stream_probe.log"
@@ -505,7 +505,7 @@ if pgrep -f "$leftover_stream"; then
     exit 1
 fi
 if ((stream_status != 0)); then
-    echo "error: Flare streaming behavior differs from the recorded M3-053 evidence" >&2
+    echo "error: Flare streaming behavior differs from the recorded M3-056 evidence" >&2
     exit 1
 fi
 if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/stream_probe.log"; then
