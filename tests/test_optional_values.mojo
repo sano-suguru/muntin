@@ -330,11 +330,10 @@ def _app() -> App:
     # A defaulted parameter registers as a required value.
     app.get["/d?{limit}"](defaulted)
     app.get["/sd?{query}&{limit}"](search_defaulted)
-    # First registration wins, either way round; a 400 never falls through.
+    # An optional and a required value on paths of their own: a second
+    # route on either path would be a route conflict (M3-052).
     app.get["/first?{limit}"](opt_int)
-    app.get["/first?{limit}"](required)  # never reached
     app.get["/req?{limit}"](required)
-    app.get["/req?{limit}"](opt_int)  # never reached
     # A raw handler is never decoded and never gets `None`.
     app.get["/raw"](raw)
     # A typed function value and generic forwarding.
@@ -590,12 +589,12 @@ def test_defaulted_int_parameter_stays_required() raises:
     _bad(app, "/sd?query=a")
 
 
-def test_first_registration_wins() raises:
+def test_optional_and_required_values_on_their_own_paths() raises:
     var app = _app()
     _expect(app, "/first", 200, "int None")
     _expect(app, "/first?limit=3", 200, "int 3")
-    _bad(app, "/first?limit=x")  # no fall-through to the required route
-    _bad(app, "/req")  # the required route answers first
+    _bad(app, "/first?limit=x")
+    _bad(app, "/req")
     _bad(app, "/req?limit=")
     _expect(app, "/req?limit=3", 200, "required 3")
 

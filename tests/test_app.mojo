@@ -24,6 +24,10 @@ def me() -> String:
     return "me"
 
 
+def named(name: String) -> String:
+    return "named " + name
+
+
 def list_items(limit: Int) -> String:
     return "items " + String(limit)
 
@@ -174,34 +178,17 @@ def test_exact_and_typed_routes_share_one_app() raises:
 
 
 def test_first_registered_matching_route_wins() raises:
+    # A static route registered before the parameter route that covers it;
+    # the other order aborts at registration (M3-052,
+    # tests/route_conflict_abort).
     var app = App()
     app.get["/users/me"](me)
     app.get["/users/{id}"](get_user)
     app.get["/users/{id}/posts"](user_posts)
-    app.get["/users/7"](me)
     var client = TestClient(app)
 
     assert_equal(client.get("/users/me").text(), "me")
     assert_equal(client.get("/users/7").text(), "7")
-
-
-def test_parameter_route_registered_first_shadows_a_static_one() raises:
-    # Today's behavior, pinned before the route-conflict decision changes it:
-    # `/users/{id}` registered first takes `/users/me`, answers 400 for the
-    # `Int`, and never falls through to the later static route.
-    var app = App()
-    app.get["/users/{id}"](get_user)
-    app.get["/users/me"](me)
-    var client = TestClient(app)
-
-    var r = client.get("/users/me")
-    assert_equal(r.status, 400)
-    assert_equal(r.text(), "Bad Request")
-    assert_equal(client.get("/users/7").text(), "7")
-    var not_allowed = app.handle(Request("POST", "/users/me"))
-    assert_equal(not_allowed.status, 405)
-    assert_equal(_allow(not_allowed), "GET, HEAD")
-    assert_equal(client.get("/users/me/x").status, 404)
 
 
 def test_request_splits_target_at_first_question_mark() raises:
@@ -335,13 +322,15 @@ def test_query_route_does_not_match_other_paths_or_methods() raises:
 def test_query_does_not_take_part_in_route_selection() raises:
     var app = App()
     app.get["/items?{limit}"](list_items)
-    app.get["/items"](hello)
+    app.get["/{name}"](named)
     var client = TestClient(app)
 
-    # The first route matches on path alone; a missing key is 400 there,
-    # not a fall-through to the later route.
+    # The first route matches on path alone; a missing key is 400 there, not
+    # a fall-through to the later, more general route. A second `get` route
+    # on `/items` would be a route conflict (M3-052).
     assert_equal(client.get("/items?limit=5").text(), "items 5")
     assert_equal(client.get("/items").status, 400)
+    assert_equal(client.get("/other").text(), "named other")
 
 
 def test_query_binding_is_positional() raises:

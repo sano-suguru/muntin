@@ -256,6 +256,92 @@ def _allowed(routes: List[_Route], path: String) -> List[String]:
     return methods^
 
 
+def _covers(general: String, specific: String) -> Bool:
+    """Whether route path `general` matches every request path `specific`
+    matches (M3-052): the same number of segments, and at each position the
+    same static text in both, or a placeholder in `general` and a placeholder
+    or a non-empty static segment in `specific` (a placeholder matches no
+    empty segment, `_match`). Placeholder names are not compared."""
+    var g = general.split("/")
+    var s = specific.split("/")
+    if len(g) != len(s):
+        return False
+    for i in range(len(g)):
+        if _is_param(g[i]):
+            if s[i].byte_length() == 0:
+                return False
+        elif _is_param(s[i]) or g[i] != s[i]:
+            return False
+    return True
+
+
+def _overlaps(a: String, b: String) -> Bool:
+    """Whether some request path matches both route paths `a` and `b`
+    (M3-052): the same number of segments, and at each position the same
+    static text in both, or a placeholder in one and a placeholder or a
+    non-empty static segment in the other."""
+    var x = a.split("/")
+    var y = b.split("/")
+    if len(x) != len(y):
+        return False
+    for i in range(len(x)):
+        var px = _is_param(x[i])
+        var py = _is_param(y[i])
+        if px and py:
+            continue
+        if px or py:
+            if x[i].byte_length() == 0 or y[i].byte_length() == 0:
+                return False
+        elif x[i] != y[i]:
+            return False
+    return True
+
+
+def _conflict(routes: List[_Route], method: String, path: String) -> String:
+    """Why a route for `method` and `path` cannot be registered after
+    `routes`, or empty if it can (M3-052). It can when every earlier route of
+    the same method whose path overlaps `path` is more specific than it, so
+    the first match `App.handle` selects is always the most specific one.
+    The query takes no part, as in selection."""
+    for i in range(len(routes)):
+        ref earlier = routes[i]
+        if earlier.method != method or not _overlaps(earlier.path, path):
+            continue
+        var new_covers = _covers(path, earlier.path)
+        var earlier_covers = _covers(earlier.path, path)
+        if new_covers and not earlier_covers:
+            continue
+        var new = method + " " + path
+        var old = method + " " + earlier.path
+        if new_covers:
+            return (
+                "route conflict: "
+                + new
+                + " matches the same requests as "
+                + old
+                + ", registered earlier (the query takes no part in selection)"
+            )
+        if earlier_covers:
+            return (
+                "route conflict: "
+                + new
+                + " is registered after "
+                + old
+                + ", which matches every request it matches; register "
+                + new
+                + " first"
+            )
+        return (
+            "route conflict: "
+            + new
+            + " and "
+            + old
+            + ", registered earlier, both match some requests and neither"
+            " is more specific"
+        )
+    return String()
+
+
 def _parse_int(segment: String) raises -> Int:
     """Converts a route value's decoded text to `Int`: an optional `-`
     followed by one or more ASCII digits, within `Int` range. Anything else
@@ -987,6 +1073,15 @@ struct App(Movable):
         """
         self._middleware.append(middleware)
 
+    def _add(mut self, var route: _Route):
+        """Appends `route` to the routes, or aborts at this registration with
+        `_conflict`'s message when an earlier route of the same method
+        overlaps it and is not more specific (M3-052)."""
+        var refused = _conflict(self._routes, route.method, route.path)
+        if refused.byte_length() > 0:
+            abort(refused)
+        self._routes.append(route^)
+
     def get[
         E: Deinitable, R: Movable & Deinitable, //, path: StaticString
     ](mut self, handler: def() thin raises E -> R) where (
@@ -1006,7 +1101,7 @@ struct App(Movable):
         """
         _check["GET", False, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["GET", False, path, R, _NoSlot, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[_NoSlot, _NoSlot, _NoSlot](
                     "GET", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
@@ -1052,7 +1147,7 @@ struct App(Movable):
         handled as for `get` on `def()`."""
         _check["GET", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["GET", False, path, R, A, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, _NoSlot, _NoSlot](
                     "GET",
                     path,
@@ -1088,7 +1183,7 @@ struct App(Movable):
         and one `Headers`, last); a registration reports the rule it breaks."""
         _check["GET", False, path, R, A, B, _NoSlot]()
         comptime if _admits["GET", False, path, R, A, B, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, B, _NoSlot](
                     "GET",
                     path,
@@ -1118,7 +1213,7 @@ struct App(Movable):
         `Headers`, last); a registration reports the rule it breaks."""
         _check["GET", False, path, R, A, B, C]()
         comptime if _admits["GET", False, path, R, A, B, C]():
-            self._routes.append(
+            self._add(
                 _route[A, B, C](
                     "GET",
                     path,
@@ -1143,7 +1238,7 @@ struct App(Movable):
         passes it to `handler` by borrow."""
         _check["GET", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["GET", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[_NoSlot, _NoSlot, _NoSlot](
                     "GET",
                     path,
@@ -1174,7 +1269,7 @@ struct App(Movable):
         typed function value."""
         _check["GET", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["GET", True, path, R, A, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, _NoSlot, _NoSlot](
                     "GET",
                     path,
@@ -1205,7 +1300,7 @@ struct App(Movable):
         `def(State[S])`."""
         _check["GET", True, path, R, A, B, _NoSlot]()
         comptime if _admits["GET", True, path, R, A, B, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, B, _NoSlot](
                     "GET",
                     path,
@@ -1237,7 +1332,7 @@ struct App(Movable):
         `def(State[S])`."""
         _check["GET", True, path, R, A, B, C]()
         comptime if _admits["GET", True, path, R, A, B, C]():
-            self._routes.append(
+            self._add(
                 _route[A, B, C](
                     "GET",
                     path,
@@ -1261,7 +1356,7 @@ struct App(Movable):
         comptime if _admits[
             "POST", False, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
-            self._routes.append(
+            self._add(
                 _route[_NoSlot, _NoSlot, _NoSlot](
                     "POST", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
@@ -1310,7 +1405,7 @@ struct App(Movable):
         (M3-048)."""
         _check["POST", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["POST", False, path, R, A, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, _NoSlot, _NoSlot](
                     "POST",
                     path,
@@ -1350,7 +1445,7 @@ struct App(Movable):
         (M3-048)."""
         _check["POST", False, path, R, A, B, _NoSlot]()
         comptime if _admits["POST", False, path, R, A, B, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, B, _NoSlot](
                     "POST",
                     path,
@@ -1388,7 +1483,7 @@ struct App(Movable):
         (M3-048)."""
         _check["POST", False, path, R, A, B, C]()
         comptime if _admits["POST", False, path, R, A, B, C]():
-            self._routes.append(
+            self._add(
                 _route[A, B, C](
                     "POST",
                     path,
@@ -1412,7 +1507,7 @@ struct App(Movable):
         read."""
         _check["POST", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["POST", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[_NoSlot, _NoSlot, _NoSlot](
                     "POST",
                     path,
@@ -1447,7 +1542,7 @@ struct App(Movable):
         (M3-048)."""
         _check["POST", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["POST", True, path, R, A, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, _NoSlot, _NoSlot](
                     "POST",
                     path,
@@ -1481,7 +1576,7 @@ struct App(Movable):
         (M3-048)."""
         _check["POST", True, path, R, A, B, _NoSlot]()
         comptime if _admits["POST", True, path, R, A, B, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, B, _NoSlot](
                     "POST",
                     path,
@@ -1517,7 +1612,7 @@ struct App(Movable):
         (M3-048)."""
         _check["POST", True, path, R, A, B, C]()
         comptime if _admits["POST", True, path, R, A, B, C]():
-            self._routes.append(
+            self._add(
                 _route[A, B, C](
                     "POST",
                     path,
@@ -1539,7 +1634,7 @@ struct App(Movable):
         body is not read."""
         _check["PUT", False, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", False, path, R, _NoSlot, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[_NoSlot, _NoSlot, _NoSlot](
                     "PUT", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
@@ -1588,7 +1683,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PUT", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", False, path, R, A, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, _NoSlot, _NoSlot](
                     "PUT",
                     path,
@@ -1628,7 +1723,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PUT", False, path, R, A, B, _NoSlot]()
         comptime if _admits["PUT", False, path, R, A, B, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, B, _NoSlot](
                     "PUT",
                     path,
@@ -1666,7 +1761,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PUT", False, path, R, A, B, C]()
         comptime if _admits["PUT", False, path, R, A, B, C]():
-            self._routes.append(
+            self._add(
                 _route[A, B, C](
                     "PUT",
                     path,
@@ -1690,7 +1785,7 @@ struct App(Movable):
         read."""
         _check["PUT", True, path, R, _NoSlot, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", True, path, R, _NoSlot, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[_NoSlot, _NoSlot, _NoSlot](
                     "PUT",
                     path,
@@ -1725,7 +1820,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PUT", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PUT", True, path, R, A, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, _NoSlot, _NoSlot](
                     "PUT",
                     path,
@@ -1759,7 +1854,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PUT", True, path, R, A, B, _NoSlot]()
         comptime if _admits["PUT", True, path, R, A, B, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, B, _NoSlot](
                     "PUT",
                     path,
@@ -1795,7 +1890,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PUT", True, path, R, A, B, C]()
         comptime if _admits["PUT", True, path, R, A, B, C]():
-            self._routes.append(
+            self._add(
                 _route[A, B, C](
                     "PUT",
                     path,
@@ -1819,7 +1914,7 @@ struct App(Movable):
         comptime if _admits[
             "PATCH", False, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
-            self._routes.append(
+            self._add(
                 _route[_NoSlot, _NoSlot, _NoSlot](
                     "PATCH", path, _Erased.__init__[call=_call_0[E, R]](handler)
                 )
@@ -1868,7 +1963,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PATCH", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PATCH", False, path, R, A, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, _NoSlot, _NoSlot](
                     "PATCH",
                     path,
@@ -1908,7 +2003,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PATCH", False, path, R, A, B, _NoSlot]()
         comptime if _admits["PATCH", False, path, R, A, B, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, B, _NoSlot](
                     "PATCH",
                     path,
@@ -1946,7 +2041,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PATCH", False, path, R, A, B, C]()
         comptime if _admits["PATCH", False, path, R, A, B, C]():
-            self._routes.append(
+            self._add(
                 _route[A, B, C](
                     "PATCH",
                     path,
@@ -1972,7 +2067,7 @@ struct App(Movable):
         comptime if _admits[
             "PATCH", True, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
-            self._routes.append(
+            self._add(
                 _route[_NoSlot, _NoSlot, _NoSlot](
                     "PATCH",
                     path,
@@ -2007,7 +2102,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PATCH", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["PATCH", True, path, R, A, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, _NoSlot, _NoSlot](
                     "PATCH",
                     path,
@@ -2041,7 +2136,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PATCH", True, path, R, A, B, _NoSlot]()
         comptime if _admits["PATCH", True, path, R, A, B, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, B, _NoSlot](
                     "PATCH",
                     path,
@@ -2077,7 +2172,7 @@ struct App(Movable):
         (M3-048)."""
         _check["PATCH", True, path, R, A, B, C]()
         comptime if _admits["PATCH", True, path, R, A, B, C]():
-            self._routes.append(
+            self._add(
                 _route[A, B, C](
                     "PATCH",
                     path,
@@ -2110,7 +2205,7 @@ struct App(Movable):
         comptime if _admits[
             "DELETE", False, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
-            self._routes.append(
+            self._add(
                 _route[_NoSlot, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
@@ -2158,7 +2253,7 @@ struct App(Movable):
         handled as for `delete` on `def()`."""
         _check["DELETE", False, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["DELETE", False, path, R, A, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
@@ -2195,7 +2290,7 @@ struct App(Movable):
         breaks."""
         _check["DELETE", False, path, R, A, B, _NoSlot]()
         comptime if _admits["DELETE", False, path, R, A, B, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, B, _NoSlot](
                     "DELETE",
                     path,
@@ -2225,7 +2320,7 @@ struct App(Movable):
         `Headers`, last); a registration reports the rule it breaks."""
         _check["DELETE", False, path, R, A, B, C]()
         comptime if _admits["DELETE", False, path, R, A, B, C]():
-            self._routes.append(
+            self._add(
                 _route[A, B, C](
                     "DELETE",
                     path,
@@ -2252,7 +2347,7 @@ struct App(Movable):
         comptime if _admits[
             "DELETE", True, path, R, _NoSlot, _NoSlot, _NoSlot
         ]():
-            self._routes.append(
+            self._add(
                 _route[_NoSlot, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
@@ -2283,7 +2378,7 @@ struct App(Movable):
         a typed function value."""
         _check["DELETE", True, path, R, A, _NoSlot, _NoSlot]()
         comptime if _admits["DELETE", True, path, R, A, _NoSlot, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, _NoSlot, _NoSlot](
                     "DELETE",
                     path,
@@ -2314,7 +2409,7 @@ struct App(Movable):
         `def(State[S])`."""
         _check["DELETE", True, path, R, A, B, _NoSlot]()
         comptime if _admits["DELETE", True, path, R, A, B, _NoSlot]():
-            self._routes.append(
+            self._add(
                 _route[A, B, _NoSlot](
                     "DELETE",
                     path,
@@ -2346,7 +2441,7 @@ struct App(Movable):
         `def(State[S])`."""
         _check["DELETE", True, path, R, A, B, C]()
         comptime if _admits["DELETE", True, path, R, A, B, C]():
-            self._routes.append(
+            self._add(
                 _route[A, B, C](
                     "DELETE",
                     path,
@@ -2370,7 +2465,10 @@ struct App(Movable):
         (`_run`, M3-034). What follows is the routes' answer.
 
         The first registered route whose method and path match handles the
-        request, raw or typed; the query takes no part in selecting it. Methods match
+        request, raw or typed; the query takes no part in selecting it.
+        Registration refuses a route that an earlier, not more specific route
+        of its method overlaps (`_add`, M3-052), so that route is the most
+        specific match. Methods match
         byte for byte, except that a `HEAD` request also matches a `GET`
         route and runs the `GET` route's steps: a typed handler receives the
         same arguments as for the `GET`, a raw handler the `HEAD` request

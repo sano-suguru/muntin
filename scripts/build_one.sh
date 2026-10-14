@@ -10,6 +10,8 @@
 #               "constraint failed: <expected diagnostic>".
 #   must_fail   other must-not-build fixtures: must not build; the log must
 #               contain the expected diagnostic.
+#   must_abort  must build with --Werror, then abort when run; the output
+#               must contain "ABORT:" and the expected diagnostic.
 #   known_gap   must build with --Werror (never run).
 #   toolchain_gap  must build, warnings allowed (never run).
 set -euo pipefail
@@ -63,6 +65,25 @@ must_fail)
     if ! grep -qF "$expected" "$build_log"; then
         cat "$build_log"
         echo "error: $t failed without '$expected'"
+        exit 1
+    fi
+    echo "ok: $t"
+    ;;
+must_abort)
+    expected_diagnostic
+    if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
+        cat "$build_log"
+        echo "error: $t failed to build"
+        exit 1
+    fi
+    if "$bin" >"$build_log" 2>&1; then
+        cat "$build_log"
+        echo "error: $t ran to completion; it is expected to abort"
+        exit 1
+    fi
+    if ! grep -F "ABORT:" "$build_log" | grep -qF "$expected"; then
+        cat "$build_log"
+        echo "error: $t did not abort with '$expected'"
         exit 1
     fi
     echo "ok: $t"

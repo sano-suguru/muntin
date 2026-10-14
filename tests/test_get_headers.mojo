@@ -301,12 +301,12 @@ def test_testclient_headers() raises:
     assert_equal(client.get("/missing").status, 404)
 
 
-def test_first_registration_wins() raises:
+def test_route_kinds_share_one_app() raises:
+    # Each kind on a path of its own: a second route on one path is a route
+    # conflict whatever the kinds (M3-052, tests/route_conflict_abort).
     var app = App()
     app.get["/a/{id}"](plain_id)
-    app.get["/a/{id}"](by_id)
     app.get["/b/{id}"](by_id)
-    app.get["/b/{id}"](plain_id)
     assert_equal(_get(app, "/a/1", _h("A", "1")).text(), "plain 1")
     assert_equal(_get(app, "/b/1", _h("A", "1")).text(), "1 A=1;")
 

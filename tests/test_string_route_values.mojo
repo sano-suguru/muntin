@@ -127,6 +127,10 @@ def me() -> String:
     return "me"
 
 
+def two_names(p: String, name: String) -> String:
+    return p + "/" + name
+
+
 def owned(var name: String) -> String:
     name += "!"  # the handler's own value
     return name^
@@ -203,7 +207,6 @@ def _app() -> App:
     var app = App()
     app.get["/users/me"](me)  # registered first: wins over the value route
     app.get["/users/{id}"](get_user)
-    app.get["/users/{name}"](profile)  # never reached: the Int route answers
     app.get["/profiles/{name}"](profile)
     app.get["/search?{q}"](search)
     app.get["/items?{limit}"](list_items)
@@ -368,9 +371,16 @@ def test_first_registration_wins() raises:
     var app = _app()
     _expect(app, "/users/me", 200, "me")
     _expect(app, "/users/42", 200, "42")
-    # The Int route answers; a 400 never falls through to the String route.
     _bad(app, "/users/alice")
     _bad(app, "/users/%zz")
+    # The Int route answers; a 400 never falls through to a later, more
+    # general `String` route (a repeated path is a route conflict, M3-052).
+    var general = App()
+    general.get["/users/{id}"](get_user)
+    general.get["/{p}/{name}"](two_names)
+    _expect(general, "/users/42", 200, "42")
+    _bad(general, "/users/alice")
+    _expect(general, "/people/alice", 200, "people/alice")
 
 
 def test_owned_typed_and_forwarded_values() raises:

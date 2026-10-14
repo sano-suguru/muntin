@@ -309,11 +309,12 @@ def _app() -> App:
     # Parameter names in the other order receive the values by position.
     app.get["/rev/{uid}/posts/{pid}"](post_of_swapped)
     app.get["/owned/{a}?{b}"](owned)
-    # First registration wins; a 400 never falls through.
+    # The more specific route first; a 400 never falls through to a more
+    # general one. A repeated path is a route conflict (M3-052).
     app.get["/users/me/posts/{pid}"](one_value)
     app.get["/users/{uid}/posts/{pid}"](post_of)
-    app.get["/fw/{a}/{b}"](two_ints)
-    app.get["/fw/{a}/{b}"](two_strs)  # never reached
+    app.get["/fw/x/{pid}"](one_value)
+    app.get["/fw/{a}/{b}"](two_strs)
     # A raw handler on a two-segment static path, before a typed route that
     # would match it.
     app.get["/raw/a%2Fb/c"](raw)
@@ -566,8 +567,9 @@ def test_first_registration_wins() raises:
     var app = _app()
     _expect(app, "/users/me/posts/2", 200, "me, post 2")
     _expect(app, "/users/1/posts/2", 200, "post 2 of user 1")
-    _expect(app, "/fw/1/2", 200, "ints 1,2")
-    _bad(app, "/fw/x/2")  # the `Int` route answers; no fall-through
+    _expect(app, "/fw/x/2", 200, "me, post 2")
+    _bad(app, "/fw/x/y")  # the `Int` route answers; no fall-through
+    _expect(app, "/fw/1/y", 200, "strs 1,y")
 
 
 def test_raw_handler_is_unaffected() raises:

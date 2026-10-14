@@ -103,8 +103,27 @@ def _app() -> App:
     app.get["/items?{limit}"](list_items)
     # Later registrations grow the route list, moving the first three
     # routes (and their boxes) to new buffers.
-    comptime for _ in range(20):
-        app.get["/other"](other)
+    # Distinct paths: a repeated one is a route conflict (M3-052).
+    app.get["/other"](other)
+    app.get["/other1"](other)
+    app.get["/other2"](other)
+    app.get["/other3"](other)
+    app.get["/other4"](other)
+    app.get["/other5"](other)
+    app.get["/other6"](other)
+    app.get["/other7"](other)
+    app.get["/other8"](other)
+    app.get["/other9"](other)
+    app.get["/other10"](other)
+    app.get["/other11"](other)
+    app.get["/other12"](other)
+    app.get["/other13"](other)
+    app.get["/other14"](other)
+    app.get["/other15"](other)
+    app.get["/other16"](other)
+    app.get["/other17"](other)
+    app.get["/other18"](other)
+    app.get["/other19"](other)
     return app^
 
 

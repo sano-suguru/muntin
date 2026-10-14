@@ -455,41 +455,32 @@ def test_routes_run_only_after_route_selection() raises:
     assert_equal(_calls(keys), 0)
 
 
-def test_first_registration_wins() raises:
-    # Across stateless raw, stateful raw and typed routes, both orders.
+def test_route_kinds_share_one_app() raises:
+    # Each kind on a path of its own: a second route on one path is a route
+    # conflict whatever the kinds (M3-052, tests/route_conflict_abort).
+    # Stateless raw, stateful raw and typed routes.
     var keys = _keys()
     var post = App()
     post.post["/a"](plain_raw)
-    post.post["/a"](later, keys)
     post.post["/b"](later, keys)
-    post.post["/b"](plain_raw)
     post.post["/c"](later, keys)
-    post.post["/c"](typed_post)
-    post.post["/c"](stateful_post, keys)
     post.post["/d"](typed_post)
-    post.post["/d"](later, keys)
     post.post["/e"](stateful_post, keys)
-    post.post["/e"](later, keys)
     assert_equal(post.handle(Request("POST", "/a", "x")).text(), "plain raw x")
     assert_equal(post.handle(Request("POST", "/b", "x")).text(), "stateful raw")
     assert_equal(post.handle(Request("POST", "/c", "")).text(), "stateful raw")
     assert_equal(post.handle(Request("POST", "/d", "x")).text(), "typed post x")
     assert_equal(post.handle(Request("POST", "/e", "x")).text(), "typed x")
-    # A typed route's 400 does not fall through to a later raw route.
+    # A typed route answers its own 400.
     assert_equal(post.handle(Request("POST", "/d", "")).status, 400)
     assert_equal(post.handle(Request("POST", "/e", "")).status, 400)
 
     var get = App()
     get.get["/a"](plain_raw)
-    get.get["/a"](later, keys)
     get.get["/b"](later, keys)
-    get.get["/b"](plain_raw)
     get.get["/c"](later, keys)
-    get.get["/c"](typed_get)
     get.get["/d"](typed_get)
-    get.get["/d"](later, keys)
     get.get["/e?{id}"](stateful_get, keys)
-    get.get["/e"](later, keys)
     assert_equal(get.handle(Request("GET", "/a")).text(), "plain raw ")
     assert_equal(get.handle(Request("GET", "/b")).text(), "stateful raw")
     assert_equal(get.handle(Request("GET", "/c")).text(), "stateful raw")

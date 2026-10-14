@@ -482,8 +482,8 @@ def first(body: Note) -> String:
     return "first " + body.text
 
 
-def second(body: Note) -> String:
-    return "second " + body.text
+def two_text_body(p: String, name: String, body: Note) -> String:
+    return "two " + p + "/" + name + " " + body.text
 
 
 def by_name(name: String) -> String:
@@ -534,18 +534,23 @@ def test_method_without_a_route_on_a_matching_path_is_405() raises:
 def test_first_registration_wins_and_never_falls_through() raises:
     var app = App()
     app.put["/f"](first)
-    app.put["/f"](second)
+    app.put["/{name}"](text_body)
     app.delete["/g/{name}"](by_name)
     app.patch["/g/{id}"](patched)
-    app.patch["/g/{name}"](text_body)
+    app.patch["/{p}/{name}"](two_text_body)
     assert_equal(app.handle(Request("PUT", "/f", "x")).text(), "first x")
-    # The `patch` route's 400 does not fall through to the later `patch`
-    # route on the same path, nor to the `delete` route before it.
+    assert_equal(app.handle(Request("PUT", "/h", "x")).text(), "s h x")
+    # The `patch` route's 400 does not fall through to the later, more
+    # general `patch` route (a repeated path is a route conflict, M3-052),
+    # nor to the `delete` route before it.
     var bad = app.handle(Request("PATCH", "/g/abc", "x"))
     assert_equal(bad.status, 400)
     assert_equal(bad.text(), "Bad Request")
     assert_equal(app.handle(Request("PATCH", "/g/7", "x")).text(), "PATCH 7 x")
     assert_equal(app.handle(Request("DELETE", "/g/abc")).text(), "by name abc")
+    assert_equal(
+        app.handle(Request("PATCH", "/h/abc", "x")).text(), "two h/abc x"
+    )
 
 
 # `TestClient` equals `App.handle` for the same request.
