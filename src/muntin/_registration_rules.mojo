@@ -26,6 +26,7 @@ registration; and `_match` in `app.mojo` classifies each route segment with
 from .body import FromBody, FromBytes
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response
+from .route_value import Param, _NamedValue
 from .state import _InjectedState
 
 
@@ -170,7 +171,8 @@ def _kind[A: AnyType]() -> Int:
     conversion (one conforming only to the private bound) is `_OTHER`. A
     `FromBytes` body, bare or carried, whose `max_bytes` is negative is a
     body with no valid limit (`_NEGATIVE_LIMIT`, M3-043), which the rules
-    reject where a body is accepted."""
+    reject where a body is accepted. A `Param[name, T]` (M3-050) has the
+    kind of its `T` when that is a route value (`_named_kind`)."""
     comptime if A == _NoSlot:
         return _ABSENT
     elif A == Int:
@@ -185,6 +187,8 @@ def _kind[A: AnyType]() -> Int:
         return _OPT_INT
     elif A == Optional[String]:
         return _OPT_TEXT
+    elif conforms_to(A, _NamedValue):
+        return _named_kind[A]()
     elif conforms_to(A, _InjectedState):
         return _STATE
     elif conforms_to(A, FromBody) and conforms_to(A, FromBytes):
@@ -202,6 +206,86 @@ def _kind[A: AnyType]() -> Int:
         return _BODY
     else:
         return _OTHER
+
+
+def _named_kind[A: _NamedValue]() -> Int:
+    """The kind of a named route value (M3-050): its value type's kind when
+    `A` is a `Param` (exactly, so another type conforming to the private
+    marker is no route value) and its value type a route value that is not
+    itself named; otherwise `_OTHER`."""
+    comptime if A != Param[A._placeholder, A._Value] or conforms_to(
+        A._Value, _NamedValue
+    ):
+        return _OTHER
+    var k = _kind[A._Value]()
+    return k if _is_value(k) else _OTHER
+
+
+def _is_named[A: AnyType]() -> Bool:
+    """Whether a slot of type `A` declares a placeholder name (a `Param`)."""
+    return conforms_to(A, _NamedValue)
+
+
+def _value_name[A: AnyType]() -> StaticString:
+    """The placeholder name a `Param` slot declares (possibly empty, which
+    no placeholder's is), or `""` for any other slot type."""
+    comptime if conforms_to(A, _NamedValue):
+        return A._placeholder
+    else:
+        return ""
+
+
+def _placeholder_name(route: StaticString, j: Int) -> StaticString:
+    """The name of the placeholder that route value `j` (from 0) binds in a
+    well-formed literal: the path placeholders left to right, then the query
+    placeholders left to right; `""` past the last one."""
+    var n = 0
+    for segment in _path_part(route).split("/"):
+        if _is_param(segment):
+            if n == j:
+                return _param_name(segment)
+            n += 1
+    for item in _query_items(route):
+        if n == j:
+            return _param_name(item)
+        n += 1
+    return ""
+
+
+def _misnamed[path: StaticString, A: AnyType, B: AnyType]() -> Int:
+    """The position (from 0) of the first of route values `A`, `B` whose
+    declared name differs from the placeholder it binds, or -1 (M3-050).
+    An unnamed value is never misnamed."""
+    var named = [_is_named[A](), _is_named[B]()]
+    var names = [_value_name[A](), _value_name[B]()]
+    for j in range(len(names)):
+        if named[j] and names[j] != _placeholder_name(path, j):
+            return j
+    return -1
+
+
+comptime _BINDING_ORDER = (
+    "route values bind the path parameters left to right, then the query"
+    " parameters"
+)
+
+
+def _misnamed_message[path: StaticString, A: AnyType, B: AnyType]() -> String:
+    """`_NAME_MISMATCH`'s message, naming the value and the placeholder."""
+    var j = _misnamed[path, A, B]()
+    if j < 0:
+        return String("")
+    var name = _value_name[A]() if j == 0 else _value_name[B]()
+    return String(
+        "route value ",
+        j + 1,
+        ' is Param["',
+        name,
+        '"] but binds {',
+        _placeholder_name(path, j),
+        "}; ",
+        _BINDING_ORDER,
+    )
 
 
 # Registration rules (`_rule`): `_OK`, or the first rule a shape breaks.
@@ -239,6 +323,8 @@ comptime _POST_OPTIONAL_BODY_PLACES = 34
 comptime _OPTIONAL_AT_PATH = 35
 comptime _BODY_TWO_CONVERSIONS = 36
 comptime _BODY_NEGATIVE_LIMIT = 37
+comptime _NAMES_MIXED = 38
+comptime _NAME_MISMATCH = 39
 
 
 def _takes_none(paths: Int, queries: Int) -> Int:
@@ -422,7 +508,10 @@ def _rule[
     type. `"GET"` and `"DELETE"` take `get`'s rules, `"POST"`, `"PUT"` and
     `"PATCH"` take `post`'s (M3-020). A shape that passes them all on a
     literal that repeats a query key breaks the last rule (M3-022). The
-    result rule itself is each overload's `where` clause."""
+    result rule itself is each overload's `where` clause. A shape the family
+    rule accepts is then checked for names (M3-050): of two route values,
+    both or neither are `Param`s, and each `Param` must name the placeholder
+    at its position."""
     var paths = _path_params(path)
     var queries = _query_params(path)
     if paths < 0 or queries < 0:
@@ -435,7 +524,14 @@ def _rule[
         rule = _get_rule(stateful, k1, k2, k3, R == Response, paths, queries)
     else:
         rule = _post_rule(stateful, k1, k2, k3, R == Response, paths, queries)
-    if rule == _OK and not _distinct_query_keys(path):
+    if rule != _OK:
+        return rule
+    # Route values are the leading slots; at most two pass the family rule.
+    if _is_value(k2) and _is_named[A]() != _is_named[B]():
+        return _NAMES_MIXED
+    if _misnamed[path, A, B]() >= 0:
+        return _NAME_MISMATCH
+    if not _distinct_query_keys(path):
         return _QUERY_TWICE
     return rule
 
@@ -598,4 +694,10 @@ def _check[
         "the request body's max_bytes is negative; a FromBytes type's"
         " max_bytes is a byte count, 0 or more"
     )
+    comptime assert rule != _NAMES_MIXED, (
+        "handler takes two route values and only one is a Param; declare"
+        " both as Param, each named after the placeholder it binds, or"
+        " neither"
+    )
+    comptime assert rule != _NAME_MISMATCH, _misnamed_message[path, A, B]()
     comptime assert rule == _OK, "internal: a registration rule has no message"
