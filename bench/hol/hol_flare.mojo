@@ -7,11 +7,13 @@ Flare's `HttpServer` on an ephemeral loopback port with
 `ServerConfig.idle_timeout_ms=IDLE_MS`, prints `port <n>` and serves with
 `serve(handler)` when `WORKERS` is 1 and with Flare's own multi-worker
 `serve(handler, num_workers=WORKERS, pin_cores=False)` otherwise (one
-`SO_REUSEPORT` listener per worker, Flare's default). The routes are
-bench/hol/hol_muntin.mojo's.
+`SO_REUSEPORT` listener per worker, Flare's default; with
+`FLARE_REUSEPORT_WORKERS=0` in its environment, one listener shared by every
+worker, which Flare reads itself). The routes are bench/hol/hol_muntin.mojo's.
 """
 
 from std.ffi import external_call
+from std.os import getenv
 from std.sys import argv
 from std.time import sleep
 
@@ -19,12 +21,22 @@ from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
 
 
+def signal(byte: String) raises:
+    """Writes `byte` to the file named by `HOL_SIGNAL`, if set."""
+    var path = getenv("HOL_SIGNAL")
+    if path != "":
+        with open(path, "w") as f:
+            f.write(byte)
+
+
 @fieldwise_init
 struct Hol(Copyable, Handler):
     def serve(self, request: Request) raises -> Response:
         var parts = request.url.split("/")
         if len(parts) == 3 and parts[1] == "slow":
+            signal("s")
             sleep(Float64(Int(parts[2])) / 1000.0)
+            signal("e")
             return Response(status=200, body=List("slow".as_bytes()))
         if request.url == "/health":
             return Response(status=200, body=List("ok".as_bytes()))

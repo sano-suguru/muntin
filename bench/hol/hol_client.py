@@ -1,41 +1,52 @@
 """The head-of-line blocking measurement's client (Python standard library
 only). Not part of Muntin and not run by CI; scripts/bench_hol.sh runs it.
 
-    python3 hol_client.py PORT MODE SLOW_MS
+    python3 hol_client.py PORT MODE SLOW_MS SIGNAL
 
 One run against a fresh server on 127.0.0.1:PORT (bench/hol/hol_muntin.mojo
-or hol_flare.mojo). It opens the connections MODE needs and answers one
-`/health` on each, so every one is accepted and idle when the hold starts.
-At `HOLD_AT_S` it sends one `GET /slow/SLOW_MS`, whose handler blocks its
-serving thread for SLOW_MS. From the start to `HOLD_AT_S + SLOW_MS +
-TAIL_S` it sends `GET /health` every `PERIOD_S`, each from its own thread, and
-records for each probe when it was sent and whether and when it was
-answered. A probe with no answer `ANSWER_BOUND_S` after the hold ended is
-lost, as is one whose connection was closed or reset first.
+or hol_flare.mojo) started with `HOL_SIGNAL=SIGNAL`, a FIFO this client
+reads. It opens the connections MODE needs and asks `/worker` on each, so
+every one is accepted, idle and known to belong to one worker when the hold
+starts. At `HOLD_AT_S` it asks `/worker`, then `GET /slow/SLOW_MS`, on a
+connection of its own (for the h2c modes, on the h2c connection named
+below). That handler writes `s` to SIGNAL when it starts and `e` when it
+returns; the hold is the time between the two, as this client reads them.
+From the start to `HOLD_AT_S + SLOW_MS + TAIL_S` it sends `GET /health`
+every `PERIOD_S`, each from its own thread, and records for each probe when
+it was sent and whether and when it was answered. A probe with no answer
+`ANSWER_BOUND_S` after the hold ended is lost, as is one whose connection
+was closed or reset first.
+
+With SLOW_MS 0 (a control) no slow request is sent, and the window is the
+`CONTROL_S` from `HOLD_AT_S`: what the same probes get with no handler held.
 
 MODE is where the probes go:
-- `h1-new`: each probe on a new HTTP/1.1 connection (`Connection: close`),
-  the slow request on its own.
-- `h1-pool`: a keep-alive pool of `POOL` HTTP/1.1 connections, opened and
-  answered before the hold; a probe takes an idle connection from it (a new
-  one when none is idle, as a client's pool does) and puts it back once
-  answered. The slow request is on its own connection.
-- `h2c-same`: prior-knowledge h2c; the slow request is stream 1 of the
+- `h1-new`: each probe on a new HTTP/1.1 connection (`Connection: close`).
+- `h1-pool`: HTTP/1.1 keep-alive connections, `POOL` opened before the hold;
+  a probe takes an idle one, opens a new one when none is idle (no upper
+  bound), and puts it back once answered.
+- `h1-pool-fixed`: as `h1-pool`, but never more than `POOL` connections: a
+  probe with none idle waits for one (up to the answer bound, then lost).
+- `h2c-same`: prior-knowledge h2c; the slow request is a stream of the
   connection every probe is a later stream of.
 - `h2c-other`: as `h2c-same`, with the slow request on a second h2c
   connection.
-- `spread`: no slow request; how a server spreads long-lived connections over
-  its workers (`spread` below says how), printed as `spread
-  sequential=<connections per worker> burst=<...>`, e.g. `16` for one worker.
+- `spread`: no slow request; how a server spreads kept-open connections
+  over its workers (`spread` below).
 
-It prints one line, `MODE n=<probes sent during the hold> prompt=<answered
-within PROMPT_S> delayed=<answered later> lost=<not answered>
-p50_ms=<median latency of the answered> max_ms=<largest> slow=<the slow
-request's outcome>`, counting only the probes sent while the slow handler
-ran (from the moment it was sent to SLOW_MS later): those are what the hold
-can affect.
+It prints one line: `MODE n=<probes sent during the hold> prompt=<answered
+within PROMPT_S> delayed=<answered later> lost=<not answered> p50_ms=<median
+latency of the answered> max_ms=<largest> slow=<the slow request's outcome>
+hold_ms=<the hold as signalled>`, then, where the probes' connections are
+known (every mode but `h1-new`, and only for connections opened before the
+hold), `slow_worker=<sent>/<lost>` and `other_workers=<sent>/<lost>`: the
+probes on connections of the slow request's worker and of the others; for
+the pool modes, `lost_idle_ms=<least>..<most>`: how long each lost probe's
+connection had been idle (since its previous answer) when the probe was
+sent. Latency figures cover answered probes only: read them with `lost`.
 """
 
+import os
 import socket
 import struct
 import sys
@@ -47,6 +58,7 @@ PERIOD_S = 0.05
 TAIL_S = 0.7
 PROMPT_S = 0.1
 ANSWER_BOUND_S = 3.0
+CONTROL_S = 1.0
 POOL = 8
 SPREAD = 16
 
@@ -56,9 +68,9 @@ def h1_request(path, close):
     return f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}\r\n".encode()
 
 
-def h1_read_response(sock, with_body=False):
-    """The status of one response that declares its Content-Length (its body
-    with `with_body`); raises on EOF."""
+def h1_read_response(sock):
+    """(status, body) of one response that declares its Content-Length;
+    raises on EOF."""
     data = b""
     while b"\r\n\r\n" not in data:
         chunk = sock.recv(4096)
@@ -76,13 +88,36 @@ def h1_read_response(sock, with_body=False):
         if not chunk:
             raise ConnectionError("closed")
         body += chunk
-    return int(head.split(b" ")[1]) if not with_body else body
+    return int(head.split(b" ")[1]), body
 
 
 def h1_connect(port):
     sock = socket.create_connection(("127.0.0.1", port))
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     return sock
+
+
+def failure(e):
+    if isinstance(e, socket.timeout):
+        return "timeout"
+    return str(e) or type(e).__name__
+
+
+class H1:
+    """One HTTP/1.1 keep-alive connection, with the worker that serves it
+    and when it last answered."""
+
+    def __init__(self, port, ask_worker=True):
+        self.sock = h1_connect(port)
+        self.sock.settimeout(2.0)
+        # A connection opened during the hold is not asked: its worker could
+        # be the held one, and asking would wait for the hold.
+        self.worker = self.call("/worker")[1] if ask_worker else None
+        self.last = time.monotonic()
+
+    def call(self, path):
+        self.sock.sendall(h1_request(path, False))
+        return h1_read_response(self.sock)
 
 
 class H2c:
@@ -94,34 +129,39 @@ class H2c:
         self.sock = h1_connect(port)
         self.lock = threading.Lock()
         self.next_id = 1
-        self.waiting = {}  # stream id -> [event, status or error]
+        self.waiting = {}  # stream id -> [event, outcome, status, body]
         self.dead = None
         self.sock.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" + self.frame(4, 0, 0, b""))
         threading.Thread(target=self.read_loop, daemon=True).start()
+        slot = self.get("/worker")
+        if not slot[0].wait(2.0) or slot[1] != 200:
+            raise ConnectionError("h2c warm-up failed")
+        self.worker = slot[3]
 
     @staticmethod
     def frame(kind, flags, stream, payload):
         return struct.pack(">I", len(payload))[1:] + bytes([kind, flags]) + struct.pack(">I", stream) + payload
 
     def get(self, path):
-        """Sends a GET and returns (event, slot): slot[1] is set before event."""
+        """Sends a GET; returns its slot, whose event is set once slot[1] holds
+        the status (200) or why it failed."""
         authority = f"127.0.0.1:{self.port}".encode()
         block = b"\x82\x86\x04" + bytes([len(path)]) + path.encode() + b"\x01" + bytes([len(authority)]) + authority
+        slot = [threading.Event(), None, None, b""]
         with self.lock:
-            stream = self.next_id
-            self.next_id += 2
-            slot = [threading.Event(), None]
-            self.waiting[stream] = slot
             if self.dead is not None:
                 slot[1] = self.dead
                 slot[0].set()
                 return slot
+            stream = self.next_id
+            self.next_id += 2
             try:
                 self.sock.sendall(self.frame(1, 0x5, stream, block))
             except OSError as e:
-                del self.waiting[stream]
-                slot[1] = str(e) or type(e).__name__
+                slot[1] = failure(e)
                 slot[0].set()
+                return slot
+            self.waiting[stream] = slot
         return slot
 
     def recv_exact(self, n):
@@ -132,6 +172,18 @@ class H2c:
                 raise ConnectionError("closed")
             data += chunk
         return data
+
+    @staticmethod
+    def status(block):
+        """The :status of a header block whose first field is it: indexed
+        (static entries 8 to 14) or a literal with an indexed name and a value
+        without Huffman coding, as Flare v0.12.0 sends it."""
+        first = block[0]
+        if first & 0x80:
+            return {8: 200, 9: 204, 10: 206, 11: 304, 12: 400, 13: 404, 14: 500}.get(first & 0x7F, "status?")
+        if block[1] & 0x80:
+            return "status?"
+        return int(block[2 : 2 + block[1]])
 
     def read_loop(self):
         try:
@@ -147,41 +199,29 @@ class H2c:
                 elif kind == 6 and not flags & 1:  # PING
                     with self.lock:
                         self.sock.sendall(self.frame(6, 1, 0, payload))
-                elif kind == 1:  # HEADERS: the first field is :status
-                    with self.lock:
-                        slot = self.waiting.get(stream)
-                    if slot is not None:
-                        slot.append(self.status(payload))
-                if kind in (0, 1) and flags & 1:  # END_STREAM
-                    with self.lock:
-                        slot = self.waiting.pop(stream, None)
-                    if slot is not None:
-                        slot[1] = slot[2] if len(slot) > 2 else "no status"
-                        slot[0].set()
                 elif kind == 3:  # RST_STREAM
-                    self.fail_stream(stream, "reset")
+                    self.finish(stream, "reset")
+                    continue
                 elif kind == 7:  # GOAWAY
                     raise ConnectionError("goaway")
+                with self.lock:
+                    slot = self.waiting.get(stream)
+                if slot is None:
+                    continue
+                if kind == 1:  # HEADERS: the first field is :status
+                    slot[2] = self.status(payload)
+                elif kind == 0:  # DATA
+                    slot[3] += payload
+                if kind in (0, 1) and flags & 1:  # END_STREAM
+                    self.finish(stream, slot[2] if slot[2] is not None else "no status")
         except (OSError, ConnectionError) as e:
-            self.fail_all(type(e).__name__ if not str(e) else str(e))
+            self.fail_all(failure(e))
 
-    @staticmethod
-    def status(block):
-        """The :status of a header block whose first field is it: indexed
-        (static entries 8 to 14) or a literal with an indexed name and a value
-        without Huffman coding, as Flare v0.12.0 sends it."""
-        first = block[0]
-        if first & 0x80:
-            return {8: 200, 9: 204, 10: 206, 11: 304, 12: 400, 13: 404, 14: 500}.get(first & 0x7F, "status?")
-        if block[1] & 0x80:
-            return "status?"
-        return int(block[2 : 2 + block[1]])
-
-    def fail_stream(self, stream, reason):
+    def finish(self, stream, outcome):
         with self.lock:
             slot = self.waiting.pop(stream, None)
         if slot is not None:
-            slot[1] = reason
+            slot[1] = outcome
             slot[0].set()
 
     def fail_all(self, reason):
@@ -201,31 +241,61 @@ class H2c:
 
 
 class Pool:
-    def __init__(self, port):
-        self.port = port
-        self.lock = threading.Lock()
-        self.idle = [h1_connect(port) for _ in range(POOL)]
-        for sock in self.idle:
-            sock.sendall(h1_request("/health", False))
-            h1_read_response(sock)
+    """HTTP/1.1 keep-alive connections; `bounded` caps them at `POOL`."""
 
-    def call(self, path, timeout):
-        with self.lock:
-            sock = self.idle.pop(0) if self.idle else None
-        if sock is None:
-            sock = h1_connect(self.port)
+    def __init__(self, port, bounded):
+        self.port = port
+        self.bounded = bounded
+        self.cond = threading.Condition()
+        self.idle = [H1(port) for _ in range(POOL)]
+
+    def take(self, timeout):
+        deadline = time.monotonic() + timeout
+        with self.cond:
+            while not self.idle:
+                if not self.bounded:
+                    return None
+                left = deadline - time.monotonic()
+                if left <= 0 or not self.cond.wait(left):
+                    raise socket.timeout()
+            return self.idle.pop(0)
+
+    def give_back(self, conn):
+        with self.cond:
+            if conn is not None:
+                self.idle.append(conn)
+            self.cond.notify()
+
+    def probe(self, timeout, note):
+        try:
+            conn = self.take(timeout)
+        except socket.timeout:
+            return "timeout"
+        if conn is None:
+            try:
+                conn = H1(self.port, ask_worker=False)
+            except OSError as e:
+                return failure(e)
+        else:
+            note["worker"] = conn.worker
+            note["idle_ms"] = (time.monotonic() - conn.last) * 1000
+        sock = conn.sock
         sock.settimeout(timeout)
         try:
-            sock.sendall(h1_request(path, False))
-            status = h1_read_response(sock)
-        except OSError as e:
+            sock.sendall(h1_request("/health", False))
+            status = h1_read_response(sock)[0]
+        except (OSError, ConnectionError) as e:
             sock.close()
-            return "timeout" if isinstance(e, socket.timeout) else type(e).__name__
-        except ConnectionError as e:
-            sock.close()
-            return str(e)
-        with self.lock:
-            self.idle.append(sock)
+            self.give_back(None)  # a bounded pool may open a replacement
+            if self.bounded:
+                try:
+                    replacement = H1(self.port, ask_worker=False)
+                    self.give_back(replacement)
+                except (OSError, ConnectionError):
+                    pass
+            return failure(e)
+        conn.last = time.monotonic()
+        self.give_back(conn)
         return status
 
 
@@ -234,100 +304,135 @@ def h1_new_call(port, path, timeout):
         sock = h1_connect(port)
         sock.settimeout(timeout)
         sock.sendall(h1_request(path, True))
-        status = h1_read_response(sock)
+        status = h1_read_response(sock)[0]
         sock.close()
         return status
-    except socket.timeout:
-        return "timeout"
     except (OSError, ConnectionError) as e:
-        return str(e) or type(e).__name__
+        return failure(e)
 
 
 def spread(port):
     """Opens `SPREAD` keep-alive HTTP/1.1 connections one after another, each
     asking `/worker` before the next is opened and all kept open, then
-    `SPREAD` more at once; prints how many of each landed on each worker,
-    largest first."""
-    def worker_of(sock):
-        sock.sendall(h1_request("/worker", False))
-        return h1_read_response(sock, with_body=True)
-
-    kept = []
+    `SPREAD` more from `SPREAD` threads released together by a barrier; prints
+    how many of each landed on each worker, busiest first."""
+    kept = [H1(port) for _ in range(SPREAD)]
     sequential = {}
-    for _ in range(SPREAD):
-        sock = h1_connect(port)
-        sock.settimeout(2.0)
-        kept.append(sock)
-        tid = worker_of(sock)
-        sequential[tid] = sequential.get(tid, 0) + 1
-    burst = [h1_connect(port) for _ in range(SPREAD)]
-    kept += burst
-    together = {}
-    for sock in burst:
-        sock.settimeout(2.0)
-        tid = worker_of(sock)
-        together[tid] = together.get(tid, 0) + 1
+    for conn in kept:
+        sequential[conn.worker] = sequential.get(conn.worker, 0) + 1
+    barrier = threading.Barrier(SPREAD)
+    together = []
+    lock = threading.Lock()
+
+    def connect():
+        barrier.wait()
+        conn = H1(port)
+        with lock:
+            together.append(conn)
+
+    threads = [threading.Thread(target=connect) for _ in range(SPREAD)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    concurrent = {}
+    for conn in together:
+        concurrent[conn.worker] = concurrent.get(conn.worker, 0) + 1
     order = lambda d: "/".join(str(n) for n in sorted(d.values(), reverse=True))
-    print(f"spread sequential={order(sequential)} burst={order(together)}", flush=True)
-    for sock in kept:
-        sock.close()
+    print(f"spread sequential={order(sequential)} concurrent={order(concurrent)}", flush=True)
+    for conn in kept + together:
+        conn.sock.close()
+
+
+class Signal:
+    """Reads the slow handler's `s` and `e` from the FIFO, with the time each
+    arrived."""
+
+    def __init__(self, path):
+        # O_RDWR keeps a writer present, so the server's open never blocks
+        # and this read never sees EOF between the two bytes (Linux).
+        self.fd = os.open(path, os.O_RDWR)
+        self.times = {}
+        self.done = threading.Event()
+        threading.Thread(target=self.read, daemon=True).start()
+
+    def read(self):
+        while len(self.times) < 2:
+            byte = os.read(self.fd, 1).decode()
+            self.times[byte] = time.monotonic()
+        self.done.set()
 
 
 def main():
-    port, mode, slow_ms = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+    port, mode, slow_ms, signal_path = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), sys.argv[4]
     if mode == "spread":
         return spread(port)
-    slow_s = slow_ms / 1000
+    control = slow_ms == 0
+    slow_s = slow_ms / 1000 if not control else CONTROL_S
     end_s = HOLD_AT_S + slow_s + TAIL_S
     bound_s = HOLD_AT_S + slow_s + ANSWER_BOUND_S
+    signal = None if control else Signal(signal_path)
 
+    slow_conn = None  # (worker, call)
     if mode == "h1-new":
-        probe = lambda t: h1_new_call(port, "/health", t)
-        slow = lambda t: h1_new_call(port, f"/slow/{slow_ms}", t)
-    elif mode == "h1-pool":
-        pool = Pool(port)
-        probe = lambda t: pool.call("/health", t)
-        slow = lambda t: h1_new_call(port, f"/slow/{slow_ms}", t)
+        probe = lambda t, note: h1_new_call(port, "/health", t)
+    elif mode in ("h1-pool", "h1-pool-fixed"):
+        pool = Pool(port, mode == "h1-pool-fixed")
+        probe = pool.probe
     elif mode in ("h2c-same", "h2c-other"):
         conn = H2c(port)
-        assert conn.call("/health", 2.0) == 200, "h2c warm-up failed"
-        slow_conn = conn
+        probe_conn = conn
+
+        def probe(t, note):
+            note["worker"] = probe_conn.worker
+            return probe_conn.call("/health", t)
+
         if mode == "h2c-other":
-            slow_conn = H2c(port)
-            assert slow_conn.call("/health", 2.0) == 200, "h2c warm-up failed"
-        probe = lambda t: conn.call("/health", t)
-        slow = lambda t: slow_conn.call(f"/slow/{slow_ms}", t)
+            conn = H2c(port)
+        slow_conn = (conn.worker, lambda t: conn.call(f"/slow/{slow_ms}", t))
     else:
         sys.exit(f"unknown mode {mode}")
+    if slow_conn is None and not control:
+        h1 = H1(port)
+
+        def slow_call(t):
+            h1.sock.settimeout(t)
+            try:
+                return h1.call(f"/slow/{slow_ms}")[0]
+            except (OSError, ConnectionError) as e:
+                return failure(e)
+
+        slow_conn = (h1.worker, slow_call)
 
     start = time.monotonic()
-    results = []  # (sent, answered or None, outcome)
+    results = []  # (sent, answered or None, outcome, note)
     lock = threading.Lock()
-
-    def run(fn, record):
-        sent = time.monotonic() - start
-        outcome = fn(max(0.1, bound_s - sent))
-        done = time.monotonic() - start
-        if record is not None:
-            with lock:
-                record.append((sent, done if outcome == 200 else None, outcome))
-
     slow_result = []
+
+    def run_probe():
+        note = {}
+        sent = time.monotonic()
+        outcome = probe(max(0.1, start + bound_s - sent), note)
+        done = time.monotonic()
+        with lock:
+            results.append((sent, done if outcome == 200 else None, outcome, note))
+
+    def run_slow():
+        slow_result.append(slow_conn[1](max(0.1, bound_s)))
+
     threads = []
     probe_at = 0.0
-    slow_sent = False
+    slow_sent = control
     while probe_at < end_s:
         now = time.monotonic() - start
         if not slow_sent and now >= HOLD_AT_S:
-            t = threading.Thread(target=run, args=(slow, slow_result))
-            t.start()
-            threads.append(t)
+            threads.append(threading.Thread(target=run_slow))
+            threads[-1].start()
             slow_sent = True
             continue
         if now >= probe_at:
-            t = threading.Thread(target=run, args=(probe, results))
-            t.start()
-            threads.append(t)
+            threads.append(threading.Thread(target=run_probe))
+            threads[-1].start()
             probe_at += PERIOD_S
             continue
         next_at = probe_at if slow_sent else min(probe_at, HOLD_AT_S)
@@ -335,20 +440,38 @@ def main():
     for t in threads:
         t.join()
 
-    slow_sent_at = slow_result[0][0]
-    window = [r for r in results if slow_sent_at <= r[0] < slow_sent_at + slow_s]
+    if control:
+        hold_from, hold_to = start + HOLD_AT_S, start + HOLD_AT_S + CONTROL_S
+        slow_outcome, slow_worker = "none", None
+    else:
+        if not signal.done.wait(ANSWER_BOUND_S) or set(signal.times) != {"s", "e"}:
+            sys.exit(f"{mode}: the slow handler did not signal its start and end: {signal.times}")
+        hold_from, hold_to = signal.times["s"], signal.times["e"]
+        slow_outcome, slow_worker = slow_result[0], slow_conn[0]
+    window = [r for r in results if hold_from <= r[0] < hold_to]
     answered = sorted(r[1] - r[0] for r in window if r[1] is not None)
     prompt = sum(1 for x in answered if x < PROMPT_S)
-    lost_kinds = sorted({str(r[2]) for r in window if r[1] is None})
+    lost = [r for r in window if r[1] is None]
+    lost_kinds = sorted({str(r[2]) for r in lost})
     p50 = answered[len(answered) // 2] * 1000 if answered else float("nan")
     worst = answered[-1] * 1000 if answered else float("nan")
-    slow_outcome = slow_result[0][2]
-    print(
+    line = (
         f"{mode} n={len(window)} prompt={prompt} delayed={len(answered) - prompt} "
-        f"lost={len(window) - len(answered)} p50_ms={p50:.0f} max_ms={worst:.0f} "
-        f"slow={slow_outcome}" + (f" lost_as={','.join(lost_kinds)}" if lost_kinds else ""),
-        flush=True,
+        f"lost={len(lost)} p50_ms={p50:.0f} max_ms={worst:.0f} slow={slow_outcome} "
+        f"hold_ms={(hold_to - hold_from) * 1000:.0f}"
     )
+    if mode != "h1-new" and not control:
+        known = [r for r in window if r[3].get("worker") is not None]
+        same = [r for r in known if r[3]["worker"] == slow_worker]
+        other = [r for r in known if r[3]["worker"] != slow_worker]
+        count = lambda rs: f"{len(rs)}/{sum(1 for r in rs if r[1] is None)}"
+        line += f" slow_worker={count(same)} other_workers={count(other)}"
+    idles = sorted(r[3]["idle_ms"] for r in lost if "idle_ms" in r[3])
+    if idles:
+        line += f" lost_idle_ms={idles[0]:.0f}..{idles[-1]:.0f}"
+    if lost_kinds:
+        line += f" lost_as={','.join(lost_kinds)}"
+    print(line, flush=True)
 
 
 if __name__ == "__main__":

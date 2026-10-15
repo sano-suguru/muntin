@@ -9,7 +9,9 @@ same server written against Flare alone.
 
 Routes:
 - `GET /slow/{ms}`: sleeps `ms` milliseconds on the serving thread, then
-  answers `slow`. It stands for a handler waiting on a database or another
+  answers `slow`. It writes `s` to the file named by `HOL_SIGNAL` (the
+  client's FIFO) when it starts and `e` when it returns, so the client can
+  tell which probes were sent while it ran. It stands for a handler waiting on a database or another
   service with a blocking call, the case the measurement is about.
 - `GET /health`: answers `ok` at once.
 - `GET /worker`: answers the serving thread's `pthread_self()`, so a client
@@ -17,6 +19,7 @@ Routes:
 """
 
 from std.ffi import external_call
+from std.os import getenv
 from std.sys import argv
 from std.time import sleep
 
@@ -24,8 +27,18 @@ from muntin import App
 from muntin_flare import Server
 
 
-def slow(ms: Int) -> String:
+def signal(byte: String) raises:
+    """Writes `byte` to the file named by `HOL_SIGNAL`, if set."""
+    var path = getenv("HOL_SIGNAL")
+    if path != "":
+        with open(path, "w") as f:
+            f.write(byte)
+
+
+def slow(ms: Int) raises -> String:
+    signal("s")
     sleep(Float64(ms) / 1000.0)
+    signal("e")
     return "slow"
 
 

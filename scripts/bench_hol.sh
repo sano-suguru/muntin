@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
 # Head-of-line blocking measurement: what one slow handler does to the other
 # requests of the process, Muntin's Server against Flare alone, by protocol,
-# worker count and idle timeout (bench/hol/hol_client.py says what one run
-# measures and prints). Not run by CI.
+# worker count, listener form and idle timeout (bench/hol/hol_client.py says
+# what one run measures and prints). Linux only (the client's FIFO); not run
+# by CI.
 #
 #   ./scripts/bench_hol.sh [RUNS] [SLOW_MS]
 #
 # RUNS is the number of runs per case (default 3), each against a freshly
 # started server; SLOW_MS is how long the slow handler blocks its thread
 # (default 1000). It builds bench/hol/hol_muntin.mojo and hol_flare.mojo in
-# the `flare` environment, then for each server, worker count (1, 4), idle
-# timeout (Flare's default 500 ms; 60000 ms) and client mode prints one line
-# per run: `<server> workers=<n> idle_ms=<ms> ` and the client's line; then,
-# RUNS times per server with 4 workers, how it spreads long-lived connections
-# over them (the client's `spread` mode).
+# the `flare` environment, then prints one line per run, prefixed with its
+# case (`<server> workers=<n> idle_ms=<ms> `), in four sections:
+# - hold: every server, 1 and 4 workers, idle timeout 500 ms (Flare's
+#   default) and 60000 ms, every client mode but `spread`. Servers: `muntin`,
+#   `flare` (Flare's own workers, one SO_REUSEPORT listener each) and, with 4
+#   workers only, `flare-shared` (the same with FLARE_REUSEPORT_WORKERS=0: one
+#   listener shared by every worker, as Muntin's workers share one);
+# - control: no slow request (SLOW_MS 0), `muntin` and `flare`, 1 worker,
+#   500 ms, the kept-open modes: what the same probes get with nothing held;
+# - idle: `muntin`, 1 worker, idle timeouts 750 to 2000 ms, the fixed pool
+#   and h2c on one connection: where the lost requests stop;
+# - spread: `muntin`, `flare` and `flare-shared` with 4 workers, how each
+#   spreads kept-open connections over its workers.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -38,11 +47,18 @@ for prog in hol_muntin hol_flare; do
     "${FLARE[@]}" build -I src -I adapters/flare "bench/hol/$prog.mojo" -o "$dir/$prog"
 done
 
+fifo="$dir/signal.fifo"
 pid=
 start_server() { # SERVER WORKERS IDLE_MS: starts it and sets pid and port
-    local out="$dir/port.txt"
+    local out="$dir/port.txt" prog="$1" env=()
+    if [[ $prog == flare-shared ]]; then
+        prog=flare
+        env=(FLARE_REUSEPORT_WORKERS=0)
+    fi
+    rm -f "$fifo"
+    mkfifo "$fifo"
     : >"$out"
-    "./$dir/hol_$1" "$2" "$3" >"$out" 2>&1 &
+    env ${env[@]+"${env[@]}"} HOL_SIGNAL="$fifo" "./$dir/hol_$prog" "$2" "$3" >"$out" 2>&1 &
     pid=$!
     for _ in $(seq 50); do
         [[ -s $out ]] && break
@@ -66,25 +82,40 @@ stop_server() {
 }
 trap stop_server EXIT
 
-for server in muntin flare; do
+measure() { # SERVER WORKERS IDLE_MS MODE SLOW_MS: RUNS runs of one case
+    for ((run = 1; run <= runs; run++)); do
+        start_server "$1" "$2" "$3"
+        printf '%s workers=%s idle_ms=%s ' "$1" "$2" "$3"
+        python3 -I bench/hol/hol_client.py "$port" "$4" "$5" "$fifo"
+        stop_server
+    done
+}
+
+modes=(h1-new h1-pool h1-pool-fixed h2c-same h2c-other)
+echo "## hold"
+for server in muntin flare flare-shared; do
     for workers in 1 4; do
+        [[ $server == flare-shared && $workers == 1 ]] && continue
         for idle in 500 60000; do
-            for mode in h1-new h1-pool h2c-same h2c-other; do
-                for ((run = 1; run <= runs; run++)); do
-                    start_server "$server" "$workers" "$idle"
-                    printf '%s workers=%s idle_ms=%s ' "$server" "$workers" "$idle"
-                    python3 -I bench/hol/hol_client.py "$port" "$mode" "$slow_ms"
-                    stop_server
-                done
+            for mode in "${modes[@]}"; do
+                measure "$server" "$workers" "$idle" "$mode" "$slow_ms"
             done
         done
     done
 done
+echo "## control"
 for server in muntin flare; do
-    for ((run = 1; run <= runs; run++)); do
-        start_server "$server" 4 60000
-        printf '%s workers=4 ' "$server"
-        python3 -I bench/hol/hol_client.py "$port" spread "$slow_ms"
-        stop_server
+    for mode in h1-pool h1-pool-fixed h2c-same; do
+        measure "$server" 1 500 "$mode" 0
     done
+done
+echo "## idle"
+for idle in 750 1000 1500 2000; do
+    for mode in h1-pool-fixed h2c-same; do
+        measure muntin 1 "$idle" "$mode" "$slow_ms"
+    done
+done
+echo "## spread"
+for server in muntin flare flare-shared; do
+    measure "$server" 4 60000 spread "$slow_ms"
 done
