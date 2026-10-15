@@ -6,6 +6,11 @@ against the new release: each name below says what it relies on, and the
 adapter's tests (`adapters/flare/test_server.mojo`) exercise every one.
 Decided in docs/history/architecture-decisions.md "Multi-worker serving
 decision (M3-049)" (revisit: the Flare pin moves).
+
+Each name also says what Flare v0.12.0's public API offers in its place, so
+an upgrade that breaks one knows its way out. Outside the adapter, the tests
+import two Flare internals directly: `test_server.mojo` uses
+`flare.net._libc_event._pipe` and `flare.runtime._thread.current_thread_id`.
 """
 
 from std.ffi import c_int
@@ -21,7 +26,9 @@ from flare.runtime.scheduler_stats import store_stop_flag
 comptime ThreadHandle = _ThreadHandle
 """Flare's OS thread (`flare.runtime._thread`): `spawn_os[start](arg)` runs a
 `def(_OpaquePtr) -> _OpaquePtr` start routine on a new pthread; `join`.
-Used by the stop watcher (M3-045) and the workers (M3-049)."""
+Used by the stop watcher (M3-045) and the workers (M3-049). Public
+alternative: none (`flare.runtime` exports only `num_cpus` from `_thread`);
+Muntin would declare `pthread_create` and `pthread_join` itself."""
 
 comptime OpaquePtr = _FlareOpaquePtr
 """The argument and result type of a `ThreadHandle` start routine."""
@@ -39,7 +46,11 @@ def run_worker_loop[
     reads `stop` with an acquire load before its first poll and every turn,
     leaves its accept loop on `ENOTSOCK`, returns without raising on a failed
     poll, and closes its connections when it leaves; no TLS context is
-    passed, so it serves cleartext only."""
+    passed, so it serves cleartext only. Public alternative: Flare's
+    `HttpFrontend(handler, config, config.h2, auto_protocol=True)` and its
+    `run_worker`, which calls this loop, so it relies on the same behavior;
+    it needs a `Copyable` handler and swallows the loop's raise, so a
+    reactor that fails to start would read as one that returned."""
     run_unified_reactor_loop_shared(
         listener_fd, config, config.h2.copy(), handler, stop
     )
@@ -47,31 +58,38 @@ def run_worker_loop[
 
 def set_stop(stop_addr: Int):
     """Sets the stop byte at `stop_addr` that `run_worker_loop` reads (Flare's
-    release store, `store_stop_flag`)."""
+    release store, `store_stop_flag`). Public alternative: the same release
+    store through `std.atomic`, which is all `store_stop_flag` does;
+    `flare.runtime` does not export it."""
     store_stop_flag(stop_addr, True)
 
 
 def flare_pipe(fds: Pointer[c_int, _]) -> Int:
     """`pipe(2)` through Flare's declaration (`flare.net._libc_event._pipe`),
-    the one a program linking Flare already has: 0, or -1 with `errno`."""
+    the one a program linking Flare already has: 0, or -1 with `errno`.
+    Public alternative: none."""
     return Int(_pipe(fds))
 
 
 def listener_fd(server: HttpServer) -> Int:
     """The bound listener's descriptor (`HttpServer._listener`), which the
-    `HttpServer` owns."""
+    `HttpServer` owns. Public alternative: none (`HttpServer` exposes the
+    bound address only)."""
     return Int(server._listener.as_raw_fd())
 
 
 def close_listener(mut server: HttpServer):
     """Closes the bound listener (`HttpServer._listener.close`), as Flare's own
-    `drain` does first; idempotent."""
+    `drain` does first; idempotent. Public alternative: `HttpServer.close()`,
+    which also sets the `HttpServer`'s own stop flag, read only by its own
+    serving methods."""
     server._listener.close()
 
 
 def has_tls(server: HttpServer) -> Bool:
     """Whether a TLS context is bound (`HttpServer._tls_ctx`, set by
-    `bind_tls`)."""
+    `bind_tls`). Public alternative: none in Flare; `Server` would record
+    whether it bound with a certificate."""
     return Bool(server._tls_ctx)
 
 
@@ -80,7 +98,8 @@ def set_listener_nonblocking(fd: Int) raises:
     Flare's `RawSocket.set_nonblocking` (its C wrapper on macOS, where
     `fcntl`'s variadic call is corrupted). The socket is wrapped with the
     private `_wrap=True`, and its `fd` is cleared on every path so the wrapper
-    never closes the listener."""
+    never closes the listener. Public alternative: none for a descriptor
+    Muntin does not own."""
     var raw = RawSocket(c_int(fd), AF_INET, SOCK_STREAM, _wrap=True)
     try:
         raw.set_nonblocking(True)
