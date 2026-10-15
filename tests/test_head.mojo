@@ -312,10 +312,6 @@ def first(id: Int) -> String:
     return String("first ", id)
 
 
-def second(id: Int) -> String:
-    return String("second ", id)
-
-
 def by_name(name: String) -> String:
     return "by name " + name
 
@@ -328,13 +324,15 @@ def test_first_registration_wins_and_never_falls_through() raises:
     # The get first: it answers, the route after it is never tried.
     app.get["/b/{id}"](first)
     app.delete["/b/{id}"](removed)
-    app.get["/b/{id}"](second)
-    # A get route that answers 400 does not fall through to the next.
-    app.get["/c/{id}"](first)
+    # A get route that answers 400 does not fall through to the next, more
+    # general one (a repeated path is a route conflict, M3-053).
+    app.get["/c/x?{id}"](first)
     app.get["/c/{name}"](by_name)
     _same_as_get(app, "/a/1", 200, "first 1")
     _same_as_get(app, "/b/2", 200, "first 2")
     _same_as_get(app, "/c/x", 400, "Bad Request")
+    _same_as_get(app, "/c/x?id=3", 200, "first 3")
+    _same_as_get(app, "/c/y", 200, "by name y")
     assert_equal(app.handle(Request("DELETE", "/b/2")).text(), "removed 2")
 
 

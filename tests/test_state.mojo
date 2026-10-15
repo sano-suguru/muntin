@@ -267,13 +267,13 @@ def test_errors_use_the_m2_model() raises:
     assert_equal(_calls(users), 5)
 
 
-def test_first_registration_wins() raises:
+def test_route_kinds_share_one_app() raises:
+    # Each kind on a path of its own: a second route on one path is a route
+    # conflict whatever the kinds (M3-053, tests/route_conflict_abort).
     var users = _users()
     var app = App()
     app.get["/count"](count_users, users)
-    app.get["/count"](later, users)
     app.get["/later"](later, users)
-    app.get["/later"](count_users, users)
     var client = TestClient(app)
     assert_equal(client.get("/count").text(), "2")
     assert_equal(client.get("/later").text(), "later")

@@ -446,40 +446,36 @@ def test_typed_shapes_are_unchanged_beside_raw() raises:
 
 
 def test_first_registered_route_wins_across_kinds() raises:
+    # Raw and typed routes are routes alike: the more specific one,
+    # registered first, answers. A repeated path, the query aside, or the
+    # other order is a route conflict whatever the kinds (M3-053,
+    # tests/route_conflict_abort).
     var raw_post = App()
     raw_post.post["/same"](raw_first)
-    raw_post.post["/same"](typed_first)
+    raw_post.post["/{id}"](update)
     assert_equal(raw_post.handle(Request("POST", "/same", "x")).text(), "raw")
     assert_equal(raw_post.handle(Request("POST", "/same", "")).text(), "raw")
+    assert_equal(raw_post.handle(Request("POST", "/7", "x")).text(), "7 x")
     var typed_post = App()
     typed_post.post["/same"](typed_first)
-    typed_post.post["/same"](raw_first)
+    typed_post.post["/{id}"](update)
     assert_equal(
         typed_post.handle(Request("POST", "/same", "x")).text(), "typed"
     )
-    # The typed route answers its own 400; a matched route never falls
-    # through to a later one.
+    # The typed route answers its own 400.
     var bad = typed_post.handle(Request("POST", "/same", ""))
     assert_equal(bad.status, 400)
     assert_equal(bad.text(), "Bad Request")
 
     var raw_get = App()
     raw_get.get["/same"](raw_first)
-    raw_get.get["/same"](typed_get_first)
+    raw_get.get["/{id}"](get_text)
     assert_equal(raw_get.handle(Request("GET", "/same")).text(), "raw")
+    assert_equal(raw_get.handle(Request("GET", "/2")).text(), "id 2")
     var typed_get = App()
     typed_get.get["/same"](typed_get_first)
-    typed_get.get["/same"](raw_first)
+    typed_get.get["/{id}"](get_text)
     assert_equal(typed_get.handle(Request("GET", "/same")).text(), "typed")
-
-    # A typed query route registered first keeps its 400 on the raw path.
-    var query_first = App()
-    query_first.get["/same?{id}"](get_text)
-    query_first.get["/same"](raw_first)
-    assert_equal(query_first.handle(Request("GET", "/same")).status, 400)
-    assert_equal(
-        query_first.handle(Request("GET", "/same?id=2")).text(), "id 2"
-    )
 
 
 def test_test_client_equals_handle() raises:
