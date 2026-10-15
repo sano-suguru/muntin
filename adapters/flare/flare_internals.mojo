@@ -9,7 +9,10 @@ Decided in docs/history/architecture-decisions.md "Multi-worker serving
 decision (M3-049)" (revisit: the Flare pin moves).
 
 Each name also says what Flare v0.12.0's public API offers in its place and
-what taking it would cost (evaluated in pull request #111; none is taken).
+what taking it would cost (evaluated in pull request #111). The two whose
+public alternative cost nothing were taken: `muntin_flare` closes the
+listener with `HttpServer.close()` and sets a worker's stop byte with its own
+release store (`_set_stop`), so neither goes through this module.
 Keeping the internals here localizes a change of name or signature; it does
 not bound a change of behavior, which only the tests observe, and only on
 the paths they run. Outside the adapter, the tests import two Flare internals
@@ -25,7 +28,6 @@ from flare.net._libc_event import _pipe
 from flare.net.socket import AF_INET, INVALID_FD, SOCK_STREAM, RawSocket
 from flare.runtime._thread import ThreadHandle as _ThreadHandle
 from flare.runtime._thread import _OpaquePtr as _FlareOpaquePtr
-from flare.runtime.scheduler_stats import store_stop_flag
 
 comptime ThreadHandle = _ThreadHandle
 """Flare's OS thread (`flare.runtime._thread`): `spawn_os[start](arg)` runs a
@@ -75,15 +77,6 @@ def run_worker_loop[
     )
 
 
-def set_stop(stop_addr: Int):
-    """Sets the stop byte at `stop_addr` that `run_worker_loop` reads (Flare's
-    release store, `store_stop_flag`). Public alternative: the same release
-    store through `std.atomic`; `store_stop_flag` also returns at once for
-    address 0, which never reaches it here (every stop byte is a cell of the
-    workers' `List[Bool]`). `flare.runtime` does not export it."""
-    store_stop_flag(stop_addr, True)
-
-
 def flare_pipe(fds: Pointer[c_int, _]) -> Int:
     """`pipe(2)` through Flare's declaration (`flare.net._libc_event._pipe`),
     the one a program linking Flare already has: 0, or -1 with `errno`.
@@ -96,14 +89,6 @@ def listener_fd(server: HttpServer) -> Int:
     `HttpServer` owns. Public alternative: none (`HttpServer` exposes the
     bound address only)."""
     return Int(server._listener.as_raw_fd())
-
-
-def close_listener(mut server: HttpServer):
-    """Closes the bound listener (`HttpServer._listener.close`), as Flare's own
-    `drain` does first; idempotent. Public alternative: `HttpServer.close()`,
-    which also sets the `HttpServer`'s own stop flag; in v0.12.0 only its own
-    serving methods read that flag, which a later release may change."""
-    server._listener.close()
 
 
 def tls_context_addr(server: HttpServer) -> Int:

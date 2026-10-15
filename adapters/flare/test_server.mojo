@@ -48,12 +48,13 @@ Workers (M3-049, decided in docs/history/architecture-decisions.md
 opened meanwhile is answered by another (the order pipe reads `b` before `a`),
 while the held h2c connection's other streams still wait; each worker builds
 its own `App`; the stop, the range, a raising `make` and the buffer-ring
-refusal are as for `serve(app)`. A raising `make` with another worker that
+refusal are as for `serve(app)`; a reactor that fails to start is reported
+with its error. A raising `make` with another worker that
 does not stop (in `make`, a handler or its `App`'s destructor) ends the
 process; a stop signal delivered before the watcher
 sees it keeps its window; a process a handler starts does not keep the port;
 a listener copy that cannot be parked stays open and the copies after it
-are parked (a TLS server's refusal is in `adapters/flare/test_tls.mojo`).
+are parked (TLS on workers is in `adapters/flare/test_tls.mojo`).
 
 Idle timeout (M3-047, decided in docs/history/architecture-decisions.md
 "Server idle timeout decision (M3-047)"): the head-of-line blocking cases run
@@ -2837,6 +2838,59 @@ def test_a_raising_make_stops_every_worker() raises:
     _ = server^
     var ended = _reap_within(pid, STOP_BOUND_MS * 5)
     assert_equal(_exit_code(ended[0]), 7, "serve did not raise make's error")
+
+
+def app_with_no_descriptors_left() -> App:
+    """A `make` that sets this process's soft open-file limit to 0 before
+    returning, so the reactor its worker starts next cannot open a
+    descriptor it needs as it starts (on Linux, Flare v0.12.0's `dlopen` of
+    its TLS library fails first, with `EMFILE`). Every descriptor
+    `serve[make]` needs is opened before its workers start."""
+    var limit = List[UInt64](length=2, fill=0)
+    if (
+        Int(
+            external_call["getrlimit", c_int](
+                c_int(RLIMIT_NOFILE), Int(limit.unsafe_ptr())
+            )
+        )
+        == 0
+    ):
+        limit[0] = 0
+        _ = external_call["setrlimit", c_int](
+            c_int(RLIMIT_NOFILE), Int(limit.unsafe_ptr())
+        )
+    return borrowed_app()
+
+
+def test_a_reactor_that_fails_to_start_is_reported() raises:
+    """When a worker's reactor raises as it starts, `serve[make]` raises its
+    error (`serve: a worker's reactor raised: <error>`), with both stop
+    dispositions back (pull request #111: Flare's public `HttpFrontend`
+    would lose this error)."""
+    var server = Server.bind("127.0.0.1", 0)
+    var pid = fork()
+    if pid < 0:
+        raise Error("fork() failed")
+    if pid == 0:
+        _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
+        _default_sigpipe()
+        var term = _handler_word(SIGTERM)
+        var int = _handler_word(SIGINT)
+        try:
+            server.serve[app_with_no_descriptors_left](workers=1)
+            exit(9)
+        except e:
+            print("observed: reactor start failure ->", e)
+            if _handler_word(SIGTERM) != term or _handler_word(SIGINT) != int:
+                exit(4)
+            if String(e).startswith("serve: a worker's reactor raised: "):
+                exit(7)
+            exit(8)
+    _ = server^
+    var ended = _reap_within(pid, STOP_BOUND_MS * 5)
+    assert_equal(
+        _exit_code(ended[0]), 7, "serve did not raise the reactor's error"
+    )
 
 
 def test_serve_workers_refuses_flare_bufring_handler() raises:
