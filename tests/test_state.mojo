@@ -135,6 +135,16 @@ def track(tracked: State[Tracked]) -> String:
     return String(tracked[].drops[])
 
 
+def track_or_fail(tracked: State[Tracked], id: Int) raises NotFound -> String:
+    if id != 0:
+        raise NotFound(id)
+    return String(tracked[].drops[])
+
+
+def track_and_raise(tracked: State[Tracked]) raises -> String:
+    raise Error("secret detail")
+
+
 def later(users: State[Users]) -> String:
     return "later"
 
@@ -341,6 +351,28 @@ def test_state_survives_app_moves_and_is_dropped_once() raises:
     assert_equal(TestClient(again).get("/track").text(), "0")
     assert_equal(drops[], 0)
     _ = again^
+    assert_equal(drops[], 1)
+
+
+def test_state_is_dropped_once_after_failed_requests() raises:
+    # Error paths release what they took: requests that end in a converted
+    # error, a 500 or a 400 leave the routes' handles, and the value is
+    # dropped once, with the app. Under `SANITIZE=address`, a leaked or
+    # doubly freed box, header or value also fails this test.
+    var drops = ArcPointer(0)
+    var tracked = State(Tracked(drops))
+    var app = App()
+    app.get["/track/{id}"](track_or_fail, tracked)
+    app.get["/raise"](track_and_raise, tracked)
+    _ = tracked^  # the routes now hold the only handles
+    var client = TestClient(app)
+    for _ in range(3):
+        assert_equal(client.get("/track/0").text(), "0")
+        assert_equal(client.get("/track/7").status, 404)
+        assert_equal(client.get("/track/x").status, 400)
+        assert_equal(client.get("/raise").status, 500)
+    assert_equal(drops[], 0)
+    _ = app^
     assert_equal(drops[], 1)
 
 

@@ -1,0 +1,24 @@
+# The users API both programs implement: one request per line, tab-separated:
+# method, target, request body (sent with Content-Type: application/json; - for
+# none), expected status, expected response body. scripts/compare_dx.sh sends
+# each to both programs and fails if either answers otherwise.
+#
+# The store holds Ada (1, 36), Bo (2, 41) and Cy (3, 29) and never changes:
+# POST /users answers the user it would create, with the next id, and keeps
+# nothing (shared mutable state needs interior mutability in both, which is
+# not what this compares). GET /users lists at most ?limit= users (10 when
+# absent).
+GET	/users	-	200	[{"id":1,"name":"Ada","age":36},{"id":2,"name":"Bo","age":41},{"id":3,"name":"Cy","age":29}]
+GET	/users?limit=2	-	200	[{"id":1,"name":"Ada","age":36},{"id":2,"name":"Bo","age":41}]
+GET	/users?limit=0	-	200	[]
+GET	/users?limit=x	-	400	Bad Request
+GET	/users/2	-	200	{"id":2,"name":"Bo","age":41}
+GET	/users/9	-	404	no user 9
+GET	/users/abc	-	400	Bad Request
+GET	/users/1/posts/7	-	200	post 7 of user 1
+GET	/users/1/posts/x	-	400	Bad Request
+POST	/users	{"name":"Di","age":22}	201	{"id":4,"name":"Di","age":22}
+POST	/users	{"name":"Di"}	400	Bad Request
+POST	/users	{"name":"Di","age":"22"}	400	Bad Request
+POST	/users	{"name":	400	Bad Request
+DELETE	/users/1	-	405	Method Not Allowed

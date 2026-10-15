@@ -28,6 +28,10 @@ pre-commit = ">=4.6.2,<5"
 # resolved commit.
 [feature.flare.dependencies]
 flare = { git = "https://github.com/ehsanmok/flare.git", tag = "v0.12.0" }
+# The `openssl` command that scripts/check_flare.sh uses to write the TLS
+# tests' certificates (M3-051). Flare needs the library too; declaring it
+# keeps the command when Flare's own dependencies change.
+openssl = ">=3.6.5,<4"
 
 [environments]
 flare = ["flare"]

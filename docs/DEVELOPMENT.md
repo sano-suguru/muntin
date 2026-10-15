@@ -2,7 +2,7 @@
 
 ## 1. Orient
 
-Read `AGENT_PROGRESS.md`, check `git status` and recent commits, and run the cheapest relevant check. Read the document that owns what the next change touches (section 7). Do not re-plan the project when the repository state is coherent.
+Check `git status` and recent commits, and run the cheapest relevant check. The item is the one the user asked for; without one, the first entry of `docs/SPEC.md`, "Remaining candidates". Read the document that owns what the next change touches (section 7). Do not re-plan the project when the repository state is coherent.
 
 ## 2. Pick one increment
 
@@ -12,12 +12,18 @@ Where an item's contract is written depends on its kind, and nowhere else:
 
 | Item | Its contract | Written when |
 |---|---|---|
-| decision (a design question, settled with evidence suited to it: existing records and pull requests where they suffice, spikes and fixtures under `tests/` where compiler or runtime behavior must be measured; `src/muntin` unchanged) | its new record in `docs/history/architecture-decisions.md`: the question and what would settle it, then the choice and exactly one next action: a "Next production slice", or an explicit deferral with a concrete revisit condition | the question and settling condition before any measurement; the choice and next action after the evidence |
+| decision (a design question, settled with evidence suited to it: existing records and pull requests where they suffice, spikes and fixtures under `tests/` where compiler or runtime behavior must be measured; `src/muntin` unchanged) | its pull request first: the question and what would settle it. Then, if it chooses to build, its new record in `docs/history/architecture-decisions.md` with the choice and one "Next production slice"; if it sets a standing constraint, its record (below); if it defers, the `docs/SPEC.md` lines below | the question and settling condition before any measurement; the choice and next action after the evidence |
 | production (implements a decided slice) | the decision record's "Next production slice", as written | already, by the decision item |
 | production that cannot follow its slice as written | an amendment record: the delta to the slice, why, and the invariant or compatibility boundary it affects | before the change merges; a new design question is a new decision item, not an amendment |
 | fix, behavior-preserving refactor, tooling or docs with no design question | the pull request | with the pull request |
 
-A product item, decision or production, gets a milestone ID (`M3-017`) where it is first named: a decision record's title or its "Next production slice". A process or tooling decision gets none unless `docs/SPEC.md` tracks it as milestone work. `docs/SPEC.md` and `AGENT_PROGRESS.md` refer to it; nothing else tracks it.
+A decision record has five parts, in this order: the question and what would settle it; the choice and why, in a few sentences; each rejected candidate in one line, with why; its "Revisit when" conditions; and its "Next production slice". Keep it under about 8 KB. Measurements, compiler output, candidate-by-candidate comparisons, test counts and review findings go in the pull request, which the record names. Records written before this rule stay as they are.
+
+A standing constraint, a decision whose choice is a rule that later items must follow (a budget, a policy) rather than something to build, gets a record with the same five parts; its "Next production slice" says none, names the document that owns the rule, and the pull request writes the rule there.
+
+A decision whose choice is to build nothing now (an explicit deferral of a candidate, no "Next production slice") gets no record: its contract is one or two lines under its candidate in `docs/SPEC.md`, "Remaining candidates": the choice, why, the revisit condition and its pull request. A test or fixture it adds to pin today's behavior names that pull request in its opening comment, and so does its revisit index row.
+
+A product item, decision or production, gets a milestone ID (`M3-017`) where it is first named: a decision record's title or its "Next production slice". A process or tooling decision gets none unless `docs/SPEC.md` tracks it as milestone work. `docs/SPEC.md` refers to it; nothing else tracks it.
 
 ## 3. Verify with the strongest available oracle
 
@@ -25,7 +31,12 @@ A change is not complete because the code looks plausible. Use, as applicable: a
 
 - `./scripts/check.sh`: toolchain version, formatting, architecture boundary, unsafe confinement, package and example builds, the library-only spike drivers, and every must-not-build and must-build fixture under `tests/` (in parallel; reports in file order). `CHECK_SHARD=I/N` builds only every N-th fixture, starting at the I-th, and still runs every other step; CI uses it. It does not build `tests/test_*.mojo`.
 - `./scripts/test.sh [FILE...]`: builds each `tests/test_*.mojo` (or the named files) with `--Werror` in parallel, then runs them one at a time.
+- `SANITIZE=address ./scripts/test.sh [FILE...]`: the same, built with Mojo's AddressSanitizer (`mojo build --sanitize address`). A heap use-after-free or double free, and on Linux a leak at exit (forced on whatever `ASAN_OPTIONS` says, with `LSAN_OPTIONS` unset so no suppression from the environment applies; reports go to stderr whatever `log_path` says), fails the file even when every assertion passed. Before building any test it builds and runs the positive controls in `tests/sanitizer_controls`, listed by name in the script, each of which must fail with a sanitizer report of the kind its `# Expected report: ` line names, so a toolchain whose sanitizer stops seeing these errors, or a deleted control, stops the run there; the leak control runs on Linux only, the one platform where leak detection is verified for this toolchain. A control proves only that the sanitizer sees that error in that program. It is the runtime check of the unsafe storage (`_Erased`, `_Shared`) on the paths `tests/test_*.mojo` run, not of the Flare adapter (`check_flare.sh` is unchanged), and not a proof: an error on a path no test runs, or an access the compiler removed, goes unseen. The ownership oracles in `tests/test_handler_storage.mojo` and `tests/test_state.mojo` count live values, which cannot see a leaked header or a read of a freed one. CI does not run it; run it locally on Linux when a change touches `src/muntin/_handler_storage.mojo` or how `App` or `State` hold it.
 - `./scripts/check_flare.sh`: the Flare adapter, its `Server` tests and localhost round trips, the serving must-not-build fixtures and the serving example's build, in the `flare` environment.
+
+`./scripts/bench_routing.sh [RUNS] [N...]` is a measurement, not a check, and CI does not run it: routing cost by route count, Muntin against Flare alone (`bench/routing/bench_routing.mojo` says what it measures). Its results go in the pull request that relies on them, with the machine and the versions the script prints.
+
+`./scripts/compare_dx.sh` is a measurement too, and CI does not run it: one small API written with Muntin and against Flare alone (`bench/compare/`), compared by code size, by the answers to the same requests, and by what each does with the same planted mistakes (whether it still builds, the compiler's message, or what the mistaken program answers). Its results go in the pull request that relies on them, with the versions the script prints.
 
 A must-not-build fixture states its expected diagnostic on a line starting `# Expected diagnostic (checked by scripts/check.sh): `; `scripts/build_one.sh` reads it.
 
@@ -50,7 +61,7 @@ For public API, architecture, ownership/lifetime, backend seam, unsafe code or d
 
 ## 6. Finish an item
 
-An item's pull request updates only the owners whose facts changed (section 7), in the same diff: `docs/ARCHITECTURE.md` when the current architecture changes (a revisit index row when the item pins fixtures), `docs/DX.md` when user-visible semantics change, `docs/SPEC.md` when a capability's status or the product scope changes, and `AGENT_PROGRESS.md` when the next action or an easy-to-miss current constraint changes. A typo, script or test-speed fix usually touches none of them. The item is complete when the pull request merges; `main` requires CI to pass first, so nothing is recorded after CI. Test counts, mutation lists, review findings and CI runs go in the pull request description; a new decision or amendment record names its pull request.
+An item's pull request updates only the owners whose facts changed (section 7), in the same diff: `docs/ARCHITECTURE.md` when the current architecture changes (a revisit index row when the item pins fixtures: the pinned paths and a link to the decision record, or to the pull request for an explicit deferral without a record), `docs/DX.md` when user-visible semantics change, and `docs/SPEC.md` when a capability's status, the product scope or the candidates' order changes (one table row per capability, naming it and linking its decision, never restating its semantics). There is no separate handoff file: a fact that is easy to miss about the current code goes in `docs/ARCHITECTURE.md` or in a comment beside the code, once. A typo, script or test-speed fix usually touches none of them. The item is complete when the pull request merges; `main` requires CI to pass first, so nothing is recorded after CI. Test counts, mutation lists, review findings and CI runs go in the pull request description; a new decision or amendment record names its pull request.
 
 ## 7. Where information lives
 
@@ -63,7 +74,7 @@ Each fact has one owner. Other documents link to it instead of restating it.
 | why: the decision, candidates, costs, measured premises, revisit conditions; the next production item's contract | `docs/history/architecture-decisions.md`, one record per decision or amendment |
 | product scope: milestones, shipped and remaining capabilities, product boundaries, the M2 contract | `docs/SPEC.md` |
 | evidence that an item was verified | its pull request |
-| what to do next | `AGENT_PROGRESS.md` |
+| what to do next | the user's request; otherwise the first entry of `docs/SPEC.md`, "Remaining candidates" |
 | behavior and invariants | tests, fixtures, `scripts/` and CI |
 | upstream sources and the Flare pin | `docs/REFERENCES.md`, `pixi.lock` |
 
