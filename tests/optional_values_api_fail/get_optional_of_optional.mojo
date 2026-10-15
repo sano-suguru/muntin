@@ -2,7 +2,7 @@
 # only an `Optional` of `Int` or `String` is a route value. Decision:
 # docs/history/architecture-decisions.md, "Optional query values decision
 # (M3-024)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: a get handler's parameter is an Int or String route value, an Optional of one, the request Headers or, for a raw handler, the Request
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a get handler's parameter is an Int or String route value, an Optional of one, a FromRouteValue type, the request Headers or, for a raw handler, the Request
 from muntin import App
 
 

@@ -2,7 +2,7 @@
 # The message is production's existing rule for a first slot other than a route
 # value, which M3-016 keeps. Decision: docs/history/architecture-decisions.md,
 # "Typed get header access decision (M3-016)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler's parameter before the body is a route value: an Int, a String or an Optional of either
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler's parameter before the body is a route value: an Int, a String, an Optional of either or a FromRouteValue type
 from muntin import App, FromBody, Headers
 
 
