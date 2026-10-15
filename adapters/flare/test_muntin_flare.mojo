@@ -5,7 +5,8 @@ replaced M3-038; request target and method bytes M3-039).
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). Every
 dispatch goes through `MuntinHandler.serve`, a Flare handler entry point that
 answers through the same `_serve_app` as `Server`'s, and from there through
-the real `App.handle`.
+the real `App.handle`; the M3-064 test also calls `_handle_owned`, the step
+after the conversion, directly.
 """
 
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
@@ -13,7 +14,12 @@ from std.testing import assert_equal, assert_false, assert_true, TestSuite
 from flare.http import Request as FlareRequest, Response as FlareResponse
 from muntin import App, FromBody, Headers, Next, Request, Response
 from muntin.testing import TestClient
-from muntin_flare import MuntinHandler, to_flare_response, to_muntin_request
+from muntin_flare import (
+    MuntinHandler,
+    _handle_owned,
+    to_flare_response,
+    to_muntin_request,
+)
 
 
 def hello() -> String:
@@ -757,6 +763,34 @@ def test_other_methods_keep_their_body() raises:
     )
     assert_equal(post.text(), "created Ada")
     assert_equal(_wire(post), "")
+
+
+def body_at(var request: Request, var next: Next) raises -> Response:
+    """Answers with the address of the body buffer it received."""
+    var at = String(Int(request.body.unsafe_ptr()))
+    var response = next^.run(request^)
+    response.headers.add("X-Body-At", at)
+    return response^
+
+
+def test_the_converted_request_is_handed_over() raises:
+    # M3-064: `_answer` moves the converted request into `_handle_owned`
+    # (without `^` it does not build), which moves it into the owning
+    # `App.handle`: the middleware receives the converted body buffer
+    # itself. `MuntinHandler.serve` answers through the same chain.
+    var app = body_app()
+    app.use(body_at)
+    var flare = FlareRequest("POST", "/reached", body=_octets([0x61, 0xFF]))
+    var request = to_muntin_request(flare)
+    var at = String(Int(request.body.unsafe_ptr()))
+    var r = _handle_owned(app, request^)
+    assert_equal(r.status, 200)
+    assert_equal(r.headers.get("X-Body-At").or_else("<none>"), at)
+    var served = MuntinHandler(app^).serve(flare)
+    assert_equal(served.status, 200)
+    var wire = _wire(served)
+    assert_true(wire.startswith("X-Body-Length: 2\r\nX-Body-At: "), wire)
+    assert_true(wire.endswith("\r\nX-Seen: 1\r\n"), wire)
 
 
 def main() raises:

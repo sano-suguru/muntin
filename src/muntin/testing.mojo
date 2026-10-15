@@ -5,7 +5,9 @@ from .http import Headers, Request, Response
 
 
 struct TestClient[origin: Origin[mut=False]]:
-    """Sends requests to a borrowed `App` through `App.handle`, in memory."""
+    """Sends requests to a borrowed `App` through `App.handle`, in memory.
+    Each method builds the `Request` and hands it over, so `handle`'s owning
+    overload takes it (M3-064)."""
 
     var _app: Pointer[App, Self.origin]
 
