@@ -4395,7 +4395,7 @@ These are the two forms of one shared set that were tested; sharing more of the 
 
 ### Streaming responses and cancellation decision (M3-056)
 
-Status: **decision, proposed** (M3-056, pull request #101, which holds the Flare reading, the probe's observations and the storage spike; `src/muntin` unchanged). Not accepted until the owner approves it there.
+Status: **decision** (M3-056, pull request #101, which holds the Flare reading, the probe's observations, the storage spike and the owner's two reviews; `src/muntin` unchanged).
 
 **Question and what settles it.** `App.handle(Request) -> Response` returns a whole body, so a handler cannot send a body it produces over time or one larger than memory, and cannot learn that the client has gone. An outside review asked to settle streaming responses and cancellation first; WebSocket, protocol-specific control and streamed request bodies are out of scope. Settled by: what Flare v0.12.0 delivers on the path `Server` serves (`HttpServer.serve` with a `Handler`; the same connection handles under the workers' loop), read in code and measured over loopback by `compat/flare/stream/stream_probe.mojo`; and whether Mojo 1.1.0 lets a `Copyable` `Response` carry a stream of an application type (a scratch spike).
 

@@ -206,15 +206,13 @@ def _read_some(mut stream: TcpStream, at_least: Int) raises -> List[UInt8]:
 
 
 def _read_to_close(mut stream: TcpStream) raises -> String:
+    """Reads until the server closes the connection (EOF); a read timeout
+    or error raises, so a connection left open fails the caller."""
     var acc = List[UInt8]()
     var buf = List[UInt8]()
     buf.resize(4096, 0)
     while True:
-        var n: Int
-        try:
-            n = stream.read(buf.unsafe_ptr(), len(buf))
-        except:
-            break
+        var n = stream.read(buf.unsafe_ptr(), len(buf))
         if n == 0:
             break
         for k in range(n):
@@ -274,7 +272,9 @@ def _read_to_close_or_terminator(mut stream: TcpStream) raises -> String:
 def test_h1_other_connections_served_while_stream_open() raises:
     """While an `idle` stream is open and quiet, a request on another
     connection is answered before the stream ends: a stream holds the
-    reactor only for each `next` call, unlike a running handler (M3-046)."""
+    reactor only for each `next` call, unlike a running handler (M3-046).
+    The stream is shown open when `/hello` is answered (its source not yet
+    destroyed, so no record) and to end afterwards with `late`."""
     var child = _serve()
     var c = _connect(child.port)
     _get(c, "/idle-hol")
@@ -282,9 +282,15 @@ def test_h1_other_connections_served_while_stream_open() raises:
     var t0 = _now_ms()
     var status = _hello(child.port)
     var waited = _now_ms() - t0
+    var open_then = not exists(String(LOG_DIR, "/idle-hol"))
+    var rest = _read_to_close_or_terminator(c)
+    var log = _log("idle-hol")
     _stop(child)
     assert_equal(status, "HTTP/1.1 200 OK")
     assert_true(waited < IDLE_MS // 2, String("waited ms: ", waited))
+    assert_true(open_then, "the stream had ended before /hello was answered")
+    assert_true(rest.find("late\n") >= 0, rest)
+    assert_true(log.endswith(" ended=1 cancelled=0"), log)
 
 
 def test_h1_client_gone_drops_source_without_cancel() raises:
@@ -306,8 +312,8 @@ def test_h1_client_gone_drops_source_without_cancel() raises:
 
 def test_h1_source_raise_truncates() raises:
     """A `fail` source raising on its third call: the status line and
-    fields have gone out, then the connection closes with no chunked
-    terminator, so the client can tell the body is incomplete. The two
+    fields have gone out, then the server closes the connection (EOF, not a
+    read timeout) with no chunked terminator, so the client can tell the body is incomplete. The two
     chunks the source produced before raising never arrive (the reactor
     pulls up to 16 per writable edge before writing, and the raise drops
     the batch). The source is destroyed."""
