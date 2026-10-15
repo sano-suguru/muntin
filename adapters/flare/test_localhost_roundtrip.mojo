@@ -3935,8 +3935,9 @@ def test_receive_limit_on_flare_bufring_path() raises:
     bytes Flare's refusal on every route with no middleware, conversion or
     handler run, a head declaring 65 refused at once, the keep-alive
     connection closed after a refusal, and the server still answering. That
-    the buffer-ring loop served is read off the wire: it closes an h2c
-    connection, which the unified loop serves.
+    the buffer-ring loop served is read off the wire: it answers an h2c
+    opening in HTTP/1.1 (404, then 400) and closes, where the unified loop
+    answers in HTTP/2.
 
     The pin: on that loop, Flare v0.12.0 does not answer a request longer
     than 8192 wire bytes (one buffer-ring buffer), however small its body
@@ -3994,19 +3995,52 @@ def test_receive_limit_on_flare_bufring_path() raises:
         assert_equal(pair.count("HTTP/1.1 "), 1, pair)
         pair = h1_keep_alive_pair(child.port, "/echo-raw", _pattern(64))
         assert_equal(pair.count("HTTP/1.1 200 OK"), 2, pair)
-        # The buffer-ring loop is serving: it closes an h2c connection.
-        # With no body the client writes once (preface, SETTINGS, HEADERS
-        # with END_STREAM) and never again, since that loop answers in
-        # HTTP/1.1 and sends no frame. A DATA frame written after it could
-        # still be unread when the loop closes, and Linux then resets the
-        # connection instead of ending it (measured: about 1 run in 40).
-        var h2c = String("served")
-        try:
-            _ = h2_upload(child.port, "/echo-raw", List[UInt8](), pieces=1)
-        except e:
-            h2c = String(e)
-        print("observed bufring h2c:", h2c)
-        assert_equal(h2c, "connection closed before both streams ended")
+        # The buffer-ring loop is serving: it answers an h2c opening in
+        # HTTP/1.1 and closes, where the unified loop answers in HTTP/2. It
+        # reads the preface's `PRI * HTTP/2.0` as a request for `*` (the
+        # App's 404, kept alive), then refuses `SM` (Flare's 400, close).
+        # The opening is one write with no DATA frame and nothing follows:
+        # a frame written later could race the close and still be unread
+        # when the loop closes, which Linux answers with a reset instead of
+        # an end of stream (measured: about 1 run in 40). Any error,
+        # a reset or a timeout included, fails the test.
+        var none = List[Tuple[String, String]]()
+        var opening = List(H2_PREFACE.as_bytes())
+        opening.extend(
+            Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]()))
+        )
+        opening.extend(
+            Span(
+                _h2_frame(
+                    FrameType.HEADERS(),
+                    FrameFlags.END_HEADERS() | FrameFlags.END_STREAM(),
+                    1,
+                    _h2_block("POST", "/echo-raw", none),
+                )
+            )
+        )
+        var h2c_stream = TcpStream.connect(
+            SocketAddr.localhost(UInt16(child.port))
+        )
+        h2c_stream.set_recv_timeout(TIMEOUT_MS)
+        h2c_stream.write_all(Span[UInt8, _](opening))
+        var answered = List[UInt8]()
+        var chunk = List[UInt8]()
+        chunk.resize(4096, 0)
+        while True:
+            var n = h2c_stream.read(chunk.unsafe_ptr(), len(chunk))
+            if n == 0:
+                break
+            for k in range(n):
+                answered.append(chunk[k])
+        h2c_stream.close()
+        var h2c = String(from_utf8_lossy=Span(answered))
+        print("observed bufring h2c:", repr(h2c))
+        assert_true(h2c.startswith("HTTP/1.1 404 Not Found\r\n"), h2c)
+        assert_true("\r\n\r\nNot FoundHTTP/1.1 400 Bad Request\r\n" in h2c, h2c)
+        assert_true("\r\nConnection: close\r\n" in h2c, h2c)
+        assert_true(h2c.endswith("\r\n\r\n400 Bad Request"), h2c)
+        assert_equal(h2c.count("HTTP/1.1 "), 2, h2c)
         var hi = h1_exchange(child.port, "GET", "/hello", [], List[UInt8]())
         assert_equal(hi[0], "HTTP/1.1 200 OK")
         assert_true(_running(child.pid))
