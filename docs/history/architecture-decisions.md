@@ -4511,7 +4511,7 @@ Status: **decision, standing constraint** (pull request #105; `src/muntin`, `ada
 
 ### Request context decision (M3-061)
 
-Status: **decision** (M3-061, pull request #PRNUM; `src/muntin` unchanged). The prototype, its runs, probes, review and measurements are in the pull request.
+Status: **decision** (M3-061, pull request #113; `src/muntin` unchanged). The prototype, its runs, probes, review and measurements are in the pull request.
 
 **Question and what settles it.** [M3-034](#middleware-decision-m3-034) left middleware unable to hand a handler what it established (an authenticated user): header fields are client input, and a second injected kind doubles the overloads ([M3-001](#application-state-decision-m3-001)). An outside review asked for that, type-safe, and for the cost of the request copy `App.handle` makes when middleware is registered (M3-034's last revisit condition). How can a middleware attach a typed value that a handler receives, on Mojo 1.1.0, within [M3-052](#registration-complexity-budget-decision-m3-052)'s budget and the storage guarantee ([M3-004](#state-storage-decision-m3-004)), and what should the copy become? Settled by: a scratch prototype on production (not retained), run through `TestClient` with application types from their own modules, probed with must-not-build shapes, and passing `check.sh`, `test.sh` and `check_flare.sh` with every existing fixture's text unchanged; probes of `reflect` names and of overloading on a borrowed and an owned argument; the copy timed by body size.
 
