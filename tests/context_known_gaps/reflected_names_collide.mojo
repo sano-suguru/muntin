@@ -1,23 +1,23 @@
 # Must build, and is never run (scripts/check.sh builds it only). Evidence for
 # docs/history/architecture-decisions.md, "Request context decision
-# (M3-061)": on Mojo 1.1.0, `reflect[T].name()` is module-qualified and
-# carries a type's parameters, but two distinct types can print one name:
-# every origin prints as `{}`, and a function-valued parameter prints as
-# `<unprintable>`, whatever the function, even when it decides the type's
-# layout (`Arr` below). A request context keyed by that name could restore a
-# value as a different type, a heap overflow for `Arr`. The decision
-# therefore refuses, at compile time, a context value whose name contains `{`
-# or `<` (string and struct values print inside `{...}` too), and keys every
-# other type by its name.
+# (M3-063)", which leaves how context values are stored undecided because
+# Mojo 1.1.0 offers no documented type identity:
+# - `reflect[T].name()` prints distinct types alike: every origin as `{}`,
+#   and a function-valued parameter as `<unprintable>` even when it decides
+#   the type's layout (`Arr`). Restoring a value under such a name overflowed
+#   the heap under AddressSanitizer (pull request #113).
+# - `get_linkage_name` of a function specialized on the type tells the `Arr`s
+#   apart but not two origins, and is a symbol name, not a documented
+#   identity.
+# A function's address is no identity either: specializations with equal
+# bodies share one address (measured in pull request #113; not pinned here,
+# since this file never runs).
 #
-# If this file stops building, see which assert failed. An origin or function
-# assert: names now tell those types apart, so the refusal may be narrowed
-# (re-measure). A marker assert: such names no longer show `{` or `<`, so the
-# refusal no longer catches them; the key is unsound until it is replaced.
-# The module assert: names are no longer module-qualified, so two types with
-# one short name would share a key; the decision's premise is gone.
+# If this file stops building, a candidate identity changed: re-measure it
+# before the context storage item relies on it.
 
 from std.reflection import reflect
+from std.reflection.type_info import get_linkage_name
 
 
 struct Holder[o: Origin[mut=False]](Movable):
@@ -42,15 +42,8 @@ struct Arr[f: def() thin -> Int](Movable):
         self.data = SIMD[DType.int64, Self.f()](7)
 
 
-struct Tag[text: StaticString](Movable):
+def token[T: AnyType]():
     pass
-
-
-struct Plain(Movable):
-    var n: Int
-
-    def __init__(out self, n: Int):
-        self.n = n
 
 
 def name_of[T: AnyType](x: T) -> StaticString:
@@ -67,15 +60,20 @@ def main():
     comptime assert (
         reflect[type_of(ha)].name() == reflect[Holder[ImmutAnyOrigin]].name()
     )
-    comptime assert reflect[Holder[ImmutAnyOrigin]].name().find("{") >= 0
     # Two functions that give the types different layouts: one name.
     comptime assert reflect[Arr[one]].name() == reflect[Arr[many]].name()
-    comptime assert reflect[Arr[one]].name().find("<") >= 0
-    # A string value prints inside braces.
-    comptime assert reflect[Tag["x"]].name().find("{") >= 0
-    # A type without such parameters: module-qualified, neither marker.
-    comptime assert reflect[Plain].name() == "reflected_names_collide.Plain"
-    comptime assert reflect[Plain].name().find("{") < 0
-    comptime assert reflect[Plain].name().find("<") < 0
+    # Linkage names: the two `Arr`s apart, the origins still alike.
+    comptime assert (
+        get_linkage_name[token[Arr[one]]]()
+        != get_linkage_name[token[Arr[many]]]()
+    )
+    comptime assert (
+        get_linkage_name[token[type_of(ha)]]()
+        == get_linkage_name[token[type_of(hb)]]()
+    )
+    comptime assert (
+        get_linkage_name[token[type_of(ha)]]()
+        == get_linkage_name[token[Holder[ImmutAnyOrigin]]]()
+    )
     _ = name_of(ha)
     _ = name_of(hb)

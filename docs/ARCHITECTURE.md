@@ -341,7 +341,7 @@ If one of these pins changes (a pinned fixture unexpectedly compiles, fails to c
 | `adapters/flare/test_tls.mojo` | [Server TLS decision (M3-051)](history/architecture-decisions.md#server-tls-decision-m3-051) |
 | `adapters/flare/test_server.mojo`'s stop tests | [Graceful shutdown decision (M3-045)](history/architecture-decisions.md#graceful-shutdown-decision-m3-045) |
 | `compat/flare/stream/stream_probe.mojo` | [Streaming responses and cancellation decision (M3-056)](history/architecture-decisions.md#streaming-responses-and-cancellation-decision-m3-056) |
-| `tests/context_known_gaps` (must build) | [Request context decision (M3-061)](history/architecture-decisions.md#request-context-decision-m3-061) |
+| `tests/context_known_gaps` (must build) | [Request context decision (M3-063)](history/architecture-decisions.md#request-context-decision-m3-063) |
 
 ## Request/Response ownership
 
