@@ -132,8 +132,9 @@ worker that ends on its own (`make` or its loop raised, or its loop
 returned) before a stop signal was delivered, as the serving thread sees it
 at its next look, stops the others at once; one
 that has not ended `_REACTOR_STOP_MS` later (a `make` or a handler that
-does not return) ends the process with status 1. `serve[make]` refuses a
-TLS server.
+does not return) ends the process with status 1. On a TLS `Server` every
+worker's loop is given the `Server`'s one TLS context (M3-060), as Flare's
+own workers share theirs.
 
 TLS (M3-051, decided in docs/history/architecture-decisions.md "Server TLS
 decision (M3-051)"): `Server.bind`'s keyword-only `tls`, a `Tls` holding a
@@ -197,11 +198,11 @@ from flare_internals import (
     ThreadHandle,
     close_listener,
     flare_pipe,
-    has_tls,
     listener_fd,
     run_worker_loop,
     set_listener_nonblocking,
     set_stop,
+    tls_context_addr,
 )
 from muntin import App, Headers, Request, Response
 
@@ -527,13 +528,6 @@ comptime _CB_PARKED = 8
 write end stays open, so it never becomes readable."""
 comptime _CB_LEN = 9
 
-comptime _WORKERS_TLS_UNSUPPORTED = (
-    "serve: workers are unsupported on a TLS server"
-)
-"""What `serve[make]` raises, before serving, for a `Server` with a TLS
-context: its workers' reactor loop is not given one, and no test covers a
-TLS handshake on a worker (M3-049)."""
-
 comptime _O_CLOEXEC_LINUX = 0o2000000
 comptime _FIOCLEX_MACOS: c_ulong = 0x20006601
 """`FIOCLEX` on macOS (`_IO('f', 1)`), the request Flare uses there too."""
@@ -575,7 +569,10 @@ comptime _W_ERROR = 3
 """Worker table cell: the address of the `String` a raise is written to."""
 comptime _W_CONFIG = 4
 """Worker table cell: the address of the worker's own `ServerConfig`."""
-comptime _W_LEN = 5
+comptime _W_TLS = 5
+"""Worker table cell: the address of the `Server`'s TLS context, or 0 for
+cleartext (`tls_context_addr`)."""
+comptime _W_LEN = 6
 
 comptime _W_SERVING = 0
 comptime _W_RETURNED = 1
@@ -927,7 +924,13 @@ def _serve_worker[
     var ended = _W_RETURNED
     try:
         if fd >= 0:
-            run_worker_loop(fd, config[], _BorrowedHandler(app), stop[])
+            run_worker_loop(
+                fd,
+                config[],
+                _BorrowedHandler(app),
+                stop[],
+                _load(row, _W_TLS),
+            )
     except e:
         error[] = String(e)
         ended = _W_LOOP_RAISED
@@ -1650,10 +1653,9 @@ struct Server(Movable):
         at a time, as `serve(app)` does.
 
         Raises `workers out of range: <value>` outside 1 to 256, then
-        `FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare v0.12.0`,
-        `serve: workers are unsupported on a TLS server`, and `Server.serve
-        is already serving in this process` as `serve(app)` does, all before
-        serving. If `make` raises on a worker, or a worker's reactor raises
+        `FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare v0.12.0`
+        and `Server.serve is already serving in this process` as `serve(app)`
+        does, all before serving. If `make` raises on a worker, or a worker's reactor raises
         or returns on its own, before a stop signal was delivered (as this
         thread sees it at its next look, not when the worker ended), every
         worker is stopped at once (no grace window) and this raises `serve:
@@ -1674,9 +1676,8 @@ struct Server(Movable):
             raise Error("workers out of range: " + String(workers))
         if getenv("FLARE_BUFRING_HANDLER") == "1":
             raise Error(_BUFRING_UNSUPPORTED)
-        if has_tls(self._server):
-            raise Error(_WORKERS_TLS_UNSUPPORTED)
         var listener = listener_fd(self._server)
+        var tls = tls_context_addr(self._server)
         var table = List[Int64](length=workers * _W_LEN, fill=0)
         var stops = List[Bool](length=workers, fill=False)
         var errors = List[String](length=workers, fill=String())
@@ -1696,6 +1697,7 @@ struct Server(Movable):
             _store(row, _W_STOP, Int(stops.unsafe_ptr().unsafe_offset(i)))
             _store(row, _W_ERROR, Int(errors.unsafe_ptr().unsafe_offset(i)))
             _store(row, _W_CONFIG, Int(configs.unsafe_ptr().unsafe_offset(i)))
+            _store(row, _W_TLS, tls)
         # A worker's reactor polls its copy without blocking.
         try:
             set_listener_nonblocking(listener)
