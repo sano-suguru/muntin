@@ -169,6 +169,7 @@ result is checked. What clients see: docs/DX.md section 1.
 """
 
 from std.atomic import Atomic, Ordering
+from std.collections import Dict
 from std.ffi import (
     _get_global,
     c_int,
@@ -206,14 +207,14 @@ from muntin import App, Headers, Request, Response
 
 
 def _ascii_lower(s: String) -> String:
-    var out = String()
+    var out = List[UInt8](capacity=s.byte_length())
     for b in s.as_bytes():
-        var c = Int(b)
-        if c >= ord("A") and c <= ord("Z"):
-            out += chr(c + 32)
+        if b >= 65 and b <= 90:
+            out.append(b + 32)
         else:
-            out += chr(c)
-    return out^
+            out.append(b)
+    # Lowering ASCII letters keeps UTF-8 well formed, so nothing is replaced.
+    return String(from_utf8_lossy=Span(out))
 
 
 def _same_name(a: String, b: String) -> Bool:
@@ -235,35 +236,57 @@ def _trim_ows(s: StringSlice) -> String:
 
 def to_muntin_headers(request: FlareRequest) raises -> Headers:
     """Exactly the request's fields, or a raise when they cannot be
-    represented."""
+    represented. One pass over `encode_to`'s text; each name's values are
+    fetched with `get_all` once, when the name first appears."""
     var buf = List[UInt8]()
     request.headers.encode_to(buf)
-    var text = String(from_utf8_lossy=Span(buf))
-    var names = List[String]()
-    var values = List[String]()
-    for line in text.split("\r\n"):
-        if line.byte_length() == 0:
-            continue
-        var colon = line.find(":")
-        if colon <= 0:
-            raise Error("unparsable header line")
-        names.append(String(line[byte=:colon]))
-        if line.byte_length() >= colon + 2:
-            values.append(String(line[byte = colon + 2 :]))
-        else:
-            values.append(String())
-    if len(names) != request.headers.len():
-        raise Error("header count mismatch")
+    # A field that is not UTF-8 cannot be represented, so neither can the
+    # text.
+    var text = String(from_utf8=Span(buf))
+    var bytes = text.as_bytes()
     var headers = Headers()
-    for i in range(len(names)):
-        var seen = 0
-        for j in range(i):
-            if _same_name(names[j], names[i]):
-                seen += 1
-        var flare_values = request.headers.get_all(names[i])
-        if seen >= len(flare_values) or flare_values[seen] != values[i]:
-            raise Error("header field cannot be represented")
-        headers.add(names[i], values[i])
+    var group = Dict[String, Int]()  # lowercased name -> index below
+    var flare_values = List[List[String]]()
+    var seen = List[Int]()
+    var count = 0
+    var start = 0
+    var n = text.byte_length()
+    while start < n:
+        var end = text.find("\r\n", start)
+        if end < 0:
+            end = n
+        if end > start:
+            var colon = text.find(":", start)
+            if colon <= start or colon >= end:
+                raise Error("unparsable header line")
+            var name = String(from_utf8=bytes[start:colon])
+            var value = String()
+            if end >= colon + 2:
+                # The byte after the colon is `encode_to`'s space unless the
+                # name holds a `:`; then the value may start inside a code
+                # point, which a byte span raises on and a slice of `text`
+                # aborts on (Mojo 1.1.0).
+                value = String(from_utf8=bytes[colon + 2 : end])
+            # A token name is ASCII, so `_ascii_lower` is exact below.
+            headers.add(name, value)
+            var key = _ascii_lower(name)
+            var at = group.get(key)
+            if not at:
+                at = len(seen)
+                group[key] = at.value()
+                flare_values.append(request.headers.get_all(name))
+                seen.append(0)
+            var i = at.value()
+            if (
+                seen[i] >= len(flare_values[i])
+                or flare_values[i][seen[i]] != value
+            ):
+                raise Error("header field cannot be represented")
+            seen[i] += 1
+            count += 1
+        start = end + 2
+    if count != request.headers.len():
+        raise Error("header count mismatch")
     return headers^
 
 
