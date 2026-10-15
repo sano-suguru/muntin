@@ -43,10 +43,10 @@ fi
 out=build/bench_headers
 mkdir -p "$out"
 for prog in bench_headers muntin_server flare_server; do
-    "${FLARE[@]}" build -I src -I adapters/flare "bench/headers/$prog.mojo" -o "$out/$prog"
+    "${FLARE[@]}" build -I src -I adapters/flare -I compat/flare/headers "bench/headers/$prog.mojo" -o "$out/$prog"
 done
 
-echo "# in process: to_muntin_headers"
+echo "# in process: to_muntin_headers (adapter) and the M3-066 rebuild (pieces)"
 ${pin[@]+"${pin[@]}"} "./$out/bench_headers" "$runs"
 
 pid=

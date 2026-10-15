@@ -5,20 +5,28 @@ For each header shape, against the server on 127.0.0.1:PORT:
   `browser12` and 5 times otherwise; the median and minimum in ms;
 - `load` (not for `browser12`): four connections each send the shape one
   request after another for SECONDS while a fifth sends a bare `GET /`,
-  waits for its answer and sleeps 10 ms before the next, a closed loop, so
-  the slower the bare answers, the fewer are sent (`bare_n`, beside the
-  percentiles; with few samples p99 is about the maximum); the heavy
-  requests answered per second and the bare requests' latency percentiles
-  in ms.
+  waits for its answer and sleeps 10 ms before the next. A closed loop:
+  the slower the bare answers, the fewer are sent (`bare_n`; with few
+  samples p99 is about the maximum), so two servers' bare latencies are
+  not measured under the same arrivals. Prints the heavy requests answered
+  per second and the bare requests' latency percentiles in ms;
+- `open` (not for `browser12`): the same four connections, while a bare
+  `GET /` is due every 10 ms whatever the answers, each on a new
+  connection of its own; its latency is counted from when it was due, so
+  a send that starts late counts its delay. An open loop: the same arrivals
+  for every server, `open_n` of them. Prints the heavy requests answered
+  per second and the bare requests' latency percentiles in ms.
 Every answer must be 200, and no connect, send or receive may wait more
-than TIMEOUT_S; otherwise the run stops with an error, also when it
-happens on a `load` connection. When the server has closed a kept-open
-connection, the request is sent again on a new one, at most RETRIES times
-in a row; each line prints how many requests were sent again (`resent`),
-so the server may have received up to that many more requests than were
-answered. Shapes are the largest Flare v0.12.0 admits over HTTP/1.1 (`max_header_size` 8192 counts header lines without CRLF):
-`same4000` (4000 lines `a:`) and `distinct2600` (2600 lines, each a
-distinct two-byte name and no value)."""
+than TIMEOUT_S. Anything else, an unexpected exception on any thread
+included, stops the run with exit status 1 after printing each failure
+(with its traceback). When the server has closed a kept-open connection,
+the request is sent again on a new one, at most RETRIES times in a row;
+each line prints how many requests were sent again (`resent`), so the
+server may have received up to that many more requests than were
+answered. Shapes are the largest Flare v0.12.0 admits over HTTP/1.1
+(`max_header_size` 8192 counts header lines without CRLF): `same4000`
+(4000 lines `a:`) and `distinct2600` (2600 lines, each a distinct
+two-byte name and no value)."""
 
 import itertools
 import socket
@@ -26,6 +34,7 @@ import string
 import sys
 import threading
 import time
+import traceback
 
 port, seconds = int(sys.argv[1]), float(sys.argv[2])
 TIMEOUT_S = 30.0
@@ -61,6 +70,7 @@ def request(fields):
 
 
 BARE = request("")
+INTERVAL_S = 0.01
 
 
 def roundtrip(sock, data, buf):
@@ -69,13 +79,17 @@ def roundtrip(sock, data, buf):
     while True:
         end = buf.find(b"\r\n\r\n")
         if end >= 0:
-            head = buf[:end].decode()
-            length = 0
-            for line in head.split("\r\n")[1:]:
-                if line.lower().startswith("content-length:"):
-                    length = int(line.split(":", 1)[1])
+            try:
+                head = buf[:end].decode("ascii")
+                length = 0
+                for line in head.split("\r\n")[1:]:
+                    if line.lower().startswith("content-length:"):
+                        length = int(line.split(":", 1)[1])
+                status = head.split(" ")[1]
+            except (UnicodeDecodeError, ValueError, IndexError) as e:
+                raise Failed(f"malformed answer head: {e!r}")
             if len(buf) >= end + 4 + length:
-                return head.split(" ")[1], buf[end + 4 + length:]
+                return status, buf[end + 4 + length:]
         chunk = sock.recv(65536)
         if not chunk:
             raise EOFError
@@ -110,6 +124,34 @@ def call(conn, data):
         return resent
 
 
+def guarded(f, failures):
+    """Runs `f`; any exception it raises is appended to `failures` with its
+    traceback, so a thread never ends unnoticed."""
+    try:
+        f()
+    except BaseException:
+        failures.append(traceback.format_exc())
+
+
+def spawn(f, failures):
+    t = threading.Thread(target=guarded, args=(f, failures))
+    t.start()
+    return t
+
+
+def run_threads(targets, failures):
+    """Runs every target on its own thread and joins them; the targets see
+    `failures` and stop once it is not empty."""
+    for t in [spawn(f, failures) for f in targets]:
+        t.join()
+
+
+def percentiles(prefix, latency):
+    latency.sort()
+    pct = lambda p: latency[min(len(latency) - 1, int(p * len(latency)))]
+    return f"{prefix}_n={len(latency)}\t{prefix}_p50_ms={pct(0.5):.2f}\t{prefix}_p99_ms={pct(0.99):.2f}\t{prefix}_max_ms={latency[-1]:.2f}"
+
+
 def single(name):
     data = request(SHAPES[name])
     times = []
@@ -124,51 +166,95 @@ def single(name):
     print(f"{name}\tsingle\tbytes={len(data)}\tmedian_ms={times[len(times) // 2]:.3f}\tmin_ms={times[0]:.3f}\tresent={resent}")
 
 
-def load(name):
+def heavy_senders(data, stop, answered, resent, failures):
+    def heavy(j):
+        conn = [None, b""]
+        while time.perf_counter() < stop and not failures:
+            resent[j] += call(conn, data)
+            answered[j] += 1
+
+    return [lambda j=j: heavy(j) for j in range(4)]
+
+
+def load(name, failures):
     data = request(SHAPES[name])
     stop = time.perf_counter() + seconds
     answered = [0] * 4
     resent = [0] * 5
     latency = []
-    errors = []
-
-    def heavy(j):
-        conn = [None, b""]
-        try:
-            while time.perf_counter() < stop and not errors:
-                resent[j] += call(conn, data)
-                answered[j] += 1
-        except Failed as e:
-            errors.append(str(e))
 
     def bare():
         conn = [None, b""]
+        while time.perf_counter() < stop and not failures:
+            start = time.perf_counter()
+            resent[4] += call(conn, BARE)
+            latency.append((time.perf_counter() - start) * 1000)
+            time.sleep(INTERVAL_S)
+
+    run_threads(heavy_senders(data, stop, answered, resent, failures) + [bare], failures)
+    if failures:
+        return
+    if not latency:
+        failures.append(f"{name} load: no bare answer")
+        return
+    print(f"{name}\tload\theavy_per_s={sum(answered) / seconds:.1f}\t{percentiles('bare', latency)}\tresent={sum(resent)}")
+
+
+def open_loop(name, failures):
+    data = request(SHAPES[name])
+    begin = time.perf_counter()
+    stop = begin + seconds
+    answered = [0] * 4
+    resent = [0] * 4
+    bare_resent = []
+    latency = []
+    due = [begin + k * INTERVAL_S for k in range(int(seconds / INTERVAL_S))]
+
+    def one(t):
+        conn = [None, b""]
         try:
-            while time.perf_counter() < stop and not errors:
-                start = time.perf_counter()
-                resent[4] += call(conn, BARE)
-                latency.append((time.perf_counter() - start) * 1000)
-                time.sleep(0.01)
-        except Failed as e:
-            errors.append(str(e))
+            # list.append is atomic; `+=` on a shared cell is not.
+            bare_resent.append(call(conn, BARE))
+            latency.append((time.perf_counter() - t) * 1000)
+        finally:
+            if conn[0] is not None:
+                conn[0].close()
 
-    threads = [threading.Thread(target=heavy, args=(j,)) for j in range(4)]
-    threads.append(threading.Thread(target=bare))
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    if errors:
-        raise Failed(f"{name} load: {errors[0]}")
-    latency.sort()
-    pct = lambda p: latency[min(len(latency) - 1, int(p * len(latency)))]
-    print(f"{name}\tload\theavy_per_s={sum(answered) / seconds:.1f}\tbare_n={len(latency)}\tbare_p50_ms={pct(0.5):.2f}\tbare_p99_ms={pct(0.99):.2f}\tbare_max_ms={latency[-1]:.2f}\tresent={sum(resent)}")
+    def bare():
+        threads = []
+        for t in due:
+            if failures:
+                break
+            wait = t - time.perf_counter()
+            if wait > 0:
+                time.sleep(wait)
+            threads.append(spawn(lambda t=t: one(t), failures))
+        for th in threads:
+            th.join()
+
+    run_threads(heavy_senders(data, stop, answered, resent, failures) + [bare], failures)
+    if failures:
+        return
+    if len(latency) != len(due):
+        failures.append(f"{name} open: {len(latency)} of {len(due)} bare requests answered")
+        return
+    print(f"{name}\topen\theavy_per_s={sum(answered) / seconds:.1f}\t{percentiles('open', latency)}\tresent={sum(resent) + sum(bare_resent)}")
 
 
+failures = []
 try:
     for shape in SHAPES:
         single(shape)
     for shape in ("same4000", "distinct2600"):
-        load(shape)
+        load(shape, failures)
+        if failures:
+            break
+        open_loop(shape, failures)
+        if failures:
+            break
 except Failed as e:
-    raise SystemExit(str(e))
+    failures.append(str(e))
+if failures:
+    for f in failures:
+        print(f, file=sys.stderr)
+    raise SystemExit(1)
