@@ -11,11 +11,16 @@
 # 1. runs bench_adapter: nanoseconds per request in process, no network, by
 #    request header count and body size, with and without middleware
 #    (bench/overhead/bench_adapter.mojo says what it measures);
-# 2. serves the application from each implementation on loopback and loads
+# 2. on Linux with glibc and a C compiler (`cc`), runs `bench_adapter count`
+#    under bench/overhead/count_alloc.c: the same cases' allocations per
+#    request, of which those of 64 KiB or more are a large echo's body
+#    copies; elsewhere it says the section is skipped;
+# 3. serves the application from each implementation on loopback and loads
 #    it with wrk over HTTP/1.1 keep-alive: requests per second, latency p50
 #    and p99 (wrk's), errors, and the server's peak resident memory (VmHWM;
 #    Linux only, `-` elsewhere), for each worker count, middleware off and
-#    on, endpoint and connection count.
+#    on, endpoint and connection count, ROUNDS times, then summarizes the
+#    rounds.
 #
 # Endpoints: plaintext (GET /plaintext), plaintext-h16 (the same with 16
 # more request header fields, X-Bench-000 to X-Bench-015; wrk alone sends
@@ -33,6 +38,17 @@
 # FLARE_REUSEPORT_WORKERS=0, one shared listener as Muntin's workers use).
 # Flare's workers are not pinned to cores (bench/overhead/server_flare.mojo).
 #
+# Rounds: each endpoint's servers start once; round r then loads every
+# connection count, the implementations in the order above in odd rounds and
+# in the reverse order in even ones (two rounds: muntin, flare, flare,
+# muntin), so that no implementation always runs first or last. Each line
+# names its round. With more than one round, a summary follows, one line per
+# configuration and pair: the median requests per second of each, and the
+# ratio of the second to the first in each round (median, minimum and
+# maximum): `flare/muntin` and, with several workers,
+# `flare-shared/flare`. A ratio whose minimum and maximum are on the same
+# side of 1 held in every round.
+#
 # CPUs: where taskset exists (Linux), the allowed CPUs (Cpus_allowed_list in
 # /proc/self/status, at least 2) are split in two: the first half runs the
 # servers, the second wrk and the in-process program (on its last CPU).
@@ -42,10 +58,11 @@
 #   WARMUP    seconds of the unmeasured wrk run before it (default 2)
 #   CONNS     connection counts (default "1 16 256")
 #   WORKERS   worker counts (default "1 N", N the server CPU count, at least 2)
+#   ROUNDS    loopback rounds (default 1)
 #   RUNS      timed runs per in-process case (default 15)
 #   WRK       the wrk command (default: wrk 4.2.0 from conda-forge through
 #             `pixi exec`, linux-64 only; elsewhere set WRK=wrk)
-# Needs curl, cmp and awk.
+# Needs curl, cmp, awk and sort.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -58,9 +75,11 @@ uint() { # NAME VALUE: refuses VALUE unless a decimal integer 1..999999
 duration="${DURATION-10}"
 warmup="${WARMUP-2}"
 runs="${RUNS-15}"
+rounds="${ROUNDS-1}"
 uint DURATION "$duration"
 uint WARMUP "$warmup"
 uint RUNS "$runs"
+uint ROUNDS "$rounds"
 read -r -a conns <<<"${CONNS-1 16 256}"
 for c in "${conns[@]}"; do uint CONNS "$c"; done
 if ((${#conns[@]} == 0)); then
@@ -129,6 +148,17 @@ done
 echo
 echo "== in process (ns per request)"
 ${bench_pin[@]+"${bench_pin[@]}"} "./$out/bench_adapter" "$runs"
+
+echo
+echo "== in process (allocations per request)"
+if [[ $(uname -s) == Linux ]] && getconf GNU_LIBC_VERSION >/dev/null 2>&1 &&
+    command -v cc >/dev/null; then
+    cc -shared -fPIC -O2 -o "$out/count_alloc.so" bench/overhead/count_alloc.c -ldl
+    LD_PRELOAD="$PWD/$out/count_alloc.so" ${bench_pin[@]+"${bench_pin[@]}"} \
+        "./$out/bench_adapter" count
+else
+    echo "# skipped: needs Linux with glibc and cc"
+fi
 
 # Request bodies, and wrk scripts that send them.
 printf '{"name":"Ada","age":36}' >"$out/json-post.body"
@@ -259,11 +289,53 @@ load() { # IMPL ENDPOINT PORT CONNS PID LABEL: one warm-up run and one measured 
         /^  Socket errors:/ { gsub(",", ""); n += $4 + $6 + $8 + $10 }
         END { print n + 0 }' <<<"$result")"
     printf '%s\tc=%s\t%s\treq_s=%s\tp50_us=%s\tp99_us=%s\terrors=%s\tpeak_rss_kib=%s\n' \
-        "$6" "$c" "$1" "$rps" "$p50" "$p99" "$errors" "$(peak_rss "$5")"
+        "$6" "$c" "$1" "$rps" "$p50" "$p99" "$errors" "$(peak_rss "$5")" | tee -a "$out/loopback.tsv"
+}
+
+summarize() { # the rounds of $out/loopback.tsv, one line per configuration and pair
+    awk -F '\t' '
+        function median(list,    v, n, i, j, t) {
+            n = split(list, v, " ")
+            for (i = 2; i <= n; i++)
+                for (j = i; j > 1 && v[j - 1] + 0 > v[j] + 0; j--) {
+                    t = v[j]; v[j] = v[j - 1]; v[j - 1] = t
+                }
+            return n % 2 ? v[(n + 1) / 2] : (v[n / 2] + v[n / 2 + 1]) / 2
+        }
+        function pair(key, a, b,    ratios, r, n, i, lo, hi, x) {
+            if (!((key, a) in rps) || !((key, b) in rps)) return
+            n = 0
+            for (r = 1; r <= rounds; r++) {
+                if (!((key, a, r) in one) || !((key, b, r) in one)) continue
+                x = one[key, b, r] / one[key, a, r]
+                ratios = ratios " " x
+                if (n == 0 || x < lo) lo = x
+                if (n == 0 || x > hi) hi = x
+                n++
+            }
+            printf "%s\t%s/%s\t%s=%.0f\t%s=%.0f\tratio_median=%.3f\tratio_min=%.3f\tratio_max=%.3f\trounds=%d\n",
+                key, b, a, a, median(rps[key, a]), b, median(rps[key, b]),
+                median(ratios), lo, hi, n
+        }
+        {
+            key = $1 "\t" $2 "\t" $3 "\t" $5
+            sub(/^round=/, "", $4); sub(/^req_s=/, "", $7)
+            if (!(key in seen)) { seen[key] = 1; keys[++nkeys] = key }
+            rps[key, $6] = rps[key, $6] " " $7
+            one[key, $6, $4] = $7
+            if ($4 + 0 > rounds) rounds = $4 + 0
+        }
+        END {
+            for (k = 1; k <= nkeys; k++) {
+                pair(keys[k], "muntin", "flare")
+                pair(keys[k], "flare", "flare-shared")
+            }
+        }' "$out/loopback.tsv"
 }
 
 echo
-echo "== over loopback (wrk, HTTP/1.1 keep-alive, ${duration} s after ${warmup} s of warm-up)"
+echo "== over loopback (wrk, HTTP/1.1 keep-alive, ${duration} s after ${warmup} s of warm-up, $rounds round(s))"
+: >"$out/loopback.tsv"
 for w in "${workers[@]}"; do
     impls=(muntin flare)
     ((w > 1)) && impls+=(flare-shared)
@@ -283,10 +355,17 @@ for w in "${workers[@]}"; do
                     exit 1
                 fi
             done
-            for c in "${conns[@]}"; do
-                for impl in "${impls[@]}"; do
-                    load "$impl" "$ep" "${port_of[$impl]}" "$c" "${pid_of[$impl]}" \
-                        "workers=$w	mw=$mw	$ep"
+            for ((r = 1; r <= rounds; r++)); do
+                order=("${impls[@]}")
+                if ((r % 2 == 0)); then
+                    order=()
+                    for ((i = ${#impls[@]} - 1; i >= 0; i--)); do order+=("${impls[i]}"); done
+                fi
+                for c in "${conns[@]}"; do
+                    for impl in "${order[@]}"; do
+                        load "$impl" "$ep" "${port_of[$impl]}" "$c" "${pid_of[$impl]}" \
+                            "workers=$w	mw=$mw	$ep	round=$r"
+                    done
                 done
             done
             for impl in "${impls[@]}"; do
@@ -297,3 +376,9 @@ for w in "${workers[@]}"; do
         done
     done
 done
+
+if ((rounds > 1)); then
+    echo
+    echo "== over loopback, the rounds summarized (requests per second)"
+    summarize
+fi

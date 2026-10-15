@@ -19,6 +19,8 @@ Implementations:
 - `flare`: Flare's `Router.serve` (`Tracing[Router]` with the middleware).
 - `headers`: `to_muntin_headers` alone, the adapter's request header
   conversion; `plaintext` cases without the middleware.
+- `copy`: one copy of the request body (`List[UInt8].copy()`), what each
+  body copy costs; `echo` cases without the middleware.
 
 Cases, each with and without the middleware (`mw=1`, `mw=0`):
 - `plaintext`, with `h` request header fields named `X-Bench-000` up to
@@ -31,7 +33,21 @@ Cases, each with and without the middleware (`mw=1`, `mw=0`):
 
 Each line printed is one case and one implementation, in nanoseconds per
 request: the median and the minimum over the timed runs.
+
+    bench_adapter count
+
+counts allocations instead of timing, under `count_alloc.c` (LD_PRELOAD;
+it raises without it), which says what is counted: for each case and
+implementation, after one request that warms it up, what each of `COUNTED`
+more requests allocates and frees, the response's drop included: `allocs`,
+`alloc_bytes`, `frees`, and the allocations of 64 KiB or more
+(`large_allocs`, `large_alloc_bytes`), which in the 64 KiB and 1 MiB echoes
+are the body copies. A value is printed as `min..max` when the requests
+differ.
 """
+
+from std.ffi import external_call
+from std.sys import argv
 
 from flare.http import Handler, Router
 from flare.http import Request as FlareRequest
@@ -46,6 +62,15 @@ from muntin_app import build
 comptime HEADER_COUNTS: List[Int] = [0, 8, 16, 32, 128]
 comptime BODY_SIZES: List[Int] = [0, 1024, 65536, 1048576]
 comptime JSON_IN = '{"name":"Ada","age":36}'
+comptime COUNTED = 8
+comptime COUNTERS: List[String] = [
+    "allocs",
+    "alloc_bytes",
+    "frees",
+    "large_allocs",
+    "large_alloc_bytes",
+]
+"""`count_alloc.c`'s `muntin_count`, in order."""
 
 
 struct MuntinCore(Dispatch):
@@ -105,6 +130,19 @@ struct HeaderConversion(Dispatch):
 
     def body(self) raises -> String:
         return String(len(to_muntin_headers(self.request)))
+
+
+struct BodyCopy(Dispatch):
+    var bytes: List[UInt8]
+
+    def __init__(out self, request: FlareRequest):
+        self.bytes = request.body.copy()
+
+    def status(self) raises -> Int:
+        return 200 if len(self.bytes.copy()) == len(self.bytes) else 500
+
+    def body(self) raises -> String:
+        return String(unsafe_from_utf8=self.bytes.copy())
 
 
 struct Case(Copyable):
@@ -173,9 +211,49 @@ def cases() -> List[Case]:
     return out^
 
 
+def _counters() raises -> Pointer[Int64, MutAnyOrigin]:
+    var name = String("muntin_count")
+    var address = external_call["dlsym", Int](
+        Int(0), name.as_c_string_span().ptr()
+    )
+    if address == 0:
+        raise Error("count: run under LD_PRELOAD=count_alloc.so")
+    return Pointer[Int64, MutAnyOrigin](unsafe_from_address=address)
+
+
+def count[D: Dispatch](d: D) raises -> String:
+    """`COUNTERS` per request after one warm-up request, as columns."""
+    var counters = _counters()
+    var names = materialize[COUNTERS]()
+    var k = len(names)
+    _ = d.status()
+    var low = List[Int64](length=k, fill=Int64.MAX)
+    var high = List[Int64](length=k, fill=Int64.MIN)
+    for _ in range(COUNTED):
+        var before = List[Int64](capacity=k)
+        for i in range(k):
+            before.append(counters[unsafe_offset=i])
+        if d.status() != 200:
+            raise Error("unexpected status while counting")
+        for i in range(k):
+            var n = counters[unsafe_offset=i] - before[i]
+            low[i] = min(low[i], n)
+            high[i] = max(high[i], n)
+    var out = String()
+    for i in range(k):
+        if i > 0:
+            out += "\t"
+        out += names[i] + "=" + String(low[i])
+        if high[i] != low[i]:
+            out += ".." + String(high[i])
+    return out^
+
+
 def measure[
     D: Dispatch
-](c: Case, middleware: Bool, impl: String, d: D, runs: Int) raises:
+](
+    c: Case, middleware: Bool, impl: String, d: D, runs: Int, counting: Bool
+) raises:
     var name = (
         c.label
         + "\th="
@@ -197,16 +275,27 @@ def measure[
         expect = String(c.headers)
     if d.body() != expect:
         raise Error(name + ": unexpected body")
-    print(name + "\t" + time_per_request(d, runs, 200).columns())
+    if counting:
+        print(name + "\t" + count(d))
+    else:
+        print(name + "\t" + time_per_request(d, runs, 200).columns())
 
 
 def main() raises:
-    var runs = runs_arg()
+    var args = argv()
+    var counting = len(args) > 1 and args[1] == "count"
+    var runs = 1 if counting else runs_arg()
     for mw in [False, True]:
         for c in cases():
-            measure(c, mw, "muntin", MuntinCore(mw, c.request()), runs)
+            var r = c.request()
+            measure(c, mw, "muntin", MuntinCore(mw, r), runs, counting)
             measure(
-                c, mw, "muntin+adapter", MuntinAdapter(mw, c.request()), runs
+                c,
+                mw,
+                "muntin+adapter",
+                MuntinAdapter(mw, c.request()),
+                runs,
+                counting,
             )
             if mw:
                 measure(
@@ -215,10 +304,25 @@ def main() raises:
                     "flare",
                     FlareDirect(Tracing(router()), c.request()),
                     runs,
+                    counting,
                 )
             else:
                 measure(
-                    c, mw, "flare", FlareDirect(router(), c.request()), runs
+                    c,
+                    mw,
+                    "flare",
+                    FlareDirect(router(), c.request()),
+                    runs,
+                    counting,
                 )
             if c.label == "plaintext" and not mw:
-                measure(c, mw, "headers", HeaderConversion(c.request()), runs)
+                measure(
+                    c,
+                    mw,
+                    "headers",
+                    HeaderConversion(c.request()),
+                    runs,
+                    counting,
+                )
+            if c.label == "echo" and not mw:
+                measure(c, mw, "copy", BodyCopy(r), runs, counting)
