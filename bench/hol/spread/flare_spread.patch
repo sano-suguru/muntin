@@ -1,0 +1,111 @@
+diff --git a/flare/http/_unified_reactor_impl.mojo b/flare/http/_unified_reactor_impl.mojo
+index c6c4e96..6ba6740 100644
+--- a/flare/http/_unified_reactor_impl.mojo
++++ b/flare/http/_unified_reactor_impl.mojo
+@@ -56,6 +56,7 @@ kernel wakes one worker per accept event.
+ """
+ 
+ from std.builtin.debug_assert import debug_assert
++from std.sys import CompilationTarget
+ from std.collections import Dict, Optional
+ from std.ffi import c_int, get_errno
+ from std.memory import Pointer
+@@ -1101,7 +1102,10 @@ def _run_unified_loop_for_fd[
+ 
+     comptime if is_shared:
+         reactor.register_exclusive(
+-            c_int(listener_fd), LISTENER_TOKEN, INTEREST_READ
++            c_int(listener_fd),
++            LISTENER_TOKEN,
++            INTEREST_READ,
++            without_rdhup=True,
+         )
+     else:
+         reactor.register(c_int(listener_fd), LISTENER_TOKEN, INTEREST_READ)
+@@ -1130,6 +1134,7 @@ def _run_unified_loop_for_fd[
+         var now_ms = UInt64(_monotonic_ms())
+         _advance_timer_wheel_unified(now_ms, wheel, conns, timers, reactor)
+ 
++        var listener_lost = False
+         for i in range(len(events)):
+             var evt = events[i]
+             if evt.is_wakeup():
+@@ -1145,6 +1150,25 @@ def _run_unified_loop_for_fd[
+                     config.max_connections,
+                     tls_ctx_addr,
+                 )
++                # Linux offers a new connection on a shared listener to the
++                # first waiting worker in the listener's wait queue (an
++                # implementation detail, not epoll_ctl(2)'s contract), so a
++                # worker that stays first takes every connection while it
++                # is idle. Registering again moves this worker to the tail.
++                comptime if is_shared and CompilationTarget.is_linux():
++                    reactor.unregister(c_int(listener_fd))
++                    try:
++                        reactor.register_exclusive(
++                            c_int(listener_fd),
++                            LISTENER_TOKEN,
++                            INTEREST_READ,
++                            without_rdhup=True,
++                        )
++                    except:
++                        # Neither the exclusive nor the plain registration
++                        # took: this worker can no longer see new
++                        # connections, so it ends as on a failed poll.
++                        listener_lost = True
+                 continue
+             var fd = Int(evt.token)
+             if len(listener_fds) > 0 and fd in listener_fds:
+@@ -1176,6 +1200,9 @@ def _run_unified_loop_for_fd[
+                 timers,
+                 ws_hooks.copy(),
+             )
++        if listener_lost:
++            exit_status = WORKER_STATUS_CRASHED
++            break
+ 
+     store_worker_stat(stats_addr, WORKER_STAT_STATUS, exit_status)
+     # Publish what was actually still in flight when the loop stopped,
+diff --git a/flare/runtime/reactor.mojo b/flare/runtime/reactor.mojo
+index 79f909e..31885dc 100644
+--- a/flare/runtime/reactor.mojo
++++ b/flare/runtime/reactor.mojo
+@@ -315,7 +315,12 @@ struct Reactor(Movable):
+         self._register_raw(fd, token, interest)
+ 
+     def register_exclusive(
+-        mut self, fd: c_int, token: UInt64, interest: Int
++        mut self,
++        fd: c_int,
++        token: UInt64,
++        interest: Int,
++        *,
++        without_rdhup: Bool = False,
+     ) raises -> None:
+         """Register ``fd`` with ``EPOLLEXCLUSIVE`` semantics on Linux.
+ 
+@@ -345,6 +350,12 @@ struct Reactor(Movable):
+                       ``WAKEUP_TOKEN``.
+             interest: Bitmask; in practice always ``INTEREST_READ`` for
+                       the listener path.
++            without_rdhup: Leave ``EPOLLRDHUP`` out, which the kernel
++                      refuses beside ``EPOLLEXCLUSIVE`` (``EINVAL``), so
++                      the exclusive registration takes. Off by default:
++                      a loop that sets it must also spread connections
++                      (see the unified shared loop), or one idle worker
++                      takes every connection.
+ 
+         Raises:
+             NetworkError: Same conditions as ``register``.
+@@ -362,7 +373,10 @@ struct Reactor(Movable):
+             var ev = stack_allocation[EPOLL_EVENT_SIZE, UInt8]()
+             for i in range(EPOLL_EVENT_SIZE):
+                 ev.unsafe_offset(i).unsafe_write(UInt8(0))
+-            var bits = _interest_to_epoll(interest) | EPOLLEXCLUSIVE
++            var base = _interest_to_epoll(interest)
++            if without_rdhup:
++                base = base & ~EPOLLRDHUP
++            var bits = base | EPOLLEXCLUSIVE
+             _epoll_event_set(ev, bits, token)
+             var rc = _epoll_ctl(self._fd, EPOLL_CTL_ADD, fd, ev)
+             if rc < c_int(0):
