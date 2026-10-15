@@ -380,7 +380,7 @@ def _answer(app: App, request: FlareRequest) -> FlareResponse:
         return FlareResponse(
             status=400, body=List(String("Bad Request").as_bytes())
         )
-    return to_flare_response(app.handle(muntin_request))
+    return to_flare_response(app.handle(muntin_request^))
 
 
 def _serve_app(app: App, request: FlareRequest) -> FlareResponse:

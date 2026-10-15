@@ -2,6 +2,8 @@
 # through `TestClient`. Contract: docs/history/architecture-decisions.md,
 # "Middleware decision (M3-034)", "Next production slice"; semantics:
 # docs/DX.md section 7. Must-not-build evidence: tests/middleware_api_fail.
+# M3-064: the owning `App.handle` ("Request context decision (M3-063)",
+# "Next production slice"), the last tests.
 
 from std.memory import ArcPointer
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
@@ -239,6 +241,14 @@ def drop_allow(var request: Request, var next: Next) raises -> Response:
     var response = next^.run(request^)
     if response.status == 405:
         return Response(405, response.body.copy())
+    return response^
+
+
+def body_at(var request: Request, var next: Next) raises -> Response:
+    """Answers with the address of the body buffer it received."""
+    var at = String(Int(request.body.unsafe_ptr()))
+    var response = next^.run(request^)
+    response.headers.add("X-Body-At", at)
     return response^
 
 
@@ -529,6 +539,112 @@ def test_middleware_survives_moving_the_app() raises:
     var r = TestClient(held[0]).get("/hello")
     assert_equal(r.text(), "hello")
     assert_equal(_field(r, "X-Seen"), "GET")
+
+
+comptime CHAINS = 13
+"""The middleware chains `_chain` builds: none, then one per middleware case
+above."""
+
+
+def _chain(i: Int, counter: State[Counter]) -> App:
+    """The routes behind the `i`-th middleware chain."""
+    var app = _app(counter)
+    if i == 1:
+        app.use(passthrough)
+    elif i == 2:
+        app.use(stamp)
+    elif i == 3:
+        app.use(trail_a)
+        app.use(trail_b)
+    elif i == 4:
+        app.use(stamp)
+        app.use(gate)
+        app.use(inner)
+    elif i == 5:
+        app.use(rewrite)
+        app.use(tagged["v1"])
+        app.use(tagged["v2"])
+    elif i == 6:
+        app.use(fail_before)
+    elif i == 7:
+        app.use(fail_after)
+    elif i == 8:
+        app.use(stamp)
+        app.use(fail_before)
+    elif i == 9:
+        app.use(borrowing)
+        app.use(not_raising)
+    elif i == 10:
+        app.use(own_404)
+    elif i == 11:
+        app.use(narrow_allow)
+    elif i == 12:
+        app.use(drop_allow)
+    return app^
+
+
+def _every_request() raises -> List[Request]:
+    """`_requests()`, then the paths the middleware above treat apart."""
+    var r = _requests()
+    var trail = Headers()
+    trail.add("X-Trail", "client")
+    r.append(Request("GET", "/trail", "", trail^))
+    r.append(Request("GET", "/counted"))
+    r.append(Request("GET", "/blocked"))
+    r.append(Request("GET", "/nowhere"))
+    r.append(Request("GET", "/old"))
+    r.append(Request("PUT", "/echo", "put body"))
+    return r^
+
+
+def test_owning_and_borrowing_handle_answer_alike() raises:
+    # M3-064: for each chain and request, the borrowing `handle` (a named
+    # value) and the owning one (a temporary) give the same answer and run
+    # the handler the same number of times.
+    var counter = State(Counter())
+    for i in range(CHAINS):
+        var app = _chain(i, counter)
+        for request in _every_request():
+            var what = String(i) + " " + request.method + " " + request.path
+            var before = counter[].n[]
+            var borrowed = app.handle(request)
+            var calls = counter[].n[] - before
+            before = counter[].n[]
+            var owned = app.handle(request.copy())
+            _same(owned, borrowed, what)
+            assert_equal(counter[].n[] - before, calls, what)
+
+
+def test_the_owning_handle_moves_the_request_into_the_chain() raises:
+    # M3-064: with middleware, the first middleware receives the caller's
+    # body buffer itself through the owning `handle` (`request^`, or
+    # TestClient's temporary), and a copy through the borrowing one.
+    var counter = State(Counter())
+    var app = _app(counter)
+    app.use(body_at)
+    app.use(stamp)
+    var payload = "payload"
+
+    var moved = Request("POST", "/echo", payload)
+    var at = String(Int(moved.body.unsafe_ptr()))
+    var r = app.handle(moved^)
+    assert_equal(r.text(), "POST /echo payload")
+    assert_equal(_field(r, "X-Seen"), "POST")
+    assert_equal(_field(r, "X-Body-At"), at)
+
+    var bytes = List(payload.as_bytes())
+    at = String(Int(bytes.unsafe_ptr()))
+    r = TestClient(app).post("/echo", bytes^)
+    assert_equal(r.text(), "POST /echo payload")
+    assert_equal(_field(r, "X-Body-At"), at)
+
+    var borrowed = Request("POST", "/echo", payload)
+    at = String(Int(borrowed.body.unsafe_ptr()))
+    r = app.handle(borrowed)
+    assert_equal(r.text(), "POST /echo payload")
+    assert_true(_field(r, "X-Body-At") != at)
+    # The caller's request is still its own.
+    assert_equal(String(unsafe_from_utf8=borrowed.body), payload)
 
 
 def main() raises:

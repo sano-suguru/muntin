@@ -1310,7 +1310,7 @@ app.get["/users/{id}"](get_user)
 
 Middleware should be able to inspect a request, short-circuit, call the next layer, inspect/modify a response, and attach request-scoped typed context. The public middleware contract must be Muntin-owned even if an adapter internally translates to a backend-specific mechanism.
 
-Status: production, proven by `tests/test_middleware.mojo` (through `TestClient`, `HEAD` through `TestClient.head`; it runs the example below as written), `tests/test_testclient_head.mojo` (`HEAD` through middleware: seen as `HEAD`, a field added, a short circuit, a replaced 404), `tests/middleware_api_fail/` (via `./scripts/check.sh`) and, over real loopback connections through Flare's `Server` (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`. Middleware is a function (why: [Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034)):
+Status: production, proven by `tests/test_middleware.mojo` (through `TestClient`, `HEAD` through `TestClient.head`, and the owning and borrowing `App.handle` alike; it runs the example below as written), `tests/test_testclient_head.mojo` (`HEAD` through middleware: seen as `HEAD`, a field added, a short circuit, a replaced 404), `tests/middleware_api_fail/` (via `./scripts/check.sh`) and, over real loopback connections through Flare's `Server` (HTTP/1.1 and cleartext HTTP/2), `adapters/flare/test_localhost_roundtrip.mojo`. Middleware is a function (why: [Middleware decision (M3-034)](history/architecture-decisions.md#middleware-decision-m3-034)):
 
 ```mojo
 from muntin import App, Next, Request, Response
@@ -1342,7 +1342,7 @@ def main() raises:
 - Errors: a raise out of a middleware is the fixed 500 `Internal Server Error` at that middleware's call, with no error text; the middleware outside it receives that 500 from its `next` as an ordinary response and continues. A raise before `next^.run` leaves the rest, the handler included, uncalled. Middleware has no error type of its own.
 - Configuration is compile-time only, through the function's own parameters (`app.use(tagged["v1"])` for `def tagged[value: StaticString](var request: Request, var next: Next) raises -> Response`). A closure that captures a runtime value does not convert (`cannot be converted from ... to 'Middleware'`), nor does a function without `next` or a plain value. Not supported: runtime-configured middleware (the `Tracing()` values above, or a value read at start-up), request-scoped typed context, per-route or per-group middleware, middleware error types, async.
 - An identity is not passed in header fields: middleware can allow or deny a request, but request header fields are client input (a client can send the same name itself), so a field middleware writes for a handler to trust is not a way to hand it an authenticated identity, and an application must not use one as such.
-- Cost: an `App` with no middleware dispatches as before, plus a length check. With middleware, `App.handle` copies the borrowed request once per request (method, path, query, header fields and body), and each middleware is one call and one `Next`. Over Flare the body in that copy is bounded by the `Server`'s `max_body_bytes` (10 MiB unless set); `TestClient` and other in-memory callers have no such bound. Each middleware also adds one level of nested calls (`App.handle` to the middleware, to `next^.run`, to the next one), so the stack grows with the number registered. Neither the copy nor the stack is measured.
+- Cost: an `App` with no middleware dispatches as before, plus a length check. With middleware, each middleware is one call and one `Next`, and the request reaches the first one without a copy when `App.handle` is handed it (`app.handle(request^)` or a temporary, as `TestClient` and the Flare adapter pass it; section 11): the first middleware receives that request's own body buffer. Given a named request, which the caller keeps, `App.handle` copies it once per request (method, path, query, header fields and body) for the chain, a cost that grows with the body ([M3-063](history/architecture-decisions.md#request-context-decision-m3-063) measures it). Each middleware also adds one level of nested calls (`App.handle` to the middleware, to `next^.run`, to the next one), so the stack grows with the number registered; the stack is not measured.
 
 ## 8. Application state
 
@@ -1649,6 +1649,8 @@ in-memory  Flare
 
 Flare is an implementation backend, not part of Muntin's durable application contract.
 
+The backend boundary is `App.handle`, which takes the request either way and answers it alike: handed over (`app.handle(request^)`, or a temporary such as `app.handle(Request("GET", "/hello"))`), or lent (`app.handle(request)`, a named value the caller keeps). Mojo picks the owning overload for the first and the borrowing one for the second. `TestClient` and the Flare adapter hand their request over. The only difference is cost: with middleware, a lent request is copied for the chain (section 7, "Cost"). Proven by `tests/test_middleware.mojo`.
+
 ## 12. Compile-time route information
 
 Where supported cleanly by Mojo, prefer preserving route literals at compile time:
@@ -1687,6 +1689,8 @@ def get_user(id: Int) -> User:
 over requiring every ordinary handler to accept allocators, connection contexts, or backend lifecycle objects.
 
 Low-level APIs may expose more control when an endpoint genuinely needs it.
+
+Today a `Request` and a `Response` own their data. A request handed to `App.handle` (section 11) moves through the middleware chain without a copy; a lent one is copied once before the chain. Copies that remain whichever way the request arrives: the Flare adapter copies the body out of Flare's request, a raw handler receives a copy of the body (section 9), and a typed text body is read into text (section 4).
 
 ## 16. Error messages are part of the API
 
