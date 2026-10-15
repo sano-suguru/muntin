@@ -4687,7 +4687,7 @@ def me(user: Context[CurrentUser]) -> String:
 
 ### Worker connection spread decision (M3-068)
 
-Status: **decision** (M3-068, pull request #PR; `src/muntin` and the adapter's behavior unchanged). The probes, traces, prototypes and measurements are in the pull request.
+Status: **decision** (M3-068, pull request #120; `src/muntin` and the adapter's behavior unchanged). The probes, traces, prototypes and measurements are in the pull request.
 
 **Question and what settles it.** `serve[make](workers=n)`'s workers share one listener, and connections kept open cluster on one worker (`docs/DX.md` section 1, Workers; pull request #109), so whether a keep-alive pool or an h2c client waits behind a slow handler depends on which worker happened to take its connections. Can they be spread while [M3-049](#multi-worker-serving-decision-m3-049)'s tested guarantee (a connection opened while one worker is held is answered by another), [M3-045](#graceful-shutdown-decision-m3-045)'s stop and [M3-060](#tls-with-workers-decision-m3-060)'s TLS workers still hold? Settled by why they cluster (Flare v0.12.0's worker loop read in code, its system calls traced), Linux's wake-up rules probed outside Flare, each candidate measured with `bench/hol` on Linux (spread, and every hold case with 4 workers), and `scripts/check_flare.sh` run against the chosen change. The cause found: Flare's loop asks Linux for `EPOLLEXCLUSIVE` on the shared listener together with `EPOLLRDHUP`, which Linux refuses beside it (`EINVAL`), and falls back to a plain registration, so every idle worker wakes for each new connection and the first to accept takes it.
 
