@@ -18,10 +18,17 @@
 #    request. It builds at most COMPARE_JOBS copies at once (default 4), and
 #    fails if a copy does not build without a compiler error (such as a
 #    compiler killed for lack of memory), which is not a rejected mistake.
-# Builds go under build/compare_dx. Every request has a 10 s limit. Needs curl,
-# cmp and python3.
+# Builds go under build/compare_dx. Every request has a 10 s limit, and a
+# transfer curl reports as failed (exit status not 0, such as a body shorter
+# than its Content-Length) fails a specified request whatever was received.
+# Needs bash 4.3 or later (`wait -n`; macOS ships 3.2), curl, cmp and python3.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3))); then
+    echo "error: needs bash 4.3 or later, found $BASH_VERSION" >&2
+    exit 1
+fi
 
 FLARE=(pixi run --frozen -e flare mojo)
 "${FLARE[@]}" --version
@@ -76,7 +83,8 @@ start() { # BINARY VAR: serves BINARY on a free port, sets VAR to it once it ans
 }
 
 ask() { # PORT METHOD TARGET BODY CONTENT_TYPE: prints status, Content-Type, Allow and body,
-    # tab-separated; the body exactly as received is left in $out/body
+    # tab-separated; the body exactly as received is left in $out/body. Returns
+    # curl's exit status, printing nothing, when curl reports the transfer failed.
     local args=(-X "$2" -D "$out/headers" -o "$out/body")
     if [[ $2 == HEAD ]]; then
         args=(-I -D "$out/headers" -o /dev/null)
@@ -90,8 +98,12 @@ ask() { # PORT METHOD TARGET BODY CONTENT_TYPE: prints status, Content-Type, All
             args+=(-H "Content-Type: $5")
         fi
     fi
-    local status
-    status="$("${CURL[@]}" "${args[@]}" -w '%{http_code}' "http://127.0.0.1:$1$3" || true)"
+    : >"$out/headers"
+    local status code=0
+    status="$("${CURL[@]}" "${args[@]}" -w '%{http_code}' "http://127.0.0.1:$1$3")" || code=$?
+    if ((code != 0)); then
+        return "$code"
+    fi
     local ctype allow
     ctype="$(sed -n 's/^[Cc]ontent-[Tt]ype: *\(.*\)\r$/\1/p' "$out/headers")"
     allow="$(sed -n 's/^[Aa]llow: *\(.*\)\r$/\1/p' "$out/headers")"
@@ -170,7 +182,14 @@ while IFS=$'\t' read -r method target body status expected; do
     [[ -z $method || $method == \#* ]] && continue
     for prog in muntin flare; do
         port_var="${prog}_port"
-        IFS=$'\t' read -r got_status _ _ got_body < <(ask "${!port_var}" "$method" "$target" "$body" application/json)
+        code=0
+        response="$(ask "${!port_var}" "$method" "$target" "$body" application/json)" || code=$?
+        if ((code != 0)); then
+            printf 'FAIL\t%s\t%s %s\tthe transfer failed (curl exit %s)\n' "$prog" "$method" "$target" "$code"
+            failed=1
+            continue
+        fi
+        IFS=$'\t' read -r got_status _ _ got_body <<<"$response"
         # The body is compared byte for byte, a trailing newline included.
         printf '%s' "$expected" >"$out/expected"
         if [[ $got_status == "$status" ]] && cmp -s "$out/body" "$out/expected"; then
@@ -193,8 +212,12 @@ while IFS=$'\t' read -r method target body ctype; do
     sent="$method $target"
     [[ $body != - ]] && sent+=" $body (Content-Type: ${ctype/#-/none})"
     echo "$sent"
-    printf '  muntin\t%s\n' "$(ask "$muntin_port" "$method" "$target" "$body" "$ctype")"
-    printf '  flare\t%s\n' "$(ask "$flare_port" "$method" "$target" "$body" "$ctype")"
+    for prog in muntin flare; do
+        port_var="${prog}_port"
+        response="$(ask "${!port_var}" "$method" "$target" "$body" "$ctype")" ||
+            response="the transfer failed (curl exit $?)"
+        printf '  %s\t%s\n' "$prog" "$response"
+    done
 done <"$dir/defaults.tsv"
 cleanup
 pids=()
@@ -251,8 +274,12 @@ while IFS=$'\t' read -r name prog method target body; do
         diagnostic "$out/${name}_$prog" || unexplained=1
     else
         start "$out/${name}_$prog" port
-        IFS=$'\t' read -r st _ _ got < <(ask "$port" "$method" "$target" "$body" application/json)
-        printf 'builds; %s %s -> %s %s\n' "$method" "$target" "$st" "$got"
+        if response="$(ask "$port" "$method" "$target" "$body" application/json)"; then
+            IFS=$'\t' read -r st _ _ got <<<"$response"
+            printf 'builds; %s %s -> %s %s\n' "$method" "$target" "$st" "$got"
+        else
+            printf 'builds; %s %s -> the transfer failed (curl exit %s)\n' "$method" "$target" "$?"
+        fi
         cleanup
         pids=()
     fi
