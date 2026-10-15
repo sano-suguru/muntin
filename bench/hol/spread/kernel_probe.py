@@ -1,8 +1,10 @@
 """Linux kernel probes for the worker-spread decision (M3-068).
 
 shared: one listener, N threads each with its own epoll, the listener
-registered EPOLLIN|EPOLLEXCLUSIVE level-triggered, accept until EAGAIN
-(Flare v0.12.0's shared-listener worker loop). rotate: the same, but a
+registered EPOLLIN|EPOLLEXCLUSIVE level-triggered, accept until EAGAIN: a
+working exclusive registration without re-registration, which stock Flare
+v0.12.0 never reaches (its EPOLLRDHUP makes the kernel refuse the flag, and
+it falls back to a plain registration). rotate: the same, but a
 worker re-registers the listener (DEL then ADD) after each accept batch.
 reuseport: one SO_REUSEPORT listener per worker. Client opens K connections
 one after another, each kept open after its accept is seen.

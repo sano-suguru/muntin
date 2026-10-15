@@ -46,6 +46,12 @@ git -C "$dir/flare" apply "$PWD/$here/flare_spread.patch"
 
 installed=.pixi/envs/flare/lib/mojo/flare
 saved="$dir/flare-installed"
+# A run killed while the patched source was installed leaves $saved behind;
+# moving onto it again would nest the original inside it.
+[[ ! -e $saved ]] ||
+    { echo "error: $saved exists: a run was killed; check $installed and restore it first" >&2; exit 1; }
+diff -rq "$checkout/flare" "$installed" >/dev/null ||
+    { echo "error: $installed differs from $checkout/flare" >&2; exit 1; }
 restore() {
     if [[ -d $saved ]]; then
         rm -rf "$installed"
