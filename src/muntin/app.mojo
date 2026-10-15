@@ -3,8 +3,10 @@
 from std.builtin.rebind import rebind_var
 from std.collections import Dict
 from std.os import abort
+from std.reflection import reflect
 
 from ._handler_storage import _Erased
+from ._handler_storage import _build_record
 from ._registration_rules import (
     _BODY,
     _HEADERS,
@@ -13,6 +15,7 @@ from ._registration_rules import (
     _admits,
     _check,
     _is_optional,
+    _is_value,
     _is_param,
     _kind,
     _param_name,
@@ -24,7 +27,7 @@ from .body import FromBody, FromBytes, _body_text
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
-from .route_value import FromRouteValue, _NamedValue
+from .route_value import FromRouteValue, RouteValues, _NamedValue
 from .state import State
 
 # Tags such as (M3-014) name the item whose decision, in
@@ -42,9 +45,11 @@ from .state import State
 # slot is a generic `var A` (a plain `def` with a borrowed parameter converts
 # to it too), and its kind is decided at compile time from its type alone
 # (`_kind`): a route value (`Int`, `String` or an `Optional` of either,
-# below), a body (`FromBody`, `FromBytes` or a `WithHeaders` carrier,
-# below), the raw `Request`, the request `Headers` (below), a misplaced
-# `State`, or none.
+# below), a route-value record (`RouteValues`, M3-061: one slot carrying
+# every route value, so a slot reads as many route values as its `_width`),
+# a body (`FromBody`, `FromBytes` or a `WithHeaders` carrier, below), the
+# raw `Request`, the request `Headers` (below), a misplaced `State`, or
+# none.
 #
 # Mojo 1.1.0 function types spelled without `thin` are traits and cannot be
 # stored, so the overloads take thin function values; ordinary `def`
@@ -769,13 +774,19 @@ def _slot[
     (400 if it raises); the rules reject a type that is also a `FromBody`.
     A `FromBytes` body longer than its type's `max_bytes`, bare or carried
     (`A._max_bytes()`, checked before the rebuild), is 413 before any of
-    that (M3-043).
+    that (M3-043). A `RouteValues` record (M3-061) is built by
+    `_build_record`, never by its own initializers: field `i` is converted
+    as a bare slot of its type from `args[at + i]` (`_record_field`), in
+    field order, so the first invalid one is 400 and nothing after it is
+    converted.
 
     `A` is refined here rather than bounded: forwarding a handler with an
     explicit body type to a callee that requires `FromBody` fails on Mojo
     1.1.0 (docs/history/architecture-decisions.md, "Argument extraction decision (M2-005)").
     """
-    comptime if conforms_to(A, _NamedValue):
+    comptime if conforms_to(A, RouteValues):
+        return _build_record[A, _Reject, _record_field, at](args, body)
+    elif conforms_to(A, _NamedValue):
         # A `Param` (M3-050): its value converted as a bare slot of its type.
         # Only an exact `Param` reaches here: `_kind` gives any other type
         # conforming to the private marker no kind, so `_admits` refuses it
@@ -854,6 +865,30 @@ def _slot[
                 raise _Reject(400)
 
 
+def _record_field[
+    F: Movable & Deinitable, i: Int
+](args: List[String], body: List[UInt8]) raises _Reject -> F:
+    """A field of a `RouteValues` record (M3-061): the bare slot of type `F`
+    at `args[i]`, converted by `_slot`. The registration rules accept only
+    route values as fields, so `body` is never read."""
+    return _slot[F, i](args, body)
+
+
+def _width[A: AnyType]() -> Int:
+    """How many route values a request slot of type `A` reads (M3-061): a
+    record its field count, a bare route value (a `Param` included) one,
+    any other slot (a body, `Headers`, the `Request`) none. A slot's first
+    route value is at the sum of the widths of the slots before it, which
+    is also where a `Headers` slot's fields or a JSON body's verdict
+    start."""
+    comptime if conforms_to(A, RouteValues):
+        return reflect[A].field_count()
+    elif _is_value(_kind[A]()):
+        return 1
+    else:
+        return 0
+
+
 def _respond[R: Movable & Deinitable](var result: R) -> Response:
     """The result policy, chosen at compile time from `R`: `String` or
     `StaticString` is a 200 text response, a `ToResponse` converts itself
@@ -926,7 +961,7 @@ def _call_2[
     var b: B
     try:
         a = _slot[A, 0](args, body)
-        b = _slot[B, 1](args, body)
+        b = _slot[B, _width[A]()](args, body)
     except r:
         return _rejected(r)
     var result: R
@@ -956,8 +991,8 @@ def _call_3[
     var c: C
     try:
         a = _slot[A, 0](args, body)
-        b = _slot[B, 1](args, body)
-        c = _slot[C, 2](args, body)
+        b = _slot[B, _width[A]()](args, body)
+        c = _slot[C, _width[A]() + _width[B]()](args, body)
     except r:
         return _rejected(r)
     var result: R
@@ -1038,7 +1073,7 @@ def _call_state_2[
     var b: B
     try:
         a = _slot[A, 0](args, body)
-        b = _slot[B, 1](args, body)
+        b = _slot[B, _width[A]()](args, body)
     except r:
         return _rejected(r)
     var result: R
@@ -1067,8 +1102,8 @@ def _call_state_3[
     var c: C
     try:
         a = _slot[A, 0](args, body)
-        b = _slot[B, 1](args, body)
-        c = _slot[C, 2](args, body)
+        b = _slot[B, _width[A]()](args, body)
+        c = _slot[C, _width[A]() + _width[B]()](args, body)
     except r:
         return _rejected(r)
     var result: R
@@ -1087,8 +1122,9 @@ def _route[
     is a `Json[T]`, raw when its slot is the `Request`, and a route that
     receives the header fields for a carrier or a `Headers` slot. A body, a `Headers` or a `Request` slot is always the
     last one, so the flags read every slot. Each query key whose value binds
-    an `Optional` slot is marked optional (M3-025): route values come first,
-    so the value at position `j` binds query key `j - paths`."""
+    an `Optional` slot or record field is marked optional (M3-025, M3-061):
+    route values come first, a record's fields in field order, so the value
+    at position `j` binds query key `j - paths`."""
     var route = _Route(
         method,
         path,
@@ -1105,7 +1141,15 @@ def _route[
         raw=_kind[A]() == _RAW,
     )
     var paths = _path_params(path)
-    var kinds = [_kind[A](), _kind[B](), _kind[C]()]
+    var kinds = List[Int]()
+    comptime if conforms_to(A, RouteValues):
+        comptime types = reflect[A].field_types()
+        comptime for i in range(reflect[A].field_count()):
+            kinds.append(_kind[types[i]]())
+    else:
+        kinds.append(_kind[A]())
+    kinds.append(_kind[B]())
+    kinds.append(_kind[C]())
     for j in range(len(kinds)):
         if _is_optional(kinds[j]):
             route.query_optional[j - paths] = True

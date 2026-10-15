@@ -1,12 +1,14 @@
-"""Muntin's private storage: the handler box `_Erased` and the shared state
-box `_Shared`.
+"""Muntin's private storage: the handler box `_Erased`, the shared state
+box `_Shared`, and `_build_record`, which builds a route-value record field
+by field.
 
 Not part of Muntin's public API; nothing here is exported from `muntin`.
 This is the only module in `src/muntin` allowed to use unsafe pointer or
 ownership operations (`scripts/check_unsafe.sh` fails otherwise). Decision
 and evidence: docs/history/architecture-decisions.md, "Handler storage decision (M2)" and its
 "Production implementation (M2-004)" for `_Erased`, "State storage decision
-(M3-004)" for `_Shared`.
+(M3-004)" for `_Shared`, "Route-value records decision (M3-061)" for
+`_build_record`.
 
 A handler value of type `F` is moved into an `OwnedPointer[F]`, and the
 allocation is then held as an opaque pointer. Only the pointer is erased;
@@ -56,7 +58,13 @@ Unsafe operations, all in this module:
   read, and released (`_Erased`, `_Shared`);
 - `Pointer.unsafe_mut_cast` + `Pointer.unsafe_origin_cast[MutUntrackedOrigin]`
   + `ThinAllocation(unsafe_owned_ptr=)`: a second owning handle on the same
-  shared header (`_Shared`'s copy constructor).
+  shared header (`_Shared`'s copy constructor);
+- `MaybeUninit.unsafe_ptr`, `unsafe_bitcast` and `unsafe_offset` to a
+  field's reflected offset, `unsafe_write`, `unsafe_take_pointee`,
+  `MaybeUninit.unsafe_forget` and `unsafe_assume_init`: a record's fields
+  written in place, destroyed on failure, and the storage forgotten or
+  taken as the record (`_build_record`, whose docstring states its own
+  invariant).
 
 Invariant, which the compiler does not check (`MutUntrackedOrigin` is an
 origin the lifetime checker does not track):
@@ -66,7 +74,7 @@ origin the lifetime checker does not track):
   `_unsafe_invoke_box` and `_unsafe_drop_box` with the same `F` it allocated, so the
   pointer is only ever restored as that `F`;
 - `_Erased` exposes only `invoke`; other modules in `src/muntin` import
-  only `_Erased` and `_Shared` (`check_unsafe.sh`);
+  only `_Erased`, `_Shared` and `_build_record` (`check_unsafe.sh`);
 - `_Erased` is `Movable` and not `Copyable`: a move transfers the handle
   without running `__deinit__` on the source, `__deinit__` frees the value
   and then the header exactly once, and `invoke` borrows the owning
@@ -79,8 +87,9 @@ origin the lifetime checker does not track):
 """
 
 from std.atomic import Atomic, Ordering, fence
-from std.memory import MutOpaquePointer, OwnedPointer
+from std.memory import MaybeUninit, MutOpaquePointer, OwnedPointer
 from std.memory.alloc import ThinAllocation
+from std.reflection import reflect
 
 from .http import Response
 
@@ -208,3 +217,60 @@ struct _Shared[S: Movable & Deinitable](Copyable, Movable):
         """The value's `OwnedPointer`, immutable: the receiver is borrowed.
         This line is what makes `State[]` read-only."""
         return self._header.unsafe_ptr()[].value
+
+
+def _build_record[
+    T: Movable & Deinitable,
+    E: Movable & Deinitable,
+    convert: def[F: Movable & Deinitable, i: Int](
+        List[String], List[UInt8]
+    ) thin raises E -> F,
+    at: Int,
+](args: List[String], bytes: List[UInt8]) raises E -> T:
+    """Builds a `T` field by field without calling any of its initializers:
+    field `i`, of type `F`, is `convert[F, at + i](args, bytes)`, in field
+    order. `app.mojo` passes a route-value record (M3-061), whose fields
+    the registration rules restrict to route values.
+
+    Invariant, which the compiler does not check (`MaybeUninit` does not
+    track which fields are initialized):
+    - each field is written once, as its own type, at its reflected offset
+      (`reflect[T].field_offset`), so alignment and padding are the
+      compiler's; field types are refined with `conforms_to`, which Mojo
+      1.1.0 checks, never `downcast`, which it does not;
+    - nothing is destroyed before field 0 is written, and after `k` fields
+      exactly fields `0` to `k-1` are initialized;
+    - when converting field `k` raises, field `k` was never written, each of
+      fields `0` to `k-1` is moved out and destroyed once, the storage is
+      forgotten without running `T`'s destructor, and the error propagates;
+    - on success every field is initialized, the storage is taken as the
+      `T`, whose destructor then runs once, where its owner drops it, and
+      this function owns nothing;
+    - no field is destroyed twice or read uninitialized.
+    """
+    comptime r = reflect[T]
+    comptime count = r.field_count()
+    comptime types = r.field_types()
+    comptime assert count > 0, "a record has at least one field"
+    var storage = MaybeUninit[T]()
+    var base = storage.unsafe_ptr().unsafe_bitcast[UInt8]()
+    comptime for i in range(count):
+        comptime F = types[i]
+        comptime assert conforms_to(F, Movable & Deinitable)
+        comptime if conforms_to(F, Movable & Deinitable):
+            try:
+                base.unsafe_offset(r.field_offset[index=i]()).unsafe_bitcast[
+                    F
+                ]().unsafe_write(convert[F, at + i](args, bytes))
+            except e:
+                comptime for j in range(i):
+                    comptime G = types[j]
+                    comptime if conforms_to(G, Movable & Deinitable):
+                        _ = (
+                            base.unsafe_offset(r.field_offset[index=j]())
+                            .unsafe_bitcast[G]()
+                            .unsafe_take_pointee()
+                        )
+                storage^.unsafe_forget()
+                raise e^
+    return storage^.unsafe_assume_init()
