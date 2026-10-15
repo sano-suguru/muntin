@@ -1322,9 +1322,9 @@ def find_order(id: Int) raises -> String:
 - `message` is the error's text when its type is `Writable` (an `Error`'s message, or what the application's `write_to` writes), else `<`, the type's module-qualified name and `>` (`<orders.Unavailable>`). There is no stack trace. A `Failure` writes itself as `source: message`.
 - What carries a report: only the fixed 500 Muntin makes. A response the application builds (including its own 500), a converted error (`ToErrorResponse`), Muntin's 400, 404, 405, 413 and 415 and any successful answer have `None`. The reason for a 400 is not reported, because it is text the client controls.
 - The report stays with the response: copies, the `HEAD` answer and edits of the status, body or fields keep it, so a 500 a middleware turns into a 503, or a `Json[T]` failure a handler gives another status (section 5), still carries it. A response built anew (a middleware that answers `Response.text(...)` instead of the one it received) has none.
-- No backend sends it. The Flare adapter converts the status, fields and body only, so the error's text reaches application code and never the client unless the application writes it into a response. Muntin prints nothing.
+- No backend sends it. The Flare adapter converts the status, fields and body only, so the error's text reaches application code and never the client unless the application writes it into a response. Muntin has no logger of its own: where a report goes is the application's choice (section 7).
 - `message` is not safe log text: it may hold secrets (a password in a database error), control characters and values the client sent (a handler can raise an error built from its route value). Escaping and masking it before it reaches a log are the application's; Muntin does neither.
-- Not reported: a raise out of the outermost middleware (no middleware is outside it), the Flare adapter's own 500 for an invalid outgoing field, which it makes after `App.handle` (section 1), and the 400s. Request IDs, timing, metrics and tracing are application middleware too (section 7).
+- Read by no middleware: a raise out of the outermost middleware, whose report only the caller of `App.handle` (a backend, `TestClient`) receives. Not reported at all: the Flare adapter's own 500 for an invalid outgoing field, which it makes after `App.handle` (section 1), and the 400s. Request IDs, timing, metrics and tracing are application middleware too (section 7).
 - `Failure`'s initializer takes only `_`-prefixed keywords, which are not API: an application does not build a report.
 
 ## 7. Middleware
@@ -1421,7 +1421,7 @@ app.get["/orders/{id}"](find_order)  # section 6
 #   GET /orders/0 client-id='r-1' handler: 'database password is hunter2'
 ```
 
-- Register it first: a report made inside it reaches it, a raise out of it is reported to nobody, and a middleware outside it that builds a new response drops the report before a later one could read it.
+- Register it first: a report made inside it reaches it, a raise out of it reaches no middleware, and a middleware outside it that builds a new response drops the report before a later one could read it.
 - A request ID field a client sends is client input, like every request field (above): a client can send any value, another client's included, so it correlates log lines and is not trusted. An application that needs an ID it can trust makes one itself; Muntin has no request ID, timing, metrics or tracing.
 - Writing the line is the application's: where it goes, its format, and escaping and masking `message` (section 6). `repr` above escapes control characters and quotes; it masks nothing.
 

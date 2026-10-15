@@ -332,6 +332,17 @@ def test_middleware_raise_read_by_the_middleware_outside() raises:
     _assert_report(r, Failure.MIDDLEWARE, "middleware detail")
 
 
+def test_outermost_middleware_raise_reaches_the_caller() raises:
+    # No middleware is outside it; `App.handle` returns the report.
+    var app = App()
+    app.use(failing)
+    _routes(app)
+    var r = TestClient(app).get("/mw")
+    _assert_fixed_500(r)
+    _assert_report(r, Failure.MIDDLEWARE, "middleware detail")
+    assert_equal(String(r.failure().value()), "middleware: middleware detail")
+
+
 def test_json_serialization_failure() raises:
     var app = App()
     _routes(app)
@@ -339,6 +350,9 @@ def test_json_serialization_failure() raises:
     var r = client.get("/secret")
     _assert_fixed_500(r)
     _assert_report(r, Failure.RESPONSE, "cannot write token=abc")
+    assert_equal(
+        String(r.failure().value()), "response: cannot write token=abc"
+    )
     r = client.get("/unfinished")
     _assert_fixed_500(r)
     _assert_report(r, Failure.RESPONSE, "JSON writer: incomplete document")
@@ -355,6 +369,10 @@ def test_rebuild_failure_through_the_fields_gap() raises:
             r,
             Failure.MUNTIN,
             "the request's header fields could not be rebuilt",
+        )
+        assert_equal(
+            String(r.failure().value()),
+            "muntin: the request's header fields could not be rebuilt",
         )
 
 
