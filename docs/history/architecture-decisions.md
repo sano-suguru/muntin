@@ -4473,7 +4473,7 @@ Status: **decision** (M3-056, pull request #101, which holds the Flare reading, 
 
 ### Local flare run decision
 
-Status: **decision, standing constraint** (pull request #PR; `src/muntin`, `adapters/`, `tests/`, `scripts/` and CI unchanged). It changes one trigger of the [production verification policy](#production-verification-policy-decision).
+Status: **decision, standing constraint** (pull request #105; `src/muntin`, `adapters/`, `tests/`, `scripts/` and CI unchanged). It changes one trigger of the [production verification policy](#production-verification-policy-decision).
 
 **Question and what settles it.** The wire trigger in `docs/DEVELOPMENT.md` section 3 required a local `check_flare.sh` run before pushing, because a failure in the `flare` environment was slow to iterate on through CI. Does that run protect against anything CI's `flare` job does not? Settled by what the job runs and how long it takes, and by whether the authors who push can run the script.
 
