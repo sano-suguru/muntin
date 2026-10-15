@@ -13,13 +13,15 @@ below). That handler writes `s` to SIGNAL when it starts and `e` when it
 returns; the hold is the time between the two, as this client reads them.
 From the start to `HOLD_AT_S + SLOW_MS + TAIL_S` it sends `GET /health`
 every `PERIOD_S`, each from its own thread, and records for each probe when
-it started, when it was sent (its first byte written to a connected socket:
-after a pool probe got its connection, after an `h1-new` probe connected),
-and whether and when it was answered. A probe sent with no answer
-`ANSWER_BOUND_S` after the hold ended is lost, as is one whose connection
-was closed or reset first; a probe never sent (no pool connection came free
-in time, the connection could not be opened, the h2c connection was already
-gone) is not lost but not sent.
+it started, when it was sent (when it began writing its request to a
+connected socket: after a pool probe got its connection, after an `h1-new`
+probe connected), whether that write completed (the whole request handed to
+the kernel) or failed, and whether and when it was answered. A probe whose
+write completed with no answer `ANSWER_BOUND_S` after the hold ended is
+lost, as is one whose connection was closed or reset first; a probe whose
+write failed is not lost but write-failed; a probe never sent (no pool
+connection came free in time, the connection could not be opened, the h2c
+connection was already gone) is neither, but not sent.
 
 With SLOW_MS 0 (a control) no slow request is sent, and the window is the
 `CONTROL_S` from `HOLD_AT_S`: what the same probes get with no handler held.
@@ -40,19 +42,20 @@ MODE is where the probes go:
   over its workers (`spread` below).
 
 It prints one line: `MODE n=<probes sent during the hold> during=<answered
-before the hold ended> after=<answered after it> lost=<not answered>
-p50_ms=<median latency of the answered, from sending> max_ms=<largest>
-slow=<the slow request's outcome> hold_ms=<the hold as signalled>
-started=<probes started during the hold> sent_after=<of those, sent after
-it ended>/<lost of these> not_sent=<probes of the run never sent>` (for a control, "the
-hold" is its window), then, where the probes' connections are
-known (every mode but `h1-new`, and only for connections opened before the
-hold), `slow_worker=<sent>/<lost>` and `other_workers=<sent>/<lost>`: the
-probes on connections of the slow request's worker and of the others; for
-the pool modes, `lost_idle_ms=<least>..<most>`: how long each lost probe's
-connection had been idle (since its previous answer) when the probe was
-sent; `lost_as` and `not_sent_as`: why. Latency figures cover answered
-probes only: read them with `lost`.
+before the hold ended> after=<answered after it> lost=<written, not
+answered> write_failed=<write failed> p50_ms=<median latency of the
+answered, from sending> max_ms=<largest> slow=<the slow request's outcome>
+hold_ms=<the hold as signalled> started=<probes started during the hold>
+sent_after=<of those, sent after it ended>/<lost>/<write failed>
+not_sent=<probes of the run never sent>` (for a control, "the hold" is its
+window), then, where the probes' connections are known (every mode but
+`h1-new`, and only for connections opened before the hold),
+`slow_worker=<sent>/<lost>/<write failed>` and `other_workers=` the same:
+the probes on connections of the slow request's worker and of the others;
+for the pool modes, `lost_idle_ms=<least>..<most>`: how long each lost
+probe's connection had been idle (since its previous answer) when the probe
+was sent; `lost_as`, `write_failed_as` and `not_sent_as`: why. Latency
+figures cover answered probes only: read them with `lost`.
 """
 
 import os
@@ -97,6 +100,19 @@ def h1_read_response(sock):
             raise ConnectionError("closed")
         body += chunk
     return int(head.split(b" ")[1]), body
+
+
+def write(sock, data, note):
+    """Writes a probe's request: note["sent"] when the write begins,
+    note["written"] once all of it is handed to the kernel, or
+    note["write_failed"] (why) and the error raised again."""
+    note["sent"] = time.monotonic()
+    try:
+        sock.sendall(data)
+    except OSError as e:
+        note["write_failed"] = failure(e)
+        raise
+    note["written"] = time.monotonic()
 
 
 def h1_connect(port):
@@ -152,8 +168,8 @@ class H2c:
 
     def get(self, path, note=None):
         """Sends a GET; returns its slot, whose event is set once slot[1] holds
-        the status (200) or why it failed. Sets note["sent"] when it writes
-        the request."""
+        the status (200) or why it failed. Records the write in note as
+        `write` does."""
         authority = f"127.0.0.1:{self.port}".encode()
         block = b"\x82\x86\x04" + bytes([len(path)]) + path.encode() + b"\x01" + bytes([len(authority)]) + authority
         slot = [threading.Event(), None, None, b""]
@@ -164,10 +180,8 @@ class H2c:
                 return slot
             stream = self.next_id
             self.next_id += 2
-            if note is not None:
-                note["sent"] = time.monotonic()
             try:
-                self.sock.sendall(self.frame(1, 0x5, stream, block))
+                write(self.sock, self.frame(1, 0x5, stream, block), {} if note is None else note)
             except OSError as e:
                 slot[1] = failure(e)
                 slot[0].set()
@@ -292,9 +306,8 @@ class Pool:
             note["idle_ms"] = (time.monotonic() - conn.last) * 1000
         sock = conn.sock
         sock.settimeout(timeout)
-        note["sent"] = time.monotonic()
         try:
-            sock.sendall(h1_request("/health", False))
+            write(sock, h1_request("/health", False), note)
             status = h1_read_response(sock)[0]
         except (OSError, ConnectionError) as e:
             sock.close()
@@ -318,8 +331,7 @@ def h1_new_call(port, path, timeout, note):
         return "connect: " + failure(e)
     try:
         sock.settimeout(timeout)
-        note["sent"] = time.monotonic()
-        sock.sendall(h1_request(path, True))
+        write(sock, h1_request(path, True), note)
         return h1_read_response(sock)[0]
     except (OSError, ConnectionError) as e:
         return failure(e)
@@ -467,11 +479,14 @@ def main():
         hold_from, hold_to = signal.times["s"], signal.times["e"]
         slow_outcome, slow_worker = slow_result[0], slow_conn[0]
     ok = lambda r: r["outcome"] == 200
+    is_lost = lambda r: "written" in r and not ok(r)
+    count = lambda rs: f"{len(rs)}/{sum(map(is_lost, rs))}/{sum('write_failed' in r for r in rs)}"
     window = [r for r in results if "sent" in r and hold_from <= r["sent"] < hold_to]
     answered = sorted(r["done"] - r["sent"] for r in window if ok(r))
     during = sum(1 for r in window if ok(r) and r["done"] < hold_to)
-    lost = [r for r in window if not ok(r)]
+    lost = [r for r in window if is_lost(r)]
     lost_kinds = sorted({str(r["outcome"]) for r in lost})
+    write_failed = [r for r in window if "write_failed" in r]
     started = [r for r in results if hold_from <= r["started"] < hold_to]
     sent_after = [r for r in started if "sent" in r and r["sent"] >= hold_to]
     not_sent = [r for r in results if "sent" not in r]
@@ -479,21 +494,22 @@ def main():
     worst = answered[-1] * 1000 if answered else float("nan")
     line = (
         f"{mode} n={len(window)} during={during} after={len(answered) - during} "
-        f"lost={len(lost)} p50_ms={p50:.0f} max_ms={worst:.0f} slow={slow_outcome} "
+        f"lost={len(lost)} write_failed={len(write_failed)} p50_ms={p50:.0f} max_ms={worst:.0f} slow={slow_outcome} "
         f"hold_ms={(hold_to - hold_from) * 1000:.0f} started={len(started)} "
-        f"sent_after={len(sent_after)}/{sum(1 for r in sent_after if not ok(r))} not_sent={len(not_sent)}"
+        f"sent_after={count(sent_after)} not_sent={len(not_sent)}"
     )
     if mode != "h1-new" and not control:
         known = [r for r in window if r.get("worker") is not None]
         same = [r for r in known if r["worker"] == slow_worker]
         other = [r for r in known if r["worker"] != slow_worker]
-        count = lambda rs: f"{len(rs)}/{sum(1 for r in rs if not ok(r))}"
         line += f" slow_worker={count(same)} other_workers={count(other)}"
     idles = sorted(r["idle_ms"] for r in lost if "idle_ms" in r)
     if idles:
         line += f" lost_idle_ms={idles[0]:.0f}..{idles[-1]:.0f}"
     if lost_kinds:
         line += f" lost_as={','.join(lost_kinds)}"
+    if write_failed:
+        line += f" write_failed_as={','.join(sorted({r['write_failed'] for r in write_failed}))}"
     if not_sent:
         line += f" not_sent_as={','.join(sorted({str(r['outcome']) for r in not_sent}))}"
     print(line, flush=True)
