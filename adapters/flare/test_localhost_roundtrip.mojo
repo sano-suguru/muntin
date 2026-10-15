@@ -3995,9 +3995,14 @@ def test_receive_limit_on_flare_bufring_path() raises:
         pair = h1_keep_alive_pair(child.port, "/echo-raw", _pattern(64))
         assert_equal(pair.count("HTTP/1.1 200 OK"), 2, pair)
         # The buffer-ring loop is serving: it closes an h2c connection.
+        # With no body the client writes once (preface, SETTINGS, HEADERS
+        # with END_STREAM) and never again, since that loop answers in
+        # HTTP/1.1 and sends no frame. A DATA frame written after it could
+        # still be unread when the loop closes, and Linux then resets the
+        # connection instead of ending it (measured: about 1 run in 40).
         var h2c = String("served")
         try:
-            _ = h2_upload(child.port, "/echo-raw", _pattern(1), pieces=1)
+            _ = h2_upload(child.port, "/echo-raw", List[UInt8](), pieces=1)
         except e:
             h2c = String(e)
         print("observed bufring h2c:", h2c)
