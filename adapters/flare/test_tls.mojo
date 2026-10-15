@@ -37,16 +37,15 @@ from flare.tcp import TcpStream
 from flare.tls import TlsConfig, TlsStream
 from flare.utils import SIGTERM, exit, fork, kill
 from muntin import App, Request, Response
-from muntin_flare import Server, Tls, _serving_held
+from muntin_flare import Server, Tls
 from test_server import (
     CHILD_LIFETIME_S,
-    REFUSAL_ALARM_S,
     STOP_BOUND_MS,
     WORKERS,
     _Child,
     _close,
-    _default_sigpipe,
     _exit_code,
+    _fork_workers,
     _h2_frame,
     _held_pipes,
     _is_reset,
@@ -55,7 +54,6 @@ from test_server import (
     _refused_within,
     _stop,
     _write_byte,
-    borrowed_app,
     stoppable_app,
 )
 
@@ -456,25 +454,31 @@ def test_https_does_not_answer_cleartext() raises:
     var app = https_app()
     var child = _serve(Server.bind("127.0.0.1", 0, tls=_tls()), app)
     try:
-        var stream = TcpStream.connect(SocketAddr.localhost(UInt16(child.port)))
-        stream.set_recv_timeout(READ_MS)
-        stream.write_all(
-            "GET /hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
-            .as_bytes()
-        )
-        var buf = List[UInt8](length=4096, fill=0)
-        var got = String()
-        try:
-            while True:
-                var n = stream.read(buf.unsafe_ptr(), len(buf))
-                if n == 0:
-                    break
-                got += String(from_utf8_lossy=Span(buf)[:n])
-        except e:
-            assert_true(_is_reset(String(e)), String(e))
+        var got = _cleartext_answer(child.port)
         assert_true(not got.startswith("HTTP/"), got)
     finally:
         _stop(child.pid)
+
+
+def _cleartext_answer(port: Int) raises -> String:
+    """What a cleartext `GET /hello` on `port` reads before the connection
+    ends; a reset ends it too."""
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.set_recv_timeout(READ_MS)
+    stream.write_all(
+        "GET /hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n".as_bytes()
+    )
+    var buf = List[UInt8](length=4096, fill=0)
+    var got = String()
+    try:
+        while True:
+            var n = stream.read(buf.unsafe_ptr(), len(buf))
+            if n == 0:
+                break
+            got += String(from_utf8_lossy=Span(buf)[:n])
+    except e:
+        assert_true(_is_reset(String(e)), String(e))
+    return got^
 
 
 def _client_error(
@@ -846,33 +850,101 @@ def test_bind_checks_the_settings_and_the_host_before_the_tls_files() raises:
 # ── The three settings over TLS ────────────────────────────────────────────
 
 
-def test_serve_workers_refuses_a_tls_server() raises:
-    """`serve[make]` refuses a `Server` bound with `tls` (M3-049) before
-    serving or taking the serving claim: its workers' reactor loop is not
-    given the TLS context. The child would serve otherwise, so a missing
-    refusal fails the test instead of hanging it. `serve(app)` on the same
-    kind of `Server` serves HTTPS (the tests above), and `serve[make]`
-    without `tls` serves cleartext (`adapters/flare/test_server.mojo`)."""
-    var server = Server.bind("127.0.0.1", 0, tls=_tls())
-    var pid = fork()
-    if pid < 0:
-        raise Error("fork() failed")
-    if pid == 0:
-        _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
-        _default_sigpipe()
-        try:
-            server.serve[borrowed_app](workers=WORKERS)
-        except e:
-            print("observed: workers on a TLS server ->", e)
-            if _serving_held():
-                exit(4)
-            if String(e) == "serve: workers are unsupported on a TLS server":
-                exit(7)
-            exit(8)
-        exit(9)
-    _ = server^
-    var ended = _reap_within(pid, STOP_BOUND_MS * 5)
-    assert_equal(_exit_code(ended[0]), 7, "serve did not refuse")
+def _send_held(port: Int, held_path: String) raises -> TlsStream:
+    """Sends `GET <held_path>` over HTTP/1.1 inside TLS, with `Connection:
+    close`; the caller reads the answer once it releases the handler."""
+    var stream = _connect(port, "http/1.1")
+    stream.write_all(
+        (
+            "GET "
+            + held_path
+            + " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        ).as_bytes()
+    )
+    return stream^
+
+
+def test_https_workers_handshake_on_every_worker() raises:
+    """`serve[make](workers=2)` on a TLS `Server` (M3-060): while one
+    worker's handler is held on a TLS connection, new TLS connections are
+    handshaken and answered, over HTTP/1.1 and HTTP/2, by the other worker,
+    before the held handler returns; so both workers handshake, each with
+    the `Server`'s one certificate. The held request is answered once
+    released, and SIGTERM ends `serve` normally."""
+    var pipes = _held_pipes()
+    var child = _fork_workers[https_app](
+        Server.bind("127.0.0.1", 0, shutdown_grace_ms=GRACE_MS, tls=_tls()),
+        WORKERS,
+    )
+    _close(pipes[1])
+    _close(pipes[2])
+    var held = pipes[0].copy()
+    var reaped = False
+    try:
+        var first = _send_held(child.port, held.path)
+        assert_equal(_read_byte(held.started), 1, "the handler never started")
+        # The held worker does not poll, so the other one handshakes these.
+        var raw = _h1(child.port, "http/1.1", "GET", "/hello")
+        assert_true(raw.startswith("HTTP/1.1 200"), raw)
+        assert_true(raw.endswith("\r\n\r\nhello"), raw)
+        var stream = _connect(child.port, "h2,http/1.1")
+        assert_equal(stream.alpn_selected(), "h2")
+        var frames = _h2_headers(1, "GET", "/hello", True)
+        frames.extend(Span(_h2_headers(3, "GET", "/users/7", True)))
+        var answers = _h2_exchange(stream, frames^)
+        assert_equal(answers[0].status, "200")
+        assert_equal(answers[0].body, "hello")
+        assert_equal(answers[1].status, "200")
+        assert_equal(answers[1].body, "user 7")
+        _write_byte(held.release)
+        var answer = _read_all(first)
+        assert_true(answer[0].startswith("HTTP/1.1 200"), answer[0])
+        assert_true(
+            answer[0].endswith("\r\n\r\nreleased after the stop"), answer[0]
+        )
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        var ended = _reap_within(child.pid, GRACE_MS + STOP_BOUND_MS + 500)
+        reaped = ended[0] >= 0
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+    finally:
+        if not reaped:
+            _stop(child.pid)
+        _close(held.started)
+        _close(held.release)
+
+
+def test_https_workers_do_not_answer_cleartext() raises:
+    """No worker of a TLS `Server` answers a cleartext request, the held one
+    included once released: every worker starts each connection as a TLS
+    handshake (M3-060). One worker is held, so the request reaches the
+    other; then both are free and two more are sent."""
+    var pipes = _held_pipes()
+    var child = _fork_workers[https_app](
+        Server.bind("127.0.0.1", 0, shutdown_grace_ms=GRACE_MS, tls=_tls()),
+        WORKERS,
+    )
+    _close(pipes[1])
+    _close(pipes[2])
+    var held = pipes[0].copy()
+    var reaped = False
+    try:
+        var first = _send_held(child.port, held.path)
+        assert_equal(_read_byte(held.started), 1, "the handler never started")
+        assert_true(not _cleartext_answer(child.port).startswith("HTTP/"))
+        _write_byte(held.release)
+        _ = _read_all(first)
+        for _ in range(2):
+            var got = _cleartext_answer(child.port)
+            assert_true(not got.startswith("HTTP/"), got)
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        var ended = _reap_within(child.pid, GRACE_MS + STOP_BOUND_MS + 500)
+        reaped = ended[0] >= 0
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+    finally:
+        if not reaped:
+            _stop(child.pid)
+        _close(held.started)
+        _close(held.release)
 
 
 def test_body_limit_over_https() raises:
