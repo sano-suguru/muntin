@@ -40,6 +40,8 @@ A change is not complete because the code looks plausible. Use, as applicable: a
 
 `./scripts/compare_dx.sh` is a measurement too, and CI does not run it: one small API written with Muntin and against Flare alone (`bench/compare/`), compared by code size, by the answers to the same requests, and by what each does with the same planted mistakes (whether it still builds, the compiler's message, or what the mistaken program answers). Its results go in the pull request that relies on them, with the versions the script prints.
 
+`./scripts/bench_hol.sh [RUNS] [SLOW_MS]` is a measurement too, and CI does not run it: what one handler blocking its thread for `SLOW_MS` does to the other requests of the process, `Server` against Flare alone, over HTTP/1.1 and h2c, by worker count, listener form and idle timeout, with a control that holds nothing, and how each spreads kept-open connections over its workers (the script's header and `bench/hol/hol_client.py` say what is measured). It runs on Linux only and needs `python3` beside the `flare` environment. Its results go in the pull request that relies on them, with the machine and the versions the script prints.
+
 A must-not-build fixture states its expected diagnostic on a line starting `# Expected diagnostic (checked by scripts/check.sh): `; `scripts/build_one.sh` reads it.
 
 CI runs all three scripts on every pull request that changes code (section 4); a passing `ci-ok` on the final HEAD is the evidence that they pass, and running them locally first is the author's choice. Beyond that, a production item adds the following ([why](history/architecture-decisions.md#production-verification-policy-decision)):
