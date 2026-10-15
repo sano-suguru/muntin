@@ -23,7 +23,7 @@ registration; and `_match` in `app.mojo` classifies each route segment with
 `_path_params` and in `_match`, which splits the request path with it too.
 """
 
-from .body import FromBody, FromBytes, _FromBodyOrBytes
+from .body import FromBody, FromBytes
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response
 from .route_value import FromRouteValue, Param, _NamedValue
@@ -199,16 +199,16 @@ def _kind[A: AnyType]() -> Int:
     elif conforms_to(A, _InjectedState):
         return _STATE
     elif conforms_to(A, FromRouteValue):
-        comptime if conforms_to(A, _FromBodyOrBytes):
+        comptime if conforms_to(A, FromBody) or conforms_to(A, FromBytes):
             return _VALUE_AND_BODY
         else:
             return _APP_VALUE
     elif conforms_to(A, FromBody) and conforms_to(A, FromBytes):
         return _TWO_BODIES
     elif conforms_to(A, _HeaderCarrier):
-        if A._carries_route_value():
-            return _VALUE_AND_BODY
         var conversions = A._conversions()
+        if conversions > 0 and A._carries_route_value():
+            return _VALUE_AND_BODY
         if conversions == 2:
             return _TWO_BODIES
         if conversions == 0:
