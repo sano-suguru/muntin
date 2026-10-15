@@ -200,6 +200,7 @@ from flare_internals import (
     listener_fd,
     run_worker_loop,
     set_listener_nonblocking,
+    set_stop,
     tls_context_addr,
 )
 from muntin import App, Headers, Request, Response
@@ -547,8 +548,8 @@ multi-worker `serve` takes (M3-049)."""
 #   joined (`finish`); a worker that cannot be joined aborts the process, and
 #   the deadline path ends it with `_exit`, which runs no destructor.
 # - Every table cell is an `Int64` read with an acquire load and written with
-#   a release store (`_load`, `_store`), and each stop byte with a
-#   release store (`_set_stop`) and its reactor's acquire load. A worker writes
+#   a release store (`_load`, `_store`), and each stop byte with Flare's
+#   release store (`set_stop`) and its reactor's acquire load. A worker writes
 #   its error string before its release store of `_W_STATE`, and the error is
 #   read only after an acquire load shows a raised state, so the string is
 #   complete when read.
@@ -869,9 +870,8 @@ def _drain_workers(block: Int, mut server: HttpServer) raises:
                     + _errno()
                     + ")"
                 )
-    # Flare's `close()` also sets the `HttpServer`'s own stop flag. In
-    # v0.12.0 only Flare's serving methods read it, each clearing it as it
-    # starts, and `serve[make]` runs none of them: it stops nothing here.
+    # Flare's public `close()`; what it also does, and why that stops nothing
+    # here, is listed in `flare_internals.mojo`.
     server.close()
     if failure:
         _stop_workers(table, count)
@@ -891,7 +891,7 @@ def _drain_workers(block: Int, mut server: HttpServer) raises:
             break
         _ = libc_nanosleep_ms(1)
     for i in range(count):
-        _set_stop(_load(_row(table, i), _W_STOP))
+        set_stop(_load(_row(table, i), _W_STOP))
 
 
 def _serve_worker[
@@ -1225,26 +1225,11 @@ def _why_ended(table: Int, count: Int, errors: List[String]) -> String:
     return String()
 
 
-def _set_stop(stop_addr: Int):
-    """Sets the worker's stop byte at `stop_addr` with a release store, the
-    one Flare's own `store_stop_flag` makes: `run_worker_loop` reads the
-    byte with an acquire load, nonzero meaning stop. `stop_addr` is never 0
-    (Flare's store skips 0): every stop byte is a cell of `serve[make]`'s
-    `stops` list, allocated at its final length, one cell per worker and at
-    least one, before any address is taken."""
-    Atomic[UInt8].store[ordering=Ordering.RELEASE](
-        Pointer[UInt8, MutUntrackedOrigin](
-            unsafe_from_address=stop_addr
-        ).unsafe_bitcast[Scalar[DType.uint8]](),
-        UInt8(1),
-    )
-
-
 def _stop_workers(table: Int, count: Int):
     """Sets the stop byte of the first `count` workers: each reactor leaves
     its loop at its next turn and closes its connections (no window)."""
     for i in range(count):
-        _set_stop(_load(_row(table, i), _W_STOP))
+        set_stop(_load(_row(table, i), _W_STOP))
 
 
 comptime _PEM_CERTIFICATE = "-----BEGIN CERTIFICATE-----"

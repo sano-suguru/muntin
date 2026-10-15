@@ -9,10 +9,13 @@ Decided in docs/history/architecture-decisions.md "Multi-worker serving
 decision (M3-049)" (revisit: the Flare pin moves).
 
 Each name also says what Flare v0.12.0's public API offers in its place and
-what taking it would cost (evaluated in pull request #111). The two whose
-public alternative cost nothing were taken: `muntin_flare` closes the
-listener with `HttpServer.close()` and sets a worker's stop byte with its own
-release store (`_set_stop`), so neither goes through this module.
+what taking it would cost (evaluated in pull request #111). One was taken
+(pull request #117): `muntin_flare` closes the `Server`'s listener with the
+public `HttpServer.close()`. What it relies on of that call is listed here
+too, so an upgrade still has one file to check: `close()` closes the
+listener, idempotently, and also sets the `HttpServer`'s own stop flag,
+which in v0.12.0 only Flare's own serving methods read, each clearing it as
+it starts; `serve[make]` runs none of them, so the flag stops nothing there.
 Keeping the internals here localizes a change of name or signature; it does
 not bound a change of behavior, which only the tests observe, and only on
 the paths they run. Outside the adapter, the tests import two Flare internals
@@ -28,6 +31,7 @@ from flare.net._libc_event import _pipe
 from flare.net.socket import AF_INET, INVALID_FD, SOCK_STREAM, RawSocket
 from flare.runtime._thread import ThreadHandle as _ThreadHandle
 from flare.runtime._thread import _OpaquePtr as _FlareOpaquePtr
+from flare.runtime.scheduler_stats import store_stop_flag
 
 comptime ThreadHandle = _ThreadHandle
 """Flare's OS thread (`flare.runtime._thread`): `spawn_os[start](arg)` runs a
@@ -75,6 +79,23 @@ def run_worker_loop[
         stop,
         tls_ctx_addr=tls_context,
     )
+
+
+def set_stop(stop_addr: Int):
+    """Sets the stop byte at `stop_addr` that `run_worker_loop` reads, with
+    Flare's own store (`store_stop_flag`), so the writer and the reader of
+    the flag stay one Flare protocol. Relied on, in v0.12.0: the flag is one
+    byte (the loop's `Bool`), written with a release store of 1 and read by
+    the loop with an acquire load (`load_stop_flag`), nonzero meaning stop;
+    the store does nothing for address 0, which never reaches it (every stop
+    byte is a cell of `serve[make]`'s `stops` list, allocated at its final
+    length, 1 to 256 cells, before any address is taken). Public
+    alternative, not taken (pull request #117): the same release store
+    through `std.atomic` would copy that protocol into Muntin, and would keep
+    compiling if Flare changed the flag's width, value or ordering, while
+    calling Flare's store either keeps matching its loop or fails to compile
+    when it is renamed. `flare.runtime` does not export it."""
+    store_stop_flag(stop_addr, True)
 
 
 def flare_pipe(fds: Pointer[c_int, _]) -> Int:

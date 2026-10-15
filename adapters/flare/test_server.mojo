@@ -2840,12 +2840,18 @@ def test_a_raising_make_stops_every_worker() raises:
     assert_equal(_exit_code(ended[0]), 7, "serve did not raise make's error")
 
 
-def app_with_no_descriptors_left() -> App:
-    """A `make` that sets this process's soft open-file limit to 0 before
-    returning, so the reactor its worker starts next cannot open a
-    descriptor it needs as it starts (on Linux, Flare v0.12.0's `dlopen` of
-    its TLS library fails first, with `EMFILE`). Every descriptor
-    `serve[make]` needs is opened before its workers start."""
+comptime EMFILE = 24
+"""`errno` for a process at its open-file limit, on Linux and macOS."""
+
+
+def app_with_no_descriptors_left() raises -> App:
+    """A `make` that sets this process's soft open-file limit to 0 and shows
+    that it holds before returning: the limit reads back as 0, and a new
+    descriptor (`dup` of standard error) fails with `EMFILE`. Every
+    descriptor `serve[make]` needs is opened before its workers start, so
+    the only one this leaves without descriptors is the reactor its worker
+    starts next. If a step fails it raises `precondition: ...`, which
+    `serve[make]` reports as `make`'s error."""
     var limit = List[UInt64](length=2, fill=0)
     if (
         Int(
@@ -2853,20 +2859,88 @@ def app_with_no_descriptors_left() -> App:
                 c_int(RLIMIT_NOFILE), Int(limit.unsafe_ptr())
             )
         )
-        == 0
+        != 0
     ):
-        limit[0] = 0
-        _ = external_call["setrlimit", c_int](
-            c_int(RLIMIT_NOFILE), Int(limit.unsafe_ptr())
+        raise Error("precondition: getrlimit failed")
+    limit[0] = 0
+    if (
+        Int(
+            external_call["setrlimit", c_int](
+                c_int(RLIMIT_NOFILE), Int(limit.unsafe_ptr())
+            )
+        )
+        != 0
+    ):
+        raise Error("precondition: setrlimit failed")
+    var now = List[UInt64](length=2, fill=1)
+    if (
+        Int(
+            external_call["getrlimit", c_int](
+                c_int(RLIMIT_NOFILE), Int(now.unsafe_ptr())
+            )
+        )
+        != 0
+        or now[0] != 0
+    ):
+        raise Error("precondition: the soft limit did not read back as 0")
+    var fd = Int(external_call["dup", c_int](c_int(2)))
+    if fd >= 0:
+        _close(fd)
+        raise Error("precondition: a new descriptor was still opened")
+    var errno = Int(get_errno().value)
+    if errno != EMFILE:
+        raise Error(
+            "precondition: dup failed with errno "
+            + String(errno)
+            + ", not EMFILE"
         )
     return borrowed_app()
 
 
+comptime _SA_MASK_AT = 8
+comptime _SA_MASK_BYTES = 4 if CompilationTarget.is_macos() else 8
+"""The bytes of the mask the kernel reports: glibc's `sigset_t` has 128,
+but Linux reports 8 (64 signals) and glibc leaves the rest unset."""
+comptime _SA_FLAGS_AT = 12 if CompilationTarget.is_macos() else 136
+comptime _SA_RESTORER = 0x04000000
+"""glibc's flag for its signal-return trampoline, which it adds to every
+disposition it sets: not part of what a caller sets, so not compared."""
+
+
+def _disposition(sig: Int) -> List[Int]:
+    """`sig`'s current disposition as `sigaction` reports it: its handler,
+    its flags (without glibc's `SA_RESTORER`) and each byte of its mask, in
+    `struct sigaction` on Linux x86-64 glibc and macOS arm64; empty if the
+    call failed."""
+    var action = List[UInt8](length=256, fill=0)
+    if (
+        Int(
+            external_call["sigaction", c_int](
+                c_int(sig), 0, Int(action.unsafe_ptr())
+            )
+        )
+        != 0
+    ):
+        return List[Int]()
+    var at = action.unsafe_ptr()
+    var flags = Int(at.unsafe_offset(_SA_FLAGS_AT).unsafe_bitcast[Int32]()[])
+    comptime if CompilationTarget.is_linux():
+        flags &= ~_SA_RESTORER
+    var out: List[Int] = [at.unsafe_bitcast[Int]()[], flags]
+    for i in range(_SA_MASK_BYTES):
+        out.append(Int(action[_SA_MASK_AT + i]))
+    _ = action^
+    return out^
+
+
 def test_a_reactor_that_fails_to_start_is_reported() raises:
     """When a worker's reactor raises as it starts, `serve[make]` raises its
-    error (`serve: a worker's reactor raised: <error>`), with both stop
-    dispositions back (pull request #111: Flare's public `HttpFrontend`
-    would lose this error)."""
+    error, `serve: a worker's reactor raised: <error>`, rather than losing it
+    (Flare's public `HttpFrontend` would, pull request #111), and puts back
+    both stop dispositions whole (handler, mask and flags). The failure is
+    injected by `app_with_no_descriptors_left`, which shows the process can
+    open no descriptor before the reactor starts; the error's own text is
+    the system's and is not checked."""
     var server = Server.bind("127.0.0.1", 0)
     var pid = fork()
     if pid < 0:
@@ -2874,22 +2948,31 @@ def test_a_reactor_that_fails_to_start_is_reported() raises:
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
         _default_sigpipe()
-        var term = _handler_word(SIGTERM)
-        var int = _handler_word(SIGINT)
+        var term = _disposition(SIGTERM)
+        var int = _disposition(SIGINT)
+        if len(term) == 0 or len(int) == 0:
+            exit(3)
         try:
             server.serve[app_with_no_descriptors_left](workers=1)
             exit(9)
         except e:
             print("observed: reactor start failure ->", e)
-            if _handler_word(SIGTERM) != term or _handler_word(SIGINT) != int:
+            if _disposition(SIGTERM) != term or _disposition(SIGINT) != int:
                 exit(4)
+            if String(e).startswith("serve: a worker's make raised: "):
+                exit(5)
             if String(e).startswith("serve: a worker's reactor raised: "):
                 exit(7)
             exit(8)
     _ = server^
     var ended = _reap_within(pid, STOP_BOUND_MS * 5)
     assert_equal(
-        _exit_code(ended[0]), 7, "serve did not raise the reactor's error"
+        _exit_code(ended[0]),
+        7,
+        (
+            "3: no disposition read, 4: a disposition not put back, 5: the"
+            " injection did not hold, 8: another error, 9: serve returned"
+        ),
     )
 
 
