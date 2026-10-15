@@ -4508,3 +4508,46 @@ Status: **decision, standing constraint** (pull request #105; `src/muntin`, `ada
 **Revisit when:** CI stops running `check_flare.sh` on every pull request that changes code; or the `flare` job grows so slow that fixing a wire change through CI holds items up.
 
 **Next production slice:** none (a standing constraint). Its owner is `docs/DEVELOPMENT.md` section 3, which this record's pull request changes. Records written before it that name a local `check_flare.sh` in their slice stay as they are.
+
+### Dropped error report decision (M3-058)
+
+Status: **decision, proposed** (M3-058, pull request #PR, which holds the drop sites read in code, the probes and the scratch production run; `src/muntin` unchanged). It answers [M2-012](#error-response-decision-m2-012)'s revisit condition on a logging hook, not the one on a fallible conversion.
+
+**Question and what settles it.** Muntin answers some failures with the fixed 500 and drops the error unread, so its text never reaches the client ([M2-011](#raising-handlers-in-production-m2-011)); an application then cannot learn what failed or on which request. An outside review asked that the text stay off the wire while logs and traces can still find the cause. Which dropped errors should an application be able to observe, through what Muntin-owned API, carrying what? Settled by every place `src/muntin` makes the fixed 500 today, read in code; what Mojo 1.1.0 can produce from a caught value of a generic error type, probed; and the chosen form applied to a scratch copy of production with the three scripts run on it.
+
+**Facts** (Mojo 1.1.0; read in code unless marked measured):
+- Muntin makes the fixed 500 in six places: a handler error whose declared type does not conform to `ToErrorResponse` (`_handler_error`); a raise out of a middleware (`_run`); a `Json[T]` result whose `write_json` raises (`Json.to_response`); a slot rebuild failure (`_Reject(500)`, only the M3-002 `_fields` gap); a raise out of a route's `invoke`, which no adapter makes; and a failed `Allow` write. Only the first three happen on ordinary paths.
+- A converted error is not dropped: the application's `to_error_response` runs on it. The 400s drop the client's conversion error (`from_body`, `from_route_value`, `from_bytes`).
+- Under `comptime if conforms_to(E, Writable)`, `String(e)` of a caught `E` compiles and gives an `Error`'s message or an application type's own text; `reflect[E].name()` gives any other type's module-qualified name (measured). `Error.get_stack_trace()` returned `None` with `MOJO_ENABLE_STACK_TRACE_ON_ERROR=1`, under `mojo run` and in a `-g` build (measured, Linux).
+- Middleware sees every response `App.handle` makes, with the request it answers, before and after the rest ([M3-034](#middleware-decision-m3-034)); its configuration is compile-time only.
+- A streamed response's pull runs in the backend after `App.handle` returns ([M3-056](#streaming-responses-and-cancellation-decision-m3-056), not shipped), so no middleware sees its raise.
+- `Response` is 56 bytes; with an inline `Optional` of a two-`String` report, 112; with the report behind an `ArcPointer`, 72 (measured, `size_of`).
+
+**Choice: every fixed 500 Muntin makes carries a report of what it dropped, which middleware reads; Muntin prints nothing.**
+- A public, Muntin-owned `Failure` (`Copyable`, `Writable`): `source`, which step dropped it (`"handler"`, `"middleware"`, `"response"` for a result conversion, `"muntin"` for Muntin's own internal failures), and `message`: the error's text when its type is `Writable` (`Error` included), else `<` and its type's name and `>`.
+- `Response.failure() -> Optional[Failure]` is set on each fixed 500 Muntin makes and on nothing else: `None` on a response the application builds (a 500 included), on Muntin's 400, 404, 405, 413 and 415, and on a converted error. No public spelling sets it. It travels with the response (copies, middleware that passes it on, `TestClient`, `HEAD`) and is gone when a middleware builds a new response instead.
+- No backend sends it: a backend converts the status, fields and body only. The client still receives exactly the fixed 500.
+- Observing is middleware: an application that wants every report registers its logging middleware first, keeps the request's method, path and request ID field before `next`, and reads the report after it. A raise out of that outermost middleware is answered with a report nobody reads.
+- The text reaches application code, never the client unless the application writes it into a response.
+- Request IDs, timing, metrics and tracing stay application middleware; Muntin adds no API for them.
+
+**Rejected.**
+- An `App` hook (`app.on_error(f)`, `f(request, failure)`): a second observation concept beside middleware, which still needs the report carried from the adapter to `App.handle`; it would add only the outermost middleware's own raise.
+- Printing dropped errors to standard error by default: Muntin would choose the sink and the format, the output would need more API to turn off, and an error's secrets would go where the application did not choose.
+- The typed error value instead of text: a second erased box in `Response`, of a type middleware cannot name; a log line needs text.
+- A trait on the error type: covers neither `Error` nor a middleware raise.
+- Reports on the 400s: client-controlled text in the server's log lines, for a status the client fixes; revisit below.
+- Reports on converted errors: the application's own conversion already runs on the value.
+
+**Revisit when:**
+- streamed responses ship ([M3-057](#streaming-responses-and-cancellation-decision-m3-056)): a stream's raise happens after middleware, so decide whether and where a backend reports it;
+- an application needs the reason for a 400, or a failure the outermost middleware cannot see;
+- Mojo's `Error` carries a stack trace or source location a report could hold;
+- runtime-configured middleware or a `State` bound to middleware ships (M3-034): a logger configured at start-up becomes expressible.
+
+**Next production slice (M3-059):**
+- `src/muntin`: `Failure` in `http.mojo`, exported from `muntin`; `Response` holds an `Optional[ArcPointer[Failure]]`, `None` from every public initializer, and `failure()` returns a copy of the report; each of the six sites above builds its report (`_internal_error()` stays without one, since spikes under `tests/` import it). No change to `_handler_storage.mojo`, `check_unsafe.sh`, the adapter, `TestClient` or any registration overload.
+- Tests, in a new `tests/test_failure.mojo` through `TestClient`: each ordinary source with its text (an `Error`, a `Writable` type, another type's name, a middleware raise read by the middleware outside it, a `Json[T]` serialization failure); `None` on a converted error, an application's own 500, 400, 404, 405, 413 and 415; the body is still `Internal Server Error`; `HEAD` and a copy keep the report; a middleware that builds a new response drops it; an outermost logging middleware reads method, path, a request ID field and the report together.
+- Loopback: the existing `find_order` case in `adapters/flare/test_localhost_roundtrip.mojo`, whose error text is a secret, gains a check that neither the body nor any field carries it.
+- Docs: `docs/DX.md` section 6 (the report and what carries one) and section 7 (a logging middleware registered first); `docs/ARCHITECTURE.md` request handling (the 500 rows) and "Other current limits"; `docs/SPEC.md` (the capability row; the candidate keeps what is not in the slice).
+- Not in the slice: a default logger, request IDs, timing, metrics, tracing, reports on the 400s or on a stream's raise, a stack trace.
