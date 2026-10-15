@@ -7,10 +7,13 @@ adapter's tests (`adapters/flare/test_server.mojo`) exercise every one.
 Decided in docs/history/architecture-decisions.md "Multi-worker serving
 decision (M3-049)" (revisit: the Flare pin moves).
 
-Each name also says what Flare v0.12.0's public API offers in its place, so
-an upgrade that breaks one knows its way out. Outside the adapter, the tests
-import two Flare internals directly: `test_server.mojo` uses
-`flare.net._libc_event._pipe` and `flare.runtime._thread.current_thread_id`.
+Each name also says what Flare v0.12.0's public API offers in its place and
+what taking it would cost (evaluated in pull request #111; none is taken).
+Keeping the internals here localizes a change of name or signature; it does
+not bound a change of behavior, which only the tests observe, and only on
+the paths they run. Outside the adapter, the tests import two Flare internals
+directly: `test_server.mojo` uses `flare.net._libc_event._pipe` and
+`flare.runtime._thread.current_thread_id`.
 """
 
 from std.ffi import c_int
@@ -46,11 +49,13 @@ def run_worker_loop[
     reads `stop` with an acquire load before its first poll and every turn,
     leaves its accept loop on `ENOTSOCK`, returns without raising on a failed
     poll, and closes its connections when it leaves; no TLS context is
-    passed, so it serves cleartext only. Public alternative: Flare's
-    `HttpFrontend(handler, config, config.h2, auto_protocol=True)` and its
-    `run_worker`, which calls this loop, so it relies on the same behavior;
-    it needs a `Copyable` handler and swallows the loop's raise, so a
-    reactor that fails to start would read as one that returned."""
+    passed, so it serves cleartext only. Public alternative, not taken:
+    Flare's `HttpFrontend(handler, config, config.h2, auto_protocol=True)`
+    (whose `tls_ctx_addr` would have to carry a TLS context) and its
+    `run_worker` call this same loop, so the behavior relied on is unchanged; but it needs a
+    `Copyable` handler, and it swallows the loop's raise, so a reactor that
+    fails to start would read as one that returned and its error would be
+    lost (`serve` reports it today)."""
     run_unified_reactor_loop_shared(
         listener_fd, config, config.h2.copy(), handler, stop
     )
@@ -59,8 +64,9 @@ def run_worker_loop[
 def set_stop(stop_addr: Int):
     """Sets the stop byte at `stop_addr` that `run_worker_loop` reads (Flare's
     release store, `store_stop_flag`). Public alternative: the same release
-    store through `std.atomic`, which is all `store_stop_flag` does;
-    `flare.runtime` does not export it."""
+    store through `std.atomic`; `store_stop_flag` also returns at once for
+    address 0, which never reaches it here (every stop byte is a cell of the
+    workers' `List[Bool]`). `flare.runtime` does not export it."""
     store_stop_flag(stop_addr, True)
 
 
@@ -81,15 +87,16 @@ def listener_fd(server: HttpServer) -> Int:
 def close_listener(mut server: HttpServer):
     """Closes the bound listener (`HttpServer._listener.close`), as Flare's own
     `drain` does first; idempotent. Public alternative: `HttpServer.close()`,
-    which also sets the `HttpServer`'s own stop flag, read only by its own
-    serving methods."""
+    which also sets the `HttpServer`'s own stop flag; in v0.12.0 only its own
+    serving methods read that flag, which a later release may change."""
     server._listener.close()
 
 
 def has_tls(server: HttpServer) -> Bool:
     """Whether a TLS context is bound (`HttpServer._tls_ctx`, set by
-    `bind_tls`). Public alternative: none in Flare; `Server` would record
-    whether it bound with a certificate."""
+    `bind_tls`). Public alternative: none in Flare; `Server` could record
+    whether it bound with a certificate, but serving TLS on workers needs
+    the context's address, which only the private `_tls_ctx_addr` gives."""
     return Bool(server._tls_ctx)
 
 
