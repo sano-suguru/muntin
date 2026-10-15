@@ -291,6 +291,18 @@ def _placeholder_name(route: StaticString, j: Int) -> StaticString:
     return ""
 
 
+def _placeholder_names(route: StaticString) -> List[StaticString]:
+    """The names of a well-formed literal's placeholders in binding order,
+    each `_placeholder_name(route, j)`, in one pass over the literal."""
+    var names = List[StaticString]()
+    for segment in _path_part(route).split("/"):
+        if _is_param(segment):
+            names.append(_param_name(segment))
+    for item in _query_items(route):
+        names.append(_param_name(item))
+    return names^
+
+
 def _misnamed[path: StaticString, A: AnyType, B: AnyType]() -> Int:
     """The position (from 0) of the first of route values `A`, `B` whose
     declared name differs from the placeholder it binds, or -1 (M3-050).
@@ -412,13 +424,14 @@ def _record_fault[path: StaticString, A: AnyType]() -> Tuple[Int, Int]:
         var count = paths + _query_params(path)
         if n != count:
             return (_RECORD_COUNT, -1)
+        var placeholders = _placeholder_names(path)
         for j in range(count):
             for k in range(j):
-                if _placeholder_name(path, j) == _placeholder_name(path, k):
+                if placeholders[j] == placeholders[k]:
                     return (_RECORD_PLACEHOLDER_TWICE, j)
         comptime for i in range(n):
             comptime name = names[i]
-            if String(name) != String(_placeholder_name(path, i)):
+            if String(name) != String(placeholders[i]):
                 return (_RECORD_NAME, i)
         comptime for i in range(n):
             comptime F = types[i]

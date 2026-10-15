@@ -531,6 +531,33 @@ def _query_value(query: String, key: String) raises -> Optional[String]:
     return value^
 
 
+def _query_values(
+    query: String, keys: List[String]
+) raises -> List[Optional[String]]:
+    """The value of each of `keys` (distinct) in a raw query string, read as
+    `_query_value` reads one, in one pass over the query whatever the number
+    of keys (each pair's key is compared with `keys`, with no second split):
+    `None` where a key is absent. Raises if one of `keys` appears
+    more than once; other keys may repeat."""
+    var values = List[Optional[String]](length=len(keys), fill=None)
+    if len(keys) == 0:
+        return values^
+    for pair in query.split("&"):
+        var eq = pair.find("=")
+        var name = pair[byte=:eq] if eq >= 0 else pair[byte=:]
+        var at = -1
+        for k in range(len(keys)):
+            if keys[k] == name:
+                at = k
+                break
+        if at < 0:
+            continue
+        if values[at]:
+            raise Error("duplicate query key")
+        values[at] = String(pair[byte = eq + 1 :]) if eq >= 0 else String()
+    return values^
+
+
 def _hex_digit(b: Byte) -> Int:
     """The value of the ASCII hex digit `b` (either case), or -1."""
     var c = Int(b)
@@ -2776,10 +2803,9 @@ struct App(Movable):
                 try:
                     for j in range(len(args)):
                         args[j] = _decode_value(args[j], query=False)
+                    var values = _query_values(request.query, route.query_keys)
                     for k in range(len(route.query_keys)):
-                        var raw = _query_value(
-                            request.query, route.query_keys[k]
-                        )
+                        ref raw = values[k]
                         if route.query_optional[k] and (
                             not raw or raw.value().byte_length() == 0
                         ):

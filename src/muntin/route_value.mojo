@@ -112,9 +112,10 @@ trait RouteValues(Deinitable, Movable):
 
     Conforming consents to Muntin initializing the fields directly: the
     record's `__init__` is never called, so neither it nor an invariant
-    across fields (`start_id <= end_id`) is enforced. Validate a field in
-    its type (a `FromRouteValue`) and a relation between fields in the
-    handler. Muntin cannot tell a record that declares its own `__init__`
+    across fields (`start_id <= end_id`) is enforced. A record is a
+    transport type, not a domain type: validate a field in its type (a
+    `FromRouteValue`) and build the domain type that establishes a relation
+    between fields in the handler. Muntin cannot tell a record that declares its own `__init__`
     (Mojo 1.1.0 reflects fields, not initializers), so it does not refuse
     one. The destructor runs once for a completed record and never for a
     partial one, and must not rely on anything only `__init__` would

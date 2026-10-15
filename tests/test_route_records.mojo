@@ -489,6 +489,172 @@ def test_headers_and_bodies_after_a_record() raises:
     )
 
 
+def task_with_headers(at: TaskAt, headers: Headers) -> String:
+    return String(
+        at.org_id,
+        "/",
+        at.project_id,
+        "/",
+        at.task_id,
+        " ",
+        headers.get("x-tag").or_else("-"),
+    )
+
+
+def task_with_carried_json(
+    at: TaskAt, input: WithHeaders[Json[TaskEdit]]
+) -> String:
+    return String(
+        at.org_id,
+        "/",
+        at.project_id,
+        "/",
+        at.task_id,
+        " ",
+        input.body.value.title,
+        " ",
+        input.headers.get("x-tag").or_else("-"),
+    )
+
+
+def task_with_note(at: TaskAt, note: Note) -> String:
+    return String(
+        at.org_id, "/", at.project_id, "/", at.task_id, " ", note.text
+    )
+
+
+def _tagged_json() raises -> Headers:
+    var h = _json_headers()
+    h.add("X-Tag", "t2")
+    return h^
+
+
+def test_three_fields_with_headers_bodies_and_every_method() raises:
+    # The header fields and the JSON verdict start after the record's three
+    # values (`_width`).
+    var app = App()
+    app.get["/h3/{org_id}/{project_id}/{task_id}"](task_with_headers)
+    app.post["/c3/{org_id}/{project_id}/{task_id}"](task_with_carried_json)
+    app.put["/n3/{org_id}/{project_id}/{task_id}"](task_with_note)
+    app.delete["/d3/{org_id}/{project_id}/{task_id}"](task_with_headers)
+    app.patch["/p3/{org_id}/{project_id}?{task_id}"](task_with_note)
+    var client = TestClient(app)
+    assert_equal(client.get("/h3/1/2/3", headers=_tagged()).text(), "1/2/3 t1")
+    assert_equal(client.get("/h3/1/2/x", headers=_tagged()).status, 400)
+    var r = client.post("/c3/4/5/6", '{"title":"t"}', headers=_tagged_json())
+    assert_equal(r.status, 200)
+    assert_equal(r.text(), "4/5/6 t t2")
+    assert_equal(
+        client.post("/c3/4/5/6", '{"title":"t"}', headers=_tagged()).status, 415
+    )
+    assert_equal(
+        client.post(
+            "/c3/4/x/6", '{"title":"t"}', headers=_tagged_json()
+        ).status,
+        400,
+    )
+    assert_equal(client.put("/n3/7/8/9", "note").text(), "7/8/9 note")
+    assert_equal(client.delete("/d3/1/1/1").text(), "1/1/1 -")
+    assert_equal(client.patch("/p3/1/2?task_id=3", "n").text(), "1/2/3 n")
+    assert_equal(client.patch("/p3/1/2", "n").status, 400)
+
+
+struct Wide(RouteValues):
+    """Ten path fields and twenty query fields, five of them optional."""
+
+    var p0: Int
+    var p1: String
+    var p2: Int
+    var p3: Int
+    var p4: Int
+    var p5: Int
+    var p6: Int
+    var p7: Int
+    var p8: Int
+    var p9: Counted
+    var q0: Int
+    var q1: Int
+    var q2: Int
+    var q3: Int
+    var q4: Int
+    var q5: Int
+    var q6: Int
+    var q7: Int
+    var q8: Int
+    var q9: Int
+    var q10: Int
+    var q11: Int
+    var q12: Int
+    var q13: Int
+    var q14: Counted
+    var q15: Optional[Int]
+    var q16: Optional[String]
+    var q17: Optional[Int]
+    var q18: Optional[String]
+    var q19: Optional[Int]
+
+
+def wide(at: Wide) -> String:
+    var total = at.p0 + at.p2 + at.p3 + at.p4 + at.p5 + at.p6 + at.p7 + at.p8
+    total += at.q0 + at.q1 + at.q2 + at.q3 + at.q4 + at.q5 + at.q6 + at.q7
+    total += at.q8 + at.q9 + at.q10 + at.q11 + at.q12 + at.q13
+    return String(
+        at.p1,
+        " ",
+        total,
+        " ",
+        at.p9.text,
+        at.q14.text,
+        " ",
+        at.q15.or_else(-1),
+        " ",
+        at.q16.or_else("-"),
+        " ",
+        at.q19.or_else(-1),
+    )
+
+
+comptime WIDE = (
+    "/w/{p0}/{p1}/{p2}/{p3}/{p4}/{p5}/{p6}/{p7}/{p8}/{p9}"
+    "?{q0}&{q1}&{q2}&{q3}&{q4}&{q5}&{q6}&{q7}&{q8}&{q9}&{q10}&{q11}&{q12}"
+    "&{q13}&{q14}&{q15}&{q16}&{q17}&{q18}&{q19}"
+)
+
+
+def _wide_query(q14: String) -> String:
+    var query = String("?")
+    for i in range(14):
+        query += String("q", i, "=", i + 1, "&")
+    return query + "q14=" + q14 + "&q16=s&q19=9&unrelated=1"
+
+
+def test_thirty_fields_path_query_and_optional() raises:
+    # Each field binds its own placeholder: the sums and the texts show any
+    # two exchanged, and the counted fields are destroyed once each.
+    var app = App()
+    app.get[WIDE](wide)
+    var client = TestClient(app)
+    _reset()
+    var r = client.get("/w/1/name/3/4/5/6/7/8/9/c" + _wide_query("k"))
+    assert_equal(r.status, 200)
+    assert_equal(r.text(), "name 148 ck -1 s 9")
+    _expect_counts("wide", 2, 2, 2, 0, 0, 0)
+    # A missing required query value is 400 before any field converts.
+    _reset()
+    r = client.get("/w/1/name/3/4/5/6/7/8/9/c?q0=1")
+    assert_equal(r.status, 400)
+    _expect_counts("wide missing", 0, 0, 0, 0, 0, 0)
+    # A failing path field after a built one: the built one is destroyed.
+    _reset()
+    r = client.get("/w/1/name/3/4/5/6/7/8/9/fail" + _wide_query("k"))
+    assert_equal(r.status, 400)
+    _expect_counts("wide fail", 1, 0, 0, 0, 0, 0)
+    _reset()
+    r = client.get("/w/1/name/3/4/5/6/7/8/9/c" + _wide_query("fail"))
+    assert_equal(r.status, 400)
+    _expect_counts("wide late fail", 2, 1, 1, 0, 0, 0)
+
+
 def test_stateful_forms() raises:
     var app = App()
     var db = State(Db("db"))
@@ -543,7 +709,13 @@ def _bump(name: String):
     _ = setenv(name, String(_count(name) + 1))
 
 
+def _append(name: String, text: String):
+    var now = getenv(name, "")
+    _ = setenv(name, now + text if now == "" else now + "," + text)
+
+
 def _reset():
+    _ = setenv("MUNTIN_RR_ORDER", "")
     for name in [
         "MUNTIN_RR_TRIED",
         "MUNTIN_RR_BUILT",
@@ -574,6 +746,7 @@ struct Counted(FromRouteValue):
 
     def __deinit__(deinit self):
         _bump("MUNTIN_RR_DROPPED")
+        _append("MUNTIN_RR_ORDER", self.text)
 
 
 struct Three(RouteValues):
@@ -662,11 +835,15 @@ def test_ownership_on_failure_at_each_field_and_on_success() raises:
         "/three/x/fail/z",
         "/three/x/y/fail",
     ]
+    var orders: List[String] = ["", "x", "x,y"]
     for k in range(3):
         _reset()
         var r = client.post(targets[k], "body")
         assert_equal(r.status, 400, targets[k])
         _expect_counts(targets[k], k + 1, k, k, 0, 0, 0)
+        # The built fields are destroyed in field order, as Mojo destroys
+        # a whole record's fields (the success case below).
+        assert_equal(getenv("MUNTIN_RR_ORDER", ""), orders[k], targets[k])
     # Success: each field built once and destroyed once, with the record,
     # whose destructor runs once.
     _reset()
@@ -674,6 +851,7 @@ def test_ownership_on_failure_at_each_field_and_on_success() raises:
     assert_equal(r.status, 200)
     assert_equal(r.text(), "xyz body")
     _expect_counts("/three/x/y/z", 3, 3, 3, 1, 1, 1)
+    assert_equal(getenv("MUNTIN_RR_ORDER", ""), "x,y,z")
     # A body failing after a completed record: the record is destroyed
     # once, with each field once, and the handler is not called.
     _reset()

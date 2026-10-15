@@ -5,7 +5,8 @@
 # fields; if a module imports anything but `_Erased`, `_Shared` or
 # `_build_record` from it;
 # if the package root exports it; if the module imports anything but the
-# standard library and `.http`; or if it names request or body data (M2-006) or result/error
+# standard library, `.http` and the `RouteValues` trait (so `_build_record`
+# can build no other type, M3-062); or if it names request or body data (M2-006) or result/error
 # conversion (M2-013); or if `rebind_var` appears anywhere but the one guarded
 # rebind in app.mojo (M3-015, below). A confinement guard, not a safety proof:
 # the invariant itself is in the module docstring and docs/history/architecture-decisions.md
@@ -49,8 +50,9 @@ if grep -nE '_handler_storage|_Erased' "$dir/__init__.mojo"; then
 fi
 
 if grep -nE '^[[:space:]]*(from|import)[[:space:]]' "$storage" |
-    grep -vE '^[0-9]+:[[:space:]]*from[[:space:]]+(std\.[[:alnum:]_.]+|\.http)[[:space:]]+import[[:space:]]'; then
-    echo "error: $storage may import only std and .http" >&2
+    grep -vE '^[0-9]+:[[:space:]]*from[[:space:]]+(std\.[[:alnum:]_.]+|\.http)[[:space:]]+import[[:space:]]' |
+    grep -vE '^[0-9]+:from \.route_value import RouteValues$'; then
+    echo "error: $storage may import only std, .http and RouteValues from .route_value" >&2
     status=1
 fi
 

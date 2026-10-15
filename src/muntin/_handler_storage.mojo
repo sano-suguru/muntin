@@ -92,6 +92,7 @@ from std.memory.alloc import ThinAllocation
 from std.reflection import reflect
 
 from .http import Response
+from .route_value import RouteValues
 
 comptime _Box = MutOpaquePointer[MutUntrackedOrigin]
 
@@ -220,7 +221,7 @@ struct _Shared[S: Movable & Deinitable](Copyable, Movable):
 
 
 def _build_record[
-    T: Movable & Deinitable,
+    T: RouteValues,
     E: Movable & Deinitable,
     convert: def[F: Movable & Deinitable, i: Int](
         List[String], List[UInt8]
@@ -229,8 +230,9 @@ def _build_record[
 ](args: List[String], bytes: List[UInt8]) raises E -> T:
     """Builds a `T` field by field without calling any of its initializers:
     field `i`, of type `F`, is `convert[F, at + i](args, bytes)`, in field
-    order. `app.mojo` passes a route-value record (M3-061), whose fields
-    the registration rules restrict to route values.
+    order. `T` is a route-value record (M3-061), so no other type can be
+    built this way; `app.mojo` calls it only for a record the registration
+    rules accepted, whose fields they restrict to route values.
 
     Invariant, which the compiler does not check (`MaybeUninit` does not
     track which fields are initialized):
@@ -241,7 +243,8 @@ def _build_record[
     - nothing is destroyed before field 0 is written, and after `k` fields
       exactly fields `0` to `k-1` are initialized;
     - when converting field `k` raises, field `k` was never written, each of
-      fields `0` to `k-1` is moved out and destroyed once, the storage is
+      fields `0` to `k-1` is moved out and destroyed once, in field order
+      (the order Mojo destroys a struct's fields in), the storage is
       forgotten without running `T`'s destructor, and the error propagates;
     - on success every field is initialized, the storage is taken as the
       `T`, whose destructor then runs once, where its owner drops it, and
