@@ -22,8 +22,9 @@ Implementations:
 
 Cases, each with and without the middleware (`mw=1`, `mw=0`):
 - `plaintext`, with `h` request header fields named `X-Bench-000` up to
-  `X-Bench-127` (all the same length, which `to_muntin_headers` compares
-  case-insensitively, pair by pair, for each later field);
+  `X-Bench-127`, each name distinct, so `to_muntin_headers` calls Flare's
+  `get_all` once per field and each call scans every field (before #110,
+  names of one length were also compared pair by pair in the adapter);
 - `json-get` and `json-post` (`{"name":"Ada","age":36}`, its one field
   `Content-Type: application/json`);
 - `echo`, a `b`-byte body.
