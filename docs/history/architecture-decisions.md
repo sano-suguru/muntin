@@ -4508,3 +4508,56 @@ Status: **decision, standing constraint** (pull request #105; `src/muntin`, `ada
 **Revisit when:** CI stops running `check_flare.sh` on every pull request that changes code; or the `flare` job grows so slow that fixing a wire change through CI holds items up.
 
 **Next production slice:** none (a standing constraint). Its owner is `docs/DEVELOPMENT.md` section 3, which this record's pull request changes. Records written before it that name a local `check_flare.sh` in their slice stay as they are.
+
+### Route-value records decision (M3-061)
+
+Status: **decision, proposed** (M3-061, pull request #PR; `src/muntin` unchanged). The two prototypes, their runs, the probes, the candidate-note counts and the build times are in the pull request.
+
+**Question and what settles it.** A typed handler takes at most two route values ([M3-022](#several-route-values-decision-m3-022)), so `/organizations/{org_id}/projects/{project_id}/tasks/{task_id}` reaches no typed handler (an outside review's example). Three values beside a body or `Headers` need slot arity 4, ten more overloads, which [M3-052](#registration-complexity-budget-decision-m3-052) lets only a decision add, after comparing them with a slot kind that carries several values on application code, conversion and error order, diagnostics and build time. How does a handler take three or more route values on Mojo 1.1.0? Settled by two scratch prototypes run through `App.handle`, slot arity 4 on every method name (40 overloads to 50) and a record slot kind (40 unchanged), with `test.sh` and `check.sh` on each, AddressSanitizer on the record's construction, must-not-build probes, candidate-note counts and cold build times.
+
+**Choice: `RouteValues`, a public marker trait. A struct that conforms to it is one request slot carrying every route value of its route: one field per placeholder, in the literal's order, each named after the placeholder it binds.**
+
+```mojo
+@fieldwise_init
+struct TaskAt(RouteValues):
+    var org_id: Int
+    var project_id: Int
+    var task_id: Int
+
+def get_task(at: TaskAt) -> Json[Task]: ...
+def update_task(db: State[Db], at: TaskAt, body: Json[TaskEdit]) raises -> Json[Task]: ...
+
+comptime TASK = "/organizations/{org_id}/projects/{project_id}/tasks/{task_id}"
+app.get[TASK](get_task)
+app.patch[TASK](update_task, db)
+```
+
+- **Shapes.** A record is the first request slot and the handler's only route value: `def(P)` and `def(P, Headers)` on `get`, `delete` and bodyless `post`, `put` and `patch`, `def(P, B)` on `post`, `put` and `patch`, each also after `State[S]`. Slot arity 1 or 2, so no overload, for any number of values from one.
+- **Fields.** Each is a bare route-value type (`Int`, `String`, a `FromRouteValue` type, or `Optional[Int]` or `Optional[String]` at a query position, as M3-024 decides); a `Param`, a record or anything else is rejected. Field `i` binds placeholder `i` (path placeholders left to right, then query ones), the counts must be equal and each field's name must equal its placeholder's, so every record gets M3-050's compile-time name check without `.value`, and a swap is a compile error naming the field and the placeholder. Distinct query keys stay required.
+- **Conversion and errors.** Each field converts as a bare slot of its type, in field order: the first invalid value is 400 and nothing after it, the body included, is converted. No new status.
+- **Construction.** Muntin writes each converted field into `MaybeUninit` storage at the offset `std.reflection` gives; when a field fails, the fields already written are destroyed and the storage forgotten. It never calls the record's `__init__`, so a record is plain data: validation belongs in its field types (`FromRouteValue`). The writes are one generic helper in `_handler_storage.mojo` that receives the conversion as a parameter, so the storage module still names no request data or conversion (M2-006); field types are refined with `conforms_to`, not `downcast`, which Mojo 1.1.0 does not check.
+- **Disjointness.** A record that also conforms to `FromRouteValue`, `FromBody` or `FromBytes` is a kind of its own, rejected wherever it appears (M3-054's way); a record inside `Param`, `Optional` or `WithHeaders` has no kind.
+- Bare values (zero to two, `Param` opt-in) are unchanged; a record is additive.
+
+**Rejected.**
+- Slot arity 4 on every method name (ten overloads, 40 to 50): every name then sits at Mojo 1.1.0's ten-note cap, so a call no overload takes loses a candidate note, a stateful arity-3 handler with a rejected result loses its last two notes, and a stateful arity-4 one shows `violated constraint` without the `where` clause it violated; it reaches three values only (four beside a body need arity 5, past the cap), three values of one type still bind by position with `Param` opt-in, and each further value costs ten more overloads.
+- Three bare values only where slot arity 3 fits (`def(V, V, V)`, no overload): `PUT` and `PATCH` with a body and `GET` with `Headers` stay unreachable, the asymmetry M3-022 rejected (its B).
+- Fields bound by name in any order: a second binding rule where a compile error naming the field suffices (M3-050).
+- A `Defaultable` record filled through `field_ref` (no unsafe code): Mojo 1.1.0 has no field defaults, so every record writes a placeholder initializer and every `FromRouteValue` field type needs a placeholder value.
+- A hand-written `from_route_values(values)` per record (M3-022's E): names read at run time; a positional carrier (a tuple, `Values[Int, Int, Int]`; M3-022's F): no names.
+- Requiring a record or `Param` for two values: breaks every bare two-value handler (M3-050).
+- Deferral: the routes stay unreachable.
+
+**Revisit when:**
+- Mojo reflects function parameter names: bare values could be checked or bound by name, and a record would only group values;
+- Mojo gains a reflective constructor, field defaults or derived initializers: build the record through them and drop the unsafe helper;
+- a record needs a field that is not a route value (a header field, the state): a carrier decided against M3-052;
+- `state_fail/variadic_handler_type.mojo` builds, or `header_access_fail/eleven_candidates_drop_a_note.mojo` changes its text: weigh slot arity 4 again;
+- applications report a struct per resource path as a burden: weigh slot arity 4 again with this record's measurements.
+
+**Next production slice (M3-062).**
+- `RouteValues` in `src/muntin/route_value.mojo`, exported, its docstring stating the field rules and that `__init__` is never called. In `_registration_rules.mojo`: a record kind and an ambiguous-record kind; the record's own rules (at least one field, each field's kind, the count, the names, an `Optional` at a query position), checked in `_rule` before the family rules, which then see the record as one route value on one placeholder; one message per rule, the name message naming the field and the placeholder as `_misnamed_message` does. In `app.mojo`: the record branch of `_slot`; `_call_2`, `_call_3` and their stateful forms read the next slot after a record's fields; `_route` marks optional query keys per field. In `_handler_storage.mojo`: the generic field-writing helper, its invariant in the module docstring; `check_unsafe.sh` admits importing it and nothing else new.
+- `tests/test_route_records.mojo` through `TestClient`: DX's example; three path values; path and query values with an `Optional` field absent and present; a `FromRouteValue` field; each 400 (invalid, missing, duplicated, empty) with counted field types showing that later fields and the body are not converted and that each field already built is destroyed once; `Headers` after a record on `get` and `delete`; a body after one on `post`, `put` and `patch`, `Json[T]` included; bodyless and stateful forms; records of one and two fields. A local `SANITIZE=address` run of it on Linux, with a heap-allocated `String` field written before a failing one.
+- `tests/route_records_api_fail`: each new message, stateless and stateful, on `get` and on `post`'s family; a swapped record; a record beside a bare value and after another slot; a field that is a `Param`, a record, a body or of no kind; an `Optional` field at a path position; no fields; the ambiguous record; a record in `Param` and in `WithHeaders`. Every existing test and fixture is unchanged.
+- Docs: `docs/DX.md` (a section on route-value records and section 2's status), `docs/ARCHITECTURE.md` (registration surface, unsafe confinement, revisit index), `docs/SPEC.md`.
+- Not in the slice: fields bound in any order, fields that are not route values, defaults in the literal, records for raw handlers.
