@@ -4684,3 +4684,32 @@ def me(user: Context[CurrentUser]) -> String:
 - Measure: the pull request's copy timing again, with middleware, through the owning `handle`: flat across body sizes.
 - Docs: `docs/DX.md` sections 7, 11 and 15; `docs/ARCHITECTURE.md` (request handling, Request/Response ownership); `docs/SPEC.md`.
 - Not in the slice: `Context`, the adapter's body copy, a raw handler's body copy.
+
+### Worker connection spread decision (M3-068)
+
+Status: **decision** (M3-068, pull request #PR; `src/muntin` and the adapter's behavior unchanged). The probes, traces, prototypes and measurements are in the pull request.
+
+**Question and what settles it.** `serve[make](workers=n)`'s workers share one listener, and connections kept open cluster on one worker (`docs/DX.md` section 1, Workers; pull request #109), so whether a keep-alive pool or an h2c client waits behind a slow handler depends on which worker happened to take its connections. Can they be spread while [M3-049](#multi-worker-serving-decision-m3-049)'s tested guarantee (a connection opened while one worker is held is answered by another), [M3-045](#graceful-shutdown-decision-m3-045)'s stop and [M3-060](#tls-with-workers-decision-m3-060)'s TLS workers still hold? Settled by why they cluster (Flare v0.12.0's worker loop read in code, its system calls traced), Linux's wake-up rules probed outside Flare, each candidate measured with `bench/hol` on Linux (spread, and every hold case with 4 workers), and `scripts/check_flare.sh` run against the chosen change. The cause found: Flare's loop asks Linux for `EPOLLEXCLUSIVE` on the shared listener together with `EPOLLRDHUP`, which Linux refuses beside it (`EINVAL`), and falls back to a plain registration, so every idle worker wakes for each new connection and the first to accept takes it.
+
+**Choice: keep one shared listener, and get the spread from three changes to Flare's shared-listener loop.** Register the listener with `EPOLLEXCLUSIVE` and without `EPOLLRDHUP`; register it again after each batch of accepts, which moves that worker to the tail of the listener's wait queue; and accept before dispatching the batch's other events. The flag alone makes it worse: Linux offers a connection only to the first waiting worker in the queue, so one idle worker took 16 of 16 in every run. With re-registration the next connection goes to the idle worker that has waited longest: 4, 4, 4 and 4 of 16 in every run. A worker running a handler is not waiting, so a connection opened during a hold still goes to another, and accepting first keeps a connection offered to one worker from waiting behind a handler that worker starts in the same batch. Parking a worker's listener for the stop is unaffected: the re-registration then names the parking pipe, which never becomes readable, and `scripts/check_flare.sh`, its stop and TLS workers tests included, passed against Flare with the changes. A record rather than a deferral, because the slice is concrete; it waits on Flare. Until then the clustering stays as `docs/DX.md` section 1 states it.
+
+**Rejected.**
+- A `SO_REUSEPORT` listener per worker, Flare's default (prototyped in the adapter: the address rebound with `SO_REUSEPORT` in `bind`, one more listener per worker in `serve[make]`): it spreads, but the kernel's hash sends about one new connection in n to the held worker, where it waits for the hold, so M3-049's guarantee becomes chance; any process of the same user that sets `SO_REUSEPORT` can then bind the port and take part of its connections; and its balancing is Linux only.
+- Rebinding per-worker listeners when `serve` starts, as Flare's own multi-worker `serve` does: it also resets connections opened between `bind` and `serve`, which `docs/DX.md` section 1 promises a client may open.
+- `SO_REUSEPORT` with an eBPF program steering connections (`SO_ATTACH_REUSEPORT_EBPF`): needs privileges most deployments do not grant, a BPF program in the adapter, and per-request bookkeeping to know which worker is held.
+- Re-registering from the adapter: the registration belongs to Flare's reactor, and Muntin holds only the descriptor, whose replacement (`dup2`) leaves the registration where it is.
+- Pinning a Flare fork or an unmerged commit with the changes: the pin would carry an unreviewed change to Flare's reactor; a commit merged upstream is enough to start the slice.
+- Wiring Flare's `WorkerHandoffPool` into the loop (it exists in `flare.runtime`; no loop uses it): a larger change for the same placement of new connections.
+- A per-worker connection cap (`max_connections`): a capped worker leaves new connections queued for the others, but the cap spreads nothing below it, caps the total, and keeps waking the capped worker for a listener that stays readable; `Server` exposes no connection cap ([M3-051](#server-tls-decision-m3-051)).
+
+**Revisit when:**
+- a Flare tag, or a commit merged upstream, carries the changes: the next production slice;
+- Flare declines them or fixes the clustering another way: measure that with `bench/hol`; if an application's keep-alive pool or h2c clients stall behind one worker meanwhile, weigh the per-worker listener again, with its cost above;
+- the workers tests' observations change (a new connection not answered during a hold): `docs/DX.md` section 1 and this record;
+- spread on macOS matters: kqueue has no exclusive wake-up, so idle workers race there with or without the changes; not measured.
+
+**Next production slice (M3-069): the spread through Flare.** Starts when a Flare tag or merged commit carries the changes, and moves the pin only with the owner's approval.
+- Pin: `pixi.toml`, `pixi.lock`, `docs/REFERENCES.md`, `scripts/check_flare.sh`'s commit, and every name in `adapters/flare/flare_internals.mojo` checked against it (M3-049's revisit), its `run_worker_loop` docstring included.
+- Tests: in `adapters/flare/test_server.mojo`, Linux only, 4 workers, three rounds of 16 connections opened one after another and kept open, each asking which worker serves it: in every round no worker serves more than 5 (at the current pin the busiest served 6 to 16 in every measured run). The existing workers tests (a new connection answered during a hold, the stop tests) and `adapters/flare/test_tls.mojo`'s workers tests unchanged and passing.
+- Measure: `scripts/bench_hol.sh`; spread and hold rows in its pull request.
+- Docs: `docs/DX.md` section 1 (Workers), `docs/ARCHITECTURE.md` (Workers, and a revisit index row for the spread test), `docs/SPEC.md`.

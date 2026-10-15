@@ -50,7 +50,10 @@ def run_worker_loop[
     """Runs Flare's per-worker reactor loop (`run_unified_reactor_loop_shared`,
     the loop its `Scheduler` runs on each worker) on `listener_fd`, which the
     caller owns and keeps open, serving with `handler` until `stop` is set.
-    Relied on: it registers `listener_fd` (with `EPOLLEXCLUSIVE` on Linux),
+    Relied on: it registers `listener_fd`, so a worker running a handler,
+    which does not poll, takes no new connection while another polls (in
+    v0.12.0 every idle worker wakes for a new connection: its
+    `EPOLLEXCLUSIVE` request is refused, M3-068),
     reads `stop` with an acquire load before its first poll and every turn,
     leaves its accept loop on `ENOTSOCK`, returns without raising on a failed
     poll, and closes its connections when it leaves. `tls_context` is
