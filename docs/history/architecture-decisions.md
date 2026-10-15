@@ -4684,3 +4684,36 @@ def me(user: Context[CurrentUser]) -> String:
 - Measure: the pull request's copy timing again, with middleware, through the owning `handle`: flat across body sizes.
 - Docs: `docs/DX.md` sections 7, 11 and 15; `docs/ARCHITECTURE.md` (request handling, Request/Response ownership); `docs/SPEC.md`.
 - Not in the slice: `Context`, the adapter's body copy, a raw handler's body copy.
+
+### Request header conversion decision (M3-066)
+
+Status: **decision** (M3-066, pull request #119, which holds the prototype's measurements, the Flare reading, the other servers' limits and the drafted proposal to Flare; `src/muntin` unchanged).
+
+**Question and what settles it.** The Flare adapter rebuilds a request's fields from `HeaderMap.encode_to`'s text and checks the parse with `get_all` once per distinct name ([M3-002](#headers-decision-m3-002), since pull request #110), and each by-name lookup of Flare v0.12.0 scans every field, so a request costs fields × distinct names comparisons; Flare's 8 KB header limit bounds that only loosely (2,600 distinct names hold a worker about 29 ms over HTTP/1.1, pull request #110). Should the adapter bound the cost with a limit on the number of fields, rebuild them some other way through Flare's public API, or both? Settled by every public `HeaderMap` method (read in Flare v0.12.0), what each yields for the cases M3-002 guards (a name with `:`, an empty value, a value that is not UTF-8, a long value; probed), a scratch prototype of the rebuild on production with `check_flare.sh` and the conversion's cost by field count (`bench/headers/bench_headers.mojo`), and the field limits of other HTTP servers (their documentation).
+
+**Choice: rebuild the fields from what `HeaderMap.write_to` writes, piece by piece, and set no field limit.**
+- `HeaderMap` is `Writable`: its public `write_to[W: Writer]` writes each field as `writer.write(name, ": ", value, "\r\n")`, and a `Writer` receives that as four `write_string` calls, each piece whole, whatever it holds (probed: a name with `:`, an empty value, two bytes that are not UTF-8, a 100,000-byte value). So the adapter's own `Writer` collects the pieces into one buffer with their ends, and the rebuild reads every field's name and value by position in one pass: no parse at a colon, no `get_all`, no `Dict` of names.
+- The split is not a documented contract, so it is checked on every request: exactly `4 × len()` pieces, the second and fourth of each field exactly `": "` and CRLF; a name or value that is not UTF-8, or that `Headers.add` refuses (a name with `:` included), raises as today. Any mismatch is the adapter's 400, so a Flare change to the split refuses every request with fields, loudly, instead of misreading one; the loopback tests see it on a pin change.
+- Cost: linear in the fields' bytes. In the prototype a 12-field browser request takes about 2.3 µs against 7.0 µs today, and 2,600 distinct two-byte names about 0.16 ms against 26 ms (pull request #119). What a request answers is unchanged.
+- No limit on the number of fields: with the rebuild linear, a limit would save at most the fraction of a millisecond the largest header block Flare v0.12.0 admits costs, while refusing requests that work today; Flare's header byte limits stay the bound. Tomcat, Apache and hyper limit fields to 100 by default, so the candidate stays open (revisit below).
+- Upstream, a documented ordered accessor on `HeaderMap` (by index or an iterator) would replace the reliance on `write_to`'s split; pull request #119 drafts the proposal, which this item does not send.
+
+**Rejected.**
+- A field limit alone (`Server.bind`'s `max_header_fields`, 100, answered 431): bounds the square instead of removing it (100 distinct names still cost about 0.12 ms against 6 µs), adds a setting and changes the answer for 101 to about 4,092 fields over HTTP/1.1.
+- The limit beside the rebuild: the same public API and compatibility change for the fraction of a millisecond above.
+- Reading `HeaderMap._keys` and `._values` through `adapters/flare/flare_internals.mojo`: linear, but breaks M3-002's rule for a layout a pin change can alter without a build error or a run-time check.
+- `encode_to` with `get_all` only for lines with two colons: a client controls that count, so the worst case stays the square.
+- Dropping the check of the parse: trusts Flare never to deliver a name with `:` (M3-002's forged `x-user:admin`), which Flare does not document.
+- Waiting for Flare's accessor: the cost stays until a release and a pin change that Muntin does not decide.
+
+**Revisit when:**
+- the pin moves, or Flare documents an accessor or `write_to`'s split: rebuild through the documented one, or re-check the split with the loopback tests;
+- an application or a measurement needs a bound on the number of fields (a per-request cost after the rebuild, or what an application's own `Headers` lookups cost on large blocks): the field limit above;
+- Flare's header byte limits change: re-measure the largest blocks (pull request #110's method).
+
+**Next production slice (M3-067).**
+- `adapters/flare/muntin_flare.mojo`: a private `Writer` collecting `write_to`'s pieces (one byte buffer, piece ends); `to_muntin_headers` rebuilt from them as above, through a private function that takes the pieces and the field count; `encode_to`, the `get_all` check, the name `Dict` and the colon parse go. The module comment and the docstring ("no public field iterator").
+- Tests, in `adapters/flare/test_muntin_flare.mojo`: the existing header cases unchanged (order, casing, repeats, empty values, interleaved names, a forged `x-user:admin` alone and beside a real field, `a:é`, a control byte, a value that is not UTF-8); new: a 100,000-byte value and 4,000 fields rebuilt exactly, and the rebuild from pieces given pieces `write_to` does not write today (one piece too few or too many, a wrong separator, a wrong line end), each refused. The loopback header cases over HTTP/1.1 and h2c pass unchanged.
+- Measure: `scripts/bench_headers.sh` at the base and at the slice, in process and over loopback.
+- Docs: `docs/ARCHITECTURE.md` (the adapter's request header rule; the `Dict` collision note goes); `docs/SPEC.md` (the candidate).
+- Not in the slice: a field limit, Flare's accessor and the pin change.
