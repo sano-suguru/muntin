@@ -245,11 +245,12 @@ with open(f"{out_dir}/mistakes.tsv", "w") as listing:
         replace = {}
         for old, new in b["edits"]:
             hits = [i for i, l in enumerate(lines) if l.strip() == old]
-            if not hits or new is None:
-                sys.exit(f"error: {b['name']} ({b['prog']}): no line '{old}', or no replacement")
-            for i in hits:
-                indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
-                replace[i] = indent + new
+            if len(hits) != 1 or new is None:
+                sys.exit(f"error: {b['name']} ({b['prog']}): expected exactly one line '{old}' "
+                         f"and a replacement; found {len(hits)} line(s)")
+            i = hits[0]
+            indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+            replace[i] = indent + new
         for i, line in replace.items():
             lines[i] = line
         path = f"{out_dir}/{b['name']}_{b['prog']}.mojo"
