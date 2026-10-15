@@ -4392,3 +4392,81 @@ These are the two forms of one shared set that were tested; sharing more of the 
 - after a Mojo upgrade, repeating the measurement shows the declared overload set or the slot arity costing build time distinguishable from noise.
 
 **Next production slice:** none (a standing constraint, `docs/DEVELOPMENT.md` section 2). Its owner is `docs/ARCHITECTURE.md`, "Registration surface", which this record's pull request writes, with the two new fixtures in its revisit index.
+
+### Application route-value types decision (M3-054)
+
+Status: **decision** (M3-054, pull request #100; `src/muntin` unchanged). The prototype, its runs and the probes are in the pull request.
+
+**Question and what settles it.** An outside review (criticism 10) asked that a handler take an application type as a route value, `def get_user(id: UserId) -> User`, converted at run time and checked against the literal at compile time, as `UUID`, an enum, a date or an `EmailAddress` would be. Route values are `Int`, `String` and an `Optional` of either, by exact type equality ([M2-005](#argument-extraction-decision-m2-005), [M3-018](#route-value-decoding-and-string-route-values-decision-m3-018), [M3-024](#optional-query-values-decision-m3-024)); M3-018 rejected a conversion trait for now because a type conforming to it and to `FromBody` would be classified by `_kind`'s order, and named it additive later. Can an application type be a route value on Mojo 1.1.0 without breaking M2-005's disjointness of route values and bodies, without an overload ([M3-052](#registration-complexity-budget-decision-m3-052)), and with `Param` ([M3-050](#named-route-values-decision-m3-050))? Settled by a scratch prototype of the trait as one slot kind, run through `App.handle` with application types from their own module, by must-not-build probes for the ambiguous and misplaced shapes, and by `check.sh` and `test.sh` passing on the prototype unchanged.
+
+**Choice: a public trait `FromRouteValue`, a route-value slot kind beside `Int` and `String`.**
+
+```mojo
+trait FromRouteValue(Deinitable, Movable):
+    @staticmethod
+    def from_route_value(value: String) raises -> Self: ...
+```
+
+An application type that conforms to it, in its own module, is a route value wherever a required `String` route value is: one or two per handler on every method, stateless or stateful, before a body or `Headers`, bodyless on `post`, `put` and `patch` (M3-048), and as `Param[name, T]`. It receives the text M3-018 defines, percent-decoded once at capture and never empty (an empty value stays 400 before any conversion), and any raise is 400 `Bad Request` before the handler, the values after it and the body unconverted, as for `Int`, whatever its cause, a fault in the conversion itself included, so the trait's documentation tells applications to keep it to reading the text; the handler receives the value by move, so it need not be `Copyable`. Disjointness is kept the way [M3-041](#typed-binary-request-bodies-decision-m3-041) kept it for two body conversions: a type conforming to `FromRouteValue` and to `FromBody` or `FromBytes` is a kind of its own, rejected at registration wherever it appears, so neither conversion is picked silently, and so is a `WithHeaders[B]` around one. Conforming does not make `Optional[T]` an optional value (below). `Int` and `String` stay kinds by equality: an application cannot conform a standard-library type to a Muntin trait (M2-005's `__extension` evidence). It adds one slot kind and rules, no overload, no storage or unsafe change.
+
+**Rejected.**
+- Precedence by `_kind`'s order (route value before body or after): picks one of two conversions silently, which M3-041 refused for bodies.
+- One source-neutral trait for route values and bodies (M2-005's `FromArg`): erases the disjointness that keeps positional binding unambiguous.
+- `FromPath` (the review's name): a query value converts through it too; `FromParam` reads as a relative of `Param`, which is a name, not a conversion.
+- A parser passed at registration (`app.get["/u/{id}"](h, parse_user_id)`): a second argument per route and per position, M2-005's rejected decoder.
+- A status or response chosen by the type (a typed raise, `ToErrorResponse`): every request conversion today is a fixed 400 (`from_body` and `from_bytes` too), and an application-chosen error answer belongs to the open structured-errors candidate; a refining trait can add it later without changing this one.
+- `Optional[T]` of an application type in this slice: an `Optional` is a kind by exact equality today, and an application `Optional` needs its own kind rule; a later item.
+- `Bool`, `Float64`, `UInt` and other standard types: they cannot conform, so each would be a Muntin kind by equality, a separate item.
+
+**Revisit when:**
+- structured errors are decided, or a body conversion may choose its status: whether a route-value conversion may too;
+- an application needs `Optional[T]` of its own type, or a default in the literal: decide its kind beside M3-024's;
+- Mojo lets an application conform a standard-library type to a Muntin trait (`tests/spike_fail/extension_int.mojo` or `tests/extraction_fail/builtin_body_via_extension.mojo` builds): `Int` and `String` could become conformances instead of kinds;
+- a conversion needs more than the value's text (another value, the header fields, the state): a carrier, decided against M3-052's budget.
+
+**Next production slice (M3-055).** `FromRouteValue` in `src/muntin/route_value.mojo`, exported from `muntin`; in `_registration_rules.mojo` a route-value kind for a conforming type and a kind for one that also conforms to `FromBody` or `FromBytes`, each rule that names a route value's type (the one-value placeholder messages for `get` and `post`) with an application-type form, the ambiguous type rejected before every other slot rule with `a parameter's type conforms to FromRouteValue and to FromBody or FromBytes; a type is a route value or a body, not both`, and the two slot-kind messages that list route values (`a get handler's parameter is ...`, `a post handler's parameter before the body is ...`) naming `FromRouteValue`, with the fixtures whose expected text that changes; the `FromRouteValue` branch of `_slot`. `tests/test_app_route_values.mojo` runs DX's example and the shapes above through `TestClient`, with its types in a module of their own: a decoded value; a raise as 400; an empty or missing value as 400 with a conversion that aborts the process if called, so the test shows it is not called; a first value's raise leaving the second value's and the body's conversions uncalled, by the same means; a move-only and an owned value; a `Param`; two application values across a path and a query placeholder, alone and before a body; one beside a `String` and an `Int`; bodyless `post`, `put` and `patch`. `tests/app_values_api_fail` pins the ambiguous type with `FromBody` and with `FromBytes`, on `get`, before and in the body position, as the value of a bodyless handler, in a `Param` and in a `WithHeaders`; the one-value placeholder messages; a type that forgot to conform; and `Optional[T]` of an application type. Docs: `docs/DX.md` (a section on application route values), `docs/ARCHITECTURE.md` (registration surface, revisit index), `docs/SPEC.md`.
+
+### Streaming responses and cancellation decision (M3-056)
+
+Status: **decision** (M3-056, pull request #101, which holds the Flare reading, the probe's observations, the storage spike and the owner's two reviews; `src/muntin` unchanged).
+
+**Question and what settles it.** `App.handle(Request) -> Response` returns a whole body, so a handler cannot send a body it produces over time or one larger than memory, and cannot learn that the client has gone. An outside review asked to settle streaming responses and cancellation first; WebSocket, protocol-specific control and streamed request bodies are out of scope. Settled by: what Flare v0.12.0 delivers on the path `Server` serves (`HttpServer.serve` with a `Handler`; the same connection handles under the workers' loop), read in code and measured over loopback by `compat/flare/stream/stream_probe.mojo`; and whether Mojo 1.1.0 lets a `Copyable` `Response` carry a stream of an application type (a scratch spike).
+
+**Facts** (Flare v0.12.0; measured unless marked read):
+- A Flare `Response` holding a `ChunkSource` is sent with chunked framing over HTTP/1.1 (no `Content-Length`) and in DATA frames over HTTP/2, over TLS too (read). The source is pulled only when the connection is writable, at most 16 chunks or 64 KiB per writable edge (read): backpressure comes from the pull.
+- A stream holds the reactor only during a pull: another connection is answered while a quiet stream is open, unlike a running handler ([M3-046](#head-of-line-blocking-decision-m3-046)).
+- A source with nothing to send returns an empty chunk and is pulled again on the next writable edge, a busy loop (780,490 pulls in 1.5 s, one stream, one Linux run); so the idle timer does not close a quiet stream. CPU use, and many quiet streams at once, are not measured.
+- When the client goes away (HTTP/1.1 close, h2c connection close, h2c `RST_STREAM`), Flare stops pulling the source once it notices (a failed write or the reset), destroys it and never sets its `Cancel`; the server keeps serving. How many pulls fall between the client going and Flare noticing is not measured.
+- A pull that raises ends the response after its status and fields: over HTTP/1.1 the connection closes without the last chunk, and the chunks pulled earlier in the same batch are lost; over HTTP/2 Flare closes the whole connection (read).
+- `Cancel` reaches a handler only through `serve_cancellable` (HTTP/1.1, one thread, no TLS), and is never set while one runs: a peer close is acted on before the call, the handler timeout is "not enforced yet", and a drain sets it after the loop stops (read).
+- Mojo 1.1.0: a `Copyable` struct can hold a type-erased, reference-counted box of a move-only source of any type, pulled through a borrowed handle and destroyed once, after its last handle, with unsafe operations of the kind `_Shared` already confines (spike).
+
+**Choice: stream response bodies from a Muntin-owned pull source that `Response` carries; offer no cancellation API.**
+- A Muntin trait, `BodySource`, with `def next(mut self) raises -> Optional[List[UInt8]]`: a chunk, an empty chunk for "nothing now", or `None` at the end. `Response.stream(source^, status=200)` builds a response with an empty `body`, that source and fields set as on any `Response`. For every backend, Muntin promises that a backend pulls a source only when it can send more, and never again once the source has returned `None` or raised, or once the backend has noticed that the client went away; a backend may pull after the client has gone and before it notices. A backend that ends a stream, for any reason, releases its handle, and the source is destroyed once, when its last handle goes.
+- Destruction is cleanup, not a signal: it also follows a complete stream, a raise, `HEAD`, a response that middleware replaced or nobody sent, and a stop; it does not say which, and a remaining copy delays it. An application releases resources in the source's destructor and cannot learn from it that the client went away.
+- The seam does not change: the stream travels inside the `Response` `App.handle` returns, through middleware. Copies of a streamed `Response` share one stream. Pulling consumes it: chunks a middleware or a test pulls with `next_chunk` are not sent. Pulls are not synchronized, so one stream is pulled by one caller at a time; a backend pulls on the worker that ran `App.handle`, and safe code has no way to hand a response to another worker (M3-049).
+- A raise ends the response incomplete (the status has gone out, so no 500), and the error is dropped unread, as a handler's is. `HEAD` through a streamed `GET` route sends the status and fields with no content and no `Content-Length`, and the source is destroyed unpulled.
+- Cancelling a running handler is not offered: no backend Muntin has can signal one, and a token that never fires is a promise Muntin cannot keep (A4).
+- What an empty chunk gives: a stream with gaps (server-sent events) can be expressed without holding the worker. What it does not: an efficient wait. On Flare v0.12.0 a quiet source is a busy loop, so whether many long-lived event streams run at an acceptable cost is not established, and Muntin promises no such cost. Muntin adds no wakeup (A4, A6).
+
+**Rejected.**
+- Flare's `ChunkSource` or `Cancel` in application code: A1.
+- A cancellation token in Muntin handlers: no path `Server` uses ever sets one; dead API.
+- A move-only `Response`: reopens M2 (`Response` is `Copyable`).
+- A second seam or handler kind for streams (`App.handle_stream`, a separate registration): routing, 404/405 and middleware would need a second path; `Response` can carry the stream.
+- A push writer (the handler calls `write(chunk)`): the handler must keep running while the backend sends, which needs a task model (A6) or holds the reactor ([M3-046](#head-of-line-blocking-decision-m3-046)).
+- Data-or-end only (no empty chunk): a source that has to wait would wait inside `next`, holding every connection of its worker, worse than the busy pull.
+- Flare's `serve_streaming`: raw bytes, no HTTP parsing, no TLS.
+
+**Revisit when:**
+- Flare sets `Cancel` while a handler runs, or wakes a quiet source instead of pulling it on every edge: re-run the probe on every Flare upgrade;
+- Mojo ships an async model a backend runs handlers on: a handler-level cancellation and a waiting source without a busy loop may become expressible;
+- streamed request bodies, WebSocket or trailers are taken up (the `Trailer` and `TE` fields: [M3-002](#headers-decision-m3-002));
+- `compat/flare/stream/stream_probe.mojo` changes its observations, or M3-057's measurement of quiet streams shows a cost the decision should not accept.
+
+**Next production slice (M3-057):**
+- `src/muntin`: `BodySource`, `Response.stream`, `Response.is_stream()` and `Response.next_chunk() raises -> Optional[List[UInt8]]` (the pull a backend, a middleware or a test makes; `None` on a buffered response); the erased shared box beside `_Shared` in `_handler_storage.mojo`, with `scripts/check_unsafe.sh` updated to allow it and nothing else.
+- Flare adapter: `to_flare_response` hands a streamed response to Flare's `stream_response` through an adapter-owned `ChunkSource` that pulls the Muntin stream and ignores `Cancel`; the `HEAD` rule above in `_serve_app`.
+- Evidence beyond `docs/DEVELOPMENT.md` section 3: an ownership oracle (one destruction, after the last copy, so a remaining copy delays it; destruction unpulled when abandoned; no pull after `None` or a raise), also under `SANITIZE=address`; middleware passing a streamed response on; loopback cases over HTTP/1.1 and h2c for chunk order, a client that disconnects (the source destroyed) and `HEAD`. A measurement, not a check, reported in the pull request: CPU use and the latency of a plain request with 1, 10 and 100 quiet streams open on one worker.
+- `docs/DX.md` section 14 states the contract, its cost, that `next_chunk` consumes, and that destruction is not a disconnect signal; `docs/ARCHITECTURE.md` the representation.
+- Not in the slice: streamed request bodies, an SSE event type or helper, WebSocket, a cancellation token, a wakeup, trailers, a `Content-Length` for a stream of known length.
