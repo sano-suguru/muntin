@@ -4684,3 +4684,29 @@ def me(user: Context[CurrentUser]) -> String:
 - Measure: the pull request's copy timing again, with middleware, through the owning `handle`: flat across body sizes.
 - Docs: `docs/DX.md` sections 7, 11 and 15; `docs/ARCHITECTURE.md` (request handling, Request/Response ownership); `docs/SPEC.md`.
 - Not in the slice: `Context`, the adapter's body copy, a raw handler's body copy.
+
+### Request context storage decision (M3-065)
+
+Status: **decision**, a standing constraint (M3-065, pull request #N; `src/muntin` unchanged). The probes are in the pull request.
+
+**Question and what settles it.** [M3-063](#request-context-decision-m3-063) fixed the context's API (`request.context.set(value^)` for a value of any type, read by a `Context[T]` slot) and left its storage open. Can Mojo 1.1.0 store such a value behind the non-generic `App` and `Request` and never restore it as another type, through a type identity the compiler guarantees, a table fixed at registration, or a shape that needs no identity? Settled by: the standard library at tag `mojo/v1.1.0` searched for a type identity; compile-time type equality probed; a store that erases one type only, so that no identity is involved, run under AddressSanitizer; a context type the application declares, written by middleware, compiled.
+
+**Choice: no storage erases a context value. Its type is a type parameter that the code writing it and the code reading it share statically, so M3-063's open `set(value^)` is withdrawn; the API is decided again for a closed context type.**
+- Mojo 1.1.0 has no run-time type identity: reflection gives names, linkage names and fields; `Variant` and `TypeList.contains` compare types at compile time only.
+- No identity Mojo offers includes origins: the reflected name prints each as `{}`, the linkage name merges them (`tests/context_known_gaps/reflected_names_collide.mojo`), and generic `==`, which `Variant` indexes by, ignores their identity (`tests/registration_known_gaps/generic_equality_ignores_origin_identity.mojo`). Specializations do not differ by origin.
+- Erasure drops a value's origin even if nothing restores the value: a guard on a middleware's local is stored, the checker ends the local, and dropping the store runs the guard's destructor on freed memory (`tests/context_known_gaps/erasure_drops_origin.mojo`, heap-use-after-free). A generic `set[T]` has no way to refuse such a `T`, so no key, however exact, makes open storage sound. Production `State` has the same gap today (`tests/state_known_gaps/state_borrows_dropped_local.mojo`); closing it is its own item.
+- A field of a type the application declares keeps the origin: storing a view of a local in an `Optional[View[ImmStaticOrigin]]` field does not compile, and no field may name `AnyOrigin` (`tests/context_fail`). A closed context type, created and restored only by code instantiated with it (as `_Erased` pairs its functions, `docs/ARCHITECTURE.md`, storage and ownership), needs no identity. Its guarantee excludes a value built with `AnyOrigin`, which a struct parameter still accepts, as for standard types (`tests/registration_known_gaps/safe_dangling_any_origin_slice.mojo`).
+
+**Rejected.**
+- Keying by any identity Mojo 1.1.0 offers (reflected name, linkage name, a specialized function's address, generic `==`): none includes origins, and erasure drops them anyway.
+- Admitting only types whose reflected name shows no parameter, or no origin (`{`): reads an undocumented display format.
+- A key object: one made by the `App` at run time cannot reach a middleware (a thin function with no captures; module-level variables do not compile), and a module-level `comptime` key has no identity beyond its parameters, so comparing two of them needs the missing type identity.
+- A table fixed at registration and keyed by type: the handler's slot is known at registration, but `set` runs in a middleware that nothing links to it except the type, so the table needs the identity this record finds missing.
+- Deferring with the open API kept: no Mojo 1.1.0 feature, documented or measured, would make it sound, and a closed type is sound within the boundary above.
+
+**Revisit when:**
+- Mojo documents a run-time type identity that includes origins and a way for generic code to refuse or bound an erased value's origins: measure open storage again;
+- `tests/context_known_gaps/erasure_drops_origin.mojo` or `tests/registration_known_gaps/generic_equality_ignores_origin_identity.mojo` stops building: measure open storage again;
+- a `tests/context_fail` fixture builds: a context type's fields no longer keep origins, and the closed type loses its premise.
+
+**Next production slice: none.** The rule is in `docs/ARCHITECTURE.md` (storage and ownership). The closed type's API is the next decision in `docs/SPEC.md`; [M3-064](#request-context-decision-m3-063), the owning `App.handle`, does not depend on it.
