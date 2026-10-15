@@ -4511,7 +4511,7 @@ Status: **decision, standing constraint** (pull request #105; `src/muntin`, `ada
 
 ### Route-value records decision (M3-061)
 
-Status: **decision** (M3-061, pull request #PR; `src/muntin` unchanged). The two prototypes, their runs, the probes, the candidate-note counts and the build times are in the pull request.
+Status: **decision** (M3-061, pull request #112; `src/muntin` unchanged). The two prototypes, their runs, the probes, the candidate-note counts and the build times are in the pull request.
 
 **Question and what settles it.** A typed handler takes at most two route values ([M3-022](#several-route-values-decision-m3-022)), so `/organizations/{org_id}/projects/{project_id}/tasks/{task_id}` reaches no typed handler (an outside review's example). Three values beside a body or `Headers` need slot arity 4, ten more overloads, which [M3-052](#registration-complexity-budget-decision-m3-052) lets only a decision add, compared with a slot kind carrying several values. How does a handler take three or more route values on Mojo 1.1.0? Settled by two scratch prototypes through `App.handle`, slot arity 4 (40 overloads to 50) and a record slot kind (40 unchanged), with the suites, AddressSanitizer, probes, candidate-note counts and cold build times.
 
