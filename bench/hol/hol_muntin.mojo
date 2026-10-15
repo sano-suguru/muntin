@@ -1,0 +1,59 @@
+"""The head-of-line blocking measurement's server, written with Muntin.
+
+Not part of Muntin and not run by CI. `scripts/bench_hol.sh` builds it in the
+`flare` environment and runs it as `hol_muntin WORKERS IDLE_MS`: it binds
+`Server` on an ephemeral loopback port with `idle_timeout_ms=IDLE_MS`,
+prints `port <n>` and serves with `serve(app)` when `WORKERS` is 1 and with
+`serve[make_app](workers=WORKERS)` otherwise. bench/hol/hol_flare.mojo is the
+same server written against Flare alone.
+
+Routes:
+- `GET /slow/{ms}`: sleeps `ms` milliseconds on the serving thread, then
+  answers `slow`. It stands for a handler waiting on a database or another
+  service with a blocking call, the case the measurement is about.
+- `GET /health`: answers `ok` at once.
+- `GET /worker`: answers the serving thread's `pthread_self()`, so a client
+  can tell which worker serves each of its connections.
+"""
+
+from std.ffi import external_call
+from std.sys import argv
+from std.time import sleep
+
+from muntin import App
+from muntin_flare import Server
+
+
+def slow(ms: Int) -> String:
+    sleep(Float64(ms) / 1000.0)
+    return "slow"
+
+
+def health() -> String:
+    return "ok"
+
+
+def worker() -> String:
+    return String(external_call["pthread_self", UInt64]())
+
+
+def make_app() -> App:
+    var app = App()
+    app.get["/slow/{ms}"](slow)
+    app.get["/health"](health)
+    app.get["/worker"](worker)
+    return app^
+
+
+def main() raises:
+    var args = argv()
+    if len(args) != 3:
+        raise Error("usage: hol_muntin WORKERS IDLE_MS")
+    var workers = Int(args[1])
+    var server = Server.bind("127.0.0.1", 0, idle_timeout_ms=Int(args[2]))
+    print("port", server.port(), flush=True)
+    if workers == 1:
+        var app = make_app()
+        server.serve(app)
+    else:
+        server.serve[make_app](workers=workers)
