@@ -242,23 +242,27 @@ def test_method_mismatch_is_405_and_unmatched_path_404_without_extraction() rais
     assert_equal(_count(CONVERSIONS), 0)
 
 
-def second_note(id: Int, body: Note) -> String:
+def second_note(name: String, body: Note) -> String:
     _ = setenv(SECOND_HANDLER_CALLED, "1")
     return "second"
 
 
 def test_matched_route_failing_conversion_does_not_fall_through() raises:
-    # Both routes match path /notes; the first selects the request, and its
-    # missing `a` is 400 even though the second route's `b` is present.
+    # Both routes match path /notes; the first, more specific one selects
+    # the request, and its missing `a` is 400 even though the second route
+    # would accept it (a repeated path is a route conflict, M3-053).
     var app = App()
     app.post["/notes?{a}"](update_note)
-    app.post["/notes?{b}"](second_note)
+    app.post["/{name}"](second_note)
     _reset()
     _ = unsetenv(SECOND_HANDLER_CALLED)
-    _expect_post(app, "/notes?b=1", "x", 400, "Bad Request")
+    _expect_post(app, "/notes?b=1", "name=Ada", 400, "Bad Request")
     assert_equal(_count(FROM_BODY_CALLS), 0)
     assert_equal(_count(HANDLER_CALLS), 0)
     assert_equal(getenv(SECOND_HANDLER_CALLED), "")
+    # The second route does accept such a request on its own path.
+    _expect_post(app, "/memo?b=1", "name=Ada", 200, "second")
+    assert_equal(getenv(SECOND_HANDLER_CALLED), "1")
 
 
 def test_get_route_on_the_same_path_is_unaffected() raises:

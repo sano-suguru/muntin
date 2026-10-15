@@ -111,7 +111,9 @@ def show_item(name: String) -> String:
 
 
 def premise_app() -> App:
-    """The measured premise's `App`, registered in its order."""
+    """The measured premise's `App`, registered in its order, except that
+    its repeated `get` on `/items/{name}` is now `/items/new` first
+    (M3-053)."""
     var app = App()
     app.get["/users/me"](me)
     app.delete["/users/{id}"](delete_user)
@@ -122,7 +124,9 @@ def premise_app() -> App:
     app.get["/report"](report)
     app.post["/hooks"](hook)
     app.put["/items/{name}"](put_item)
-    app.get["/items/{name}"](show_item)
+    # Two `get` routes match `/items/new`; a repeated path would be a route
+    # conflict (M3-053), so the more specific one comes first.
+    app.get["/items/new"](me)
     app.get["/items/{name}"](show_item)
     return app^
 
@@ -278,6 +282,7 @@ def test_premise_table_method_mismatch_is_405_with_allow() raises:
     _expect_405(app, "GET", "/hooks", "POST")
     _expect_405(app, "HEAD", "/hooks", "POST")
     # One method on two routes is listed once.
+    _expect_405(app, "PATCH", "/items/new", "PUT, GET, HEAD")
     _expect_405(app, "PATCH", "/items/a", "PUT, GET, HEAD")
 
 

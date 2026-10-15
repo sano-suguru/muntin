@@ -24,6 +24,10 @@ def me() -> String:
     return "me"
 
 
+def named(name: String) -> String:
+    return "named " + name
+
+
 def list_items(limit: Int) -> String:
     return "items " + String(limit)
 
@@ -174,11 +178,13 @@ def test_exact_and_typed_routes_share_one_app() raises:
 
 
 def test_first_registered_matching_route_wins() raises:
+    # A static route registered before the parameter route that covers it;
+    # the other order aborts at registration (M3-053,
+    # tests/route_conflict_abort).
     var app = App()
     app.get["/users/me"](me)
     app.get["/users/{id}"](get_user)
     app.get["/users/{id}/posts"](user_posts)
-    app.get["/users/7"](me)
     var client = TestClient(app)
 
     assert_equal(client.get("/users/me").text(), "me")
@@ -316,13 +322,15 @@ def test_query_route_does_not_match_other_paths_or_methods() raises:
 def test_query_does_not_take_part_in_route_selection() raises:
     var app = App()
     app.get["/items?{limit}"](list_items)
-    app.get["/items"](hello)
+    app.get["/{name}"](named)
     var client = TestClient(app)
 
-    # The first route matches on path alone; a missing key is 400 there,
-    # not a fall-through to the later route.
+    # The first route matches on path alone; a missing key is 400 there, not
+    # a fall-through to the later, more general route. A second `get` route
+    # on `/items` would be a route conflict (M3-053).
     assert_equal(client.get("/items?limit=5").text(), "items 5")
     assert_equal(client.get("/items").status, 400)
+    assert_equal(client.get("/other").text(), "named other")
 
 
 def test_query_binding_is_positional() raises:

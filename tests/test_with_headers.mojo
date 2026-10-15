@@ -581,17 +581,15 @@ def test_routes_without_a_carrier_are_unchanged_with_fields_present() raises:
     )
 
 
-def test_first_registration_wins() raises:
+def test_route_kinds_share_one_app() raises:
+    # Each kind on a path of its own: a second route on one path is a route
+    # conflict whatever the kinds (M3-053, tests/route_conflict_abort).
     var prefix = State(Prefix("p:"))
     var app = App()
     app.post["/a"](s_body)
-    app.post["/a"](plain)
     app.post["/b"](plain)
-    app.post["/b"](s_body)
     app.post["/c"](raw)
-    app.post["/c"](st_s_body, prefix)
     app.post["/d"](st_r_body, prefix)
-    app.post["/d"](raw)
     var client = TestClient(app)
     assert_equal(
         client.post("/a", "hi", headers=_h("X", "1")).text(), "s_body hi X=<1>"
