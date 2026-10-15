@@ -1,17 +1,22 @@
-# Must build, and is never run (scripts/check.sh builds it only; run, it touches
-# freed memory). Evidence for docs/history/architecture-decisions.md,
-# "Request context storage decision (M3-065)": a store that erases a value's
-# type drops the value's origin even if nothing ever restores the value, so no
-# key, however exact, makes such a store sound. `middleware` stores a guard on
-# its local `token`; the checker ends `token` at its last use, because
-# `Store`'s type does not carry that origin; dropping the store runs the
-# guard's destructor, which updates the freed value through the dead borrow (AddressSanitizer:
-# heap-use-after-free, pull request #118). A generic `set[T]` cannot refuse such
-# a `T`: generic `==` ignores origin identity
+# Must build: scripts/check.sh builds it, which shows only that the compiler
+# accepts it. scripts/run_origin_gaps.sh runs it under AddressSanitizer and
+# requires the report below, which shows that running it touches freed memory.
+# Expected report: AddressSanitizer: heap-use-after-free
+#
+# Evidence for docs/history/architecture-decisions.md, "Request context storage
+# decision (M3-065)": a store that erases a value's type drops the value's
+# origin even if nothing ever restores the value, so no key, however exact,
+# makes such a store sound. `middleware` stores a guard on its local `token`;
+# the checker ends `token` at its last use, because `Store`'s type does not
+# carry that origin; dropping the store runs the guard's destructor, which
+# updates the freed value through the dead borrow (pull request #118). A
+# generic `set[T]` cannot refuse such a `T`: generic `==` ignores origin
+# identity
 # (tests/registration_known_gaps/generic_equality_ignores_origin_identity.mojo).
 #
 # If this file stops building, Mojo refuses to erase a value that borrows a
-# local: re-measure open context storage.
+# local; if it stops reporting, Mojo keeps the borrow alive: either way,
+# re-measure open context storage.
 
 from std.memory import MutOpaquePointer, OwnedPointer
 
