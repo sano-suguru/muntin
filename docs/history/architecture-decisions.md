@@ -4480,7 +4480,7 @@ Status: **decision, standing constraint** (pull request #105; `src/muntin`, `ada
 **Choice: drop the required local run; CI's `flare` job is the run the trigger needs.** The job runs the same `check_flare.sh` on ubuntu-latest and macos-latest for every pull request that changes code, and `ci-ok` requires it. In CI run 414 the job took about 8 minutes on ubuntu (the longest job in the run) and 4.4 on macOS, and the whole run about 8. Agent sessions in the project's cloud environment have no pixi or Mojo, so the rule could not be followed there. A local run before pushing stays the author's choice, as for the other two scripts. The loopback coverage the trigger requires is unchanged.
 
 **Rejected.**
-- Keep it required: it repeats a CI job on fewer systems, and cannot run in the cloud sessions.
+- Keep it required: a local run finds a failure before the push, which is worth having where the environment exists, but it repeats a CI job on fewer systems and cannot run in the cloud sessions, so requiring it of every author costs more than the earlier signal is worth.
 - Keep it as a recommendation: section 3 already makes every local run the author's choice; a separate recommendation would restate that.
 
 **Revisit when:** CI stops running `check_flare.sh` on every pull request that changes code; or the `flare` job grows so slow that fixing a wire change through CI holds items up.
