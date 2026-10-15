@@ -376,6 +376,7 @@ comptime _RECORD_COUNT = 48
 comptime _RECORD_PLACEHOLDER_TWICE = 49
 comptime _RECORD_NAME = 50
 comptime _RECORD_OPTIONAL_AT_PATH = 51
+comptime _RECORD_FIELD_AMBIGUOUS = 52
 
 
 def _record_fault[path: StaticString, A: AnyType]() -> Tuple[Int, Int]:
@@ -383,8 +384,8 @@ def _record_fault[path: StaticString, A: AnyType]() -> Tuple[Int, Int]:
     breaks on the well-formed literal `path`, and the field (from 0) or
     placeholder position its message names (-1 for none); `(_OK, -1)` when
     it breaks none or is no record. In order: the record has a field; each
-    field is a bare route value (not a `Param` or a record; a route value
-    that is also a body breaks M3-054's rule); it has one field per
+    field is a bare route value (not a `Param` or a record, and not a route
+    value that is also a body); it has one field per
     placeholder; the placeholders are named once each; each field is named
     after the placeholder at its position; an `Optional` field binds a query
     placeholder."""
@@ -404,7 +405,7 @@ def _record_fault[path: StaticString, A: AnyType]() -> Tuple[Int, Int]:
             else:
                 var k = _kind[F]()
                 if k == _VALUE_AND_BODY:
-                    return (_VALUE_OR_BODY, i)
+                    return (_RECORD_FIELD_AMBIGUOUS, i)
                 if not _is_value(k):
                     return (_RECORD_FIELD_KIND, i)
         var paths = _path_params(path)
@@ -457,6 +458,17 @@ def _record_message[path: StaticString, A: AnyType]() -> String:
                     ", is not a bare route value: a field is an Int, a String,"
                     " an Optional of either or a FromRouteValue type, never a"
                     " Param or a record"
+                ),
+            )
+        if rule == _RECORD_FIELD_AMBIGUOUS:
+            return String(
+                "field ",
+                i + 1,
+                " of the RouteValues record, ",
+                _field_name[A](i),
+                (
+                    ", conforms to FromRouteValue and to FromBody or"
+                    " FromBytes; a type is a route value or a body, not both"
                 ),
             )
         if rule == _RECORD_COUNT:
@@ -951,6 +963,7 @@ def _check[
         " path or query parameter"
     )
     comptime assert rule != _RECORD_FIELD_KIND, record_message
+    comptime assert rule != _RECORD_FIELD_AMBIGUOUS, record_message
     comptime assert rule != _RECORD_COUNT, record_message
     comptime assert rule != _RECORD_PLACEHOLDER_TWICE, record_message
     comptime assert rule != _RECORD_NAME, record_message

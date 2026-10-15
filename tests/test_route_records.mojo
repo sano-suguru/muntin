@@ -620,6 +620,11 @@ def three(at: Three, body: CountedBody) -> String:
     return String(at.a.text, at.b.text, at.c.text, " ", body.text)
 
 
+def three_raising(at: Three, body: CountedBody) raises -> String:
+    _bump("MUNTIN_RR_CALLS")
+    raise Error("handler failed")
+
+
 def heap_then_counted(at: HeapThenCounted) -> String:
     _bump("MUNTIN_RR_CALLS")
     return String(at.name, " ", at.tag.text, " ", at.after.text)
@@ -647,6 +652,7 @@ def _expect_counts(
 def test_ownership_on_failure_at_each_field_and_on_success() raises:
     var app = App()
     app.post["/three/{a}/{b}/{c}"](three)
+    app.post["/raise/{a}/{b}/{c}"](three_raising)
     var client = TestClient(app)
     # A failure at field k: fields 0 to k-1 were built and are each
     # destroyed once, no later field or the body is converted, the record's
@@ -674,6 +680,12 @@ def test_ownership_on_failure_at_each_field_and_on_success() raises:
     r = client.post("/three/x/y/z", "fail")
     assert_equal(r.status, 400)
     _expect_counts("body fail", 3, 3, 3, 1, 1, 0)
+    # A handler raising after it received the record: 500, and the record
+    # and each field are destroyed once.
+    _reset()
+    r = client.post("/raise/x/y/z", "body")
+    assert_equal(r.status, 500)
+    _expect_counts("handler raise", 3, 3, 3, 1, 1, 1)
 
 
 def test_heap_field_before_a_failing_one_is_destroyed() raises:

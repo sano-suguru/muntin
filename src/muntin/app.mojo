@@ -87,8 +87,10 @@ from .state import State
 # converts its slots in order (`_slot`), so a route value is converted
 # before the next one and before the body; calls the handler alone in a
 # `try`, whose error becomes `_handler_error`; then applies `_respond`. A
-# slot's raw argument index is its position, because the route values come
-# first, before the body or the `Headers` slot.
+# slot's raw argument index is the sum of the widths of the slots before it
+# (`_width`: a bare value 1, a `RouteValues` record its field count, anything
+# else 0), because the route values come first, before the body or the
+# `Headers` slot.
 # `comptime if A == Int` does not refine `A` on Mojo 1.1.0, so a parsed
 # `Int`, a `String` route value, a rebuilt `Request` or `Headers` and a text
 # result reach their generic type through the one rebind helper `_as`, which
@@ -228,8 +230,8 @@ def _match(route: String, path: String, mut args: List[String]) -> Bool:
 
     Static segments must be equal; a `{name}` segment matches one non-empty
     segment, which is appended to `args` (cleared first), left to right. A
-    typed route holds at most two placeholders and a raw route none
-    (enforced at registration).
+    typed route holds as many placeholders as its handler's route values
+    and a raw route none (enforced at registration).
     """
     args.clear()
     var want = route.split("/")
