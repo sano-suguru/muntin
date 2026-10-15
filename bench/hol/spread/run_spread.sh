@@ -9,18 +9,21 @@
 # FLARE_CHECKOUT is a clean git checkout of Flare at v0.12.0 (8c6e140). The
 # patch is applied to a copy of it under build/bench_hol/spread/. The pinned
 # `flare` environment resolves `import flare` to its installed source before
-# any `-I`, so the patched build copies the patched source over the
-# environment's installed `flare` directory and puts the original back on
-# exit (checked with `diff`); a run killed by SIGKILL or a crash leaves the
-# patched source installed, so run that `diff` against the checkout's `flare`
-# before relying on the environment. RUNS (default 5) is the number of runs per
-# case. Prints, for `muntin` (the pin) and `patched`:
+# any `-I`, so the patched build uses a private copy of that environment
+# (hard links, its own `modular.cfg`, the patched `flare` in place of the
+# installed one) under build/bench_hol/spread/env; the pinned environment is
+# never written. RUNS (default 5) is the number of runs per case. Prints, for
+# `muntin` (the pin) and `patched`:
 # - spread: bench/hol/hol_client.py's `spread` mode, idle timeout 60000 ms;
 # - hold: every hol_client.py mode but `spread`, idle timeouts 500 and
 #   60000 ms, one handler held 1000 ms;
 # - fault: fail_listener_add.c preloaded, failing every listener
 #   EPOLL_CTL_ADD after the sixth, then 12 requests one after another;
 # - churn: churn.py, 8 threads, 5 s.
+# Spread and hold are measurements and judge nothing. The script exits 1,
+# after every section, if the patched server outlives the fault (it must end
+# with `serve`'s "reactor returned before a stop signal") or if any churn
+# attempt fails (churn.py checks each answer in full).
 # The kernel probes run without Flare: python3 -I kernel_probe.py and
 # kernel_probe_more.py in this directory.
 set -euo pipefail
@@ -31,6 +34,11 @@ runs="${2-5}"
 [[ $runs =~ ^[1-9][0-9]{0,3}$ ]] || { echo "error: RUNS must be 1 to 9999" >&2; exit 1; }
 [[ "$(git -C "$checkout" rev-parse --short=7 HEAD)" == 8c6e140 ]] ||
     { echo "error: $checkout is not Flare at 8c6e140" >&2; exit 1; }
+[[ -z "$(git -C "$checkout" status --porcelain)" ]] ||
+    { echo "error: $checkout has local changes" >&2; exit 1; }
+pinned="$PWD/.pixi/envs/flare"
+diff -rq "$checkout/flare" "$pinned/lib/mojo/flare" >/dev/null ||
+    { echo "error: the pinned environment's flare differs from $checkout/flare" >&2; exit 1; }
 
 FLARE=(pixi run --frozen -e flare mojo)
 here=bench/hol/spread
@@ -44,32 +52,23 @@ rm -rf "$dir/flare"
 cp -r "$checkout" "$dir/flare"
 git -C "$dir/flare" apply "$PWD/$here/flare_spread.patch"
 
-installed=.pixi/envs/flare/lib/mojo/flare
-saved="$dir/flare-installed"
-# A run killed while the patched source was installed leaves $saved behind;
-# moving onto it again would nest the original inside it.
-[[ ! -e $saved ]] ||
-    { echo "error: $saved exists: a run was killed; check $installed and restore it first" >&2; exit 1; }
-diff -rq "$checkout/flare" "$installed" >/dev/null ||
-    { echo "error: $installed differs from $checkout/flare" >&2; exit 1; }
-restore() {
-    if [[ -d $saved ]]; then
-        rm -rf "$installed"
-        mv "$saved" "$installed"
-        diff -rq "$checkout/flare" "$installed" >/dev/null &&
-            echo "# installed Flare restored to v0.12.0"
-    fi
-}
-trap restore EXIT
 "${FLARE[@]}" build -I src -I adapters/flare bench/hol/hol_muntin.mojo -o "$dir/hol_muntin"
-mv "$installed" "$saved"
-cp -r "$dir/flare/flare" "$installed"
-"${FLARE[@]}" build -I src -I adapters/flare bench/hol/hol_muntin.mojo -o "$dir/hol_patched"
-restore
+env="$PWD/$dir/env"
+rm -rf "$env"
+cp -al "$pinned" "$env"
+rm -rf "$env/lib/mojo/flare"
+cp -r "$dir/flare/flare" "$env/lib/mojo/flare"
+cfg="$env/share/max/modular.cfg"
+sed "s#$pinned#$env#g" "$cfg" >"$cfg.new"
+rm "$cfg"
+mv "$cfg.new" "$cfg"
+MODULAR_HOME="$env/share/max" CONDA_PREFIX="$env" "$env/bin/mojo" build \
+    -I src -I adapters/flare bench/hol/hol_muntin.mojo -o "$dir/hol_patched"
 cc -shared -fPIC -O2 -o "$dir/fail_listener_add.so" "$here/fail_listener_add.c" -ldl
 
 fifo="$dir/signal.fifo"
 pid=
+failed=()
 start() { # NAME IDLE_MS [ENV...]: starts the server and sets pid and port
     local out="$dir/port.txt" prog="$dir/hol_$1" idle="$2"
     shift 2
@@ -84,7 +83,7 @@ start() { # NAME IDLE_MS [ENV...]: starts the server and sets pid and port
     sleep 0.3
 }
 stop() { if [[ -n $pid ]]; then kill -KILL "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; pid=; fi; }
-trap 'stop; restore' EXIT
+trap stop EXIT
 
 echo "## spread"
 for server in muntin patched; do
@@ -134,11 +133,15 @@ EOF
     if kill -0 "$pid" 2>/dev/null; then
         echo "  server still running"
         stop
+        [[ $server == muntin ]] || failed+=("fault: the patched server outlived the failed registration")
     else
         status=0
         wait "$pid" || status=$?
         pid=
-        echo "  server exited $status: $(grep 'serve:' "$dir/port.txt" | head -n 1)"
+        why="$(grep 'serve:' "$dir/port.txt" | head -n 1)"
+        echo "  server exited $status: $why"
+        [[ $server == muntin || ($status != 0 && $why == *"reactor returned before a stop signal"*) ]] ||
+            failed+=("fault: the patched server ended otherwise than by the failed registration")
     fi
 done
 
@@ -147,7 +150,13 @@ for ((run = 1; run <= runs; run++)); do
     for server in muntin patched; do
         start "$server" 60000
         printf '%s ' "$server"
-        python3 -I "$here/churn.py" "$port" "$pid" 5 8
+        python3 -I "$here/churn.py" "$port" "$pid" 5 8 || failed+=("churn: $server run $run had failed attempts")
         stop
     done
 done
+
+if ((${#failed[@]})); then
+    printf 'FAILED: %s\n' "${failed[@]}"
+    exit 1
+fi
+echo "# every check passed"

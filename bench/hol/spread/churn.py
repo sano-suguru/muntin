@@ -1,11 +1,15 @@
-"""Connection churn against a running hol server (M3-068, review of #120).
+"""Connection churn against a running hol server (M3-068).
 
 churn.py PORT PID SECONDS THREADS: each thread opens a connection, sends
 `GET /health` with `Connection: close`, reads the answer to EOF and closes,
-in a loop. Prints connections per second, p50/p99 of connect-to-EOF in ms,
-and the server's CPU seconds (utime + stime) per 1000 connections. The
-client shares the machine's CPUs with the server: compare runs, not
-absolute numbers.
+in a loop, until an absolute deadline. An answer counts as answered only if
+it is complete: status line `HTTP/1.1 200`, headers ended, a Content-Length
+and exactly that many body bytes, the body `ok`. Prints attempts, answered,
+failures by kind, answered connections per second, p50/p99 of connect-to-EOF
+over answered connections in ms, and the server's and this client's CPU
+seconds (utime + stime) per 1000 attempts. The client shares the machine's
+CPUs with the server: compare runs, not absolute numbers. Exits 1 if any
+attempt failed or none was answered.
 """
 import os, socket, sys, threading, time
 
@@ -20,44 +24,69 @@ def cpu():
     return (int(parts[11]) + int(parts[12])) / tick
 
 
-lat, errors, lock = [], [0], threading.Lock()
+def check(data):
+    """Returns None for a complete `200 ok` answer, else the failure kind."""
+    head, sep, body = data.partition(b"\r\n\r\n")
+    if not sep:
+        return "truncated-head"
+    lines = head.split(b"\r\n")
+    if not lines[0].startswith(b"HTTP/1.1 200 "):
+        return "status"
+    length = None
+    for line in lines[1:]:
+        name, _, value = line.partition(b":")
+        if name.strip().lower() == b"content-length":
+            length = int(value.strip())
+    if length is None:
+        return "no-length"
+    if len(body) != length:
+        return "truncated-body"
+    return None if body == b"ok" else "body"
+
+
+lat, fails, lock = [], {}, threading.Lock()
 end = time.monotonic() + seconds
 
 
 def run():
-    mine, bad = [], 0
+    mine, bad = [], {}
     while time.monotonic() < end:
         t0 = time.monotonic()
+        kind = None
         try:
-            s = socket.create_connection(("127.0.0.1", port), timeout=5)
+            s = socket.create_connection(("127.0.0.1", port), timeout=max(0.1, end + 5 - t0))
             s.sendall(REQ)
             data = b""
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                data += b
+            while chunk := s.recv(4096):
+                data += chunk
             s.close()
-            if not data.startswith(b"HTTP/1.1 200"):
-                bad += 1
-                continue
-        except OSError:
-            bad += 1
-            continue
-        mine.append(time.monotonic() - t0)
+            kind = check(data)
+        except OSError as e:
+            kind = type(e).__name__
+        if kind is None:
+            mine.append(time.monotonic() - t0)
+        else:
+            bad[kind] = bad.get(kind, 0) + 1
     with lock:
         lat.extend(mine)
-        errors[0] += bad
+        for k, v in bad.items():
+            fails[k] = fails.get(k, 0) + v
 
 
-c0 = cpu()
+c0, t0 = cpu(), os.times()
 ts = [threading.Thread(target=run) for _ in range(threads)]
 for t in ts:
     t.start()
 for t in ts:
     t.join()
-c1 = cpu()
+c1, t1 = cpu(), os.times()
 lat.sort()
-n = len(lat)
-print(f"conn/s {n / seconds:.0f} p50 {lat[n // 2] * 1000:.2f} ms p99 {lat[int(n * 0.99)] * 1000:.2f} ms "
-      f"server cpu s/1000 conn {(c1 - c0) / n * 1000:.3f} errors {errors[0]}")
+n, failed = len(lat), sum(fails.values())
+attempts = n + failed
+client = (t1.user + t1.system) - (t0.user + t0.system)
+p50 = f"{lat[n // 2] * 1000:.2f}" if n else "-"
+p99 = f"{lat[int(n * 0.99)] * 1000:.2f}" if n else "-"
+per = 1000 / attempts if attempts else 0
+print(f"attempts {attempts} answered {n} failed {failed} {fails or ''} conn/s {n / seconds:.0f} "
+      f"p50 {p50} ms p99 {p99} ms cpu s/1000 attempts server {(c1 - c0) * per:.3f} client {client * per:.3f}")
+sys.exit(1 if failed or not n else 0)
