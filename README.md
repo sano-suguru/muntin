@@ -142,7 +142,7 @@ mojo = ">=1.1.0,<2"
 pixi run mojo run -I ../muntin/src app.mojo    # App and TestClient
 ```
 
-To serve with `muntin_flare`'s `Server`, also add Flare, at the tag Muntin's own `pixi.toml` pins, and pass the adapter's directory too:
+To serve with `muntin_flare`'s `Server`, also add Flare, at the tag Muntin's own `pixi.toml` pins, and pass the adapter's directory too. These keys go into the `[workspace]` and `[dependencies]` tables above; a second copy of either header makes the file invalid TOML:
 
 ```toml
 [workspace]
