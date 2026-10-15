@@ -89,29 +89,44 @@ def rebuild_fields(headers: HeaderMap) raises -> Optional[Headers]:
     return rebuild(p, headers.len())
 
 
-def write_to_splits_fields() -> Bool:
-    """Whether this Flare's `write_to` still writes the four pieces, checked
-    on fields whose text alone is ambiguous (a name with `:`, an empty
-    value, a value holding `": "`): what a server would
-    check once before serving."""
-    try:
-        var h = HeaderMap()
-        h.append("x-user:admin", "v: w")
-        h.append("X-Empty", "")
-        h.append("Host", "x")
-        var p = FieldPieces()
-        h.write_to(p)
-        if not pieces_match(p, 3):
+def _splits(fields: List[Tuple[String, String]]) raises -> Bool:
+    var h = HeaderMap()
+    for f in fields:
+        h.append(f[0], f[1])
+    var p = FieldPieces()
+    h.write_to(p)
+    if not pieces_match(p, len(fields)):
+        return False
+    var start = 0
+    for k in range(len(fields)):
+        var e = 4 * k
+        if not _piece_is(p, start, p.ends[e], fields[k][0]):
             return False
-        var start = 0
-        var names = List[String]()
-        for k in range(3):
-            names.append(String(from_utf8=Span(p.bytes)[start : p.ends[4 * k]]))
-            start = p.ends[4 * k + 3]
-        return (
-            names[0] == "x-user:admin"
-            and names[1] == "X-Empty"
-            and names[2] == "Host"
-        )
+        if not _piece_is(p, p.ends[e + 1], p.ends[e + 2], fields[k][1]):
+            return False
+        start = p.ends[e + 3]
+    return True
+
+
+def write_to_splits_fields() -> Bool:
+    """Whether this Flare's `write_to` still writes each field as its name,
+    `": "`, its value and CRLF, byte for byte: what a server would check
+    once before serving. The fields are ones any Flare should accept (token
+    names) whose values a change to `write_to` could misplace or alter
+    while keeping four pieces: one holding `": "`, an empty one, one with
+    spaces and tabs around it, one holding `;` and `=`. A name with `:` is
+    pinned by `write_to_pieces.mojo` instead, so a Flare that starts
+    refusing such names does not stop a server from starting. No fixed
+    set of fields proves every request is read exactly; that needs Flare's
+    accessor (M3-066)."""
+    try:
+        var fields: List[Tuple[String, String]] = [
+            (String("X-Sep"), String("v: w")),
+            (String("X-Empty"), String("")),
+            (String("X-Space"), String(" \t v \t ")),
+            (String("X-Delim"), String("1;Y=2")),
+            (String("Host"), String("x")),
+        ]
+        return _splits(fields)
     except:
         return False

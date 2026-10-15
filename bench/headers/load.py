@@ -15,7 +15,9 @@ For each header shape, against the server on 127.0.0.1:PORT:
   connection of its own; its latency is counted from when it was due, so
   a send that starts late counts its delay. An open loop: the same arrivals
   for every server, `open_n` of them. Prints the heavy requests answered
-  per second and the bare requests' latency percentiles in ms.
+  per second, the bare requests' latency percentiles in ms and, as
+  `start`, how late each request's thread began (Python's thread start
+  and scheduling, part of the latency but not the server's).
 Every answer must be 200, and no connect, send or receive may wait more
 than TIMEOUT_S. Anything else, an unexpected exception on any thread
 included, stops the run with exit status 1 after printing each failure
@@ -208,9 +210,11 @@ def open_loop(name, failures):
     resent = [0] * 4
     bare_resent = []
     latency = []
+    lag = []
     due = [begin + k * INTERVAL_S for k in range(int(seconds / INTERVAL_S))]
 
     def one(t):
+        lag.append((time.perf_counter() - t) * 1000)
         conn = [None, b""]
         try:
             # list.append is atomic; `+=` on a shared cell is not.
@@ -238,7 +242,7 @@ def open_loop(name, failures):
     if len(latency) != len(due):
         failures.append(f"{name} open: {len(latency)} of {len(due)} bare requests answered")
         return
-    print(f"{name}\topen\theavy_per_s={sum(answered) / seconds:.1f}\t{percentiles('open', latency)}\tresent={sum(resent) + sum(bare_resent)}")
+    print(f"{name}\topen\theavy_per_s={sum(answered) / seconds:.1f}\t{percentiles('open', latency)}\t{percentiles('start', lag)}\tresent={sum(resent) + sum(bare_resent)}")
 
 
 failures = []

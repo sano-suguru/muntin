@@ -14,7 +14,13 @@ client's (a raise).
 """
 
 from std.collections import Optional
-from std.testing import assert_equal, assert_false, assert_true, TestSuite
+from std.testing import (
+    assert_equal,
+    assert_false,
+    assert_not_equal,
+    assert_true,
+    TestSuite,
+)
 
 from flare.http import HeaderMap, Request as FlareRequest
 from muntin import Headers
@@ -55,11 +61,26 @@ def _pieces(h: HeaderMap) -> List[String]:
     return out^
 
 
-def _fields(h: Headers) -> String:
-    var out = String()
+def _listed(h: Headers) -> List[Tuple[String, String]]:
+    var out = List[Tuple[String, String]]()
     for i in range(len(h)):
-        out += h.name(i) + "=" + h.value(i) + ";"
+        out.append((h.name(i), h.value(i)))
     return out^
+
+
+def _mismatch(
+    got: List[Tuple[String, String]], want: List[Tuple[String, String]]
+) -> String:
+    """Empty when `got` and `want` hold the same fields, compared one by
+    one by count, name and value; else the first difference."""
+    if len(got) != len(want):
+        return String("count ", len(got), " != ", len(want))
+    for i in range(len(want)):
+        if got[i][0] != want[i][0]:
+            return String("name ", i, ": ", got[i][0], " != ", want[i][0])
+        if got[i][1] != want[i][1]:
+            return String("value ", i, ": ", got[i][1], " != ", want[i][1])
+    return String()
 
 
 def test_write_to_hands_four_pieces_per_field() raises:
@@ -72,11 +93,12 @@ def test_write_to_hands_four_pieces_per_field() raises:
             (String("X-Empty"), String("")),
             (String("x-bad"), _octets([0xFF, 0x80])),
             (String("X-Long"), long),
+            (String("X-Space"), String(" \t admin \t ")),
         ]
     )
     var p = FieldPieces()
     r.headers.write_to(p)
-    assert_equal(len(p.ends), 16)
+    assert_equal(len(p.ends), 20)
     var got = _pieces(r.headers)
     assert_equal(got[0], "x-user:admin")
     assert_equal(got[1], ": ")
@@ -87,7 +109,10 @@ def test_write_to_hands_four_pieces_per_field() raises:
     # Two bytes that are not UTF-8 arrive as one two-byte piece.
     assert_equal(p.ends[10] - p.ends[9], 2)
     assert_equal(p.ends[14] - p.ends[13], 100_000)
-    assert_true(pieces_match(p, 4))
+    # Spaces and tabs around a value stay in its piece.
+    assert_equal(got[16], "X-Space")
+    assert_equal(got[18], " \t admin \t ")
+    assert_true(pieces_match(p, 5))
     # The pieces are exactly `encode_to`'s bytes.
     var encoded = List[UInt8]()
     r.headers.encode_to(encoded)
@@ -101,6 +126,27 @@ def test_write_to_splits_fields_on_pinned_flare() raises:
     assert_true(pieces_match(FieldPieces(), 0))
 
 
+def test_comparison_tells_fields_apart() raises:
+    # Joined as `name=value;`, these two would read the same.
+    var a: List[Tuple[String, String]] = [
+        (String("X"), String("1;Y=2")),
+        (String("Z"), String("3")),
+    ]
+    var b: List[Tuple[String, String]] = [
+        (String("X"), String("1")),
+        (String("Y"), String("2;Z=3")),
+    ]
+    assert_not_equal(_mismatch(a, b), "")
+    var swapped: List[Tuple[String, String]] = [a[1], a[0]]
+    assert_not_equal(_mismatch(a, swapped), "")
+    var cased: List[Tuple[String, String]] = [
+        (String("x"), String("1;Y=2")),
+        (String("Z"), String("3")),
+    ]
+    assert_not_equal(_mismatch(a, cased), "")
+    assert_equal(_mismatch(a, a), "")
+
+
 def test_rebuild_matches_the_adapter() raises:
     var many = List[Tuple[String, String]]()
     for i in range(4000):
@@ -112,6 +158,14 @@ def test_rebuild_matches_the_adapter() raises:
             (String("x-b"), String("")),
             (String("X-Odd"), String("a: b\tc")),
             (String("X-Utf8"), String("é")),
+            (String("X-Inner"), String("a \t b")),
+        ],
+        [
+            (String("X"), String("1;Y=2")),
+            (String("Z"), String("3")),
+            (String("X"), String("1")),
+            (String("Y"), String("2;Z=3")),
+            (String("x"), String("=;")),
         ],
         [
             (String("X-A"), String("1")),
@@ -126,8 +180,8 @@ def test_rebuild_matches_the_adapter() raises:
         var r = _request(c)
         var got = rebuild_fields(r.headers)
         assert_true(Bool(got))
-        assert_equal(_fields(got.value()), _fields(to_muntin_headers(r)))
-        assert_equal(len(got.value()), r.headers.len())
+        assert_equal(_mismatch(_listed(got.value()), c), "")
+        assert_equal(_mismatch(_listed(to_muntin_headers(r)), c), "")
 
 
 def _refused(fields: List[Tuple[String, String]]) raises -> Bool:
@@ -157,6 +211,14 @@ def test_rebuild_refuses_what_the_adapter_refuses() raises:
         )
     )
     assert_true(_refused([(String("a:é"), String("v"))]))
+    # Spaces or tabs around a value: Flare keeps them and `Headers` refuses
+    # them, so a `write_to` that trimmed values would turn these into
+    # fields the client did not send.
+    assert_true(_refused([(String("x-sp"), String(" admin"))]))
+    assert_true(_refused([(String("x-sp"), String("admin "))]))
+    assert_true(_refused([(String("x-sp"), String("\tadmin"))]))
+    assert_true(_refused([(String("x-sp"), String("admin\t"))]))
+    assert_true(_refused([(String("x-sp"), String("  admin  "))]))
     assert_true(
         _refused([(String("x-ctl"), String("a") + chr(1) + String("b"))])
     )
