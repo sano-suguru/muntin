@@ -4395,7 +4395,7 @@ These are the two forms of one shared set that were tested; sharing more of the 
 
 ### Application route-value types decision (M3-054)
 
-Status: **decision** (M3-054, pull request to be linked on merge; `src/muntin` unchanged). The prototype, its runs and the probes are in the pull request.
+Status: **decision** (M3-054, pull request #100; `src/muntin` unchanged). The prototype, its runs and the probes are in the pull request.
 
 **Question and what settles it.** An outside review (criticism 10) asked that a handler take an application type as a route value, `def get_user(id: UserId) -> User`, converted at run time and checked against the literal at compile time, as `UUID`, an enum, a date or an `EmailAddress` would be. Route values are `Int`, `String` and an `Optional` of either, by exact type equality ([M2-005](#argument-extraction-decision-m2-005), [M3-018](#route-value-decoding-and-string-route-values-decision-m3-018), [M3-024](#optional-query-values-decision-m3-024)); M3-018 rejected a conversion trait for now because a type conforming to it and to `FromBody` would be classified by `_kind`'s order, and named it additive later. Can an application type be a route value on Mojo 1.1.0 without breaking M2-005's disjointness of route values and bodies, without an overload ([M3-052](#registration-complexity-budget-decision-m3-052)), and with `Param` ([M3-050](#named-route-values-decision-m3-050))? Settled by a scratch prototype of the trait as one slot kind, run through `App.handle` with application types from their own module, by must-not-build probes for the ambiguous and misplaced shapes, and by `check.sh` and `test.sh` passing on the prototype unchanged.
 
