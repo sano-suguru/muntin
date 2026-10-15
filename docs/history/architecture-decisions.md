@@ -4687,7 +4687,7 @@ def me(user: Context[CurrentUser]) -> String:
 
 ### Request context storage decision (M3-065)
 
-Status: **decision**, a standing constraint (M3-065, pull request #N; `src/muntin` unchanged). The probes are in the pull request.
+Status: **decision**, a standing constraint (M3-065, pull request #118; `src/muntin` unchanged). The probes are in the pull request.
 
 **Question and what settles it.** [M3-063](#request-context-decision-m3-063) fixed the context's API (`request.context.set(value^)` for a value of any type, read by a `Context[T]` slot) and left its storage open. Can Mojo 1.1.0 store such a value behind the non-generic `App` and `Request` and never restore it as another type, through a type identity the compiler guarantees, a table fixed at registration, or a shape that needs no identity? Settled by: the standard library at tag `mojo/v1.1.0` searched for a type identity; compile-time type equality probed; a store that erases one type only, so that no identity is involved, run under AddressSanitizer; a context type the application declares, written by middleware, compiled.
 

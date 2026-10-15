@@ -4,7 +4,7 @@
 # `State` today: a route erases its `State[S]`, and `App`'s type does not carry
 # the origins in `S`, so a state that borrows a local registers, the checker
 # ends the local at its last use, and a later request reads it
-# (AddressSanitizer: heap-use-after-free, pull request #N). It takes a handler
+# (AddressSanitizer: heap-use-after-free, pull request #118). It takes a handler
 # instantiated with the local's origin, in safe code that names no `_` member.
 #
 # If this file stops building, registration refuses or tracks a state that

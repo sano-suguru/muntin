@@ -6,7 +6,7 @@
 # its local `token`; the checker ends `token` at its last use, because
 # `Store`'s type does not carry that origin; dropping the store runs the
 # guard's destructor, which updates the freed value through the dead borrow (AddressSanitizer:
-# heap-use-after-free, pull request #N). A generic `set[T]` cannot refuse such
+# heap-use-after-free, pull request #118). A generic `set[T]` cannot refuse such
 # a `T`: generic `==` ignores origin identity
 # (tests/registration_known_gaps/generic_equality_ignores_origin_identity.mojo).
 #
