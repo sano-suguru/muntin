@@ -4509,9 +4509,9 @@ Status: **decision, standing constraint** (pull request #105; `src/muntin`, `ada
 
 **Next production slice:** none (a standing constraint). Its owner is `docs/DEVELOPMENT.md` section 3, which this record's pull request changes. Records written before it that name a local `check_flare.sh` in their slice stay as they are.
 
-### TLS with workers decision (M3-058)
+### TLS with workers decision (M3-060)
 
-Status: **decision and production** (M3-058, pull request to be linked on merge; `src/muntin` unchanged). The Flare reading and the tests' observations are in the pull request.
+Status: **decision and production** (M3-060, pull request to be linked on merge; `src/muntin` unchanged). The Flare reading and the tests' observations are in the pull request.
 
 **Question and what settles it.** [M3-049](#multi-worker-serving-decision-m3-049) shipped workers and refuses a TLS `Server`; [M3-051](#server-tls-decision-m3-051) shipped TLS on one reactor. An outside review pointed out that Flare v0.12.0 serves TLS on several workers, so Muntin's layer takes a capability away. Should `serve[make](workers=n)` serve a TLS `Server`, or keep refusing it and recommend terminating TLS in front of several cleartext workers? Settled by how Flare v0.12.0 runs TLS on its own workers (read in code), whether the adapter's workers and stop can do the same without changing any public signature, and real TLS connections on Linux and macOS showing a handshake on every worker, both protocols, no cleartext answer, and the stop.
 
@@ -4527,7 +4527,7 @@ Status: **decision and production** (M3-058, pull request to be linked on merge;
 - certificate reload while serving is wanted (M3-051): replacing a context every worker reads needs a synchronized swap, a design question of its own;
 - `adapters/flare/test_tls.mojo`'s workers tests change an observation (a TLS connection not handshaken while another worker is held, a cleartext request answered, a stop that does not return).
 
-**Next production slice (M3-058, in this item).**
+**Next production slice (M3-060, in this item).**
 - `adapters/flare/flare_internals.mojo`: `tls_context_addr(server)` replaces `has_tls`, and `run_worker_loop` takes the address and passes it to Flare's loop. `adapters/flare/muntin_flare.mojo`: a worker-table cell holds it for each worker; the refusal and its message go.
 - `adapters/flare/test_tls.mojo`, two workers on a TLS `Server`, replacing the refusal test: while one worker's handler is held on a TLS connection, new TLS connections are handshaken and answered by the other over HTTP/1.1 and HTTP/2 before the release, the held one is answered after it, and SIGTERM ends `serve` normally; a cleartext request is answered by no worker, during the hold and after it.
 - Docs: `docs/DX.md` section 1 (Workers, HTTPS), `docs/ARCHITECTURE.md` (workers, TLS, revisit index), `docs/SPEC.md`, `README.md`.
