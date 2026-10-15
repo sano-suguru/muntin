@@ -492,6 +492,20 @@ def test_request_headers_are_rebuilt_in_order() raises:
     )
     assert_equal(got.text(), "b")
     assert_equal(got.query, "x=1")
+    # Names interleaved and in several casings: each field keeps its place
+    # and its own value.
+    var mixed = to_muntin_request(
+        _flare_request(
+            [
+                (String("X-A"), String("1")),
+                (String("x-b"), String("2")),
+                (String("x-A"), String("3")),
+                (String("X-B"), String("4")),
+                (String("x-a"), String("5")),
+            ]
+        )
+    )
+    assert_equal(_fields(mixed.headers), "X-A=1;x-b=2;x-A=3;X-B=4;x-a=5;")
 
 
 def _served(fields: List[Tuple[String, String]]) raises -> FlareResponse:
@@ -512,6 +526,18 @@ def test_unrepresentable_request_headers_answer_400() raises:
         ]
     )
     assert_equal(beside.status, 400)
+    # The value a first-colon parse reads would start inside the `é`.
+    var split = _served([(String("a:é"), String("v"))])
+    assert_equal(split.status, 400)
+    # A forged field among real ones with the same name, in another casing.
+    var grouped = _served(
+        [
+            (String("X-A"), String("1")),
+            (String("x-a:1"), String("2")),
+            (String("x-A"), String("3")),
+        ]
+    )
+    assert_equal(grouped.status, 400)
     var ctl = _served([(String("x-ctl"), String("a") + chr(1) + String("b"))])
     assert_equal(ctl.status, 400)
     # Invalid UTF-8, as Flare v0.12.0 delivers it over HTTP/2.
