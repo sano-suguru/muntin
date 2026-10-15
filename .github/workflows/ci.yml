@@ -55,6 +55,14 @@ jobs:
         with:
           pixi-version: v0.81.0
           locked: true
+      # Mojo's compile cache, which no pixi cache holds. Its entries are
+      # keyed by content, so a stale one is a miss, not a wrong build. A
+      # pull request can restore only its own runs' saves (and main's).
+      - uses: actions/cache@v6
+        with:
+          path: .pixi/envs/default/share/max/cache/.mojo_cache
+          key: mojo-${{ runner.os }}-${{ matrix.task.script }}${{ matrix.task.shard }}-${{ hashFiles('pixi.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mojo-${{ runner.os }}-${{ matrix.task.script }}${{ matrix.task.shard }}-${{ hashFiles('pixi.lock') }}-
       - env:
           CHECK_SHARD: ${{ matrix.task.shard }}
         run: ./scripts/${{ matrix.task.script }}.sh
@@ -88,6 +96,15 @@ jobs:
           # Always build the flare env from the lock: a restored cache would
           # skip the pixi-build compile this job exists to prove.
           cache: false
+      # Only Mojo's compile cache (see verify); the environments above are
+      # still built from the lock.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            .pixi/envs/default/share/max/cache/.mojo_cache
+            .pixi/envs/flare/share/max/cache/.mojo_cache
+          key: mojo-${{ runner.os }}-flare-${{ hashFiles('pixi.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mojo-${{ runner.os }}-flare-${{ hashFiles('pixi.lock') }}-
       - run: ./scripts/check_flare.sh
 
   # The one required status check for main. It must fail, never skip, when

@@ -76,7 +76,8 @@ for ex in "$example" "$tls_example"; do
 done
 echo "ok"
 
-# Every Flare binary is built here at once; the steps below run them in order.
+# Every Flare binary is built here, one per CPU at a time; the steps below
+# run them in order.
 mkdir -p build
 pids=()
 outs=()
@@ -88,9 +89,17 @@ known=()
 # --Werror again.
 flare_src="$(pwd -P)/.pixi/envs/flare/lib/mojo/" # mojo prints resolved paths
 KNOWN_WARNING="${flare_src}flare/http/_client/parse.mojo:867:18: warning: assignment to 'http11' was never used; assign to '_' instead?"
+# More builds than CPUs only compete for the same cores and memory.
+jobs_max="$(getconf _NPROCESSORS_ONLN)"
+throttle() {
+    while (($(jobs -rp | wc -l) >= jobs_max)); do
+        sleep 0.2
+    done
+}
 build_bg() { # OUT ARGS...: mojo build --Werror ARGS -o build/OUT, in the background
     local out="$1"
     shift
+    throttle
     "${FLARE[@]}" build --Werror "$@" -o "build/$out" >"$tmp/build_$out.log" 2>&1 &
     pids+=($!)
     outs+=("$out")
@@ -99,12 +108,13 @@ build_bg() { # OUT ARGS...: mojo build --Werror ARGS -o build/OUT, in the backgr
 build_bg_known() { # OUT ARGS...: as build_bg, without --Werror; checked for KNOWN_WARNING only
     local out="$1"
     shift
+    throttle
     "${FLARE[@]}" build "$@" -o "build/$out" >"$tmp/build_$out.log" 2>&1 &
     pids+=($!)
     outs+=("$out")
     known+=(1)
 }
-step "build fixture, adapter tests and probes (in parallel)"
+step "build fixture, adapter tests and probes (in parallel, one per CPU)"
 build_bg flare_smoke "$fixture"
 build_bg test_muntin_flare -I src -I "$adapter" "$adapter_tests"
 build_bg serve_probe -I src -I "$adapter" "$serve_probe"
