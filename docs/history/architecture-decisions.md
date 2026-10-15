@@ -4511,7 +4511,7 @@ Status: **decision, standing constraint** (pull request #105; `src/muntin`, `ada
 
 ### Dropped error report decision (M3-058)
 
-Status: **decision, proposed** (M3-058, pull request #PR, which holds the drop sites read in code, the probes and the scratch production run; `src/muntin` unchanged). It answers [M2-012](#error-response-decision-m2-012)'s revisit condition on a logging hook, not the one on a fallible conversion.
+Status: **decision, proposed** (M3-058, pull request #107, which holds the drop sites read in code, the probes and the scratch production run; `src/muntin` unchanged). It answers [M2-012](#error-response-decision-m2-012)'s revisit condition on a logging hook, not the one on a fallible conversion.
 
 **Question and what settles it.** Muntin answers some failures with the fixed 500 and drops the error unread, so its text never reaches the client ([M2-011](#raising-handlers-in-production-m2-011)); an application then cannot learn what failed or on which request. An outside review asked that the text stay off the wire while logs and traces can still find the cause. Which dropped errors should an application be able to observe, through what Muntin-owned API, carrying what? Settled by every place `src/muntin` makes the fixed 500 today, read in code; what Mojo 1.1.0 can produce from a caught value of a generic error type, probed; and the chosen form applied to a scratch copy of production with the three scripts run on it.
 
