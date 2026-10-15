@@ -372,6 +372,17 @@ def _without_content(var response: FlareResponse) -> FlareResponse:
     return response^
 
 
+def _handle_owned(app: App, var request: Request) -> Response:
+    """`app`'s answer to the converted `request`, handed to the owning
+    `App.handle` (M3-064), so middleware receives it instead of a copy.
+
+    `request` is `var`, so a caller that leaves out the `^` does not build
+    (`cannot be implicitly copied`), where `app.handle(request)` would build
+    and silently pick the borrowing, copying overload. The `^` below is
+    checked by `test_muntin_flare.mojo`, which compares body addresses."""
+    return app.handle(request^)
+
+
 def _answer(app: App, request: FlareRequest) -> FlareResponse:
     var muntin_request: Request
     try:
@@ -380,7 +391,7 @@ def _answer(app: App, request: FlareRequest) -> FlareResponse:
         return FlareResponse(
             status=400, body=List(String("Bad Request").as_bytes())
         )
-    return to_flare_response(app.handle(muntin_request))
+    return to_flare_response(_handle_owned(app, muntin_request^))
 
 
 def _serve_app(app: App, request: FlareRequest) -> FlareResponse:

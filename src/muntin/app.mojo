@@ -2612,12 +2612,13 @@ struct App(Movable):
         """Answers `request` through the application's middleware and routes.
 
         This is the backend seam: every transport (the in-memory TestClient,
-        network adapters) delivers requests through this method. With no
-        middleware registered, the routes answer the borrowed request
-        directly (`_dispatch`). Otherwise the request is copied once, its
-        body bytes included, and passed to the first middleware; each `Next.run`
-        passes it on to the next one, and the last one's to the routes
-        (`_run`, M3-034). What follows is the routes' answer.
+        network adapters) delivers requests through this method or its owning
+        overload below. With no middleware registered, the routes answer the
+        borrowed request directly (`_dispatch`). Otherwise the request is
+        copied once, its body bytes included, and passed to the first
+        middleware; each `Next.run` passes it on to the next one, and the last
+        one's to the routes (`_run`, M3-034). What follows is the routes'
+        answer.
 
         The first registered route whose method and path match handles the
         request, raw or typed; the query takes no part in selecting it.
@@ -2673,6 +2674,17 @@ struct App(Movable):
         if len(self._middleware) == 0:
             return self._dispatch(request)
         return self._run(0, request.copy())
+
+    def handle(self, var request: Request) -> Response:
+        """Answers `request` as the borrowing `handle` does, taking it from
+        the caller (M3-064): with middleware registered, the request itself,
+        its body buffer included, is moved to the first middleware instead of
+        copied. Mojo picks this overload for a temporary or `request^`, the
+        borrowing one for a named value. Without middleware both answer
+        through the same `_dispatch`."""
+        if len(self._middleware) == 0:
+            return self._dispatch(request)
+        return self._run(0, request^)
 
     def _run(self, index: Int, var request: Request) -> Response:
         """The answer of the middleware at `index` and everything after it;
