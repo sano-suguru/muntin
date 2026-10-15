@@ -34,10 +34,11 @@ MODE is where the probes go:
 - `spread`: no slow request; how a server spreads kept-open connections
   over its workers (`spread` below).
 
-It prints one line: `MODE n=<probes sent during the hold> prompt=<answered
-within PROMPT_S> delayed=<answered later> lost=<not answered> p50_ms=<median
-latency of the answered> max_ms=<largest> slow=<the slow request's outcome>
-hold_ms=<the hold as signalled>`, then, where the probes' connections are
+It prints one line: `MODE n=<probes sent during the hold> during=<answered
+before the hold ended> after=<answered after it> lost=<not answered>
+p50_ms=<median latency of the answered> max_ms=<largest> slow=<the slow
+request's outcome> hold_ms=<the hold as signalled>` (for a control, "the
+hold" is its window), then, where the probes' connections are
 known (every mode but `h1-new`, and only for connections opened before the
 hold), `slow_worker=<sent>/<lost>` and `other_workers=<sent>/<lost>`: the
 probes on connections of the slow request's worker and of the others; for
@@ -56,7 +57,6 @@ import time
 HOLD_AT_S = 0.3
 PERIOD_S = 0.05
 TAIL_S = 0.7
-PROMPT_S = 0.1
 ANSWER_BOUND_S = 3.0
 CONTROL_S = 1.0
 POOL = 8
@@ -450,13 +450,13 @@ def main():
         slow_outcome, slow_worker = slow_result[0], slow_conn[0]
     window = [r for r in results if hold_from <= r[0] < hold_to]
     answered = sorted(r[1] - r[0] for r in window if r[1] is not None)
-    prompt = sum(1 for x in answered if x < PROMPT_S)
+    during = sum(1 for r in window if r[1] is not None and r[1] < hold_to)
     lost = [r for r in window if r[1] is None]
     lost_kinds = sorted({str(r[2]) for r in lost})
     p50 = answered[len(answered) // 2] * 1000 if answered else float("nan")
     worst = answered[-1] * 1000 if answered else float("nan")
     line = (
-        f"{mode} n={len(window)} prompt={prompt} delayed={len(answered) - prompt} "
+        f"{mode} n={len(window)} during={during} after={len(answered) - during} "
         f"lost={len(lost)} p50_ms={p50:.0f} max_ms={worst:.0f} slow={slow_outcome} "
         f"hold_ms={(hold_to - hold_from) * 1000:.0f}"
     )
