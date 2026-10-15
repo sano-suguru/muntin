@@ -24,7 +24,7 @@ from .body import FromBody, FromBytes, _body_text
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
-from .route_value import _NamedValue
+from .route_value import FromRouteValue, _NamedValue
 from .state import State
 
 # Tags such as (M3-014) name the item whose decision, in
@@ -196,17 +196,18 @@ from .state import State
 # reads the body.
 #
 # Route values (M3-018): a route value is an `Int` or a `String` (`_TEXT`, by
-# exact type equality, so no application type is one) or an `Optional` of
-# either (below), at most two per handler (M3-022), never the body. They
+# exact type equality) or an `Optional` of either (below), or an application
+# type conforming to `FromRouteValue` (M3-055), at most two per handler
+# (M3-022), never the body. They
 # bind by position: the path captures left to right, then the query values
 # in the literal's order; names are never compared with the handler's
 # parameters. `App.handle` decodes each raw
 # capture once (`_decode_value`), after matching on the raw path, before any
 # conversion: path captures in place, then each query value as `_query_value`
 # finds it; an empty value, a bad escape or decoded bytes that are not UTF-8
-# are 400 there. The `String` slot takes the decoded text and the `Int` slot
-# parses it. Query keys, `Request.path`, `Request.query` and raw routes stay
-# undecoded.
+# are 400 there. The `String` slot takes the decoded text, the `Int` slot
+# parses it and a `FromRouteValue` slot passes it to `from_route_value`.
+# Query keys, `Request.path`, `Request.query` and raw routes stay undecoded.
 #
 # Optional values (M3-024): an `Optional[Int]` or `Optional[String]` slot is
 # an optional route value, by exact type equality; it binds a query
@@ -751,7 +752,9 @@ def _slot[
     route value is a copy of the decoded text. An `Optional[Int]` or
     `Optional[String]` is `None` for `""`, which `App.handle` passes for an
     absent or empty optional value (M3-025), and otherwise converts as the
-    required slot of its type. A raw `Request` is rebuilt
+    required slot of its type. A `FromRouteValue` value (M3-055) is
+    `A.from_route_value` of the decoded text (400 if it raises). A raw
+    `Request` is rebuilt
     from all the arguments and the body bytes (`_raw_request`; a failure is
     the fixed 500). A `Headers` slot is rebuilt from the field pairs from
     `args[at]` on (`_header_slot`; a failure is the fixed 500). A
@@ -797,6 +800,11 @@ def _slot[
         if args[at].byte_length() == 0:
             return _as[Optional[String], A](None)
         return _as[Optional[String], A](args[at].copy())
+    elif conforms_to(A, FromRouteValue):
+        try:
+            return A.from_route_value(args[at])
+        except:
+            raise _Reject(400)
     elif A == Request:
         try:
             return _as[Request, A](_raw_request(args, body))

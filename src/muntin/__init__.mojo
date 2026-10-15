@@ -9,5 +9,5 @@ from .body import FromBody, FromBytes
 from .headers_body import WithHeaders
 from .http import Headers, Request, Response, ToErrorResponse, ToResponse
 from .json import FromJson, Json, JsonValue, JsonWriter, ToJson
-from .route_value import Param
+from .route_value import FromRouteValue, Param
 from .state import State

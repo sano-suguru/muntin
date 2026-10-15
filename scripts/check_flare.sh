@@ -120,6 +120,7 @@ build_bg inbound_rebuild -I src -I tests -I "$adapter" compat/flare/headers/inbo
 build_bg_known json_loopback_probe -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo
 build_bg head_probe -I src -I "$adapter" compat/flare/head/head_probe.mojo
 build_bg body_probe compat/flare/body/body_probe.mojo
+build_bg stream_probe compat/flare/stream/stream_probe.mojo
 built=0
 for i in "${!pids[@]}"; do
     log="$tmp/build_${outs[i]}.log"
@@ -489,8 +490,31 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/body_probe.log"; then
     exit 1
 fi
 
+# M3-056 streaming evidence (docs/history/architecture-decisions.md
+# "Streaming responses and cancellation decision (M3-056)"): what pinned
+# Flare does with a streamed response on the path Server serves: framing,
+# a client that goes away, other connections, a quiet source, a raise.
+step "Flare streaming probe (M3-056)"
+stream_status=0
+./build/stream_probe >"$tmp/stream_probe.log" 2>&1 || stream_status=$?
+cat "$tmp/stream_probe.log"
+leftover_stream='^\./build/stream_probe$'
+if pgrep -f "$leftover_stream"; then
+    pkill -KILL -f "$leftover_stream" || true
+    echo "error: the stream probe left a server process behind" >&2
+    exit 1
+fi
+if ((stream_status != 0)); then
+    echo "error: Flare streaming behavior differs from the recorded M3-056 evidence" >&2
+    exit 1
+fi
+if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/stream_probe.log"; then
+    echo "error: compat/flare/stream/stream_probe.mojo ran no tests" >&2
+    exit 1
+fi
+
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$tls_tests" "$tls_probe" "$stop_driver" "$example" "$tls_example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo compat/flare/body/body_probe.mojo; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$tls_tests" "$tls_probe" "$stop_driver" "$example" "$tls_example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo compat/flare/body/body_probe.mojo compat/flare/stream/stream_probe.mojo; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1

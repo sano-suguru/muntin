@@ -1,0 +1,12 @@
+# Requests the specification (requests.tsv) leaves open, where each framework
+# answers by its own defaults: one per line, tab-separated: method, target,
+# request body (- for none), Content-Type sent (- for none). scripts/compare_dx.sh
+# prints what each program answers and checks nothing.
+POST	/users	{"name":"Di","age":22}	-
+POST	/users	{"name":"Di","age":22}	text/plain
+GET	/missing	-	-
+GET	/users?limit=1&limit=2	-	-
+GET	/users/%32	-	-
+HEAD	/users/2	-	-
+DELETE	/users/1	-	-
+GET	/users/1/posts/7	-	-

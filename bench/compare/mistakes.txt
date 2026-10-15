@@ -1,0 +1,114 @@
+# Common mistakes, each planted in a copy of one program by
+# scripts/compare_dx.sh, which then reports whether the copy builds, the
+# compiler's first error if it does not, and otherwise what the copy answers to
+# the request named. A block is
+#
+#   == NAME PROGRAM METHOD TARGET [BODY]
+#   - a line of the program, matched with its indentation removed
+#   + what replaces it, indented as the matched line
+#
+# Every `-` line must match at least one line, and every matching line is
+# replaced. A POST body is sent with Content-Type: application/json. Each
+# mistake is planted in both programs where the same intent can be written
+# in both; a name that appears once has no counterpart in the other program
+# (scripts/compare_dx.sh says so).
+
+# The route's placeholder is renamed; the handler is not.
+== renamed-placeholder muntin GET /users/2
+- app.get["/users/{id}"](get_user, users)
++ app.get["/users/{user_id}"](get_user, users)
+== renamed-placeholder flare GET /users/2
+- r.get("/users/:id", Extracted(GetUser(users.copy(), PathInt["id"]())))
++ r.get("/users/:user_id", Extracted(GetUser(users.copy(), PathInt["id"]())))
+
+# The handler's two route values are declared in the other order.
+== swapped-values muntin GET /users/1/posts/7
+- def get_post(uid: Param["uid", Int], pid: Param["pid", Int]) -> String:
++ def get_post(pid: Param["pid", Int], uid: Param["uid", Int]) -> String:
+== swapped-values flare GET /users/1/posts/7
+- var uid: PathInt["uid"]
++ var pid: PathInt["pid"]
+- var pid: PathInt["pid"]
++ var uid: PathInt["uid"]
+
+# The same, with the values declared without Param (docs/DX.md recommends
+# Param for two values; bare values bind by position).
+== swapped-bare-values muntin GET /users/1/posts/7
+- def get_post(uid: Param["uid", Int], pid: Param["pid", Int]) -> String:
++ def get_post(pid: Int, uid: Int) -> String:
+- return String("post ", pid.value, " of user ", uid.value)
++ return String("post ", pid, " of user ", uid)
+
+# The handler reads a route value the route does not declare.
+== missing-placeholder muntin GET /users/1/posts
+- app.get["/users/{uid}/posts/{pid}"](get_post)
++ app.get["/users/{uid}/posts"](get_post)
+== missing-placeholder flare GET /users/1/posts
+- r.get("/users/:uid/posts/:pid", Extracted[GetPost]())
++ r.get("/users/:uid/posts", Extracted[GetPost]())
+
+# A query key is misspelled in one place. Muntin names it once, in the route;
+# Flare names it three times (the field's type, its __init__ and the
+# registration's prototype), so each place is its own mistake there, and the
+# key misspelled the same way in all three is one more.
+== misspelled-query-key muntin GET /users?limit=1
+- app.get["/users?{limit}"](list_users, users)
++ app.get["/users?{limt}"](list_users, users)
+== misspelled-query-key flare GET /users?limit=1
+- var limit: OptionalQueryInt["limit"]
++ var limit: OptionalQueryInt["limt"]
+== misspelled-query-key-in-init flare GET /users?limit=1
+- self.limit = OptionalQueryInt["limit"]()
++ self.limit = OptionalQueryInt["limt"]()
+== misspelled-query-key-in-registration flare GET /users?limit=1
+- Extracted(ListUsers(users.copy(), OptionalQueryInt["limit"]())),
++ Extracted(ListUsers(users.copy(), OptionalQueryInt["limt"]())),
+== misspelled-query-key-everywhere flare GET /users?limit=1
+- var limit: OptionalQueryInt["limit"]
++ var limit: OptionalQueryInt["limt"]
+- self.limit = OptionalQueryInt["limit"]()
++ self.limit = OptionalQueryInt["limt"]()
+- Extracted(ListUsers(users.copy(), OptionalQueryInt["limit"]())),
++ Extracted(ListUsers(users.copy(), OptionalQueryInt["limt"]())),
+
+# The handler needs the store, and the registration does not pass it.
+== state-not-passed muntin GET /users/2
+- app.get["/users/{id}"](get_user, users)
++ app.get["/users/{id}"](get_user)
+== state-not-passed flare GET /users/2
+- r.get("/users/:id", Extracted(GetUser(users.copy(), PathInt["id"]())))
++ r.get("/users/:id", Extracted[GetUser]())
+
+# A handler that reads the request body is registered for GET.
+== body-handler-on-get muntin POST /users {"name":"Di","age":22}
+- app.post["/users"](create_user, users)
++ app.get["/users"](create_user, users)
+== body-handler-on-get flare POST /users {"name":"Di","age":22}
+- r.post(
++ r.get(
+
+# The request body type does not declare its JSON decoding.
+== body-not-decodable muntin POST /users {"name":"Di","age":22}
+- struct CreateUser(FromJson):
++ struct CreateUser:
+== body-not-decodable flare POST /users {"name":"Di","age":22}
+- struct CreateUser(Copyable, Defaultable, FromJson):
++ struct CreateUser(Copyable, Defaultable):
+
+# The result type does not declare its JSON encoding. Flare's serialize_json
+# reflects over any struct, so there is nothing to forget there.
+== result-not-encodable muntin GET /users/2
+- struct User(Copyable, ToJson):
++ struct User(Copyable):
+
+# A JSON member name is misspelled in a hand-written decoder. Flare's
+# deserialize_value takes the names from the fields, so there is none there.
+== misspelled-json-member muntin POST /users {"name":"Di","age":22}
+- return Self(value["name"].string(), value["age"].int())
++ return Self(value["nmae"].string(), value["age"].int())
+
+# The handler is registered without Flare's Extracted, which fills its
+# extractor fields. Muntin has no such wrapper.
+== extracted-forgotten flare GET /users/1/posts/7
+- r.get("/users/:uid/posts/:pid", Extracted[GetPost]())
++ r.get("/users/:uid/posts/:pid", GetPost())

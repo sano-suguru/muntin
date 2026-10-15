@@ -1,7 +1,7 @@
 # Must not compile: `Optional[Float64]` before the body on `post` is a type of
 # no kind. Decision: docs/history/architecture-decisions.md, "Optional query
 # values decision (M3-024)".
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler's parameter before the body is a route value: an Int, a String or an Optional of either
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: a post handler's parameter before the body is a route value: an Int, a String, an Optional of either or a FromRouteValue type
 from muntin import App, FromBody
 
 
