@@ -4511,7 +4511,7 @@ Status: **decision, standing constraint** (pull request #105; `src/muntin`, `ada
 
 ### TLS with workers decision (M3-060)
 
-Status: **decision and production** (M3-060, pull request to be linked on merge; `src/muntin` unchanged). The Flare reading and the tests' observations are in the pull request.
+Status: **decision and production** (M3-060, pull request #108; `src/muntin` unchanged). The Flare reading and the tests' observations are in the pull request.
 
 **Question and what settles it.** [M3-049](#multi-worker-serving-decision-m3-049) shipped workers and refuses a TLS `Server`; [M3-051](#server-tls-decision-m3-051) shipped TLS on one reactor. An outside review pointed out that Flare v0.12.0 serves TLS on several workers, so Muntin's layer takes a capability away. Should `serve[make](workers=n)` serve a TLS `Server`, or keep refusing it and recommend terminating TLS in front of several cleartext workers? Settled by how Flare v0.12.0 runs TLS on its own workers (read in code), whether the adapter's workers and stop can do the same without changing any public signature, and real TLS connections on Linux and macOS showing a handshake on every worker, both protocols, no cleartext answer, and the stop.
 
