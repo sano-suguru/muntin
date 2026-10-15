@@ -4531,3 +4531,113 @@ Status: **decision and production** (M3-060, pull request #108; `src/muntin` unc
 - `adapters/flare/flare_internals.mojo`: `tls_context_addr(server)` replaces `has_tls`, and `run_worker_loop` takes the address and passes it to Flare's loop. `adapters/flare/muntin_flare.mojo`: a worker-table cell holds it for each worker; the refusal and its message go.
 - `adapters/flare/test_tls.mojo`, two workers on a TLS `Server`, replacing the refusal test: while one worker's handler is held on a TLS connection, new TLS connections are handshaken and answered by the other over HTTP/1.1 and HTTP/2 before the release, the held one is answered after it, and SIGTERM ends `serve` normally; a cleartext request is answered by no worker, during the hold and after it.
 - Docs: `docs/DX.md` section 1 (Workers, HTTPS), `docs/ARCHITECTURE.md` (workers, TLS, revisit index), `docs/SPEC.md`, `README.md`.
+
+### Route-value records decision (M3-061)
+
+Status: **decision** (M3-061, pull request #112; `src/muntin` unchanged). The two prototypes, the record prototype's patch on `29519e8`, its runs, the probes, the candidate-note counts and the build times are in the pull request.
+
+**Question and what settles it.** A typed handler takes at most two route values ([M3-022](#several-route-values-decision-m3-022)), so `/organizations/{org_id}/projects/{project_id}/tasks/{task_id}` reaches no typed handler. A third value beside a body or `Headers` needs slot arity 4, ten more overloads, which [M3-052](#registration-complexity-budget-decision-m3-052) admits only against a slot kind carrying several values. How does a handler take three or more? Settled by two prototypes, slot arity 4 and a record slot kind, each with the suites, AddressSanitizer, probes, note counts and cold builds.
+
+**Choice: `RouteValues`, a public marker trait. A struct that conforms to it is one request slot carrying every route value of its route: one field per placeholder, in the literal's order, each named after the placeholder it binds.**
+
+```mojo
+@fieldwise_init
+struct TaskAt(RouteValues):
+    var org_id: Int
+    var project_id: Int
+    var task_id: Int
+
+def get_task(at: TaskAt) -> Json[Task]: ...
+def update_task(db: State[Db], at: TaskAt, body: Json[TaskEdit]) raises -> Json[Task]: ...
+
+comptime TASK = "/organizations/{org_id}/projects/{project_id}/tasks/{task_id}"
+app.get[TASK](get_task)
+app.patch[TASK](update_task, db)
+```
+
+This is M3-022's candidate D, rejected then for a struct per route, a second binding system and unsafe writes outside the storage module. Now three values are required and their other form costs ten overloads; the writes are one generic helper in `_handler_storage.mojo`, given the conversion as a parameter (M2-006 holds); and the record is opt-in past two values, every name checked.
+
+- **Contract.** Conforming to `RouteValues` consents to Muntin initializing the fields directly: the record's `__init__` never runs, so neither it nor an invariant across fields (`start_id <= end_id`) is enforced. A field's validation belongs in its type (`FromRouteValue`), a check across fields in the handler. The destructor runs once for a completed record, never for a partial one, and must not rely on anything only `__init__` establishes. Mojo 1.1.0's `reflect[T]` shows fields, not initializers, so a record with its own `__init__` cannot be refused (a probe's aborting one never ran); this is the record's first documented limit.
+- **Shapes.** Request slots go `State[S]`, then any `Context[T]` slots if the request-context decision (pull request #113) is accepted, then the record as the only route value, then at most a body or `Headers`: `def(P)`, `def(P, Headers)` on `get`, `delete` and bodyless `post`, `put` and `patch`, `def(P, B)` on `post`, `put` and `patch`. A record is one slot whatever its field count, so it carries several route values independently of the slot-count limit; arity 3 still caps the slots. Not accepted: a body and `Headers` together (no shape has both; `def(P, WithHeaders[B])` does), a record beside a bare value or another record, two `Context` slots with a record and a body (arity 4), and a record in a raw handler.
+- **Positions.** A slot's first raw value is at the sum of the widths of the slots before it: a bare value 1, a record its field count, a `Context`, body or `Headers` 0. One function holds the widths; whichever of M3-062 and the request-context slice lands later extends it, and a `Context` after a record gets that decision's order message.
+- **Fields.** Each is a bare route-value type (`Int`, `String`, a `FromRouteValue` type, or `Optional[Int]` or `Optional[String]` at a query position, M3-024). Field `i` binds placeholder `i` (path placeholders left to right, then query ones); the counts are equal, the placeholder names distinct, and each field's name equals its placeholder's (`{org-id}` is a backquoted field), so a swap is a compile error naming both.
+- **Conversion and errors.** Each field converts as a bare slot of its type, in field order: the first invalid value is 400 and nothing after it, the body included, is converted. No new status.
+- **Construction.** The helper writes each converted field into `MaybeUninit[T]` at `reflect[T].field_offset[index=i]()` as its own type, so alignment and padding are the compiler's, and refines field types with `conforms_to`, not `downcast`, which Mojo 1.1.0 does not check. Its invariant: nothing is destroyed before field 0 is written; after `k` fields, exactly fields `0` to `k-1` are initialized; when field `k` fails, each of them is destroyed once, the storage is forgotten without the record's destructor, and the error propagates; on success the storage becomes the record and the helper owns nothing; no field is destroyed twice or read uninitialized.
+- **Cost.** A record adds build time, most with a record type per route; acceptable at the 50 routes measured, unmeasured for hundreds.
+- **Disjointness.** A record that is also a `FromRouteValue`, `FromBody` or `FromBytes` is rejected wherever it appears (M3-054's way). Bare values (zero to two, `Param` opt-in) are unchanged.
+
+**Rejected.**
+- Slot arity 4 (40 overloads to 50): every method name hits Mojo 1.1.0's ten-note cap, losing a candidate note, the mismatched-type note and, stateful, the `where` clause; it reaches only three values beside a body and four alone, still bound by position, at ten overloads per further value.
+- `def(V, V, V)` only: `PUT` and `PATCH` with a body and `GET` with `Headers` stay unreachable (M3-022's B).
+- `Param` fields: the field name already names the placeholder. Fields bound by name in any order: a second binding rule where a compile error suffices (M3-050).
+- A `Defaultable` record filled through `field_ref`: without field defaults every record needs placeholder values. `from_route_values(values)` (M3-022's E): names at run time. A tuple (F): no names.
+- Requiring a record or `Param` for two values: breaks every bare two-value handler (M3-050). Deferral: the routes stay unreachable.
+
+**Revisit when:**
+- Mojo reflects function parameter names: bare values could be checked or bound by name;
+- Mojo gains a reflective constructor, field defaults, derived initializers or a way to tell a user-written `__init__`: build through them, or refuse such records, and drop or narrow the unsafe helper;
+- a record needs a field that is not a route value (a header field, the state): a carrier decided against M3-052;
+- variadic handler types build (`state_fail/variadic_handler_type.mojo`), the note cap changes, or applications find a struct per path a burden: weigh slot arity 4 again.
+
+**Next production slice (M3-062).**
+- `RouteValues` in `route_value.mojo`, exported, its docstring giving the contract first. `_registration_rules.mojo`: record and ambiguous-record kinds; the record's rules (a field, each field's kind, the count, distinct placeholders, the names, `Optional` only at a query position, the position), in `_rule` before the family rules, which then see one value on one placeholder; one message each, built as `_misnamed_message` is. `app.mojo`: `_slot`'s record branch, the width function, optional keys per field in `_route`. `_handler_storage.mojo`: the helper, its invariant as its docstring; `check_unsafe.sh` admits importing it, nothing else.
+- `tests/test_route_records.mojo` through `TestClient`: DX's example; path and query fields, an `Optional` absent and present; a generic record; one-byte, `Optional[Int]` and `String` fields (padding); `{org-id}`; each 400; an ownership oracle with counted field types (a failure at each field: later fields and the body unconverted, each built field destroyed once, no record destructor; success: each destroyed once); an aborting `__init__`, never called; `Headers` or a body (`Json[T]` too) after a record; bodyless and stateful forms; one and two fields.
+- `tests/route_records_api_fail`: each message, stateless and stateful, on both families; the unaccepted shapes; a record in `Param` or `WithHeaders`. Existing tests and fixtures unchanged.
+- Loopback: DX's `GET` and `PATCH` over HTTP/1.1 and h2c.
+- Verification (`docs/DEVELOPMENT.md` section 3): the base-wide diagnostic comparison, since `_rule` gains reflection; a local `SANITIZE=address ./scripts/test.sh` running the oracle with a heap-allocated `String` field before a failing one.
+- Docs: `docs/DX.md` (a records section, the registration rules), `docs/ARCHITECTURE.md` (registration, arity budget, unsafe confinement, revisit index), `docs/SPEC.md`.
+- Not in the slice: fields in any order, fields that are not route values, defaults in the literal.
+
+### Request context decision (M3-063)
+
+Status: **decision** (M3-063, pull request #113; `src/muntin` unchanged). The prototype, probes, reviews and measurements are in the pull request.
+
+**Question and what settles it.** [M3-034](#middleware-decision-m3-034) left middleware unable to hand a handler what it established (an authenticated user): header fields are client input, and a second injected kind doubles the overloads ([M3-001](#application-state-decision-m3-001)). An outside review asked for that, type-safe, and for the cost of the request copy `App.handle` makes when middleware is registered (M3-034's last revisit condition). What public API should carry such a value, can Mojo 1.1.0 store it behind a non-generic `App` without ever restoring one type as another, and what should the copy become? Settled by: a scratch prototype on production (not retained) passing `check.sh`, `test.sh` and `check_flare.sh`; an adversarial review of it, which showed its type key unsound; probes of each type identity Mojo 1.1.0 offers (`tests/context_known_gaps/reflected_names_collide.mojo`); the copy timed by body size.
+
+**Choice: fix the context's public API now, ship none of it until a storage that never restores a value as another type is shown sound, and build the owning `App.handle` on its own.**
+
+```mojo
+def auth(var request: Request, var next: Next) raises -> Response:
+    var token = request.headers.get("authorization")
+    if not token:
+        return Response.text("unauthorized", status=401)
+    request.context.set(CurrentUser(verified_name(token.value())))
+    return next^.run(request^)
+
+
+def me(user: Context[CurrentUser]) -> String:
+    return user[].name
+```
+
+- The API the storage item builds: `Request.context` holds at most one value per type; `set(value^)` attaches or replaces, `get[T]()` is an `Optional[Context[T]]`. `Context[T]` is a read-only shared handle with `State`'s guarantees ([M3-004](#state-storage-decision-m3-004)). A handler takes it as a request slot kind after `State` and before everything else: `State`, then `Context` slots, then route values (a route-value record included, [M3-061](#route-value-records-decision-m3-061)), then a body or `Headers`. It binds no placeholder and adds no overload. A raw handler reads `req.context`.
+- Only application code writes it: `Request` starts it empty and no backend or Muntin step adds to it, so, unlike a header field, it can carry what a middleware established. It is a data carrier, not authentication or authorization: a middleware that cannot establish the value answers itself (401, 403) before `next`.
+- No value of the slot's type is the fixed 500, the handler not called: the middleware did not establish what the registration assumes, an application fault. The response names nothing; Muntin reports the type and the route internally, with dropped handler errors.
+- Storage is open. Behind a non-generic `App` a value is erased, and Mojo 1.1.0 documents no type identity to restore it by; erasure also drops a value's origins, which the storage must refuse or bound.
+- `App.handle(self, var request: Request)` beside the borrowing one: Mojo 1.1.0 picks it for a temporary or `request^`, the borrowing one for a named value. With middleware it hands the request to the first middleware; the borrowing one copies, as today. Not zero-copy: the Flare adapter still copies the body out of Flare's request, and a raw handler still receives a copy of the body (M3-040). The copy measured +2 µs at 64 KiB, +49 µs at 1 MiB and +0.79 ms at 10 MiB per request, against about 155 ns of dispatch.
+
+**Rejected.**
+- Keying by `reflect[T].name()`: distinct types print alike (origins, function values), and a restore under a shared name overflowed the heap; refusing names with `{` or `<` bans today's known collisions only, and a size and alignment check is no type check.
+- Keying by the address of a function specialized on the type: specializations with equal bodies share one address, at `-O0` and `-O3`.
+- Keying by `get_linkage_name`: tells value parameters apart but not origins, and is a symbol name, not a documented identity.
+- `Context` as a second injected argument family: doubles the overloads (M3-001, [M3-052](#registration-complexity-budget-decision-m3-052)).
+- String locals read by key and converted in the handler: a misspelled key is a 500 at run time, and every value is reparsed.
+- A handler-side extractor: nothing passes from middleware, and leaving the parameter out skips the check; it stays [M3-054](#application-route-value-types-decision-m3-054)'s carrier revisit.
+- A value carried by `Next`: later middleware and raw handlers cannot read it.
+- `T` delivered by copy: needs `Copyable` and copies per handler.
+- `App.handle` taking only `var request`: every caller with a named request would need `^` or `.copy()`, an M2 seam change.
+- `Request.body` as a shared buffer: reopens M3-040's public type for a copy the overload removes.
+
+**Revisit when:**
+- the storage item finds only a closed set of context types sound (`App[Ctx]`, a table fixed at registration): decide this API again with it;
+- Mojo documents a type identity, or `tests/context_known_gaps/reflected_names_collide.mojo` stops building: the storage item re-measures it;
+- a handler needs a value that may be absent: decide an `Optional` slot then;
+- a shape needs a `Context` with two route values and a body or `Headers` (slot arity 4): M3-052's ceiling decision;
+- per-route middleware is decided: whether registration can check that a route's middleware attaches what its handler needs;
+- a backend cannot hand over its request: it keeps the borrowing `handle` and its copy.
+
+**Next production slice (M3-064): the owning `App.handle`.**
+- Code: `app.mojo`: `handle(self, var request: Request) -> Response` beside the borrowing one; with middleware it moves the request into the chain, without it both answer through the same dispatch. `TestClient` and the Flare adapter move their requests into it. No `Context`.
+- Tests: in `tests/test_middleware.mojo`, the owning and the borrowing `handle` answer alike for each middleware case; with middleware, the first middleware receives the caller's body buffer (the same address), through the owning one only. The adapter's loopback middleware cases, over HTTP/1.1 and h2c, pass unchanged.
+- Measure: the pull request's copy timing again, with middleware, through the owning `handle`: flat across body sizes.
+- Docs: `docs/DX.md` sections 7, 11 and 15; `docs/ARCHITECTURE.md` (request handling, Request/Response ownership); `docs/SPEC.md`.
+- Not in the slice: `Context`, the adapter's body copy, a raw handler's body copy.
