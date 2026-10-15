@@ -1,5 +1,6 @@
-"""Timing and reporting shared by the routing benchmark programs. Not part of
-Muntin; `bench_routing.mojo` says what is measured."""
+"""Timing and reporting shared by the routing benchmark programs and
+`bench/overhead/bench_adapter.mojo`. Not part of Muntin; each program says
+what it measures."""
 
 from std.time import perf_counter_ns
 
@@ -75,13 +76,7 @@ def measure[D: Dispatch](n: Int, name: String, c: Case, d: D, runs: Int) raises:
             + ", expected "
             + c.want_body.value()
         )
-    var iters = 1
-    while _run(d, iters, want) < MIN_RUN_NS:
-        iters *= 2
-    var per = List[Int]()
-    for _ in range(runs):
-        per.append(_run(d, iters, want) // iters)
-    sort(per)
+    var t = time_per_request(d, runs, want)
     print(
         "N="
         + String(n)
@@ -89,13 +84,44 @@ def measure[D: Dispatch](n: Int, name: String, c: Case, d: D, runs: Int) raises:
         + name
         + "\t"
         + label
-        + "\tmedian_ns="
-        + String(_median(per))
-        + "\tmin_ns="
-        + String(per[0])
-        + "\titers="
-        + String(iters)
+        + "\t"
+        + t.columns()
     )
+
+
+@fieldwise_init
+struct Timing(Copyable):
+    """Nanoseconds per request over the timed runs, and the iterations in
+    each run."""
+
+    var median_ns: Int
+    var min_ns: Int
+    var iters: Int
+
+    def columns(self) -> String:
+        """`median_ns=...\tmin_ns=...\titers=...`."""
+        return (
+            "median_ns="
+            + String(self.median_ns)
+            + "\tmin_ns="
+            + String(self.min_ns)
+            + "\titers="
+            + String(self.iters)
+        )
+
+
+def time_per_request[D: Dispatch](d: D, runs: Int, want: Int) raises -> Timing:
+    """Calibrates (which warms up) by doubling the iterations of one run
+    until it takes `MIN_RUN_NS`, then times `runs` runs; raises if any timed
+    answer's status is not `want`."""
+    var iters = 1
+    while _run(d, iters, want) < MIN_RUN_NS:
+        iters *= 2
+    var per = List[Int]()
+    for _ in range(runs):
+        per.append(_run(d, iters, want) // iters)
+    sort(per)
+    return Timing(_median(per), per[0], iters)
 
 
 struct Case(Copyable):
