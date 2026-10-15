@@ -40,7 +40,11 @@ comptime OpaquePtr = _FlareOpaquePtr
 def run_worker_loop[
     H: Handler
 ](
-    listener_fd: Int, config: ServerConfig, ref handler: H, ref stop: Bool
+    listener_fd: Int,
+    config: ServerConfig,
+    ref handler: H,
+    ref stop: Bool,
+    tls_context: Int,
 ) raises:
     """Runs Flare's per-worker reactor loop (`run_unified_reactor_loop_shared`,
     the loop its `Scheduler` runs on each worker) on `listener_fd`, which the
@@ -48,16 +52,23 @@ def run_worker_loop[
     Relied on: it registers `listener_fd` (with `EPOLLEXCLUSIVE` on Linux),
     reads `stop` with an acquire load before its first poll and every turn,
     leaves its accept loop on `ENOTSOCK`, returns without raising on a failed
-    poll, and closes its connections when it leaves; no TLS context is
-    passed, so it serves cleartext only. Public alternative, not taken:
-    Flare's `HttpFrontend(handler, config, config.h2, auto_protocol=True)`
-    (whose `tls_ctx_addr` would have to carry a TLS context) and its
-    `run_worker` call this same loop, so the behavior relied on is unchanged; but it needs a
+    poll, and closes its connections when it leaves. `tls_context` is
+    `tls_context_addr`'s value, or 0 for cleartext: with one, every accepted
+    connection starts as a TLS handshake on this reactor, as on Flare's own
+    workers, which share the one context the same way. Public alternative,
+    not taken: Flare's `HttpFrontend(handler, config, config.h2,
+    auto_protocol=True, tls_ctx_addr=tls_context)` and its `run_worker` call
+    this same loop, so the behavior relied on is unchanged; but it needs a
     `Copyable` handler, and it swallows the loop's raise, so a reactor that
     fails to start would read as one that returned and its error would be
     lost (`serve` reports it today)."""
     run_unified_reactor_loop_shared(
-        listener_fd, config, config.h2.copy(), handler, stop
+        listener_fd,
+        config,
+        config.h2.copy(),
+        handler,
+        stop,
+        tls_ctx_addr=tls_context,
     )
 
 
@@ -92,12 +103,15 @@ def close_listener(mut server: HttpServer):
     server._listener.close()
 
 
-def has_tls(server: HttpServer) -> Bool:
-    """Whether a TLS context is bound (`HttpServer._tls_ctx`, set by
-    `bind_tls`). Public alternative: none in Flare; `Server` could record
-    whether it bound with a certificate, but serving TLS on workers needs
-    the context's address, which only the private `_tls_ctx_addr` gives."""
-    return Bool(server._tls_ctx)
+def tls_context_addr(server: HttpServer) -> Int:
+    """The address of the TLS context `bind_tls` set
+    (`HttpServer._tls_ctx_addr`, the address of `HttpServer._tls_ctx`'s value),
+    or 0 when none is bound. It stays valid while `server` is neither moved
+    nor destroyed. Relied on: OpenSSL's `SSL_CTX` is shared read-only by
+    every thread that makes a connection from it, as Flare's own
+    multi-worker `serve` shares it. Public alternative: none; `HttpFrontend`
+    takes the address, but only this private method gives it."""
+    return server._tls_ctx_addr()
 
 
 def set_listener_nonblocking(fd: Int) raises:
