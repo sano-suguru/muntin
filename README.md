@@ -2,7 +2,7 @@
 
 Muntin is a typed application layer for building web services in Mojo. Your handlers depend on Muntin, not on Flare or another networking runtime.
 
-Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over cleartext HTTP on one thread, with an IP-literal host, stopping gracefully on SIGTERM or SIGINT. It is not production-ready.
+Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over HTTP or HTTPS, with an IP-literal host, stopping gracefully on SIGTERM or SIGINT. It is not production-ready.
 
 ```mojo
 from muntin import App
@@ -61,7 +61,7 @@ application code
          /             \
         v               v
   TestClient        Flare adapter
-  in memory         over HTTP (Server, one thread)
+  in memory         over HTTP (Server)
 ```
 
 Your handlers and routes stay independent of Flare or any other networking runtime, and Muntin adds no executor or async runtime that application code must adopt. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
@@ -75,7 +75,7 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON and binary bodies), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
-- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)`, on one thread, from an IP-literal host, and stops gracefully on SIGTERM or SIGINT. Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
+- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, on one thread or on several workers with one `App` each, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)` on one thread, from an IP-literal host, and stops gracefully on SIGTERM or SIGINT. Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
 - **Not yet:** see [`docs/SPEC.md`](docs/SPEC.md), "Remaining candidates".
 
 ## Try it
@@ -113,6 +113,50 @@ curl --cacert cert.pem https://127.0.0.1:8443/   # Hello, Mojo! (in another term
 ```
 
 In production, use a certificate from your certificate authority; a wrong file stops `Server.bind` with an error naming it ([`docs/DX.md`](docs/DX.md) section 1, "HTTPS").
+
+### From your own project
+
+Until Muntin is packaged, your project uses a clone of it and passes its sources to `mojo` with `-I`. Put the clone next to your project; your program then runs against whatever commit the clone has checked out:
+
+```text
+workspace/
+├── muntin/      git clone https://github.com/sano-suguru/muntin.git
+└── myapp/
+    ├── pixi.toml
+    └── app.mojo
+```
+
+`myapp/pixi.toml` needs Muntin's channels and Mojo, in the range Muntin's own `pixi.toml` declares (Muntin is checked only with the toolchain named under [Development](#development); your `pixi.lock` records the version you get):
+
+```toml
+[workspace]
+name = "myapp"
+channels = ["https://conda.modular.com/max", "conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[dependencies]
+mojo = ">=1.1.0,<2"
+```
+
+```sh
+pixi run mojo run -I ../muntin/src app.mojo    # App and TestClient
+```
+
+To serve with `muntin_flare`'s `Server`, also add Flare, at the tag Muntin's own `pixi.toml` pins, and pass the adapter's directory too. These keys go into the `[workspace]` and `[dependencies]` tables above; a second copy of either header makes the file invalid TOML:
+
+```toml
+[workspace]
+preview = ["pixi-build"]   # pixi builds Flare from its git source
+
+[dependencies]
+flare = { git = "https://github.com/ehsanmok/flare.git", tag = "v0.12.0" }
+```
+
+```sh
+pixi run mojo run -I ../muntin/src -I ../muntin/adapters/flare app.mojo
+```
+
+`mojo build` takes the same `-I` paths.
 
 ## Documentation
 
