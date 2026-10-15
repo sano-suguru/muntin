@@ -336,6 +336,7 @@ If one of these pins changes (a pinned fixture unexpectedly compiles, fails to c
 | `adapters/flare/test_server.mojo`'s idle timeout tests | [Server idle timeout decision (M3-047)](history/architecture-decisions.md#server-idle-timeout-decision-m3-047) |
 | `adapters/flare/test_tls.mojo` | [Server TLS decision (M3-051)](history/architecture-decisions.md#server-tls-decision-m3-051) |
 | `adapters/flare/test_server.mojo`'s stop tests | [Graceful shutdown decision (M3-045)](history/architecture-decisions.md#graceful-shutdown-decision-m3-045) |
+| `compat/flare/stream/stream_probe.mojo` | [Streaming responses and cancellation decision (M3-056)](history/architecture-decisions.md#streaming-responses-and-cancellation-decision-m3-056) |
 
 ## Request/Response ownership
 
