@@ -114,6 +114,50 @@ curl --cacert cert.pem https://127.0.0.1:8443/   # Hello, Mojo! (in another term
 
 In production, use a certificate from your certificate authority; a wrong file stops `Server.bind` with an error naming it ([`docs/DX.md`](docs/DX.md) section 1, "HTTPS").
 
+### From your own project
+
+Until Muntin is packaged, your project uses a clone of it and passes its sources to `mojo` with `-I`. Put the clone next to your project; your program then runs against whatever commit the clone has checked out:
+
+```text
+workspace/
+├── muntin/      git clone https://github.com/sano-suguru/muntin.git
+└── myapp/
+    ├── pixi.toml
+    └── app.mojo
+```
+
+`myapp/pixi.toml` needs Muntin's channels and Mojo, in the range Muntin's own `pixi.toml` declares (Muntin is checked only with the toolchain named under [Development](#development); your `pixi.lock` records the version you get):
+
+```toml
+[workspace]
+name = "myapp"
+channels = ["https://conda.modular.com/max", "conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[dependencies]
+mojo = ">=1.1.0,<2"
+```
+
+```sh
+pixi run mojo run -I ../muntin/src app.mojo    # App and TestClient
+```
+
+To serve with `muntin_flare`'s `Server`, also add Flare, at the tag Muntin's own `pixi.toml` pins, and pass the adapter's directory too. These keys go into the `[workspace]` and `[dependencies]` tables above; a second copy of either header makes the file invalid TOML:
+
+```toml
+[workspace]
+preview = ["pixi-build"]   # pixi builds Flare from its git source
+
+[dependencies]
+flare = { git = "https://github.com/ehsanmok/flare.git", tag = "v0.12.0" }
+```
+
+```sh
+pixi run mojo run -I ../muntin/src -I ../muntin/adapters/flare app.mojo
+```
+
+`mojo build` takes the same `-I` paths.
+
 ## Documentation
 
 - [`docs/DX.md`](docs/DX.md): how to write Muntin applications: API, examples, semantics.
