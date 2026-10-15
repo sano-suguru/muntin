@@ -5,3 +5,7 @@
 # build output
 build/
 *.mojoc
+
+# Python bytecode caches
+__pycache__/
+*.pyc
