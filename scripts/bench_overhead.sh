@@ -13,14 +13,17 @@
 #    (bench/overhead/bench_adapter.mojo says what it measures);
 # 2. on Linux with glibc and a C compiler (`cc`), runs `bench_adapter count`
 #    under bench/overhead/count_alloc.c: the same cases' allocations per
-#    request, of which those of 64 KiB or more are a large echo's body
-#    copies; elsewhere it says the section is skipped;
+#    request (bench_adapter.mojo says what they stand for and how it checks
+#    that first); elsewhere it says the section is skipped;
 # 3. serves the application from each implementation on loopback and loads
 #    it with wrk over HTTP/1.1 keep-alive: requests per second, latency p50
-#    and p99 (wrk's), errors, and the server's peak resident memory (VmHWM;
-#    Linux only, `-` elsewhere), for each worker count, middleware off and
-#    on, endpoint and connection count, ROUNDS times, then summarizes the
-#    rounds.
+#    and p99 (wrk's), the responses received (`requests`), errors (responses
+#    other than 2xx or 3xx, and socket errors), of them timeouts, and the
+#    server's peak resident memory since it started (VmHWM; Linux only, `-`
+#    elsewhere), for each worker count, middleware off and on, endpoint and
+#    connection count, ROUNDS times, then summarizes the rounds. A server
+#    serves every connection count and round of one endpoint, so its peak
+#    covers every load of that endpoint up to the line, not that load alone.
 #
 # Endpoints: plaintext (GET /plaintext), plaintext-h16 (the same with 16
 # more request header fields, X-Bench-000 to X-Bench-015; wrk alone sends
@@ -43,11 +46,15 @@
 # in the reverse order in even ones (two rounds: muntin, flare, flare,
 # muntin), so that no implementation always runs first or last. Each line
 # names its round. With more than one round, a summary follows, one line per
-# configuration and pair: the median requests per second of each, and the
-# ratio of the second to the first in each round (median, minimum and
-# maximum): `flare/muntin` and, with several workers,
-# `flare-shared/flare`. A ratio whose minimum and maximum are on the same
-# side of 1 held in every round.
+# configuration and pair: the median requests per second of each, the ratio
+# of the second to the first in each round (median, minimum and maximum), and
+# `order`, how much higher that ratio was in the rounds where the first of
+# the pair ran first than in those where it ran last (geometric means):
+# `flare/muntin` and, with several workers, `flare-shared/flare`. A ratio
+# whose minimum and maximum are on the same side of 1 held in every round.
+# Pairs with an error in any round are summarized apart, with each side's
+# errors, timeouts and errors per response received: an overloaded server's
+# requests per second are not a throughput comparison.
 #
 # CPUs: where taskset exists (Linux), the allowed CPUs (Cpus_allowed_list in
 # /proc/self/status, at least 2) are split in two: the first half runs the
@@ -62,7 +69,7 @@
 #   RUNS      timed runs per in-process case (default 15)
 #   WRK       the wrk command (default: wrk 4.2.0 from conda-forge through
 #             `pixi exec`, linux-64 only; elsewhere set WRK=wrk)
-# Needs curl, cmp, awk and sort.
+# Needs curl, cmp and awk.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -280,20 +287,24 @@ load() { # IMPL ENDPOINT PORT CONNS PID LABEL: one warm-up run and one measured 
     local result
     result="$(${wrk_pin[@]+"${wrk_pin[@]}"} "${wrk[@]}" -t "$threads" -c "$c" -d "${duration}s" \
         --timeout 10s --latency ${args[@]+"${args[@]}"} "$url")"
-    local rps p50 p99 errors
+    local rps p50 p99 requests errors timeouts
     rps="$(awk '/^Requests\/sec:/ { print $2 }' <<<"$result")"
     p50="$(to_us "$(awk '$1 == "50%" { print $2 }' <<<"$result")")"
     p99="$(to_us "$(awk '$1 == "99%" { print $2 }' <<<"$result")")"
+    requests="$(awk '$2 == "requests" && $3 == "in" { print $1 }' <<<"$result")"
     errors="$(awk '
         /^  Non-2xx or 3xx responses:/ { n += $5 }
         /^  Socket errors:/ { gsub(",", ""); n += $4 + $6 + $8 + $10 }
         END { print n + 0 }' <<<"$result")"
-    printf '%s\tc=%s\t%s\treq_s=%s\tp50_us=%s\tp99_us=%s\terrors=%s\tpeak_rss_kib=%s\n' \
-        "$6" "$c" "$1" "$rps" "$p50" "$p99" "$errors" "$(peak_rss "$5")" | tee -a "$out/loopback.tsv"
+    timeouts="$(awk '/^  Socket errors:/ { gsub(",", ""); n += $10 } END { print n + 0 }' <<<"$result")"
+    printf '%s\tc=%s\t%s\treq_s=%s\tp50_us=%s\tp99_us=%s\trequests=%s\terrors=%s\ttimeouts=%s\tpeak_rss_kib=%s\n' \
+        "$6" "$c" "$1" "$rps" "$p50" "$p99" "${requests:-0}" "$errors" "$timeouts" "$(peak_rss "$5")" |
+        tee -a "$out/loopback.tsv"
 }
 
-summarize() { # the rounds of $out/loopback.tsv, one line per configuration and pair
-    awk -F '\t' '
+summarize() { # ERRORS: the rounds of $out/loopback.tsv, one line per configuration and pair;
+    # ERRORS 0: the pairs with no error in any round, 1: the others
+    awk -F '\t' -v want_errors="$1" '
         function median(list,    v, n, i, j, t) {
             n = split(list, v, " ")
             for (i = 2; i <= n; i++)
@@ -302,9 +313,10 @@ summarize() { # the rounds of $out/loopback.tsv, one line per configuration and 
                 }
             return n % 2 ? v[(n + 1) / 2] : (v[n / 2] + v[n / 2 + 1]) / 2
         }
-        function pair(key, a, b,    ratios, r, n, i, lo, hi, x) {
+        function pair(key, a, b,    ratios, r, n, lo, hi, x, odd, even, no, ne, order) {
             if (!((key, a) in rps) || !((key, b) in rps)) return
-            n = 0
+            if ((errs[key, a] + errs[key, b] > 0) != want_errors) return
+            n = 0; no = 0; ne = 0; odd = 0; even = 0
             for (r = 1; r <= rounds; r++) {
                 if (!((key, a, r) in one) || !((key, b, r) in one)) continue
                 x = one[key, b, r] / one[key, a, r]
@@ -312,18 +324,31 @@ summarize() { # the rounds of $out/loopback.tsv, one line per configuration and 
                 if (n == 0 || x < lo) lo = x
                 if (n == 0 || x > hi) hi = x
                 n++
+                if (r % 2) { odd += log(x); no++ } else { even += log(x); ne++ }
             }
-            printf "%s\t%s/%s\t%s=%.0f\t%s=%.0f\tratio_median=%.3f\tratio_min=%.3f\tratio_max=%.3f\trounds=%d\n",
+            order = (no && ne) ? sprintf("%+.1f%%", (exp(odd / no - even / ne) - 1) * 100) : "-"
+            printf "%s\t%s/%s\t%s=%.0f\t%s=%.0f\tratio_median=%.3f\tratio_min=%.3f\tratio_max=%.3f\torder=%s\trounds=%d",
                 key, b, a, a, median(rps[key, a]), b, median(rps[key, b]),
-                median(ratios), lo, hi, n
+                median(ratios), lo, hi, order, n
+            if (want_errors)
+                printf "\t%s_errors=%d\t%s_timeouts=%d\t%s_error_rate=%.4f\t%s_errors=%d\t%s_timeouts=%d\t%s_error_rate=%.4f",
+                    a, errs[key, a], a, tos[key, a], a, errs[key, a] / (reqs[key, a] ? reqs[key, a] : 1),
+                    b, errs[key, b], b, tos[key, b], b, errs[key, b] / (reqs[key, b] ? reqs[key, b] : 1)
+            printf "\n"
         }
         {
+            delete f
+            for (i = 1; i <= NF; i++)
+                if (split($i, kv, "=") == 2) f[kv[1]] = kv[2]
             key = $1 "\t" $2 "\t" $3 "\t" $5
-            sub(/^round=/, "", $4); sub(/^req_s=/, "", $7)
+            r = f["round"] + 0
             if (!(key in seen)) { seen[key] = 1; keys[++nkeys] = key }
-            rps[key, $6] = rps[key, $6] " " $7
-            one[key, $6, $4] = $7
-            if ($4 + 0 > rounds) rounds = $4 + 0
+            rps[key, $6] = rps[key, $6] " " f["req_s"]
+            one[key, $6, r] = f["req_s"]
+            reqs[key, $6] += f["requests"]
+            errs[key, $6] += f["errors"]
+            tos[key, $6] += f["timeouts"]
+            if (r > rounds) rounds = r
         }
         END {
             for (k = 1; k <= nkeys; k++) {
@@ -379,6 +404,9 @@ done
 
 if ((rounds > 1)); then
     echo
-    echo "== over loopback, the rounds summarized (requests per second)"
-    summarize
+    echo "== over loopback, the rounds summarized: pairs with no error in any round (requests per second)"
+    summarize 0
+    echo
+    echo "== over loopback, the rounds summarized: pairs with errors (overloaded; not a throughput comparison)"
+    summarize 1
 fi

@@ -1,7 +1,8 @@
 """What one request costs in process, without the network: Muntin against
 Flare alone, on the benchmark application (`muntin_app.mojo`,
-`flare_app.mojo`). Not part of Muntin and not run by CI;
-`scripts/bench_overhead.sh` builds and runs it.
+`flare_app.mojo`). Not part of Muntin; `scripts/bench_overhead.sh` builds
+and runs it, and CI builds it and runs `bench_adapter count` once
+(`scripts/check_flare.sh`), as a smoke test.
 
 Each request is built once, before timing, as a Flare `Request`; the Muntin
 `Request` is the adapter's conversion of it (`to_muntin_request`). A timed
@@ -37,13 +38,15 @@ request: the median and the minimum over the timed runs.
     bench_adapter count
 
 counts allocations instead of timing, under `count_alloc.c` (LD_PRELOAD;
-it raises without it), which says what is counted: for each case and
+it raises without it), which defines each counter: for each case and
 implementation, after one request that warms it up, what each of `COUNTED`
-more requests allocates and frees, the response's drop included: `allocs`,
-`alloc_bytes`, `frees`, and the allocations of 64 KiB or more
-(`large_allocs`, `large_alloc_bytes`), which in the 64 KiB and 1 MiB echoes
-are the body copies. A value is printed as `min..max` when the requests
-differ.
+more requests allocates, reallocates and frees, the response's drop
+included (`COUNTERS`). A value is printed as `min..max` when the requests
+differ. The new blocks of 64 KiB or more (`large_allocs`) stand for a large
+body's copies, because each `.copy()` of a body allocates its length; before
+the cases, a calibration (`calibrate`) checks that `large_allocs` and
+`large_alloc_bytes` follow 0 to 3 copies of a 1 MiB body exactly, and raises
+otherwise. Which code makes each copy is not checked here.
 """
 
 from std.ffi import external_call
@@ -67,8 +70,11 @@ comptime COUNTERS: List[String] = [
     "allocs",
     "alloc_bytes",
     "frees",
+    "reallocs",
+    "realloc_moves",
     "large_allocs",
     "large_alloc_bytes",
+    "large_reallocs",
 ]
 """`count_alloc.c`'s `muntin_count`, in order."""
 
@@ -133,13 +139,20 @@ struct HeaderConversion(Dispatch):
 
 
 struct BodyCopy(Dispatch):
-    var bytes: List[UInt8]
+    """`copies` copies of the body, each dropped at once."""
 
-    def __init__(out self, request: FlareRequest):
+    var bytes: List[UInt8]
+    var copies: Int
+
+    def __init__(out self, request: FlareRequest, copies: Int = 1):
         self.bytes = request.body.copy()
+        self.copies = copies
 
     def status(self) raises -> Int:
-        return 200 if len(self.bytes.copy()) == len(self.bytes) else 500
+        var copied = 0
+        for _ in range(self.copies):
+            copied += len(self.bytes.copy())
+        return 200 if copied == self.copies * len(self.bytes) else 500
 
     def body(self) raises -> String:
         return String(unsafe_from_utf8=self.bytes.copy())
@@ -221,14 +234,16 @@ def _counters() raises -> Pointer[Int64, MutAnyOrigin]:
     return Pointer[Int64, MutAnyOrigin](unsafe_from_address=address)
 
 
-def count[D: Dispatch](d: D) raises -> String:
-    """`COUNTERS` per request after one warm-up request, as columns."""
+def _ranges[
+    D: Dispatch
+](d: D, mut low: List[Int64], mut high: List[Int64]) raises:
+    """Sets `low` and `high` to the lowest and highest value of each counter
+    per request, over `COUNTED` requests after one warm-up request."""
     var counters = _counters()
-    var names = materialize[COUNTERS]()
-    var k = len(names)
+    var k = len(materialize[COUNTERS]())
     _ = d.status()
-    var low = List[Int64](length=k, fill=Int64.MAX)
-    var high = List[Int64](length=k, fill=Int64.MIN)
+    low = List[Int64](length=k, fill=Int64.MAX)
+    high = List[Int64](length=k, fill=Int64.MIN)
     for _ in range(COUNTED):
         var before = List[Int64](capacity=k)
         for i in range(k):
@@ -239,6 +254,15 @@ def count[D: Dispatch](d: D) raises -> String:
             var n = counters[unsafe_offset=i] - before[i]
             low[i] = min(low[i], n)
             high[i] = max(high[i], n)
+
+
+def count[D: Dispatch](d: D) raises -> String:
+    """`COUNTERS` per request after one warm-up request, as columns."""
+    var names = materialize[COUNTERS]()
+    var k = len(names)
+    var low = List[Int64]()
+    var high = List[Int64]()
+    _ranges(d, low, high)
     var out = String()
     for i in range(k):
         if i > 0:
@@ -247,6 +271,42 @@ def count[D: Dispatch](d: D) raises -> String:
         if high[i] != low[i]:
             out += ".." + String(high[i])
     return out^
+
+
+def calibrate() raises:
+    """Raises unless `large_allocs` and `large_alloc_bytes` count exactly
+    0, 1, 2 and 3 copies of a 1 MiB body, every request alike."""
+    var names = materialize[COUNTERS]()
+    var large = -1
+    var large_bytes = -1
+    for i in range(len(names)):
+        if names[i] == "large_allocs":
+            large = i
+        elif names[i] == "large_alloc_bytes":
+            large_bytes = i
+    var request = Case("echo", "POST", "/echo", 0, 1048576, "").request()
+    for copies in range(4):
+        var low = List[Int64]()
+        var high = List[Int64]()
+        _ranges(BodyCopy(request, copies), low, high)
+        var want = Int64(copies)
+        if (
+            low[large] != want
+            or high[large] != want
+            or low[large_bytes] != want * 1048576
+            or high[large_bytes] != want * 1048576
+        ):
+            raise Error(
+                "count: large_allocs does not follow "
+                + String(copies)
+                + " body copies"
+            )
+        print(
+            "calibration\tcopies="
+            + String(copies)
+            + "\tlarge_allocs="
+            + String(want)
+        )
 
 
 def measure[
@@ -285,6 +345,8 @@ def main() raises:
     var args = argv()
     var counting = len(args) > 1 and args[1] == "count"
     var runs = 1 if counting else runs_arg()
+    if counting:
+        calibrate()
     for mw in [False, True]:
         for c in cases():
             var r = c.request()
