@@ -255,6 +255,17 @@ def body_at[
     return response^
 
 
+def borrowed_body_at[
+    name: StaticString
+](request: Request, var next: Next) raises -> Response:
+    """Borrows the request, so it passes a copy on; answers with the address
+    of the body buffer it was lent, in the field `name`."""
+    var at = String(Int(request.body.unsafe_ptr()))
+    var response = next^.run(request.copy())
+    response.headers.add(name, at)
+    return response^
+
+
 # Tests.
 
 
@@ -658,6 +669,26 @@ def test_the_owning_handle_moves_the_request_into_the_chain() raises:
     assert_equal(_field(r, "X-Inner-Body-At"), _field(r, "X-Body-At"))
     # The caller's request is still its own.
     assert_equal(String(unsafe_from_utf8=borrowed.body), payload)
+
+
+def test_a_borrowing_middleware_is_where_the_copy_is_made() raises:
+    # M3-064: owning, borrowing, then owning middleware. The request handed
+    # to the owning `handle` reaches the first two without a copy (the
+    # borrowing one is lent that same request); the copy the borrowing one
+    # passes on is the third one's. Each copy is made while its source is
+    # alive, so it cannot share the source's address.
+    var counter = State(Counter())
+    var app = _app(counter)
+    app.use(body_at["X-Body-At"])
+    app.use(borrowed_body_at["X-Lent-At"])
+    app.use(body_at["X-After-At"])
+    var request = Request("POST", "/echo", "payload")
+    var at = String(Int(request.body.unsafe_ptr()))
+    var r = app.handle(request^)
+    assert_equal(r.text(), "POST /echo payload")
+    assert_equal(_field(r, "X-Body-At"), at)
+    assert_equal(_field(r, "X-Lent-At"), at)
+    assert_true(_field(r, "X-After-At") != at)
 
 
 def main() raises:
