@@ -11,7 +11,9 @@
 # `flare` environment resolves `import flare` to its installed source before
 # any `-I`, so the patched build copies the patched source over the
 # environment's installed `flare` directory and puts the original back on
-# exit (checked with `diff`). RUNS (default 5) is the number of runs per
+# exit (checked with `diff`); a run killed by SIGKILL or a crash leaves the
+# patched source installed, so run that `diff` against the checkout's `flare`
+# before relying on the environment. RUNS (default 5) is the number of runs per
 # case. Prints, for `muntin` (the pin) and `patched`:
 # - spread: bench/hol/hol_client.py's `spread` mode, idle timeout 60000 ms;
 # - hold: every hol_client.py mode but `spread`, idle timeouts 500 and
