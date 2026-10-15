@@ -19,7 +19,9 @@ from flare.net import SocketAddr
 from flare_app import Tracing, router
 
 
-def _serve[H: Handler & Copyable](mut srv: HttpServer, var h: H, workers: Int) raises:
+def _serve[
+    H: Handler & Copyable
+](mut srv: HttpServer, var h: H, workers: Int) raises:
     if workers == 1:
         srv.serve(h^)
     else:

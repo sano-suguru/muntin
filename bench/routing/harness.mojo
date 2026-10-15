@@ -77,16 +77,7 @@ def measure[D: Dispatch](n: Int, name: String, c: Case, d: D, runs: Int) raises:
             + c.want_body.value()
         )
     var t = time_per_request(d, runs, want)
-    print(
-        "N="
-        + String(n)
-        + "\t"
-        + name
-        + "\t"
-        + label
-        + "\t"
-        + t.columns()
-    )
+    print("N=" + String(n) + "\t" + name + "\t" + label + "\t" + t.columns())
 
 
 @fieldwise_init

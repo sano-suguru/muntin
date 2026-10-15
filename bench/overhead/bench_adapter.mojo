@@ -18,7 +18,7 @@ Implementations:
   request served by `Server` pays besides the network.
 - `flare`: Flare's `Router.serve` (`Tracing[Router]` with the middleware).
 - `headers`: `to_muntin_headers` alone, the adapter's request header
-  conversion; `plaintext` cases only.
+  conversion; `plaintext` cases without the middleware.
 
 Cases, each with and without the middleware (`mw=1`, `mw=0`):
 - `plaintext`, with `h` request header fields named `X-Bench-000` up to
@@ -151,7 +151,9 @@ struct Case(Copyable):
 def cases() -> List[Case]:
     var out = List[Case]()
     for h in materialize[HEADER_COUNTS]():
-        out.append(Case("plaintext", "GET", "/plaintext", h, 0, "Hello, World!"))
+        out.append(
+            Case("plaintext", "GET", "/plaintext", h, 0, "Hello, World!")
+        )
     out.append(
         Case("json-get", "GET", "/json", 0, 0, '{"message":"Hello, World!"}')
     )
@@ -214,6 +216,8 @@ def main() raises:
                     runs,
                 )
             else:
-                measure(c, mw, "flare", FlareDirect(router(), c.request()), runs)
+                measure(
+                    c, mw, "flare", FlareDirect(router(), c.request()), runs
+                )
             if c.label == "plaintext" and not mw:
                 measure(c, mw, "headers", HeaderConversion(c.request()), runs)
