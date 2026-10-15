@@ -1,6 +1,6 @@
 # Must build, and is never run (scripts/check.sh builds it only). Evidence for
 # docs/history/architecture-decisions.md, "Request context decision
-# (M3-058)": on Mojo 1.1.0, `reflect[T].name()` is module-qualified and
+# (M3-061)": on Mojo 1.1.0, `reflect[T].name()` is module-qualified and
 # carries a type's parameters, but two distinct types can print one name:
 # every origin prints as `{}`, and a function-valued parameter prints as
 # `<unprintable>`, whatever the function, even when it decides the type's
