@@ -75,7 +75,7 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON and binary bodies), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
-- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, on one thread or on several workers with one `App` each, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)` on one thread, from an IP-literal host, and stops gracefully on SIGTERM or SIGINT. Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
+- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)`, on one thread or on several workers with one `App` each, from an IP-literal host, and stops gracefully on SIGTERM or SIGINT. Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
 - **Not yet:** see [`docs/SPEC.md`](docs/SPEC.md), "Remaining candidates".
 
 ## Try it

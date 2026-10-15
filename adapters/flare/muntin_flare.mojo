@@ -132,8 +132,9 @@ worker that ends on its own (`make` or its loop raised, or its loop
 returned) before a stop signal was delivered, as the serving thread sees it
 at its next look, stops the others at once; one
 that has not ended `_REACTOR_STOP_MS` later (a `make` or a handler that
-does not return) ends the process with status 1. `serve[make]` refuses a
-TLS server.
+does not return) ends the process with status 1. On a TLS `Server` every
+worker's loop is given the `Server`'s one TLS context (M3-060), as Flare's
+own workers share theirs.
 
 TLS (M3-051, decided in docs/history/architecture-decisions.md "Server TLS
 decision (M3-051)"): `Server.bind`'s keyword-only `tls`, a `Tls` holding a
@@ -169,6 +170,7 @@ result is checked. What clients see: docs/DX.md section 1.
 """
 
 from std.atomic import Atomic, Ordering
+from std.collections import Dict
 from std.ffi import (
     _get_global,
     c_int,
@@ -196,24 +198,24 @@ from flare_internals import (
     ThreadHandle,
     close_listener,
     flare_pipe,
-    has_tls,
     listener_fd,
     run_worker_loop,
     set_listener_nonblocking,
     set_stop,
+    tls_context_addr,
 )
 from muntin import App, Headers, Request, Response
 
 
 def _ascii_lower(s: String) -> String:
-    var out = String()
+    var out = List[UInt8](capacity=s.byte_length())
     for b in s.as_bytes():
-        var c = Int(b)
-        if c >= ord("A") and c <= ord("Z"):
-            out += chr(c + 32)
+        if b >= 65 and b <= 90:
+            out.append(b + 32)
         else:
-            out += chr(c)
-    return out^
+            out.append(b)
+    # Lowering ASCII letters keeps UTF-8 well formed, so nothing is replaced.
+    return String(from_utf8_lossy=Span(out))
 
 
 def _same_name(a: String, b: String) -> Bool:
@@ -235,35 +237,57 @@ def _trim_ows(s: StringSlice) -> String:
 
 def to_muntin_headers(request: FlareRequest) raises -> Headers:
     """Exactly the request's fields, or a raise when they cannot be
-    represented."""
+    represented. One pass over `encode_to`'s text; each name's values are
+    fetched with `get_all` once, when the name first appears."""
     var buf = List[UInt8]()
     request.headers.encode_to(buf)
-    var text = String(from_utf8_lossy=Span(buf))
-    var names = List[String]()
-    var values = List[String]()
-    for line in text.split("\r\n"):
-        if line.byte_length() == 0:
-            continue
-        var colon = line.find(":")
-        if colon <= 0:
-            raise Error("unparsable header line")
-        names.append(String(line[byte=:colon]))
-        if line.byte_length() >= colon + 2:
-            values.append(String(line[byte = colon + 2 :]))
-        else:
-            values.append(String())
-    if len(names) != request.headers.len():
-        raise Error("header count mismatch")
+    # A field that is not UTF-8 cannot be represented, so neither can the
+    # text.
+    var text = String(from_utf8=Span(buf))
+    var bytes = text.as_bytes()
     var headers = Headers()
-    for i in range(len(names)):
-        var seen = 0
-        for j in range(i):
-            if _same_name(names[j], names[i]):
-                seen += 1
-        var flare_values = request.headers.get_all(names[i])
-        if seen >= len(flare_values) or flare_values[seen] != values[i]:
-            raise Error("header field cannot be represented")
-        headers.add(names[i], values[i])
+    var group = Dict[String, Int]()  # lowercased name -> index below
+    var flare_values = List[List[String]]()
+    var seen = List[Int]()
+    var count = 0
+    var start = 0
+    var n = text.byte_length()
+    while start < n:
+        var end = text.find("\r\n", start)
+        if end < 0:
+            end = n
+        if end > start:
+            var colon = text.find(":", start)
+            if colon <= start or colon >= end:
+                raise Error("unparsable header line")
+            var name = String(from_utf8=bytes[start:colon])
+            var value = String()
+            if end >= colon + 2:
+                # The byte after the colon is `encode_to`'s space unless the
+                # name holds a `:`; then the value may start inside a code
+                # point, which a byte span raises on and a slice of `text`
+                # aborts on (Mojo 1.1.0).
+                value = String(from_utf8=bytes[colon + 2 : end])
+            # A token name is ASCII, so `_ascii_lower` is exact below.
+            headers.add(name, value)
+            var key = _ascii_lower(name)
+            var at = group.get(key)
+            if not at:
+                at = len(seen)
+                group[key] = at.value()
+                flare_values.append(request.headers.get_all(name))
+                seen.append(0)
+            var i = at.value()
+            if (
+                seen[i] >= len(flare_values[i])
+                or flare_values[i][seen[i]] != value
+            ):
+                raise Error("header field cannot be represented")
+            seen[i] += 1
+            count += 1
+        start = end + 2
+    if count != request.headers.len():
+        raise Error("header count mismatch")
     return headers^
 
 
@@ -504,13 +528,6 @@ comptime _CB_PARKED = 8
 write end stays open, so it never becomes readable."""
 comptime _CB_LEN = 9
 
-comptime _WORKERS_TLS_UNSUPPORTED = (
-    "serve: workers are unsupported on a TLS server"
-)
-"""What `serve[make]` raises, before serving, for a `Server` with a TLS
-context: its workers' reactor loop is not given one, and no test covers a
-TLS handshake on a worker (M3-049)."""
-
 comptime _O_CLOEXEC_LINUX = 0o2000000
 comptime _FIOCLEX_MACOS: c_ulong = 0x20006601
 """`FIOCLEX` on macOS (`_IO('f', 1)`), the request Flare uses there too."""
@@ -552,7 +569,10 @@ comptime _W_ERROR = 3
 """Worker table cell: the address of the `String` a raise is written to."""
 comptime _W_CONFIG = 4
 """Worker table cell: the address of the worker's own `ServerConfig`."""
-comptime _W_LEN = 5
+comptime _W_TLS = 5
+"""Worker table cell: the address of the `Server`'s TLS context, or 0 for
+cleartext (`tls_context_addr`)."""
+comptime _W_LEN = 6
 
 comptime _W_SERVING = 0
 comptime _W_RETURNED = 1
@@ -904,7 +924,13 @@ def _serve_worker[
     var ended = _W_RETURNED
     try:
         if fd >= 0:
-            run_worker_loop(fd, config[], _BorrowedHandler(app), stop[])
+            run_worker_loop(
+                fd,
+                config[],
+                _BorrowedHandler(app),
+                stop[],
+                _load(row, _W_TLS),
+            )
     except e:
         error[] = String(e)
         ended = _W_LOOP_RAISED
@@ -1627,10 +1653,9 @@ struct Server(Movable):
         at a time, as `serve(app)` does.
 
         Raises `workers out of range: <value>` outside 1 to 256, then
-        `FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare v0.12.0`,
-        `serve: workers are unsupported on a TLS server`, and `Server.serve
-        is already serving in this process` as `serve(app)` does, all before
-        serving. If `make` raises on a worker, or a worker's reactor raises
+        `FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare v0.12.0`
+        and `Server.serve is already serving in this process` as `serve(app)`
+        does, all before serving. If `make` raises on a worker, or a worker's reactor raises
         or returns on its own, before a stop signal was delivered (as this
         thread sees it at its next look, not when the worker ended), every
         worker is stopped at once (no grace window) and this raises `serve:
@@ -1651,9 +1676,8 @@ struct Server(Movable):
             raise Error("workers out of range: " + String(workers))
         if getenv("FLARE_BUFRING_HANDLER") == "1":
             raise Error(_BUFRING_UNSUPPORTED)
-        if has_tls(self._server):
-            raise Error(_WORKERS_TLS_UNSUPPORTED)
         var listener = listener_fd(self._server)
+        var tls = tls_context_addr(self._server)
         var table = List[Int64](length=workers * _W_LEN, fill=0)
         var stops = List[Bool](length=workers, fill=False)
         var errors = List[String](length=workers, fill=String())
@@ -1673,6 +1697,7 @@ struct Server(Movable):
             _store(row, _W_STOP, Int(stops.unsafe_ptr().unsafe_offset(i)))
             _store(row, _W_ERROR, Int(errors.unsafe_ptr().unsafe_offset(i)))
             _store(row, _W_CONFIG, Int(configs.unsafe_ptr().unsafe_offset(i)))
+            _store(row, _W_TLS, tls)
         # A worker's reactor polls its copy without blocking.
         try:
             set_listener_nonblocking(listener)

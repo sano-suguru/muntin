@@ -135,7 +135,7 @@ for t in tests/route_conflict_abort/*.mojo; do fixtures+=(must_abort "$t"); done
 # Known gaps the decisions rest on: each must build (--Werror) and is never
 # run. One that stops building fires a revisit condition (docs/ARCHITECTURE.md,
 # revisit index).
-for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo tests/headers_known_gaps/*.mojo tests/json_known_gaps/*.mojo tests/registration_known_gaps/*.mojo tests/bytes_limit_known_gaps/*.mojo; do
+for t in tests/state_known_gaps/*.mojo tests/state_storage_known_gaps/*.mojo tests/headers_known_gaps/*.mojo tests/json_known_gaps/*.mojo tests/registration_known_gaps/*.mojo tests/bytes_limit_known_gaps/*.mojo tests/context_known_gaps/*.mojo; do
     fixtures+=(known_gap "$t")
 done
 
