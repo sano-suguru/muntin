@@ -342,6 +342,7 @@ If one of these pins changes (a pinned fixture unexpectedly compiles, fails to c
 | `adapters/flare/test_tls.mojo`'s workers tests; `tls_context_addr` and `run_worker_loop` in `adapters/flare/flare_internals.mojo` | [TLS with workers decision (M3-060)](history/architecture-decisions.md#tls-with-workers-decision-m3-060) |
 | `adapters/flare/test_server.mojo`'s stop tests | [Graceful shutdown decision (M3-045)](history/architecture-decisions.md#graceful-shutdown-decision-m3-045) |
 | `compat/flare/stream/stream_probe.mojo` | [Streaming responses and cancellation decision (M3-056)](history/architecture-decisions.md#streaming-responses-and-cancellation-decision-m3-056) |
+| `tests/context_known_gaps` (must build) | [Request context decision (M3-063)](history/architecture-decisions.md#request-context-decision-m3-063) |
 
 ## Request/Response ownership
 
