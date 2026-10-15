@@ -3,7 +3,8 @@
 `muntin_flare` imports Flare's non-public modules and `HttpServer`'s private
 fields only through this module, so a Flare upgrade has one file to check
 against the new release: each name below says what it relies on, and the
-adapter's tests (`adapters/flare/test_server.mojo`) exercise every one.
+adapter's tests (`adapters/flare/test_server.mojo`, and `test_tls.mojo` for
+the TLS context) exercise every one.
 Decided in docs/history/architecture-decisions.md "Multi-worker serving
 decision (M3-049)" (revisit: the Flare pin moves).
 
@@ -58,10 +59,12 @@ def run_worker_loop[
     workers, which share the one context the same way. Public alternative,
     not taken: Flare's `HttpFrontend(handler, config, config.h2,
     auto_protocol=True, tls_ctx_addr=tls_context)` and its `run_worker` call
-    this same loop, so the behavior relied on is unchanged; but it needs a
-    `Copyable` handler, and it swallows the loop's raise, so a reactor that
-    fails to start would read as one that returned and its error would be
-    lost (`serve` reports it today)."""
+    this same loop in every configuration Muntin serves (its buffer-ring
+    branch needs `use_bufring`, which `ServerConfig` leaves off and `serve`
+    refuses through `FLARE_BUFRING_HANDLER=1`), so the behavior relied on is
+    unchanged; but it needs a `Copyable` handler, and it swallows the loop's
+    raise, so a reactor that fails to start would read as one that returned
+    and its error would be lost (`serve` reports it today)."""
     run_unified_reactor_loop_shared(
         listener_fd,
         config,
