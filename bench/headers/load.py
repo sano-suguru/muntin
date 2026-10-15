@@ -18,8 +18,9 @@ For each header shape, against the server on 127.0.0.1:PORT:
   per second, the bare requests' latency percentiles in ms and, as
   `start`, how late each request's thread began (Python's thread start
   and scheduling, part of the latency but not the server's).
-Every answer must be 200, and no connect, send or receive may wait more
-than TIMEOUT_S. Anything else, an unexpected exception on any thread
+Every answer must be `HTTP/1.1 200` with a well-formed head, and each
+request, its connects, sends and receives together (a resend included),
+must end within TIMEOUT_S of its start. Anything else, an unexpected exception on any thread
 included, stops the run with exit status 1 after printing each failure
 (with its traceback). When the server has closed a kept-open connection,
 the request is sent again on a new one, at most RETRIES times in a row;
@@ -31,6 +32,7 @@ answered. Shapes are the largest Flare v0.12.0 admits over HTTP/1.1
 two-byte name and no value)."""
 
 import itertools
+import re
 import socket
 import string
 import sys
@@ -75,27 +77,65 @@ BARE = request("")
 INTERVAL_S = 0.01
 
 
-def roundtrip(sock, data, buf):
-    """Sends `data`, reads one answer; returns its status and what follows."""
+STATUS_LINE = re.compile(r"HTTP/1\.1 ([0-9]{3}) [^\r\n]*")
+FIELD_LINE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+:[^\r\n]*")
+
+
+def settle(sock, deadline):
+    """Bounds the next socket operation by what is left before `deadline`."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise socket.timeout
+    sock.settimeout(left)
+
+
+def parse_head(head):
+    """The status and Content-Length of an answer head, or Failed."""
+    try:
+        lines = head.decode("ascii").split("\r\n")
+    except UnicodeDecodeError as e:
+        raise Failed(f"malformed answer head: {e!r}")
+    m = STATUS_LINE.fullmatch(lines[0])
+    if not m:
+        raise Failed(f"malformed status line: {lines[0]!r}")
+    lengths = []
+    for line in lines[1:]:
+        if not FIELD_LINE.fullmatch(line):
+            raise Failed(f"malformed field line: {line!r}")
+        name, value = line.split(":", 1)
+        if name.lower() == "transfer-encoding":
+            raise Failed("chunked answers are not expected")
+        if name.lower() == "content-length":
+            if not value.strip().isdigit():
+                raise Failed(f"malformed Content-Length: {value!r}")
+            lengths.append(int(value))
+    if len(set(lengths)) > 1:
+        raise Failed(f"conflicting Content-Length: {lengths}")
+    return m.group(1), lengths[0] if lengths else 0
+
+
+def roundtrip(sock, data, buf, deadline):
+    """Sends `data`, reads one answer by `deadline`; returns its status and
+    what follows it."""
+    settle(sock, deadline)
     sock.sendall(data)
     while True:
         end = buf.find(b"\r\n\r\n")
         if end >= 0:
-            try:
-                head = buf[:end].decode("ascii")
-                length = 0
-                for line in head.split("\r\n")[1:]:
-                    if line.lower().startswith("content-length:"):
-                        length = int(line.split(":", 1)[1])
-                status = head.split(" ")[1]
-            except (UnicodeDecodeError, ValueError, IndexError) as e:
-                raise Failed(f"malformed answer head: {e!r}")
+            status, length = parse_head(buf[:end])
             if len(buf) >= end + 4 + length:
                 return status, buf[end + 4 + length:]
+        settle(sock, deadline)
         chunk = sock.recv(65536)
         if not chunk:
             raise EOFError
         buf += chunk
+
+
+def close(conn):
+    if conn[0] is not None:
+        conn[0].close()
+        conn[0] = None
 
 
 def call(conn, data):
@@ -103,18 +143,20 @@ def call(conn, data):
     closed the keep-alive connection; returns how many times the request
     was sent again."""
     resent = 0
+    deadline = time.monotonic() + TIMEOUT_S
     while True:
         try:
             if conn[0] is None:
                 conn[1] = b""
-                conn[0] = socket.create_connection(("127.0.0.1", port), TIMEOUT_S)
-            status, conn[1] = roundtrip(conn[0], data, conn[1])
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise socket.timeout
+                conn[0] = socket.create_connection(("127.0.0.1", port), left)
+            status, conn[1] = roundtrip(conn[0], data, conn[1], deadline)
         except socket.timeout:
-            raise Failed(f"a socket operation waited over {TIMEOUT_S} s")
+            raise Failed(f"a request took over {TIMEOUT_S} s")
         except (EOFError, ConnectionResetError, BrokenPipeError):
-            if conn[0] is not None:
-                conn[0].close()
-            conn[0] = None
+            close(conn)
             resent += 1
             if resent > RETRIES:
                 raise Failed(f"connection closed {resent} times in a row")
@@ -160,10 +202,12 @@ def single(name):
     resent = 0
     for _ in range(200 if name == "browser12" else 5):
         conn = [None, b""]
-        start = time.perf_counter()
-        resent += call(conn, data)
-        times.append((time.perf_counter() - start) * 1000)
-        conn[0].close()
+        try:
+            start = time.perf_counter()
+            resent += call(conn, data)
+            times.append((time.perf_counter() - start) * 1000)
+        finally:
+            close(conn)
     times.sort()
     print(f"{name}\tsingle\tbytes={len(data)}\tmedian_ms={times[len(times) // 2]:.3f}\tmin_ms={times[0]:.3f}\tresent={resent}")
 
@@ -171,9 +215,12 @@ def single(name):
 def heavy_senders(data, stop, answered, resent, failures):
     def heavy(j):
         conn = [None, b""]
-        while time.perf_counter() < stop and not failures:
-            resent[j] += call(conn, data)
-            answered[j] += 1
+        try:
+            while time.perf_counter() < stop and not failures:
+                resent[j] += call(conn, data)
+                answered[j] += 1
+        finally:
+            close(conn)
 
     return [lambda j=j: heavy(j) for j in range(4)]
 
@@ -187,11 +234,14 @@ def load(name, failures):
 
     def bare():
         conn = [None, b""]
-        while time.perf_counter() < stop and not failures:
-            start = time.perf_counter()
-            resent[4] += call(conn, BARE)
-            latency.append((time.perf_counter() - start) * 1000)
-            time.sleep(INTERVAL_S)
+        try:
+            while time.perf_counter() < stop and not failures:
+                start = time.perf_counter()
+                resent[4] += call(conn, BARE)
+                latency.append((time.perf_counter() - start) * 1000)
+                time.sleep(INTERVAL_S)
+        finally:
+            close(conn)
 
     run_threads(heavy_senders(data, stop, answered, resent, failures) + [bare], failures)
     if failures:
@@ -221,8 +271,7 @@ def open_loop(name, failures):
             bare_resent.append(call(conn, BARE))
             latency.append((time.perf_counter() - t) * 1000)
         finally:
-            if conn[0] is not None:
-                conn[0].close()
+            close(conn)
 
     def bare():
         threads = []

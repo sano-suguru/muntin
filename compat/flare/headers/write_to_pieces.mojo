@@ -11,6 +11,13 @@ check that the prototype rebuilds what the adapter's current
 `to_muntin_headers` rebuilds and refuses what it refuses, and that pieces
 of another shape are refused as the server's fault (`None`), not the
 client's (a raise).
+
+Requests are `HeaderMap`s built in process with `append`, not parsed from
+the wire, so some shapes here never arrive over the network today (Flare's
+HTTP/1.1 parser trims spaces and tabs around a value and its HTTP/2 layer
+refuses them): the rebuild must still refuse them as the adapter does if
+a Flare ever delivers them. What the wire delivers is the loopback tests'
+job (`adapters/flare/test_localhost_roundtrip.mojo`).
 """
 
 from std.collections import Optional
@@ -182,6 +189,116 @@ def test_rebuild_matches_the_adapter() raises:
         assert_true(Bool(got))
         assert_equal(_mismatch(_listed(got.value()), c), "")
         assert_equal(_mismatch(_listed(to_muntin_headers(r)), c), "")
+
+
+struct _Rng:
+    """xorshift64: the same cases on every run."""
+
+    var state: UInt64
+
+    def __init__(out self, seed: UInt64):
+        self.state = seed
+
+    def next(mut self, n: Int) -> Int:
+        var x = self.state
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        self.state = x
+        return Int(x % UInt64(n))
+
+
+comptime _TOKEN = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'*+-.^_`|~"
+
+
+def _name(mut rng: _Rng, size: Int) -> String:
+    var out = String()
+    var token = String(_TOKEN)
+    for _ in range(size):
+        var i = rng.next(token.byte_length())
+        out += String(token[byte = i : i + 1])
+    return out^
+
+
+def _value(mut rng: _Rng, size: Int) -> String:
+    """Text `Headers` accepts: no space or tab first or last."""
+    var parts: List[String] = [
+        "a",
+        "Z",
+        "0",
+        " ",
+        "\t",
+        ";",
+        "=",
+        ":",
+        ": ",
+        ",",
+        '"',
+        "/",
+        "é",
+        "日",
+        "😀",
+        "Bearer ",
+        "q=0.9",
+    ]
+    var out = String()
+    for _ in range(size):
+        out += parts[rng.next(len(parts))]
+    var b = out.as_bytes()
+    var start = 0
+    var end = len(b)
+    while start < end and (b[start] == 32 or b[start] == 9):
+        start += 1
+    while end > start and (b[end - 1] == 32 or b[end - 1] == 9):
+        end -= 1
+    return String(out[byte=start:end])
+
+
+def _generated(mut rng: _Rng) -> List[Tuple[String, String]]:
+    var known: List[String] = [
+        "Authorization",
+        "Cookie",
+        "cookie",
+        "Accept",
+        "X-Forwarded-For",
+    ]
+    var fields = List[Tuple[String, String]]()
+    for _ in range(1 + rng.next(60)):
+        var name: String
+        var pick = rng.next(4)
+        if pick == 0:
+            name = known[rng.next(len(known))]
+        elif pick == 1 and len(fields) > 0:
+            # A repeated name, interleaved with others.
+            name = fields[rng.next(len(fields))][0]
+        else:
+            name = _name(rng, 1 + rng.next(24))
+        if rng.next(50) == 0:
+            name = _name(rng, 200)
+        var size = rng.next(40)
+        if rng.next(50) == 0:
+            size = 2000
+        fields.append((name, _value(rng, size)))
+    return fields^
+
+
+def test_generated_fields_rebuild_exactly() raises:
+    var rng = _Rng(0x9E3779B97F4A7C15)
+    for _ in range(500):
+        var c = _generated(rng)
+        var r = _request(c)
+        var got = rebuild_fields(r.headers)
+        assert_true(Bool(got))
+        assert_equal(_mismatch(_listed(got.value()), c), "")
+        assert_equal(_mismatch(_listed(to_muntin_headers(r)), c), "")
+        # The pieces are exactly `encode_to`'s bytes, a second public path.
+        var p = FieldPieces()
+        r.headers.write_to(p)
+        var encoded = List[UInt8]()
+        r.headers.encode_to(encoded)
+        assert_equal(len(encoded), len(p.bytes))
+        for i in range(len(encoded)):
+            assert_equal(encoded[i], p.bytes[i])
 
 
 def _refused(fields: List[Tuple[String, String]]) raises -> Bool:

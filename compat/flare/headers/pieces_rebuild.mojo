@@ -1,8 +1,10 @@
 """The request header rebuild M3-066 chooses, as a prototype (pull request
 #119). Not part of Muntin, and not used by the adapter: the M3-067 slice
 moves it into `adapters/flare/muntin_flare.mojo` and deletes this file.
-`write_to_pieces.mojo` tests it and `bench/headers/bench_headers.mojo`
-measures it beside the adapter's `to_muntin_headers`.
+`write_to_pieces.mojo` tests it; `bench/headers/bench_headers.mojo`
+measures it beside the adapter's `to_muntin_headers`, and
+`scripts/bench_headers.sh` serves it over loopback through a copy of the
+adapter (`bench/headers/pieces_adapter.py`).
 
 Flare v0.12.0's `HeaderMap.write_to` calls
 `writer.write(name, ": ", value, "\\r\\n")` once per field, and a `Writer`
