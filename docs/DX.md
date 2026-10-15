@@ -1690,7 +1690,7 @@ over requiring every ordinary handler to accept allocators, connection contexts,
 
 Low-level APIs may expose more control when an endpoint genuinely needs it.
 
-Today a `Request` and a `Response` own their data. A request handed to `App.handle` (section 11) moves through the middleware chain without a copy; a lent one is copied once before the chain. Copies that remain whichever way the request arrives: the Flare adapter copies the body out of Flare's request, a raw handler receives a copy of the body (section 9), and a typed text body is read into text (section 4).
+Today a `Request` and a `Response` own their data. A request handed to `App.handle` (section 11) reaches the first middleware without a copy, and each middleware that passes it on with `next^.run(request^)` hands the same request inward (one that borrows it passes a copy, section 7); a lent one is copied once before the chain. Body copies that remain whichever way the request arrives: the Flare adapter copies the body out of Flare's request, a raw handler receives a copy of the body (section 9), and a typed text body is read into text (section 4). Every other copy a route makes is listed in `docs/ARCHITECTURE.md`, "Request handling".
 
 ## 16. Error messages are part of the API
 

@@ -244,11 +244,14 @@ def drop_allow(var request: Request, var next: Next) raises -> Response:
     return response^
 
 
-def body_at(var request: Request, var next: Next) raises -> Response:
-    """Answers with the address of the body buffer it received."""
+def body_at[
+    name: StaticString
+](var request: Request, var next: Next) raises -> Response:
+    """Answers with the address of the body buffer it received, in the
+    field `name`."""
     var at = String(Int(request.body.unsafe_ptr()))
     var response = next^.run(request^)
-    response.headers.add("X-Body-At", at)
+    response.headers.add(name, at)
     return response^
 
 
@@ -541,7 +544,7 @@ def test_middleware_survives_moving_the_app() raises:
     assert_equal(_field(r, "X-Seen"), "GET")
 
 
-comptime CHAINS = 13
+comptime CHAINS = 14
 """The middleware chains `_chain` builds: none, then one per middleware case
 above."""
 
@@ -580,6 +583,8 @@ def _chain(i: Int, counter: State[Counter]) -> App:
         app.use(narrow_allow)
     elif i == 12:
         app.use(drop_allow)
+    elif i == 13:
+        app.use(tracing)
     return app^
 
 
@@ -618,10 +623,15 @@ def test_owning_and_borrowing_handle_answer_alike() raises:
 def test_the_owning_handle_moves_the_request_into_the_chain() raises:
     # M3-064: with middleware, the first middleware receives the caller's
     # body buffer itself through the owning `handle` (`request^`, or
-    # TestClient's temporary), and a copy through the borrowing one.
+    # TestClient's temporary), and a copy through the borrowing one; a
+    # middleware that passes it on with `^` hands the same buffer inward.
+    # A copy is made while its source is alive, so it cannot share the
+    # source's address; two copies in a row could (the second can reuse the
+    # freed source's block), so the two recording middleware are adjacent.
     var counter = State(Counter())
     var app = _app(counter)
-    app.use(body_at)
+    app.use(body_at["X-Body-At"])
+    app.use(body_at["X-Inner-Body-At"])
     app.use(stamp)
     var payload = "payload"
 
@@ -631,18 +641,21 @@ def test_the_owning_handle_moves_the_request_into_the_chain() raises:
     assert_equal(r.text(), "POST /echo payload")
     assert_equal(_field(r, "X-Seen"), "POST")
     assert_equal(_field(r, "X-Body-At"), at)
+    assert_equal(_field(r, "X-Inner-Body-At"), at)
 
     var bytes = List(payload.as_bytes())
     at = String(Int(bytes.unsafe_ptr()))
     r = TestClient(app).post("/echo", bytes^)
     assert_equal(r.text(), "POST /echo payload")
     assert_equal(_field(r, "X-Body-At"), at)
+    assert_equal(_field(r, "X-Inner-Body-At"), at)
 
     var borrowed = Request("POST", "/echo", payload)
     at = String(Int(borrowed.body.unsafe_ptr()))
     r = app.handle(borrowed)
     assert_equal(r.text(), "POST /echo payload")
     assert_true(_field(r, "X-Body-At") != at)
+    assert_equal(_field(r, "X-Inner-Body-At"), _field(r, "X-Body-At"))
     # The caller's request is still its own.
     assert_equal(String(unsafe_from_utf8=borrowed.body), payload)
 

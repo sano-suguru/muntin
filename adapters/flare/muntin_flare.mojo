@@ -380,6 +380,8 @@ def _answer(app: App, request: FlareRequest) -> FlareResponse:
         return FlareResponse(
             status=400, body=List(String("Bad Request").as_bytes())
         )
+    # `^` selects the owning `handle` (M3-064): middleware receives this
+    # request instead of a copy. Without it the borrowing one copies.
     return to_flare_response(app.handle(muntin_request^))
 
 

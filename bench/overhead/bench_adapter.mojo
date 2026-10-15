@@ -11,7 +11,9 @@ body. Timed answers are checked by status (`bench/routing/harness.mojo`).
 
 Implementations:
 - `muntin`: `App.handle(Request)`, Muntin's routing, handler and conversions
-  alone.
+  alone. The request is reused, so this is the borrowing `handle`, which
+  copies it for the middleware (`mw=1`); no backend pays that copy since
+  M3-064.
 - `muntin+adapter`: `MuntinHandler.serve` on the Flare `Request`: the
   adapter's conversions around `App.handle` (request target, headers and a
   copy of the body in; status, headers and a copy of the body out), what a
