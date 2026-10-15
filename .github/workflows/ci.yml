@@ -51,6 +51,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      # Mojo's compile cache below is per target CPU, which defaults to this one.
+      - name: runner CPU
+        run: grep -m1 'model name' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string
       - uses: prefix-dev/setup-pixi@v0.11.0
         with:
           pixi-version: v0.81.0
@@ -88,6 +91,8 @@ jobs:
           echo "ImageOS=${ImageOS:-unknown} ImageVersion=${ImageVersion:-unknown}"
           uname -a
           if [ -r /etc/os-release ]; then cat /etc/os-release; else sw_vers; fi
+          # Mojo's compile cache is per target CPU, which defaults to this one.
+          grep -m1 'model name' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string
       - uses: prefix-dev/setup-pixi@v0.11.0
         with:
           pixi-version: v0.81.0
