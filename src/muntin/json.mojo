@@ -21,7 +21,7 @@ from std.collections import Optional
 
 from ._handler_storage import _Shared
 from .body import FromBody
-from .http import Headers, Response, ToResponse
+from .http import Failure, Headers, Response, ToResponse, _failed
 
 comptime _MAX_DEPTH = 64
 """Nesting cap for untrusted input: an array or object nested deeper than
@@ -788,7 +788,8 @@ struct Json[T: Movable & Deinitable](
         """The chosen status (200 by default) with the written body and
         exactly `Content-Type: application/json`. A raising or unbalanced
         `write_json`, or a non-finite number, answers the fixed 500
-        (`Internal Server Error`, no fields) instead, whatever the status;
+        (`Internal Server Error`, no fields) instead, whatever the status,
+        carrying a `Failure.RESPONSE` report of the error's text (M3-058);
         no partial body is sent."""
         var out = JsonWriter()
         try:
@@ -796,8 +797,8 @@ struct Json[T: Movable & Deinitable](
             var r = Response(self._status, out^._finish())
             r.headers.set("Content-Type", "application/json")
             return r^
-        except:
-            return Response.text("Internal Server Error", status=500)
+        except e:
+            return _failed(Failure.RESPONSE, String(e))
 
 
 def _json_content_type(headers: Headers) -> Bool:
