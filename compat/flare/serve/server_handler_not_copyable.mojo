@@ -13,4 +13,4 @@ from muntin_flare import _BorrowedHandler
 def main() raises:
     var app = App()
     var server = HttpServer.bind(SocketAddr.localhost(0))
-    server.serve(_BorrowedHandler(app), num_workers=2)
+    server.serve(_BorrowedHandler(app, 100), num_workers=2)

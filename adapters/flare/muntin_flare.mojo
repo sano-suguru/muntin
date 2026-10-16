@@ -50,6 +50,13 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   too (RFC 9110 section 7.2 has a client send one); this also covers a request upgraded with
   `Upgrade: h2c`, which Flare answers 101 and hands over as HTTP/2.
   HTTP/1.0 needs none. The value is not checked.
+- header field count (M3-067, decided in docs/history/architecture-decisions.md
+  "Request header conversion decision (M3-066)"): a request with more fields
+  than the handler's `max_header_fields` (`Server.bind`'s, 100 unless set),
+  counted as `request.headers.len()`, so as Flare hands them over, is
+  answered 431 after the `Host` rule and before the conversion, so the
+  conversion's fields × distinct names comparisons stay bounded. Its reason
+  phrase is set here: Flare v0.12.0's table has none for 431.
 - version and peer: dropped after the `Host` rule reads the version.
 - response: status and header fields copied, body bytes (whatever they
   are; M3-040) moved into Flare's response, not copied (`to_flare_response`
@@ -66,7 +73,7 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   routes, body included; the backend keeps the content off the wire. For a request
   whose method is `HEAD`, `_serve_app` (which both handlers call) takes the
   response it would send at every exit (`App.handle`'s answer, `to_flare_response`'s fixed
-  500, its own 400) and sends its status and fields with no body, declaring
+  500, its own 400 and 431) and sends its status and fields with no body, declaring
   a `Content-Length` equal to the body's byte length, except for a status
   that never carries content (1xx, 204, 205, 304), where it declares none.
   Flare v0.12.0 would send the content over cleartext HTTP/2, and over
@@ -87,10 +94,12 @@ listener. `server.port()` is the bound port. `server.serve(app)` borrows
 does; a raise propagates and a return returns, with one exception: a raise
 after a stop signal (below) returns. It returns after a graceful stop or
 when the reactor stopped on a failed poll. There is no stop call or backend configuration
-other than the body limit, the grace window, the idle timeout and TLS below.
+other than the body limit, the grace window, the idle timeout, the header
+field limit and TLS below.
 `_BorrowedHandler` is not `Copyable`, which keeps Flare's multi-worker
 `serve` out of reach: workers (below) never share an `App`. `Server`'s one initializer takes keyword-only `_host`,
-`_port`, `_max_body_bytes`, `_shutdown_grace_ms`, `_idle_timeout_ms` and `_tls`, so
+`_port`, `_max_body_bytes`, `_shutdown_grace_ms`, `_idle_timeout_ms`,
+`_max_header_fields` and `_tls`, so
 `Server.bind` is the one public spelling.
 `MuntinHandler` stays for the adapter's own tests and probes.
 
@@ -422,9 +431,23 @@ def _bad_request() -> FlareResponse:
     )
 
 
-def _answer(app: App, request: FlareRequest) -> FlareResponse:
+def _too_many_fields() -> FlareResponse:
+    # Flare v0.12.0's reason table has no 431: unset, the status line would
+    # say `Unknown`.
+    return FlareResponse(
+        status=431,
+        reason="Request Header Fields Too Large",
+        body=List(String("Request Header Fields Too Large").as_bytes()),
+    )
+
+
+def _answer(
+    app: App, request: FlareRequest, max_header_fields: Int
+) -> FlareResponse:
     if _lacks_host(request):
         return _bad_request()
+    if request.headers.len() > max_header_fields:
+        return _too_many_fields()
     var muntin_request: Request
     try:
         muntin_request = to_muntin_request(request)
@@ -433,25 +456,36 @@ def _answer(app: App, request: FlareRequest) -> FlareResponse:
     return to_flare_response(_handle_owned(app, muntin_request^))
 
 
-def _serve_app(app: App, request: FlareRequest) -> FlareResponse:
+def _serve_app(
+    app: App, request: FlareRequest, max_header_fields: Int
+) -> FlareResponse:
     """`app`'s answer to `request` as the adapter sends it: the `Host` rule,
-    the conversion, `App.handle`, the adapter's 400 and 500, and the `HEAD`
-    rule. Every handler in this module answers through it."""
+    the field limit, the conversion, `App.handle`, the adapter's 400, 431
+    and 500, and the `HEAD` rule. Every handler in this module answers
+    through it."""
     if request.method == "HEAD":
-        return _without_content(_answer(app, request))
-    return _answer(app, request)
+        return _without_content(_answer(app, request, max_header_fields))
+    return _answer(app, request, max_header_fields)
 
 
 struct MuntinHandler(Handler):
-    """Serves a Muntin `App` as a Flare handler."""
+    """Serves a Muntin `App` as a Flare handler, with `Server.bind`'s
+    field limit (`max_header_fields`, 100 unless given; not checked here)."""
 
     var app: App
+    var max_header_fields: Int
 
-    def __init__(out self, var app: App):
+    def __init__(
+        out self,
+        var app: App,
+        *,
+        max_header_fields: Int = _DEFAULT_MAX_HEADER_FIELDS,
+    ):
         self.app = app^
+        self.max_header_fields = max_header_fields
 
     def serve(self, request: FlareRequest) -> FlareResponse:
-        return _serve_app(self.app, request)
+        return _serve_app(self.app, request, self.max_header_fields)
 
 
 struct _BorrowedHandler[origin: Origin[mut=False]](Handler):
@@ -461,12 +495,14 @@ struct _BorrowedHandler[origin: Origin[mut=False]](Handler):
     `App` is never shared by two threads (M3-049)."""
 
     var _app: Pointer[App, Self.origin]
+    var _max_header_fields: Int
 
-    def __init__(out self, ref[Self.origin] app: App):
+    def __init__(out self, ref[Self.origin] app: App, max_header_fields: Int):
         self._app = Pointer(to=app)
+        self._max_header_fields = max_header_fields
 
     def serve(self, request: FlareRequest) -> FlareResponse:
-        return _serve_app(self._app[], request)
+        return _serve_app(self._app[], request, self._max_header_fields)
 
 
 comptime _DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
@@ -503,6 +539,13 @@ does not change it (M3-047)."""
 
 comptime _LARGEST_IDLE_TIMEOUT_MS = 86_400_000
 """One day, the largest idle timeout `Server.bind` takes (M3-047)."""
+
+comptime _DEFAULT_MAX_HEADER_FIELDS = 100
+"""`Server.bind`'s request header field limit when none is given (M3-066):
+Tomcat's, Apache's and hyper's default."""
+
+comptime _LARGEST_MAX_HEADER_FIELDS = 65_535
+"""The largest request header field limit `Server.bind` takes (M3-066)."""
 
 comptime _REACTOR_STOP_MS = 1000
 """How long the watcher waits, after the grace window, for Flare's reactor to
@@ -622,7 +665,9 @@ comptime _W_CONFIG = 4
 comptime _W_TLS = 5
 """Worker table cell: the address of the `Server`'s TLS context, or 0 for
 cleartext (`tls_context_addr`)."""
-comptime _W_LEN = 6
+comptime _W_MAX_HEADER_FIELDS = 6
+"""Worker table cell: the `Server`'s request header field limit."""
+comptime _W_LEN = 7
 
 comptime _W_SERVING = 0
 comptime _W_RETURNED = 1
@@ -979,7 +1024,7 @@ def _serve_worker[
             run_worker_loop(
                 fd,
                 config[],
-                _BorrowedHandler(app),
+                _BorrowedHandler(app, _load(row, _W_MAX_HEADER_FIELDS)),
                 stop[],
                 _load(row, _W_TLS),
             )
@@ -1541,6 +1586,7 @@ struct Server(Movable):
     (M3-033). `Server.bind` is the one public spelling."""
 
     var _server: HttpServer
+    var _max_header_fields: Int
 
     def __init__(
         out self,
@@ -1550,6 +1596,7 @@ struct Server(Movable):
         _max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
         _shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
         _idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
+        _max_header_fields: Int = _DEFAULT_MAX_HEADER_FIELDS,
         _tls: Optional[Tls] = None,
     ) raises:
         if _port < 0 or _port > 65535:
@@ -1557,6 +1604,14 @@ struct Server(Movable):
         var config = _server_config(
             _max_body_bytes, _shutdown_grace_ms, _idle_timeout_ms
         )
+        if (
+            _max_header_fields < 1
+            or _max_header_fields > _LARGEST_MAX_HEADER_FIELDS
+        ):
+            raise Error(
+                "max_header_fields out of range: " + String(_max_header_fields)
+            )
+        self._max_header_fields = _max_header_fields
         if not _tls:
             self._server = HttpServer.bind(
                 SocketAddr(IpAddr.parse(_host), UInt16(_port)), config^
@@ -1587,6 +1642,7 @@ struct Server(Movable):
         max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
         shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
         idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
+        max_header_fields: Int = _DEFAULT_MAX_HEADER_FIELDS,
         tls: Optional[Tls] = None,
     ) raises -> Server:
         """Binds and listens on `host` (an IPv4 or IPv6 literal) and `port`
@@ -1602,11 +1658,15 @@ struct Server(Movable):
         or SIGINT (M3-045; docs/DX.md section 1). `idle_timeout_ms` (1 to
         86,400,000; 500 when not given) is how long Flare keeps a
         connection open, over HTTP/1.1 and h2c, while nothing arrives on it
-        (M3-047; docs/DX.md section 1). With `tls`, it serves HTTPS
-        instead, HTTP/1.1 and HTTP/2 chosen in the TLS handshake (ALPN), with
-        the same three settings (M3-051; docs/DX.md section 1); the files are
-        read and checked here, after the host is parsed.
-        Raises for a port, limit, grace or idle timeout out of range, a TLS
+        (M3-047; docs/DX.md section 1). `max_header_fields` (1 to 65,535;
+        100 when not given) is the most request header fields, as Flare
+        hands them over, a request may carry: one with more is answered 431
+        before it is converted (M3-066; docs/DX.md section 1). With `tls`,
+        it serves HTTPS instead, HTTP/1.1 and HTTP/2 chosen in the TLS
+        handshake (ALPN), with the same settings (M3-051; docs/DX.md
+        section 1); the files are read and checked here, after the host is
+        parsed.
+        Raises for a port, limits, grace or idle timeout out of range, a TLS
         file that cannot be read or loaded (naming it), a host that is not
         an IP literal, an address in use or any other OS error."""
         return Server(
@@ -1615,6 +1675,7 @@ struct Server(Movable):
             _max_body_bytes=max_body_bytes,
             _shutdown_grace_ms=shutdown_grace_ms,
             _idle_timeout_ms=idle_timeout_ms,
+            _max_header_fields=max_header_fields,
             _tls=tls,
         )
 
@@ -1667,7 +1728,7 @@ struct Server(Movable):
         )
         _stage(_STAGE_WATCHING)
         try:
-            self._server.serve(_BorrowedHandler(app))
+            self._server.serve(_BorrowedHandler(app, self._max_header_fields))
         except e:
             # A stop that closed the listener before Flare's `serve` set up
             # its reactor makes that `serve` raise: still a stop.
@@ -1750,6 +1811,7 @@ struct Server(Movable):
             _store(row, _W_ERROR, Int(errors.unsafe_ptr().unsafe_offset(i)))
             _store(row, _W_CONFIG, Int(configs.unsafe_ptr().unsafe_offset(i)))
             _store(row, _W_TLS, tls)
+            _store(row, _W_MAX_HEADER_FIELDS, self._max_header_fields)
         # A worker's reactor polls its copy without blocking.
         try:
             set_listener_nonblocking(listener)

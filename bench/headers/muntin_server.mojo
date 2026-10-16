@@ -1,7 +1,9 @@
 """A Muntin route through the Flare adapter's `Server`, on the port given as
 the first argument, for `scripts/bench_headers.sh`: `GET /` answers `hi`;
 `GET /read` looks up 10 names, walks every field and answers how many bytes
-it saw, an application's work on its request fields. One worker; a 60 s
+it saw, an application's work on its request fields. `Server.bind`'s
+default field limit (100, M3-066), so a request with more fields is
+answered 431 before its conversion. One worker; a 60 s
 idle timeout, so a request that waits behind another is measured as a wait
 rather than dropped (docs/DX.md section 1)."""
 
