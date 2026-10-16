@@ -1335,7 +1335,7 @@ def create() raises -> Response:
     return r^
 ```
 
-If `write_json` raises (including NaN or infinity, which JSON cannot represent) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`, whatever status was chosen; the handler's `ToErrorResponse` is not called, because the handler did not fail. An edit after `to_response()` applies to that 500 too: on a failure, the example above sends the 500 with `Content-Type: application/problem+json`, and a status set there (`r.status = 201`) would turn the failure into a success status with the body `Internal Server Error`; choose the status with `status=` instead. Why: [JSON response status decision (M3-028)](history/architecture-decisions.md#json-response-status-decision-m3-028).
+If `write_json` raises (including NaN or infinity, which JSON cannot represent) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`, whatever status was chosen, carrying a `Failure.RESPONSE` report of the error's text for middleware (section 6); the handler's `ToErrorResponse` is not called, because the handler did not fail. An edit after `to_response()` applies to that 500 too: on a failure, the example above sends the 500 with `Content-Type: application/problem+json`, and a status set there (`r.status = 201`) would turn the failure into a success status with the body `Internal Server Error`; choose the status with `status=` instead. Why: [JSON response status decision (M3-028)](history/architecture-decisions.md#json-response-status-decision-m3-028).
 
 ## 6. Application errors
 
@@ -1363,7 +1363,7 @@ app.get["/users/{id}"](get_user)              # unchanged registration
 - Every argument shape (`def()`, `def(Int)`, `def(B)`, `def(Int, B)`) and both result policies (`String` or `StaticString` text, `ToResponse`) accept a non-raising handler, `raises`, or `raises T` for an application-defined `T`. Non-raising `def` handlers keep working unchanged. Mojo infers the handler's error type (`Never`, `Error`, or the application's type); compiler notes print a non-raising candidate type as `def(var A) raises Never thin -> String`.
 - Exception, a Mojo 1.1.0 limitation: a handler *value* whose type is spelled without `raises` (`var f: def() thin -> String = hello`, or a helper parameter of that type forwarded to `app.get`) does not register: `TODO: function type conversions between closures not supported yet` (`tests/storage_fail/typed_thin_value_handler.mojo`). Spell the type `def() thin raises Never -> String`, or make the helper generic: `def register[E: Deinitable](mut app: App, h: def() thin raises E -> String)`. Such a type also spells each request parameter `var`: `def(var Int) thin raises Never -> String`; `def(Int) thin raises Never -> String` fails with the same `TODO` error (`tests/registration_api_fail/typed_borrowed_int_value.mojo`). A leading `State[S]` keeps its spelling, and `-> StaticString` may be the result type.
 - An error type must be `Deinitable`, because Muntin drops it: a linear error type is rejected at registration (`tests/storage_fail/linear_error_type.mojo`).
-- Request failures stay 400 and are decided before the handler: an invalid value in a matched path segment, a missing, duplicated or invalid query value, a body that `from_body` or `from_bytes` rejects. A path no route matches, including a missing path segment, stays 404; a path only routes of other methods match is 405 with `Allow`. Anything the handler raises, unless its declared error type opts in (below), is a fixed 500 with the body `Internal Server Error`, whatever the error says: the same message raised by the handler and by a failing conversion step gives 500 and 400. The error value is dropped; Muntin has no logging hook yet.
+- Request failures stay 400 and are decided before the handler: an invalid value in a matched path segment, a missing, duplicated or invalid query value, a body that `from_body` or `from_bytes` rejects. A path no route matches, including a missing path segment, stays 404; a path only routes of other methods match is 405 with `Allow`. Anything the handler raises, unless its declared error type opts in (below), is a fixed 500 with the body `Internal Server Error`, whatever the error says: the same message raised by the handler and by a failing conversion step gives 500 and 400. The error value is dropped; its text or type name stays on the response for middleware to read ("Reports of dropped errors", below), never for the client.
 - Returning and raising mean different things. A returned value goes through the response conversion; a raised value is a handler error: 500, even if its type conforms to `ToResponse`, unless its declared type conforms to `ToErrorResponse` (below).
 
 Application-defined error responses, status: **production**; proven by `tests/test_error_response.mojo`, `tests/storage_fail/{error_type_is_not_a_result,raising_error_conversion}.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo`. An error type opts in by declaring the public `muntin.ToErrorResponse`, separate from `ToResponse`; registration does not change:
@@ -1393,6 +1393,37 @@ app.get["/users/{id}"](get_user)
 - A type may conform to both traits: returned, it converts with `to_response`; raised, with `to_error_response`. A type conforming only to `ToErrorResponse` cannot be returned (`no matching method`, the `where` clause's `violated constraint`).
 - One central place: an application that wants one mapping uses one error type with several kinds (a Mojo function declares one error type), or a trait of its own that refines `ToErrorResponse`.
 - The conversion runs once, after the handler raised, and consumes the error (`self`, `var self` or `deinit self`); the result conversion does not run. Move-only types work. It cannot raise: a raising `to_error_response` does not conform (`'NotFound' does not implement all requirements for 'ToErrorResponse'`). 400, 404 and 405 run neither conversion.
+
+Reports of dropped errors, status: **production**; proven by `tests/test_failure.mojo` and, over a real loopback connection through Flare, `adapters/flare/test_localhost_roundtrip.mojo` (the body and fields of `/orders/0`'s 500 do not carry its error's text). When Muntin answers with the fixed 500, the `Response` carries a report of what it dropped, which middleware reads (section 7); the client receives exactly what it did before. Why: [Dropped error report decision (M3-058)](history/architecture-decisions.md#dropped-error-report-decision-m3-058) and its [amendment (M3-059)](history/architecture-decisions.md#dropped-error-report-amendment-m3-059).
+
+```mojo
+from muntin import Failure
+
+
+def find_order(id: Int) raises -> String:
+    if id == 0:
+        raise Error("database password is hunter2")
+    return "order " + String(id)
+
+# GET /orders/0 -> 500 "Internal Server Error", no fields; in middleware:
+#   response.failure().value().source  == Failure.HANDLER       ("handler")
+#   response.failure().value().message == "database password is hunter2"
+#   String(response.failure().value()) == "handler: database password is hunter2"
+# GET /orders/1 -> 200 "order 1"; response.failure() is None
+```
+
+- `Response.failure() -> Optional[Failure]` returns a copy of the report. `Failure` has two fields: `source`, the step that dropped the error, and `message`. `source` is one of:
+  - `Failure.HANDLER` (`"handler"`): a handler raised and its declared error type does not conform to `ToErrorResponse`;
+  - `Failure.MIDDLEWARE` (`"middleware"`): a middleware raised (section 7);
+  - `Failure.RESPONSE` (`"response"`): a `Json[T]` result's `write_json` failed (section 5), also when a handler called `to_response()` itself;
+  - `Failure.MUNTIN` (`"muntin"`): one of Muntin's internal failures. The only reachable one is the rebuild of a header field an in-memory `Headers` holds invalidly (section 4), whose `message` is fixed text, `the request's header fields could not be rebuilt`, since the rebuild's error is not kept.
+- `message` is the error's text when its type is `Writable` (an `Error`'s message, or what the application's `write_to` writes), else `<`, the type's module-qualified name and `>` (`<orders.Unavailable>`). There is no stack trace. A `Failure` writes itself as `source: message`.
+- What carries a report: only the fixed 500 Muntin makes. A response the application builds (including its own 500), a converted error (`ToErrorResponse`), Muntin's 400, 404, 405, 413 and 415 and any successful answer have `None`. A 400 is not always the client's fault: Muntin answers 400 when a request-side conversion raises, the application's own included (`from_route_value`, `from_body`, `FromJson.from_json` through `Json[T]`, `from_bytes`), so one that fails for a server-side reason (a missing configuration) is a 400 with no report, and Muntin cannot tell it from bad input.
+- The report stays with the response: copies, the `HEAD` answer and edits of the status, body or fields keep it, so a 500 a middleware turns into a 503, or a `Json[T]` failure a handler gives another status (section 5), still carries it. A response built anew (a middleware that answers `Response.text(...)` instead of the one it received) has none.
+- No backend sends it. The Flare adapter converts the status, fields and body only, so the error's text reaches application code and never the client unless the application writes it into a response. Muntin has no logger of its own: where a report goes is the application's choice (section 7).
+- `message` is not safe log text: it may hold secrets (a password in a database error), control characters and values the client sent (a handler can raise an error built from its route value). Neither are the request's method, path and fields, which the client sends: Muntin refuses no control character in a method or path. Escaping all of them and masking secrets before they reach a log are the application's; Muntin does neither.
+- A middleware reads the report on the response it receives, not every error Muntin dropped while answering. Read by no middleware: a raise out of the outermost middleware, whose report only the caller of `App.handle` (a backend, `TestClient`) receives; a report an inner middleware drops by answering with a new response (an error page built for any 500); and a report a later failure replaces: when a handler fails and a middleware then raises, only the middleware's report remains. No public API carries a report onto a new response. Not reported at all: the Flare adapter's own 500 for an invalid outgoing field, which it makes after `App.handle` (section 1), and the 400s. Request IDs, timing, metrics and tracing are application middleware too (section 7).
+- `Failure`'s initializer takes only `_`-prefixed keywords, which are not API: an application does not build a report.
 
 ## 7. Middleware
 
@@ -1437,10 +1468,77 @@ def main() raises:
 - `next^.run(request^)` consumes `next`, so the rest runs at most once per middleware call: a second direct use of `next`, or one inside a loop, does not compile (`use of uninitialized value 'next'`), and `Next` has no plain call (`next(request^)` does not compile) and no copy (`next.copy()` does not compile; `Next` is not `Copyable`). The once rule holds by type for `next` itself: a `Next` moved into a container (`var o = Optional(next^)`) and taken twice runs the rest once and then aborts the process at the second `take()`, an abort, not a 500. A `Next` cannot outlive the call that received it (a middleware written for a `Next` of a fixed origin does not register), and no public spelling constructs one. Code that names `_`-prefixed members, or applies the standard library's unsafe pointer operations (`unsafe_*`, `UnsafePointer`) or an origin rebind (`rebind_var`) to a `Next`, is outside these guarantees.
 - Scope and order: every request `App.handle` receives, 404, 405, the route values' 400, a handler's 500 and `HEAD` included, in registration order, outermost first, whether `use` comes before or after the routes: two middleware `a` then `b` see the request as `a`, `b` and the response as `b`, `a`. `HEAD` arrives as `HEAD`, and the backend drops the content of whatever response comes out and declares its length by the `HEAD` rule, so a middleware must answer `HEAD` with the body it would give the `GET` (as a raw `get` handler must, "`HEAD`" in "Proven vs. target status"); Muntin cannot check this. Requests a backend refuses before `App.handle` (Flare's own 400s and its refusal of a body over the `Server`'s `max_body_bytes`, section 1, which is tested, and the adapter's 400s for a request method, target or field it cannot represent) never reach middleware; for a method or target that is not UTF-8 this is tested (`adapters/flare/test_muntin_flare.mojo`, `adapters/flare/test_localhost_roundtrip.mojo`), and otherwise it describes where `App.handle` sits. A body within `max_body_bytes` is never refused before `App.handle` for its bytes (M3-040): middleware receives every such body's bytes, ones that are not UTF-8 included, so a middleware that reads `request.text()` must handle its raise (tested in the same files and `tests/test_binary_body.mojo`).
 - Muntin's answers: middleware that does not touch a response passes it through unchanged, fields included. A middleware may replace or change any answer, Muntin's 404 and 405 included; on a 405 it builds or changes, `Allow` is the application's responsibility.
-- Errors: a raise out of a middleware is the fixed 500 `Internal Server Error` at that middleware's call, with no error text; the middleware outside it receives that 500 from its `next` as an ordinary response and continues. A raise before `next^.run` leaves the rest, the handler included, uncalled. Middleware has no error type of its own.
+- Errors: a raise out of a middleware is the fixed 500 `Internal Server Error` at that middleware's call, with no error text on the wire; the middleware outside it receives that 500 from its `next` as an ordinary response, carrying a `Failure.MIDDLEWARE` report of the error's text (section 6), and continues. A raise before `next^.run` leaves the rest, the handler included, uncalled. Middleware has no error type of its own.
 - Configuration is compile-time only, through the function's own parameters (`app.use(tagged["v1"])` for `def tagged[value: StaticString](var request: Request, var next: Next) raises -> Response`). A closure that captures a runtime value does not convert (`cannot be converted from ... to 'Middleware'`), nor does a function without `next` or a plain value. Not supported: runtime-configured middleware (the `Tracing()` values above, or a value read at start-up), request-scoped typed context, per-route or per-group middleware, middleware error types, async.
 - An identity is not passed in header fields: middleware can allow or deny a request, but request header fields are client input (a client can send the same name itself), so a field middleware writes for a handler to trust is not a way to hand it an authenticated identity, and an application must not use one as such.
 - Cost: an `App` with no middleware dispatches as before, plus a length check. With middleware, each middleware is one call and one `Next`, and the request reaches the first one without a copy when `App.handle` is handed it (`app.handle(request^)` or a temporary, as `TestClient` and the Flare adapter pass it; section 11): the first middleware receives that request's own body buffer. Given a named request, which the caller keeps, `App.handle` copies it once per request (method, path, query, header fields and body) for the chain, a cost that grows with the body ([M3-063](history/architecture-decisions.md#request-context-decision-m3-063) measures it). Each middleware also adds one level of nested calls (`App.handle` to the middleware, to `next^.run`, to the next one), so the stack grows with the number registered; the stack is not measured.
+
+Logging dropped errors, status: **production**; proven by `tests/test_failure.mojo`, which runs this example as written. A middleware registered first receives every response the others and the routes make, with the report it carries (section 6), and the request it answers; a report dropped or replaced inside it never reaches it (section 6). It keeps what it needs from the request before `next` takes it:
+
+```mojo
+from std.sys import stderr
+
+from muntin import App, Failure, Next, Request, Response
+
+
+def quoted(text: String) -> String:
+    """`text` in double quotes, each byte outside printable ASCII, `"` and
+    `\\` written as `\\xNN`: no control character reaches the log as itself.
+    """
+    var out = String('"')
+    for b in text.as_bytes():
+        var c = Int(b)
+        if c < 0x20 or c > 0x7E or c == 0x22 or c == 0x5C:
+            out += "\\x"
+            for d in [c >> 4, c & 15]:
+                out += chr(d + 48 if d < 10 else d + 87)
+        else:
+            out += chr(c)
+    return out + '"'
+
+
+def failure_line(
+    method: String, path: String, request_id: String, failure: Failure
+) -> String:
+    # Every value but `source` comes from the client or the error, so each is
+    # quoted; masking secrets is the application's.
+    return String(
+        quoted(method),
+        " ",
+        quoted(path),
+        " client-id=",
+        quoted(request_id),
+        " ",
+        failure.source,
+        ": ",
+        quoted(failure.message),
+    )
+
+
+def log_failures(var request: Request, var next: Next) raises -> Response:
+    var method = request.method  # kept: `next` takes the request
+    var path = request.path
+    var request_id = request.headers.get("X-Request-Id").or_else("-")
+    var response = next^.run(request^)
+    var failure = response.failure()
+    if failure:
+        print(
+            failure_line(method, path, request_id, failure.value()),
+            file=stderr,
+        )
+    return response^
+
+
+var app = App()
+app.use(log_failures)  # first, so outside every other middleware
+app.get["/orders/{id}"](find_order)  # section 6
+# GET /orders/0 with X-Request-Id: r-1 -> 500 "Internal Server Error"; standard error:
+#   "GET" "/orders/0" client-id="r-1" handler: "database password is hunter2"
+```
+
+- Register it first: a middleware outside it that raises makes its report where this one never sees it, and a raise out of this one reaches no middleware. Inside it, a middleware that answers a 500 with a new response, or raises after a failure, leaves it no report or only its own (section 6).
+- A request ID field a client sends is client input, like every request field (above): a client can send any value, another client's included, so it correlates log lines and is not trusted. An application that needs an ID it can trust makes one itself; Muntin has no request ID, timing, metrics or tracing.
+- Writing the line is the application's: where it goes, its format, and escaping and masking what it holds (section 6). `quoted` above writes every byte outside printable ASCII, and `"` and `\`, as `\xNN`, so no method, path, request ID or message can end the line, move the cursor or reorder its text (C0 and C1 controls, DEL, bidirectional overrides); it masks nothing. `repr` is not enough: it leaves C1 controls and other non-ASCII characters as they are (pinned in `tests/test_failure.mojo`).
 
 ## 8. Application state
 

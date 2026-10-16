@@ -254,6 +254,43 @@ trait ToErrorResponse(Deinitable):
         ...
 
 
+struct Failure(Copyable, Movable, Writable):
+    """What Muntin dropped when it answered with the fixed 500
+    (docs/history/architecture-decisions.md, "Dropped error report decision
+    (M3-058)").
+
+    `source` is the step that dropped it, one of `Failure.HANDLER` (a
+    handler error whose type does not convert), `Failure.MIDDLEWARE` (a
+    raise out of a middleware), `Failure.RESPONSE` (a result conversion,
+    `Json[T]`'s serialization) and `Failure.MUNTIN` (Muntin's own internal
+    failures). `message` is the error's text when its type is `Writable`
+    (`Error` included), else `<`, its type's module-qualified name and `>`.
+    Written as `source: message`.
+
+    `message` is never sent to the client, but it is not safe log text: it
+    may hold secrets, control characters and values the client sent.
+    Escaping and masking it in a log are the application's.
+
+    Its initializer takes only `_`-prefixed keyword arguments; only Muntin
+    builds one, and a `Response` built by the application carries none.
+    """
+
+    comptime HANDLER = "handler"
+    comptime MIDDLEWARE = "middleware"
+    comptime RESPONSE = "response"
+    comptime MUNTIN = "muntin"
+
+    var source: String
+    var message: String
+
+    def __init__(out self, *, _source: String, _message: String):
+        self.source = _source
+        self.message = _message
+
+    def write_to(self, mut writer: Some[Writer]):
+        writer.write(self.source, ": ", self.message)
+
+
 struct Response(Copyable, Movable, ToResponse):
     """An application-level HTTP response, independent of any transport.
 
@@ -266,11 +303,20 @@ struct Response(Copyable, Movable, ToResponse):
     for text or bytes). A backend writes them in order, except the fields it
     owns or that are connection-specific
     (docs/history/architecture-decisions.md, "Headers decision (M3-002)").
+
+    `failure()` is the report of what Muntin dropped when it made this
+    response as the fixed 500 (M3-058), else `None`. No public initializer
+    sets it; copies and edits of the status, body or fields keep it, and no
+    backend sends it.
     """
 
     var status: Int
     var body: List[UInt8]
     var headers: Headers
+    # The report, or empty; at most one, added only by `_failed`
+    # (docs/history/architecture-decisions.md, "Dropped error report
+    # amendment (M3-059)").
+    var _failure: List[Failure]
 
     def __init__(out self, status: Int, body: String):
         """A response whose body is the bytes of the text `body`."""
@@ -282,6 +328,7 @@ struct Response(Copyable, Movable, ToResponse):
         self.status = status
         self.body = body^
         self.headers = Headers()
+        self._failure = List[Failure]()
 
     @staticmethod
     def text(body: String, status: Int = 200) -> Response:
@@ -293,7 +340,24 @@ struct Response(Copyable, Movable, ToResponse):
         UTF-8. Raises when they are not; no byte is replaced."""
         return String(from_utf8=Span(self.body))
 
+    def failure(self) -> Optional[Failure]:
+        """A copy of the report of what Muntin dropped when it made this
+        response as the fixed 500 (M3-058); `None` on any other response,
+        and on one the application builds."""
+        if self._failure:
+            return self._failure[0].copy()
+        return None
+
     def to_response(var self) -> Response:
         """Returns this response unchanged, by move: a handler declared
         `-> Response` is answered with exactly the response it built."""
         return self^
+
+
+def _failed(source: StaticString, message: String) -> Response:
+    """The fixed 500, `Internal Server Error` with no fields, carrying a
+    `Failure` of `source` and `message` (M3-058). The message never reaches
+    the body or a field."""
+    var response = Response.text("Internal Server Error", status=500)
+    response._failure.append(Failure(_source=source, _message=message))
+    return response^
