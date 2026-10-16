@@ -165,6 +165,46 @@ printf '\n\ndef _more(server: HttpServer) -> Int:\n    return Int(server._stoppi
 expect pass "out of scope: a private member read outside flare_internals.mojo, left to review"
 
 fresh
+printf '\n\ndef _more():\n    if True: from flare.net._libc_event import _pipe\n' >>"$adapter"
+expect fail "a private import after a one-line if"
+
+fresh
+printf '\n\ndef _more():\n    with x: import flare.net._libc_event\n' >>"$adapter"
+expect fail "a plain private import after a one-line with"
+
+fresh
+printf '\n\ndef _more(): from flare.http import HttpFrontend\n' >>"$internals"
+expect fail "a new import in a one-line def in flare_internals.mojo"
+
+fresh
+printf '\n\ndef _more(server: HttpServer) -> Int:\n    return Int(server.__stopping)\n' >>"$internals"
+expect fail "a private member with two leading underscores"
+
+fresh
+printf '\n\ndef _more(fd: Int):\n    _ = RawSocket(c_int(fd), AF_INET, SOCK_STREAM, __wrap2=True)\n' >>"$internals"
+expect fail "a private keyword with two leading underscores"
+
+fresh
+printf '\n\ndef _more(server: HttpServer):\n    print(t"\\{server._stopping}")\n' >>"$internals"
+expect fail "a private member after a backslash in a template string"
+
+fresh
+printf '\n\ndef _more(fd: Int, d: List[Int]):\n    print(t"fd {fd:#x} {d[1:2]} {fd!r:>8}")\n' >>"$internals"
+expect pass "format specs and a slice in template string expressions"
+
+fresh
+printf '\n\ndef _more(fd: Int, w: Int):\n    print(t"{fd:{w}}")\n' >>"$internals"
+expect fail "a nested expression in a format spec, which the script refuses"
+
+fresh
+printf '\nfrom muntin.testing import test_client\n' >>"$adapter"
+expect pass "a name starting with test_ from a module that is not a test module"
+
+fresh
+printf '\n\ndef _more(fd: Int):\n    _ = RawSocket(c_int(fd), AF_INET, SOCK_STREAM, _other=True)\n' >>"$adapter"
+expect pass "out of scope: a private keyword outside flare_internals.mojo, left to review"
+
+fresh
 sed -e 's/, _wrap=True//' "$internals" >"$work/edited" && mv "$work/edited" "$internals"
 expect fail "a listed member no longer used (stale list)"
 

@@ -15,14 +15,15 @@
 #   fails closed rather than skip code.
 # Statements are read after strings and comments are removed, so a name in
 # a docstring, comment or string is not code, and an import after `;`, on a
-# `\` continuation or in a parenthesized list, a template string's
-# expression and a backquoted name are. A ratchet on names, not a check of
-# behavior or a Mojo parser: a non-public Flare member read outside
-# flare_internals.mojo (`x._field`) looks like Muntin's own `self._field`, and
-# a behavior the code relies on has no name to list; the tests pin what it
-# reads, what it refuses and what it leaves to review. The adapter's tests
-# may import Flare internals; flare_internals.mojo's docstring lists the ones
-# they use. scripts/test_check_flare_reliance.sh tests this script.
+# `\` continuation, in a parenthesized list or after `if x:` on one line,
+# a template string's expression and a backquoted name are. A ratchet on
+# names, not a check of behavior or a Mojo parser: a non-public Flare member
+# or keyword outside flare_internals.mojo (`x._field`, `f(_k=1)`) looks like
+# Muntin's own (`self._field`), and a behavior the code relies on has no name
+# to list; the tests pin what it reads, what it refuses and what it leaves to
+# review. The adapter's tests may import Flare internals; flare_internals.mojo's
+# docstring lists the ones they use. scripts/test_check_flare_reliance.sh
+# tests this script.
 set -euo pipefail
 if [[ $# -gt 0 ]]; then
     dir="$(cd "$1" && pwd)"
@@ -126,21 +127,36 @@ statements() {
                 out = out c
                 i++
             } else {
-                if (c == "\\") { i += 2; continue }
+                if (c == "\\") {
+                    # In a template string a backslash does not escape a brace.
+                    if (interp && substr(line, i + 1, 1) ~ /[{}]/) i++
+                    else i += 2
+                    continue
+                }
                 if (interp && (c == "{" || c == "}")) {
                     if (substr(line, i + 1, 1) == c) { i += 2; continue }
                     if (c == "}") { i++; continue }
-                    d = 1
+                    # The expression runs to a `:` (its format spec, text)
+                    # or the `}` at its own level.
+                    d = 0
+                    spec = 0
                     for (j = i + 1; j <= len; j++) {
                         ch = substr(line, j, 1)
+                        if (spec) {
+                            if (ch == "{") unreadable("a template string format spec holding a brace")
+                            if (ch == "}") break
+                            continue
+                        }
                         if (ch == "\"" || ch == "'"'"'" || ch == "\\" || ch == "#" || ch == "`")
                             unreadable("a template string expression holding a quote, backslash, # or backquote")
-                        if (ch == "{") d++
-                        if (ch == "}") d--
-                        if (d == 0) break
+                        if (ch == "(" || ch == "[" || ch == "{") d++
+                        else if (ch == "}" && d == 0) break
+                        else if (ch == ")" || ch == "]" || ch == "}") d--
+                        else if (ch == ":" && d == 0 && substr(line, j + 1, 1) != "=") { spec = 1; e = j }
                     }
-                    if (d != 0) unreadable("a template string expression left open")
-                    out = out " (" substr(line, i + 1, j - i - 1) ") "
+                    if (j > len) unreadable("a template string expression left open")
+                    if (!spec) e = j
+                    out = out " (" substr(line, i + 1, e - i - 1) ") "
                     i = j + 1
                     continue
                 }
@@ -163,10 +179,10 @@ statements() {
     }' "$1"
 }
 
-# Each name a statement imports from a `flare` module (not `flare_internals`),
-# as `module name`, aliases and spaces in the path dropped; a plain
-# `import flare.x` is `flare.x *`.
-flare_imports() {
+# Each name a statement imports, as `module name`, aliases and spaces in the
+# path dropped; a plain `import a.b` is `a.b *`. An import anywhere in a
+# statement counts, as after `if x:` or `try:` on one line.
+imports() {
     awk -F '\t' '
     function emit(module, names,    n, parts, i, name) {
         gsub(/[()]/, " ", names)
@@ -178,26 +194,35 @@ flare_imports() {
             if (name != "") print module " " name
         }
     }
-    $2 ~ /^from[ \t]+flare(\.|[ \t])/ {
-        rest = $2
-        sub(/^from[ \t]+/, "", rest)
-        if (!match(rest, /[ \t]import([ \t(]|$)/)) { print "flare _unparsed"; next }
-        module = substr(rest, 1, RSTART - 1)
-        gsub(/[ \t]/, "", module)
-        emit(module, substr(rest, RSTART + 7))
-        next
-    }
-    $2 ~ /^import[ \t]/ {
-        rest = $2
-        sub(/^import[ \t]+/, "", rest)
-        n = split(rest, parts, ",")
-        for (i = 1; i <= n; i++) {
-            path = parts[i]
-            sub(/[ \t]+as[ \t].*/, "", path)
-            gsub(/[ \t]/, "", path)
-            if (path ~ /^flare(\.|$)/) print path " *"
+    {
+        s = " " $2
+        while (match(s, /[^A-Za-z0-9_.](from|import)[ \t(]/)) {
+            s = substr(s, RSTART + 1)
+            if (s ~ /^from/) {
+                s = substr(s, 5)
+                # Without `import` it is not an import (`raise e from x`).
+                if (!match(s, /[ \t]import([ \t(]|$)/)) continue
+                module = substr(s, 1, RSTART - 1)
+                gsub(/[ \t]/, "", module)
+                s = substr(s, RSTART + 7)
+                emit(module, s)
+                continue
+            }
+            s = substr(s, 7)
+            n = split(s, parts, ",")
+            for (i = 1; i <= n; i++) {
+                path = parts[i]
+                sub(/[ \t]+as[ \t].*/, "", path)
+                gsub(/[ \t]/, "", path)
+                if (path != "") print path " *"
+            }
         }
     }'
+}
+
+# The Flare ones (`flare` or `flare.x`, not `flare_internals`).
+flare_imports() {
+    imports | awk '$1 ~ /^flare(\.|$)/'
 }
 
 # The `_`-prefixed members (`._name`) and keyword arguments (`_name =` right
@@ -209,7 +234,7 @@ members() {
     {
         s = $2
         rest = s
-        while (match(rest, /\.[ \t]*_[A-Za-z][A-Za-z0-9_]*/)) {
+        while (match(rest, /\.[ \t]*_[A-Za-z0-9_]*/)) {
             name = substr(rest, RSTART, RLENGTH)
             gsub(/[ \t]/, "", name)
             print name
@@ -221,7 +246,7 @@ members() {
         for (i = 1; i <= n; i++) {
             c = substr(s, i, 1)
             if (c == "_" && depth > 0 && (prev == "(" || prev == "[" || prev == ",") &&
-                match(substr(s, i), /^_[A-Za-z][A-Za-z0-9_]*[ \t]*=/) &&
+                match(substr(s, i), /^_[A-Za-z0-9_]*[ \t]*=/) &&
                 substr(s, i + RLENGTH, 1) != "=") {
                 name = substr(s, i, RLENGTH)
                 sub(/[ \t]*=$/, "", name)
@@ -242,7 +267,8 @@ while IFS= read -r f; do
         fail "$f: $(grep '^UNREADABLE' <<<"$parsed" | cut -f2); this script cannot read it, so it fails closed"
         continue
     fi
-    if awk -F '\t' '$2 ~ /^(from|import)[ \t]/ && $2 ~ /(^|[^A-Za-z0-9_])test_/' <<<"$parsed" | grep -q .; then
+    if imports <<<"$parsed" | awk '{ n = split($1, seg, "."); for (i = 1; i <= n; i++) if (seg[i] ~ /^test_/) bad = 1
+            if ($1 ~ /^\.+$/ && $2 ~ /^test_/) bad = 1 } END { exit !bad }'; then
         fail "$f imports a test module (\`test_*\`), which this script does not read; a module the adapter uses is not named \`test_*\`"
     fi
     if [[ "$f" == "$internals" ]]; then
