@@ -63,6 +63,10 @@ printf '\nfrom std.math import sqrt; from flare.net._libc_event import _pipe\n' 
 expect fail "a private import after a semicolon"
 
 fresh
+printf '\nfrom flare .net._libc_event import _pipe\n' >>"$adapter"
+expect fail "a private import with a space in its module path"
+
+fresh
 printf '\nfrom flare.net._libc_event \\\n    import _pipe\n' >>"$adapter"
 expect fail "a private import on a backslash continuation"
 
@@ -94,6 +98,71 @@ expect fail "a new private keyword with spaces around ="
 fresh
 printf '\n\ndef _more(server: HttpServer) -> Int:\n    """Not code: `server._stopping`, `from flare.x._y import _z`."""\n    return Int(server._listener.as_raw_fd())  # server._other\n' >>"$internals"
 expect pass "listed members only, private names in a docstring and a comment"
+
+fresh
+printf '\n\ndef _more(server: HttpServer):\n    print(t"port {server._stopping}")\n' >>"$internals"
+expect fail "a private member in a template string's expression"
+
+fresh
+printf '\n\ndef _more(server: HttpServer):\n    print(f"""port\n{server._stopping}""")\n' >>"$internals"
+expect fail "a private member in a triple-quoted f-string's expression"
+
+fresh
+printf '\n\ndef _more():\n    print(t"{{server._stopping}} {1 + 1}")\n' >>"$internals"
+expect pass "doubled braces in a template string, which are text"
+
+fresh
+printf '\n\ndef _more(d: Dict[String, Int]):\n    print(t"{d[\x27k\x27]}")\n' >>"$internals"
+expect fail "a template string expression holding a quote, which the script refuses"
+
+fresh
+printf '\n\ndef _more(server: HttpServer):\n    print(t"""{server._stopping\n}""")\n' >>"$internals"
+expect fail "a template string expression spanning lines, which the script refuses"
+
+fresh
+printf '\n\ndef _more(server: HttpServer) -> Int:\n    return Int(server. _stopping)\n' >>"$internals"
+expect fail "a private member after a dot and a space"
+
+fresh
+printf '\n\ndef _more(server: HttpServer):\n    print(server.`_stopping`)\n' >>"$internals"
+expect fail "a private member written as a backquoted name"
+
+fresh
+printf '\n\ndef _more(server: HttpServer):\n    var `marker#` = 1; print(server._stopping)\n' >>"$internals"
+expect fail "a private member after a backquoted name holding #"
+
+fresh
+printf '\n\ndef _more():\n    var `plain` = 1\n    var `two words` = 2\n' >>"$internals"
+expect pass "backquoted names with no private member"
+
+fresh
+printf '\n\ndef _more():\n    var `open = 1\n' >>"$internals"
+expect fail "a backquoted name left open"
+
+fresh
+printf '\n\ndef _more() -> Int:\n    var _counter = 1\n    var _typed: Int = 2\n    _counter = 3\n    return _counter + _typed\n' >>"$internals"
+expect pass "_-prefixed variables, which are not Flare keywords"
+
+fresh
+printf '\n\ndef _more():\n    _ = ServerConfig[_mode=1]()\n' >>"$internals"
+expect fail "a private keyword in a parameter list"
+
+fresh
+printf 'from flare.net._libc_event import _pipe\n' >"$work/flare/test_bridge.mojo"
+printf '\nfrom test_bridge import _pipe\n' >>"$adapter"
+expect fail "a module importing a test module"
+
+fresh
+printf '\nfrom .test_server import serve_once\n' >>"$adapter"
+expect fail "a module importing a test module by a relative path"
+
+fresh
+printf 'from flare.runtime._thread import current_thread_id\n' >"$work/flare/extra.🔥"
+expect fail "a private import in a .🔥 module"
+
+fresh
+printf '\n\ndef _more(server: HttpServer) -> Int:\n    return Int(server._stopping)\n' >>"$adapter"
+expect pass "out of scope: a private member read outside flare_internals.mojo, left to review"
 
 fresh
 sed -e 's/, _wrap=True//' "$internals" >"$work/edited" && mv "$work/edited" "$internals"

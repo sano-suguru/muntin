@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
 # Keeps the Flare adapter's reliance on Flare's non-public code from growing
 # unnoticed (M3-070; the rule is docs/ARCHITECTURE.md, "Flare policy").
-# Over every adapter module but its tests (`test_*.mojo`), in any directory
-# under the adapter, it fails if:
+# Over every adapter module (`.mojo` or `.🔥`, in any directory under the
+# adapter) but its tests (`test_*`), it fails if:
 # - a module other than flare_internals.mojo imports a `_`-prefixed Flare
 #   module or name;
 # - flare_internals.mojo's Flare imports, or the `_`-prefixed members
-#   (`._name`) and keywords (`_name=`) its code uses, differ from the lists
-#   below, either way, so adding a reliance or leaving a stale entry shows in
-#   the diff;
+#   (`._name`) and keyword arguments (`_name=`) its code uses, differ from the
+#   lists below, either way, so adding a reliance or leaving a stale entry
+#   shows in the diff;
+# - a module imports a test module, which this script does not read;
 # - the modules pass 2,500 lines together;
-# - a module cannot be read (a string or bracket left open), which fails
-#   closed rather than skip code.
+# - a module holds what this script does not read (see `statements`), which
+#   fails closed rather than skip code.
 # Statements are read after strings and comments are removed, so a name in
 # a docstring, comment or string is not code, and an import after `;`, on a
-# `\` continuation or in a parenthesized list is. A ratchet on names, not a
-# check of behavior: a non-public Flare member read outside
+# `\` continuation or in a parenthesized list, a template string's
+# expression and a backquoted name are. A ratchet on names, not a check of
+# behavior or a Mojo parser: a non-public Flare member read outside
 # flare_internals.mojo (`x._field`) looks like Muntin's own `self._field`, and
-# a behavior the code relies on has no name to list. The adapter's tests may
-# import Flare internals; flare_internals.mojo's docstring lists the ones
+# a behavior the code relies on has no name to list; the tests pin what it
+# reads, what it refuses and what it leaves to review. The adapter's tests
+# may import Flare internals; flare_internals.mojo's docstring lists the ones
 # they use. scripts/test_check_flare_reliance.sh tests this script.
 set -euo pipefail
 if [[ $# -gt 0 ]]; then
@@ -65,10 +68,15 @@ fi
 # The statements of a Mojo file, one per line, as `line<TAB>statement`:
 # strings (any quote, triple or not) become `""`, comments are dropped, a
 # bracketed or `\`-continued statement is joined, and `;` splits statements.
-# Prints `UNREADABLE<TAB>reason` for a string or bracket left open.
+# A template string's (a `t` or `f` prefix) `{expression}` stays as code, in
+# parentheses; a backquoted name (`` `name` ``) becomes the name, or
+# `BACKQUOTED` when it is not a plain one. Prints `UNREADABLE<TAB>reason` for
+# what it does not read: a string, bracket, backquote or template expression
+# left open, or a template expression holding a quote, backslash, `#` or
+# backquote.
 statements() {
     awk '
-    BEGIN { state = 0; depth = 0; stmt = ""; start = 0 }
+    BEGIN { state = 0; depth = 0; stmt = ""; start = 0; interp = 0; failed = 0 }
     function flush(    n, parts, i, s) {
         n = split(stmt, parts, ";")
         for (i = 1; i <= n; i++) {
@@ -78,6 +86,11 @@ statements() {
         }
         stmt = ""
     }
+    function unreadable(why) {
+        print "UNREADABLE\t" why " on line " NR
+        failed = 1
+        exit
+    }
     {
         line = $0
         out = ""
@@ -86,11 +99,25 @@ statements() {
         while (i <= len) {
             c = substr(line, i, 1)
             if (state == 0) {
-                three = substr(line, i, 3)
-                if (three == "\"\"\"" || three == "'"'''"'") {
-                    quote = three; state = 2; out = out "\"\""; i += 3; continue
+                if (c == "`") {
+                    j = index(substr(line, i + 1), "`")
+                    if (j == 0) unreadable("a backquoted name left open")
+                    name = substr(line, i + 1, j - 1)
+                    if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/) name = "BACKQUOTED"
+                    out = out name
+                    i += j + 1
+                    continue
                 }
                 if (c == "\"" || c == "'"'"'") {
+                    interp = 0
+                    if (match(out, /[A-Za-z0-9_]+$/)) {
+                        prefix = substr(out, RSTART)
+                        if (length(prefix) <= 2 && prefix ~ /^[rRtTfFbBuU]+$/ && prefix ~ /[tTfF]/) interp = 1
+                    }
+                    three = substr(line, i, 3)
+                    if (three == "\"\"\"" || three == "'"'''"'") {
+                        quote = three; state = 2; out = out "\"\""; i += 3; continue
+                    }
                     quote = c; state = 1; out = out "\"\""; i++; continue
                 }
                 if (c == "#") break
@@ -100,18 +127,36 @@ statements() {
                 i++
             } else {
                 if (c == "\\") { i += 2; continue }
+                if (interp && (c == "{" || c == "}")) {
+                    if (substr(line, i + 1, 1) == c) { i += 2; continue }
+                    if (c == "}") { i++; continue }
+                    d = 1
+                    for (j = i + 1; j <= len; j++) {
+                        ch = substr(line, j, 1)
+                        if (ch == "\"" || ch == "'"'"'" || ch == "\\" || ch == "#" || ch == "`")
+                            unreadable("a template string expression holding a quote, backslash, # or backquote")
+                        if (ch == "{") d++
+                        if (ch == "}") d--
+                        if (d == 0) break
+                    }
+                    if (d != 0) unreadable("a template string expression left open")
+                    out = out " (" substr(line, i + 1, j - i - 1) ") "
+                    i = j + 1
+                    continue
+                }
                 if (state == 1 && c == quote) { state = 0; i++; continue }
                 if (state == 2 && substr(line, i, 3) == quote) { state = 0; i += 3; continue }
                 i++
             }
         }
-        if (state == 1) { print "UNREADABLE\tstring left open on line " NR; exit }
+        if (state == 1) unreadable("a string left open")
         if (stmt == "") start = NR
         if (out ~ /\\[ \t]*$/) { sub(/\\[ \t]*$/, "", out); stmt = stmt out " "; next }
         stmt = stmt out " "
         if (state == 0 && depth == 0) flush()
     }
     END {
+        if (failed) exit
         if (state == 2) print "UNREADABLE\ttriple-quoted string left open"
         else if (depth != 0) print "UNREADABLE\tbracket left open"
         else if (stmt != "") flush()
@@ -119,7 +164,8 @@ statements() {
 }
 
 # Each name a statement imports from a `flare` module (not `flare_internals`),
-# as `module name`, aliases dropped; a plain `import flare.x` is `flare.x *`.
+# as `module name`, aliases and spaces in the path dropped; a plain
+# `import flare.x` is `flare.x *`.
 flare_imports() {
     awk -F '\t' '
     function emit(module, names,    n, parts, i, name) {
@@ -135,10 +181,10 @@ flare_imports() {
     $2 ~ /^from[ \t]+flare(\.|[ \t])/ {
         rest = $2
         sub(/^from[ \t]+/, "", rest)
-        module = rest
-        sub(/[ \t].*/, "", module)
-        sub(/^[^ \t]+[ \t]+import[ \t]*/, "", rest)
-        emit(module, rest)
+        if (!match(rest, /[ \t]import([ \t(]|$)/)) { print "flare _unparsed"; next }
+        module = substr(rest, 1, RSTART - 1)
+        gsub(/[ \t]/, "", module)
+        emit(module, substr(rest, RSTART + 7))
         next
     }
     $2 ~ /^import[ \t]/ {
@@ -154,22 +200,50 @@ flare_imports() {
     }'
 }
 
-# The `_`-prefixed members (`._name`) and keywords (`_name =`, written
-# `_name=`) a file's statements use, imports aside.
+# The `_`-prefixed members (`._name`) and keyword arguments (`_name =` right
+# after `(`, `[` or `,` inside brackets, written `_name=`) a file's statements
+# use, imports aside. A `_`-prefixed variable (`var _x = 1`) is not one.
 members() {
-    awk -F '\t' '$2 !~ /^(from|import)[ \t]/ { print $2 }' |
-        grep -oE '\._[A-Za-z][A-Za-z0-9_]*|(^|[^A-Za-z0-9_.])_[A-Za-z][A-Za-z0-9_]*[[:space:]]*=([^=]|$)' |
-        sed -E 's/^[^._]*//; s/[[:space:]]*=.*$/=/' | LC_ALL=C sort -u || true
+    awk -F '\t' '
+    $2 ~ /^(from|import)[ \t]/ { next }
+    {
+        s = $2
+        rest = s
+        while (match(rest, /\.[ \t]*_[A-Za-z][A-Za-z0-9_]*/)) {
+            name = substr(rest, RSTART, RLENGTH)
+            gsub(/[ \t]/, "", name)
+            print name
+            rest = substr(rest, RSTART + RLENGTH)
+        }
+        depth = 0
+        prev = ""
+        n = length(s)
+        for (i = 1; i <= n; i++) {
+            c = substr(s, i, 1)
+            if (c == "_" && depth > 0 && (prev == "(" || prev == "[" || prev == ",") &&
+                match(substr(s, i), /^_[A-Za-z][A-Za-z0-9_]*[ \t]*=/) &&
+                substr(s, i + RLENGTH, 1) != "=") {
+                name = substr(s, i, RLENGTH)
+                sub(/[ \t]*=$/, "", name)
+                print name "="
+            }
+            if (c == "(" || c == "[" || c == "{") depth++
+            if (c == ")" || c == "]" || c == "}") depth--
+            if (c != " " && c != "\t") prev = c
+        }
+    }' | LC_ALL=C sort -u
 }
 
-modules="$(find "$dir" -name '*.mojo' ! -name 'test_*.mojo' | LC_ALL=C sort)"
 lines=0
-for f in $modules; do
+while IFS= read -r f; do
     lines=$((lines + $(wc -l <"$f")))
     parsed="$(statements "$f")"
     if grep -q '^UNREADABLE' <<<"$parsed"; then
         fail "$f: $(grep '^UNREADABLE' <<<"$parsed" | cut -f2); this script cannot read it, so it fails closed"
         continue
+    fi
+    if awk -F '\t' '$2 ~ /^(from|import)[ \t]/ && $2 ~ /(^|[^A-Za-z0-9_])test_/' <<<"$parsed" | grep -q .; then
+        fail "$f imports a test module (\`test_*\`), which this script does not read; a module the adapter uses is not named \`test_*\`"
     fi
     if [[ "$f" == "$internals" ]]; then
         found="$(flare_imports <<<"$parsed" | LC_ALL=C sort -u)"
@@ -185,7 +259,7 @@ for f in $modules; do
     elif flare_imports <<<"$parsed" | grep -E '(\._|^[^ ]+ _)'; then
         fail "$f imports a non-public Flare module or name; only $internals may (docs/ARCHITECTURE.md, \"Flare policy\")"
     fi
-done
+done < <(find "$dir" \( -name '*.mojo' -o -name '*.🔥' \) ! -name 'test_*' | LC_ALL=C sort)
 
 if ((lines > max_lines)); then
     fail "the adapter's modules (tests aside) have $lines lines together, over $max_lines; growth past it waits for a decision (docs/ARCHITECTURE.md, \"Flare policy\")"
