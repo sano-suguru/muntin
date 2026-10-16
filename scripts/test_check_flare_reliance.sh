@@ -205,6 +205,13 @@ printf '\n\ndef _more(fd: Int):\n    _ = RawSocket(c_int(fd), AF_INET, SOCK_STRE
 expect pass "out of scope: a private keyword outside flare_internals.mojo, left to review"
 
 fresh
+mkdir -p "$work/bin"
+printf '#!/bin/sh\ncommand -p find "$@"\necho "find: a directory it could not read" >&2\nexit 1\n' >"$work/bin/find"
+chmod +x "$work/bin/find"
+PATH="$work/bin:$PATH" expect fail "a find that fails, as on a directory it cannot read"
+rm -rf "$work/bin"
+
+fresh
 sed -e 's/, _wrap=True//' "$internals" >"$work/edited" && mv "$work/edited" "$internals"
 expect fail "a listed member no longer used (stale list)"
 

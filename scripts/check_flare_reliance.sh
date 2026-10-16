@@ -259,8 +259,20 @@ members() {
     }' | LC_ALL=C sort -u
 }
 
+# The modules, listed before any is read: a directory `find` cannot list
+# fails the check rather than leave modules out.
+list="$(mktemp)"
+trap 'rm -f "$list"' EXIT
+if ! find "$dir" \( -name '*.mojo' -o -name '*.🔥' \) ! -name 'test_*' >"$list"; then
+    echo "error: cannot list every module under $dir, so this script fails closed" >&2
+    exit 1
+fi
 lines=0
 while IFS= read -r f; do
+    if [[ ! -r "$f" ]]; then
+        fail "$f cannot be read, so this script fails closed"
+        continue
+    fi
     lines=$((lines + $(wc -l <"$f")))
     parsed="$(statements "$f")"
     if grep -q '^UNREADABLE' <<<"$parsed"; then
@@ -285,7 +297,7 @@ while IFS= read -r f; do
     elif flare_imports <<<"$parsed" | grep -E '(\._|^[^ ]+ _)'; then
         fail "$f imports a non-public Flare module or name; only $internals may (docs/ARCHITECTURE.md, \"Flare policy\")"
     fi
-done < <(find "$dir" \( -name '*.mojo' -o -name '*.🔥' \) ! -name 'test_*' | LC_ALL=C sort)
+done < <(LC_ALL=C sort "$list")
 
 if ((lines > max_lines)); then
     fail "the adapter's modules (tests aside) have $lines lines together, over $max_lines; growth past it waits for a decision (docs/ARCHITECTURE.md, \"Flare policy\")"
