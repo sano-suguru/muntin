@@ -437,5 +437,69 @@ def test_dx_section_8_example() raises:
     assert_equal(client.get("/users/1").text(), "no user 1")
 
 
+# A state's type may not borrow (M3-074): the rule refuses an origin in the
+# type's name, so these types, whose parameters are owned types or values and
+# whose static text sits in a field, still register and answer. The refused
+# side is tests/state_fail/state_origin_*.mojo.
+
+
+struct Label(Movable):
+    var text: StaticString
+
+    def __init__(out self, text: StaticString):
+        self.text = text
+
+
+struct Sized[n: Int](Movable):
+    def __init__(out self):
+        pass
+
+
+def label_text(label: State[Label]) -> String:
+    return String(label[].text)
+
+
+def list_len(names: State[List[String]]) -> String:
+    return String(len(names[]))
+
+
+def dict_value(scores: State[Dict[String, Int]]) -> String:
+    try:
+        return String(scores[]["ada"])
+    except:
+        return "missing"
+
+
+def shared_name(users: State[ArcPointer[Users]]) -> String:
+    return users[][].names[0]
+
+
+def sized_n(sized: State[Sized[3]]) -> String:
+    return String(sized[].n)
+
+
+def test_owned_state_types_register() raises:
+    var names = List[String]()
+    names.append("ada")
+    var scores = Dict[String, Int]()
+    scores["ada"] = 7
+    var users = List[String]()
+    users.append("bob")
+    var app = App()
+    app.get["/label"](label_text, State(Label("static in a field")))
+    app.get["/list"](list_len, State(names^))
+    app.get["/dict"](dict_value, State(scores^))
+    app.get["/arc"](shared_name, State(ArcPointer(Users(users^))))
+    app.get["/sized"](sized_n, State(Sized[3]()))
+    var client = TestClient(app)
+    var label = client.get("/label")
+    assert_equal(label.status, 200)
+    assert_equal(label.text(), "static in a field")
+    assert_equal(client.get("/list").text(), "1")
+    assert_equal(client.get("/dict").text(), "7")
+    assert_equal(client.get("/arc").text(), "bob")
+    assert_equal(client.get("/sized").text(), "3")
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

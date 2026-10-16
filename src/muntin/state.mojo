@@ -4,9 +4,28 @@ Decision and evidence: docs/history/architecture-decisions.md, "Application stat
 (M3-001)". A handler takes state exactly when its registration passes one,
 `app.get["/users/{id}"](get_user, users)`; `State[S]` is then the handler's
 first parameter.
+
+A state's type may not borrow: "State borrowing decision (M3-074)".
 """
 
+from std.reflection import reflect
+
 from ._handler_storage import _Shared
+
+
+def _may_borrow[S: AnyType]() -> Bool:
+    """Whether `S`'s reflected name shows an origin parameter, printed `{}`
+    anywhere in it (a type argument's included), or a parameter Mojo 1.1.0
+    cannot print, `<unprintable>` (M3-074).
+
+    A value can borrow only through an origin in its type, and a struct
+    field cannot name a local's origin or `AnyOrigin`, so an origin that
+    reaches a field is a parameter of `S` or of a type in its name. The
+    format is undocumented; the fixtures under tests/state_fail that refuse
+    a borrowing state fail if it stops showing origins.
+    """
+    comptime name = reflect[S].name()
+    return name.find("{") >= 0 or name.find("<unprintable>") >= 0
 
 
 trait _InjectedState:
@@ -36,7 +55,18 @@ struct State[S: Movable & Deinitable](Copyable, Movable, _InjectedState):
     var _shared: _Shared[Self.S]
 
     def __init__(out self, var value: Self.S):
-        """Moves `value` into a new shared allocation."""
+        """Moves `value` into a new shared allocation.
+
+        `S` may not have an origin parameter (`_may_borrow`): a route erases
+        its state and the `App`'s type does not carry `S`'s origins, so
+        nothing would keep a borrowed value alive for the `App` (M3-074).
+        """
+        comptime assert not _may_borrow[Self.S](), (
+            "State takes a value that owns its data; this type has an origin"
+            " parameter (printed {}) or one Mojo cannot print, so it may"
+            " borrow a value the App outlives: "
+            + reflect[Self.S].name()
+        )
         self._shared = _Shared(value^)
 
     def __getitem__(self) -> ref[origin_of(self._shared.owned()[])] Self.S:
