@@ -50,13 +50,12 @@ def run_worker_loop[
     """Runs Flare's per-worker reactor loop (`run_unified_reactor_loop_shared`,
     the loop its `Scheduler` runs on each worker) on `listener_fd`, which the
     caller owns and keeps open, serving with `handler` until `stop` is set.
-    Relied on: it registers `listener_fd`, so a worker running a handler,
-    which does not poll, takes no new connection while another polls (in
-    v0.12.0 every idle worker wakes for a new connection: its
-    `EPOLLEXCLUSIVE` request is refused, M3-068),
-    reads `stop` with an acquire load before its first poll and every turn,
-    leaves its accept loop on `ENOTSOCK`, returns without raising on a failed
-    poll, and closes its connections when it leaves. `tls_context` is
+    Relied on: it registers `listener_fd` (on Linux without `EPOLLEXCLUSIVE`:
+    Linux refuses the flag with `EPOLLRDHUP`, which v0.12.0 asks for, and it
+    registers again plainly, so every idle worker wakes for a connection;
+    M3-068), reads `stop` with an acquire load before its first poll and
+    every turn, leaves its accept loop on `ENOTSOCK`, returns without raising
+    on a failed poll, and closes its connections when it leaves. `tls_context` is
     `tls_context_addr`'s value, or 0 for cleartext: with one, every accepted
     connection starts as a TLS handshake on this reactor, as on Flare's own
     workers, which share the one context the same way. Public alternative,
@@ -67,7 +66,9 @@ def run_worker_loop[
     refuses through `FLARE_BUFRING_HANDLER=1`), so the behavior relied on is
     unchanged; but it needs a `Copyable` handler, and it swallows the loop's
     raise, so a reactor that fails to start would read as one that returned
-    and its error would be lost (`serve` reports it today)."""
+    and its error would be lost (`serve` reports it today). No test fails if
+    the `ENOTSOCK` exit stops holding; what a break would do:
+    docs/ARCHITECTURE.md, "Other current limits and operational risks"."""
     run_unified_reactor_loop_shared(
         listener_fd,
         config,
@@ -115,8 +116,10 @@ def tls_context_addr(server: HttpServer) -> Int:
     or 0 when none is bound. It stays valid while `server` is neither moved
     nor destroyed. Relied on: OpenSSL's `SSL_CTX` is shared read-only by
     every thread that makes a connection from it, as Flare's own
-    multi-worker `serve` shares it. Public alternative: none; `HttpFrontend`
-    takes the address, but only this private method gives it."""
+    multi-worker `serve` shares it; no test starts handshakes on several
+    workers at once (docs/ARCHITECTURE.md, "Other current limits and
+    operational risks"). Public alternative: none; `HttpFrontend` takes the
+    address, but only this private method gives it."""
     return server._tls_ctx_addr()
 
 
