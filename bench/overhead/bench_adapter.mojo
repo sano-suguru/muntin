@@ -19,7 +19,9 @@ Implementations:
 - `muntin+adapter`: `MuntinHandler.serve` on the Flare `Request`: the
   adapter's conversions around `App.handle` (request target, headers and a
   copy of the body in; status, headers and a copy of the body out), what a
-  request served by `Server` pays besides the network.
+  request served by `Server` pays besides the network. Its field limit
+  (M3-066) is raised to `MAX_FIELDS`, so the 128-field case is converted, as
+  by a `Server` bound with `max_header_fields` that high, not answered 431.
 - `flare`: Flare's `Router.serve` (`Tracing[Router]` with the middleware).
 - `headers`: `to_muntin_headers` alone, the adapter's request header
   conversion; `plaintext` cases without the middleware.
@@ -67,6 +69,8 @@ from muntin_app import build
 
 
 comptime HEADER_COUNTS: List[Int] = [0, 8, 16, 32, 128]
+comptime MAX_FIELDS = 129
+"""`MuntinHandler`'s field limit: the largest case's fields and `Host`."""
 comptime BODY_SIZES: List[Int] = [0, 1024, 65536, 1048576]
 comptime JSON_IN = '{"name":"Ada","age":36}'
 comptime COUNTED = 8
@@ -103,7 +107,9 @@ struct MuntinAdapter(Dispatch):
     var request: FlareRequest
 
     def __init__(out self, middleware: Bool, var request: FlareRequest):
-        self.handler = MuntinHandler(build(middleware))
+        self.handler = MuntinHandler(
+            build(middleware), max_header_fields=MAX_FIELDS
+        )
         self.request = request^
 
     def status(self) raises -> Int:
