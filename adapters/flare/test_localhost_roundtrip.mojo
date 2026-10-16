@@ -967,6 +967,22 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             if want[1] == 405:
                 assert_equal(response.headers.get("allow"), "POST", path)
 
+        # M3-059: `App.handle`'s 500 for /orders/0 carries the error's text
+        # as its report; neither the body nor any field on the wire does.
+        assert_true(in_memory.get("/orders/0").failure())
+        var wire = h1_exchange(
+            child.port,
+            "GET",
+            "/orders/0",
+            List[Tuple[String, String]](),
+            List[UInt8](),
+        )
+        print("observed GET /orders/0:", wire[0], repr(wire[1]))
+        assert_true(wire[0].startswith("HTTP/1.1 500"), wire[0])
+        assert_equal(String(from_utf8=Span(wire[2])), "Internal Server Error")
+        for secret in ["hunter2", "password", "database", "handler"]:
+            assert_false(secret in wire[1], secret)
+
         # M2-006: "created Ada" only if Muntin converted the body; the raw
         # body is "name=Ada". GET /users above is the wrong method (405).
         # Each 405 below has `Allow: GET, HEAD`.
