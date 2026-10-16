@@ -594,24 +594,50 @@ struct Wide(RouteValues):
     var q19: Optional[Int]
 
 
+def _opt(value: Optional[Int]) -> String:
+    return String(value.value()) if value else "none"
+
+
+def _opt(value: Optional[String]) -> String:
+    return value.value() if value else "none"
+
+
 def wide(at: Wide) -> String:
-    var total = at.p0 + at.p2 + at.p3 + at.p4 + at.p5 + at.p6 + at.p7 + at.p8
-    total += at.q0 + at.q1 + at.q2 + at.q3 + at.q4 + at.q5 + at.q6 + at.q7
-    total += at.q8 + at.q9 + at.q10 + at.q11 + at.q12 + at.q13
-    return String(
+    # Every field, in field order, so any two fields exchanged change the
+    # text.
+    var parts: List[String] = [
+        String(at.p0),
         at.p1,
-        " ",
-        total,
-        " ",
+        String(at.p2),
+        String(at.p3),
+        String(at.p4),
+        String(at.p5),
+        String(at.p6),
+        String(at.p7),
+        String(at.p8),
         at.p9.text,
+        String(at.q0),
+        String(at.q1),
+        String(at.q2),
+        String(at.q3),
+        String(at.q4),
+        String(at.q5),
+        String(at.q6),
+        String(at.q7),
+        String(at.q8),
+        String(at.q9),
+        String(at.q10),
+        String(at.q11),
+        String(at.q12),
+        String(at.q13),
         at.q14.text,
-        " ",
-        at.q15.or_else(-1),
-        " ",
-        at.q16.or_else("-"),
-        " ",
-        at.q19.or_else(-1),
-    )
+        _opt(at.q15),
+        _opt(at.q16),
+        _opt(at.q17),
+        _opt(at.q18),
+        _opt(at.q19),
+    ]
+    return ",".join(parts)
 
 
 comptime WIDE = (
@@ -621,36 +647,58 @@ comptime WIDE = (
 )
 
 
-def _wide_query(q14: String) -> String:
-    var query = String("?")
+def _wide_query(q14: String, optionals: String) -> String:
+    # q0 to q13 are 100 to 113, each value distinct from every path value.
+    var query = String("?unrelated=1")
     for i in range(14):
-        query += String("q", i, "=", i + 1, "&")
-    return query + "q14=" + q14 + "&q16=s&q19=9&unrelated=1"
+        query += String("&q", i, "=", 100 + i)
+    return query + "&q14=" + q14 + optionals + "&unrelated=2"
+
+
+comptime WIDE_PATH = "/w/1/name/3/4/5/6/7/8/9/c"
+comptime WIDE_VALUES = (
+    "1,name,3,4,5,6,7,8,9,c,100,101,102,103,104,105,106,107,108,109,110,111,"
+    "112,113,k,"
+)
 
 
 def test_thirty_fields_path_query_and_optional() raises:
-    # Each field binds its own placeholder: the sums and the texts show any
-    # two exchanged, and the counted fields are destroyed once each.
+    # Each field binds its own placeholder: the handler answers every field
+    # in field order, with distinct values, so any two exchanged change the
+    # answer. The query has more than `_LINEAR_QUERY_KEYS` keys, so its
+    # values are found through the route's key index.
     var app = App()
     app.get[WIDE](wide)
     var client = TestClient(app)
     _reset()
-    var r = client.get("/w/1/name/3/4/5/6/7/8/9/c" + _wide_query("k"))
+    var r = client.get(
+        WIDE_PATH + _wide_query("k", "&q15=15&q16=s16&q17=17&q18=s18&q19=19")
+    )
     assert_equal(r.status, 200)
-    assert_equal(r.text(), "name 148 ck -1 s 9")
+    assert_equal(r.text(), WIDE_VALUES + "15,s16,17,s18,19")
     _expect_counts("wide", 2, 2, 2, 0, 0, 0)
+    # Each optional field absent, empty, or a pair without `=`.
+    r = client.get(WIDE_PATH + _wide_query("k", "&q16=&q17"))
+    assert_equal(r.status, 200)
+    assert_equal(r.text(), WIDE_VALUES + "none,none,none,none,none")
+    # Some optional fields present, the others absent.
+    r = client.get(WIDE_PATH + _wide_query("k", "&q16=x&q18=y"))
+    assert_equal(r.text(), WIDE_VALUES + "none,x,none,y,none")
+    # One of the route's keys twice is 400; an unrelated key twice is not.
+    assert_equal(client.get(WIDE_PATH + _wide_query("k", "&q3=1")).status, 400)
     # A missing required query value is 400 before any field converts.
     _reset()
-    r = client.get("/w/1/name/3/4/5/6/7/8/9/c?q0=1")
+    r = client.get(WIDE_PATH + "?q0=1")
     assert_equal(r.status, 400)
     _expect_counts("wide missing", 0, 0, 0, 0, 0, 0)
-    # A failing path field after a built one: the built one is destroyed.
+    # A failing path field: nothing before it was a counted field.
     _reset()
-    r = client.get("/w/1/name/3/4/5/6/7/8/9/fail" + _wide_query("k"))
+    r = client.get("/w/1/name/3/4/5/6/7/8/9/fail" + _wide_query("k", ""))
     assert_equal(r.status, 400)
     _expect_counts("wide fail", 1, 0, 0, 0, 0, 0)
+    # A failing query field after a built one: the built one is destroyed.
     _reset()
-    r = client.get("/w/1/name/3/4/5/6/7/8/9/c" + _wide_query("fail"))
+    r = client.get(WIDE_PATH + _wide_query("fail", ""))
     assert_equal(r.status, 400)
     _expect_counts("wide late fail", 2, 1, 1, 0, 0, 0)
 

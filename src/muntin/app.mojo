@@ -531,31 +531,48 @@ def _query_value(query: String, key: String) raises -> Optional[String]:
     return value^
 
 
-def _query_values(
-    query: String, keys: List[String]
-) raises -> List[Optional[String]]:
-    """The value of each of `keys` (distinct) in a raw query string, read as
-    `_query_value` reads one, in one pass over the query whatever the number
-    of keys (each pair's key is compared with `keys`, with no second split):
-    `None` where a key is absent. Raises if one of `keys` appears
-    more than once; other keys may repeat."""
-    var values = List[Optional[String]](length=len(keys), fill=None)
+comptime _LINEAR_QUERY_KEYS = 8
+"""Up to this many query keys, `_query_spans` compares each pair's key with
+every key; above it, it looks the key up in the route's `query_index`, so a
+pair costs one lookup however many keys a route has."""
+
+
+def _query_spans(
+    query: String, keys: List[String], index: Dict[String, Int]
+) raises -> List[Int]:
+    """Where the value of each of `keys` (distinct) lies in a raw query
+    string, read as `_query_value` reads one, in one pass over the query and
+    without copying any value: entries `2k` and `2k + 1` are the byte offsets
+    where key `k`'s value starts and ends, both -1 when the key is absent
+    (a pair without `=` has an empty value). `index` maps each key to its
+    position, for routes with more than `_LINEAR_QUERY_KEYS` keys. Raises if
+    one of `keys` appears more than once; other keys may repeat."""
+    var spans = List[Int](length=2 * len(keys), fill=-1)
     if len(keys) == 0:
-        return values^
+        return spans^
+    var linear = len(keys) <= _LINEAR_QUERY_KEYS
+    var start = 0
     for pair in query.split("&"):
         var eq = pair.find("=")
         var name = pair[byte=:eq] if eq >= 0 else pair[byte=:]
         var at = -1
-        for k in range(len(keys)):
-            if keys[k] == name:
-                at = k
-                break
-        if at < 0:
-            continue
-        if values[at]:
-            raise Error("duplicate query key")
-        values[at] = String(pair[byte = eq + 1 :]) if eq >= 0 else String()
-    return values^
+        if linear:
+            for k in range(len(keys)):
+                if keys[k] == name:
+                    at = k
+                    break
+        else:
+            var found = index.get(String(name))
+            if found:
+                at = found.value()
+        var end = start + pair.byte_length()
+        if at >= 0:
+            if spans[2 * at] >= 0:
+                raise Error("duplicate query key")
+            spans[2 * at] = start + eq + 1 if eq >= 0 else end
+            spans[2 * at + 1] = end
+        start = end + 1
+    return spans^
 
 
 def _hex_digit(b: Byte) -> Int:
@@ -1193,6 +1210,9 @@ struct _Route(Movable):
     var query_keys: List[String]
     """Keys of the route's `{key}` query parameters, in the literal's order
     (none if it has no query part)."""
+    var query_index: Dict[String, Int]
+    """Each of `query_keys` with its position, for `_query_spans` on a
+    route with many query keys (a `RouteValues` record's)."""
     var query_optional: List[Bool]
     """For each of `query_keys`, whether its value binds an `Optional` slot
     (M3-025): `App.handle` then passes an absent key or an empty value on
@@ -1233,7 +1253,9 @@ struct _Route(Movable):
         self.raw = raw
         self.path = String(_path_part(route))
         self.query_keys = List[String]()
+        self.query_index = Dict[String, Int]()
         for item in _query_items(route):
+            self.query_index[String(_param_name(item))] = len(self.query_keys)
             self.query_keys.append(String(_param_name(item)))
         self.query_optional = List[Bool](
             length=len(self.query_keys), fill=False
@@ -2803,17 +2825,28 @@ struct App(Movable):
                 try:
                     for j in range(len(args)):
                         args[j] = _decode_value(args[j], query=False)
-                    var values = _query_values(request.query, route.query_keys)
+                    # One pass finds every value without copying any; they
+                    # are copied in key order after it, so a missing key
+                    # answers 400 before any later value is copied.
+                    var spans = _query_spans(
+                        request.query, route.query_keys, route.query_index
+                    )
                     for k in range(len(route.query_keys)):
-                        ref raw = values[k]
+                        var start = spans[2 * k]
+                        var end = spans[2 * k + 1]
                         if route.query_optional[k] and (
-                            not raw or raw.value().byte_length() == 0
+                            start < 0 or start == end
                         ):
                             args.append("")
-                        elif not raw:
+                        elif start < 0:
                             raise Error("missing query key")
                         else:
-                            args.append(_decode_value(raw.value(), query=True))
+                            args.append(
+                                _decode_value(
+                                    String(request.query[byte=start:end]),
+                                    query=True,
+                                )
+                            )
                 except:
                     return _bad_request()
                 if route.json:
