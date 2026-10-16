@@ -105,9 +105,15 @@ def ok_frames(stream, path):
     return [frame(1, 0x4, stream, b"\x88"), frame(0, 0x1, stream, OK[path])]
 
 
+def lit(name, value):
+    """An HPACK field literal without indexing, with a new name."""
+    return b"\x00" + bytes([len(name)]) + name + bytes([len(value)]) + value
+
+
 def h2_server(answer):
     """Serves prior-knowledge h2c; `answer(stream, path)` returns the frames
-    to send for each request (bytes, or "close")."""
+    to send for each request (bytes, "close", or "reset": closed with a TCP
+    reset)."""
 
     def serve(conn):
         data = b""
@@ -128,6 +134,9 @@ def h2_server(answer):
                 continue
             # hol_client.H2c's block: \x82 \x86 \x04 <length> <path> ...
             for part in answer(stream, payload[4 : 4 + payload[3]].decode()):
+                if part == "reset":
+                    conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                    return
                 if part == "close":
                     return
                 conn.sendall(part)
@@ -296,6 +305,8 @@ class H2cStreams(unittest.TestCase):
             "PING, WINDOW_UPDATE and an unknown frame between": lambda s: [
                 frame(1, 0x4, s, b"\x88"), frame(6, 0, 0, bytes(8)), frame(8, 0, s, b"\x00\x00\x00\x01"),
                 frame(0xEE, 0, s, b"x"), frame(0, 0x1, s, b"ok")],
+            "field names and values RFC 9113 allows": headers_then_ok(
+                b"\x88" + lit(b"x-a_b.c~!#$%&'*+^`|", b"a b\tc\x80\xff") + lit(b"y", b"")),
             "a graceful GOAWAY mid-stream": lambda s: [
                 frame(1, 0x4, s, b"\x88"), frame(7, 0, 0, b"\x7f\xff\xff\xff\x00\x00\x00\x00"),
                 frame(0, 0x1, s, b"ok")],
@@ -325,6 +336,19 @@ class H2cStreams(unittest.TestCase):
             b"\x88\x00\x0aconnection\x05close",
             b"\x88\x0f\x0d\x015",  # content-length 5 with DATA "ok"
             b"\x08\x03101",
+            # #133 second review: a field RFC 9113 section 8.2.1 makes
+            # malformed was answered 200.
+            b"\x88" + lit(b"bad name", b"y"),
+            b"\x88" + lit(b"x", b"a\r\nb"),
+            b"\x88" + lit(b"x", b"a\nb"),
+            b"\x88" + lit(b"x", b"a\x00b"),
+            b"\x88" + lit(b"x", b" a"),
+            b"\x88" + lit(b"x", b"a\t"),
+            b"\x88" + lit(b"", b"y"),
+            b"\x88" + lit(b"a:b", b"y"),
+            b"\x88" + lit(b"x\x7f", b"y"),
+            b"\x88" + lit(b":", b"y"),
+            b"\x88\x00\x01x\x81\x1f",  # a Huffman-coded value, which this client does not decode
         ):
             with self.subTest(block=block):
                 first, second, errors = self.call(headers_then_ok(block))
@@ -357,6 +381,33 @@ class H2cStreams(unittest.TestCase):
         for answer in (lambda s: [frame(1, 0x4, s, b"\x88\x88")[:10]], lambda s: [frame(1, 0x4, s, b"\x88")]):
             self.assertMalformed(self.call(answer, timeout=0.3)[0])
 
+    def test_a_frame_cut_short_fails_the_connection(self):
+        # #133 second review: the connection closed 1 to 8 bytes into a
+        # frame's header counted as closed, with no error.
+        whole = frame(1, 0x4, 3, b"\x88\x88")
+        for n in range(1, len(whole)):
+            for how in ("close", "reset"):
+                with self.subTest(bytes=n, how=how):
+                    first, second, errors = self.call(lambda s: [whole[:n], how])
+                    self.assertMalformed(first)
+                    self.assertMalformed(second)
+                    self.assertTrue(errors)
+
+    def test_a_frame_left_unfinished_is_counted(self):
+        # A stall inside a frame's header: its stream cannot be named, so the
+        # streams waiting time out, and the run sees the frame left unfinished.
+        for n in (1, 8, 10):
+            with self.subTest(bytes=n):
+                server = h2_server(lambda s, p: ok_frames(s, p) if s == 1 else [frame(1, 0x4, s, b"\x88\x88")[:n]])
+                try:
+                    conn = hol_client.H2c(server.port)
+                    self.assertEqual(conn.unfinished(0), 0)
+                    conn.call("/health", 0.3)
+                    self.assertEqual(conn.unfinished(0.1), n)
+                    conn.sock.close()
+                finally:
+                    server.close()
+
     def test_a_stream_cut_before_its_response_began_is_not_malformed(self):
         self.assertEqual(self.call(lambda s: ["close"])[0], "closed")
         self.assertEqual(self.call(lambda s: [frame(3, 0, s, b"\x00\x00\x00\x02")])[:2], ("reset", 200))
@@ -375,6 +426,16 @@ class H2cStreams(unittest.TestCase):
             "trailers with a pseudo-header": lambda s: [frame(1, 0x4, s, b"\x88"), frame(0, 0, s, b"ok"),
                                                         frame(1, 0x5, s, b"\x88")],
             "an interim 103 ending the stream": lambda s: [frame(1, 0x5, s, b"\x08\x03103")],
+            # #133 second review: trailers skipped the checks of the head's fields.
+            **{f"trailers with {name}": (lambda block: lambda s: [
+                frame(1, 0x4, s, b"\x88"), frame(0, 0, s, b"ok"), frame(1, 0x5, s, block)])(block)
+               for name, block in {
+                   "connection: close": lit(b"connection", b"close"),
+                   "an uppercase name": lit(b"X", b"y"),
+                   "a space in a name": lit(b"bad name", b"y"),
+                   "CR LF in a value": lit(b"x", b"a\r\nb"),
+                   "a Huffman-coded value": b"\x00\x01x\x81\x1f",
+               }.items()},
         }.items():
             with self.subTest(case=name):
                 first, second, errors = self.call(answer)
@@ -461,6 +522,17 @@ class Runs(unittest.TestCase):
                 ok_frames(s, p) if p == "/worker" else ok_frames(s, p) + [frame(0, 1, s, b"ok")]),
             "empty HEADERS": lambda s, p: ok_frames(s, p) if p == "/worker" else [frame(1, 0x5, s, b"")],
             "cut after DATA": lambda s, p: ok_frames(s, p) if p == "/worker" else [frame(1, 0x4, s, b"\x88"), frame(0, 0, s, b"o"), "close"],
+            "cut 8 bytes into HEADERS": lambda s, p: ok_frames(s, p) if p == "/worker" else [frame(1, 0x4, s, b"\x88")[:8], "close"],
+            "stalled 8 bytes into HEADERS": lambda s, p: (
+                ok_frames(s, p) if p == "/worker" else [frame(1, 0x4, s, b"\x88")[:8]] if s == 3 else []),
+            "a space in a field name": lambda s, p: (
+                ok_frames(s, p) if p == "/worker" else headers_then_ok(b"\x88" + lit(b"bad name", b"y"))(s)),
+            "CR LF in a field value": lambda s, p: (
+                ok_frames(s, p) if p == "/worker" else headers_then_ok(b"\x88" + lit(b"x", b"a\r\nb"))(s)),
+            "connection: close in trailers": lambda s, p: ok_frames(s, p) if p == "/worker" else [
+                frame(1, 0x4, s, b"\x88"), frame(0, 0, s, b"ok"), frame(1, 0x5, s, lit(b"connection", b"close"))],
+            "an uppercase name in trailers": lambda s, p: ok_frames(s, p) if p == "/worker" else [
+                frame(1, 0x4, s, b"\x88"), frame(0, 0, s, b"ok"), frame(1, 0x5, s, lit(b"X", b"y"))],
         }.items():
             with self.subTest(case=name, mode="h2c-same"):
                 self.assertEqual(self.run_main(h2_server(answer), "h2c-same"), 1)

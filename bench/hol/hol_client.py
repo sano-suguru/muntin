@@ -402,30 +402,41 @@ class Hpack:
         return fields
 
 
+def h2_field(name, value):
+    """Malformed unless the field is one a response may carry (RFC 9113
+    section 8.2): its name a lowercase token after a pseudo-header's colon,
+    its value without NUL, CR or LF and without SP or HTAB at either end,
+    and not a connection-specific field. A Huffman-coded name or value
+    (None) is Malformed too: this client does not decode it, so it cannot
+    check it."""
+    if name is None or value is None:
+        which = "name" if name is None else repr(name[:20])
+        raise Malformed(f"a Huffman-coded field {which}, which this client does not decode")
+    if not re.fullmatch(rb":?[!#$%&'*+\-.^_`|~0-9a-z]+", name):
+        raise Malformed(f"field name {name[:20]!r}")
+    if re.search(rb"[\0\r\n]|^[ \t]|[ \t]$", value):
+        raise Malformed(f"field {name[:20]!r} with the value {value[:20]!r}")
+    if name in CONNECTION_SPECIFIC:
+        raise Malformed(f"connection-specific field {name!r}")
+
+
 def h2_response_head(fields):
     """(status, content-length or None) of a response header block's fields
-    (RFC 9113 section 8.3.2), or Malformed: one `:status` of three digits
-    and no other pseudo-header, before every other field; lowercase names,
-    none connection-specific; `content-length` values all the same number."""
+    (RFC 9113 section 8.3.2), or Malformed: each field one `h2_field`
+    accepts; one `:status` of three digits and no other pseudo-header,
+    before every other field; `content-length` values all the same number."""
     status, lengths, regular = None, set(), False
     for name, value in fields:
-        if name is None:
-            raise Malformed("a Huffman-coded field name, which this client does not decode")
-        if name != name.lower():
-            raise Malformed(f"field name {name[:20]!r} not lowercase")
+        h2_field(name, value)
         if name.startswith(b":"):
             if regular or name != b":status" or status is not None:
                 raise Malformed(f"pseudo-header {name[:20]!r}")
-            if value is None or not re.fullmatch(rb"[1-5][0-9][0-9]", value):
+            if not re.fullmatch(rb"[1-5][0-9][0-9]", value):
                 raise Malformed(f":status {value!r}")
             status = int(value)
             continue
         regular = True
-        if name in CONNECTION_SPECIFIC:
-            raise Malformed(f"connection-specific field {name!r}")
         if name == b"content-length":
-            if value is None:
-                raise Malformed("a Huffman-coded content-length, which this client does not decode")
             lengths |= {v.strip(b" \t") for v in value.split(b",")}
     if status is None:
         raise Malformed("no :status")
@@ -457,16 +468,20 @@ class H2c:
     - its response head is (`h2_response_head`), or an interim (1xx) one
       ends the stream or is 101;
     - DATA comes before its final HEADERS, a later header block is not
-      trailers (END_STREAM, no pseudo-header), or a 204 or 304 has DATA;
+      trailers (END_STREAM, no pseudo-header, each field one `h2_field`
+      accepts), or a 204 or 304 has DATA;
     - its DATA differs from its `content-length`, or a 200's body is not the
       one `expected` names;
     - it ends (reset, closed, GOAWAY, timeout) once a frame of it began to
       arrive.
     A connection error (RFC 9113 section 5.4.1: a frame on a stream never
     opened or already ended, an HPACK error, a frame larger than 16384
-    bytes, CONTINUATION out of place, PUSH_PROMISE, bad padding) and an
-    error of the reader itself are malformed too: every open and later
-    stream gets it, and `errors` keeps it for the end of the run."""
+    bytes, CONTINUATION out of place, PUSH_PROMISE, bad padding, the
+    connection ending inside a frame) and an error of the reader itself are
+    malformed too: every open and later stream gets it, and `errors` keeps
+    it for the end of the run. A frame still not whole at the end of the
+    run (`unfinished`) is malformed too: until it is, no stream it may
+    belong to can be told apart from a timeout."""
 
     def __init__(self, port):
         self.port = port
@@ -477,6 +492,7 @@ class H2c:
         self.ended = {}  # stream id -> whether frames may still come for it
         self.dead = None
         self.errors = []
+        self.inside = 0  # bytes of the frame being read that have arrived, while the reader reads
         self.hpack = Hpack()
         no_push = struct.pack(">HI", 2, 0)  # SETTINGS_ENABLE_PUSH = 0
         self.sock.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" + self.frame(4, 0, 0, no_push))
@@ -514,12 +530,24 @@ class H2c:
         return stream
 
     def recv_exact(self, n):
+        """The next n bytes of the frame being read, counted in `inside`.
+        The connection ending (closed or reset) once a byte of that frame
+        arrived cuts the frame short: Malformed, a connection error, where
+        between frames it is a close."""
         data = b""
         while len(data) < n:
-            chunk = self.sock.recv(n - len(data))
+            try:
+                chunk = self.sock.recv(n - len(data))
+            except OSError as e:
+                if self.inside:
+                    raise Malformed(f"the connection ended {self.inside} bytes into a frame: {failure(e)}") from e
+                raise
             if not chunk:
+                if self.inside:
+                    raise Malformed(f"the connection closed {self.inside} bytes into a frame")
                 raise ConnectionError("closed")
             data += chunk
+            self.inside += len(chunk)
         return data
 
     @staticmethod
@@ -534,6 +562,7 @@ class H2c:
         block = None  # [stream id, END_STREAM, fragments] until END_HEADERS
         try:
             while True:
+                self.inside = 0
                 head = self.recv_exact(9)
                 length = struct.unpack(">I", b"\x00" + head[:3])[0]
                 kind, flags = head[3], head[4]
@@ -590,6 +619,8 @@ class H2c:
             why = str(e) if isinstance(e, Malformed) else f"reader {type(e).__name__}: {e}"
             self.errors.append(why)
             self.fail_all(f"malformed: {why}", every=True)
+        finally:
+            self.inside = 0  # what the reader stopped on is in `errors`, or was between frames
 
     def stream(self, sid, what):
         """The open Stream `sid`, or None for one this client gave up on;
@@ -609,8 +640,13 @@ class H2c:
         if stream is None:
             return
         if stream.status is not None:
-            if not end or any(name is None or name.startswith(b":") for name, _ in fields):
-                self.finish(sid, "malformed: a header block after the response head, not trailers")
+            try:
+                if not end or any(name is not None and name.startswith(b":") for name, _ in fields):
+                    raise Malformed("a header block after the response head, not trailers")
+                for name, value in fields:
+                    h2_field(name, value)
+            except Malformed as e:
+                self.finish(sid, f"malformed: {e}")
             else:
                 self.finish(sid, self.outcome(stream))
             return
@@ -694,6 +730,14 @@ class H2c:
                 if not stream.event.is_set():
                     stream.outcome = reason if every else self.cut(stream, reason)
                     stream.event.set()
+
+    def unfinished(self, grace):
+        """How many bytes of a frame that began to arrive the reader still
+        holds after waiting up to `grace` seconds for the rest; 0 if none."""
+        deadline = time.monotonic() + grace
+        while self.inside and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return self.inside
 
     def call(self, path, timeout, note=None):
         stream = self.get(path, note)
@@ -1127,6 +1171,8 @@ def main():
             malformed.append(f"{n} bytes after the last response on a kept-open connection")
     for conn in h2_conns:
         malformed += [f"connection: {e}" for e in conn.errors]
+        if n := conn.unfinished(1.0):
+            malformed.append(f"connection: a frame left {n} bytes in at the end of the run")
     if malformed:
         line += f" malformed={len(malformed)} malformed_as={';'.join(sorted(set(malformed)))}"
     errors = [str(o) for o in [r["outcome"] for r in results] + [slow_outcome] if str(o).startswith("client error: ")]
