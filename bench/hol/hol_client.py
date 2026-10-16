@@ -21,7 +21,11 @@ write completed with no answer `ANSWER_BOUND_S` after the hold ended is
 lost, as is one whose connection was closed or reset first; a probe whose
 write failed is not lost but write-failed; a probe never sent (no pool
 connection came free in time, the connection could not be opened, the h2c
-connection was already gone) is neither, but not sent.
+connection was already gone) is neither, but not sent. A response that
+began to arrive but is not whole (`h1_read_response` and `H2c` say what
+that means: framing, and the body each route answers) is malformed, not
+lost, whichever request it answers; any malformed response makes the run
+no measurement, and the client exits 1 after printing its line.
 
 With SLOW_MS 0 (a control) no slow request is sent, and the window is the
 `CONTROL_S` from `HOLD_AT_S`: what the same probes get with no handler held.
@@ -56,11 +60,14 @@ window), then, where the probes' connections are known (every mode but
 the probes on connections of the slow request's worker and of the others;
 for the pool modes, `lost_idle_ms=<least>..<most>`: how long each lost
 probe's connection had been idle (since its previous answer) when the probe
-was sent; `lost_as`, `write_failed_as` and `not_sent_as`: why. Latency
-figures cover answered probes only: read them with `lost`.
+was sent; `lost_as`, `write_failed_as` and `not_sent_as`: why; and, if any,
+`malformed=<malformed responses of the run, the slow request's included>`
+and `malformed_as`: what was wrong with them. Latency figures cover
+answered probes only: read them with `lost`.
 """
 
 import os
+import re
 import socket
 import struct
 import sys
@@ -81,27 +88,77 @@ def h1_request(path, close):
     return f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}\r\n".encode()
 
 
-def h1_read_response(sock):
-    """(status, body) of one response that declares its Content-Length;
-    raises on EOF."""
+class Malformed(Exception):
+    """A response that began to arrive but is not whole: see
+    `h1_read_response` and `H2c`."""
+
+
+def is_malformed(outcome):
+    return str(outcome).startswith("malformed: ")
+
+
+def expected(path, body):
+    """Whether `body` is what the hol servers answer `GET path` with: `ok`,
+    `slow`, or a worker number."""
+    if path == "/health":
+        return body == b"ok"
+    if path.startswith("/slow/"):
+        return body == b"slow"
+    if path == "/worker":
+        return body.isdigit()
+    return False
+
+
+def h1_read_response(sock, path):
+    """(status, fields, body) of the response to `GET path`, fields mapping
+    each lowercased name to its values. Raises ConnectionError("closed") on
+    EOF before the response's first byte, and Malformed once any of it has
+    arrived unless it is whole: an `HTTP/1.1` status line, one
+    `Content-Length` of digits and no `Transfer-Encoding`, exactly that many
+    body bytes with none after them (no request is pipelined), and for a 200
+    the body `expected` names. An error, EOF or timeout after the first byte
+    is Malformed too."""
     data = b""
-    while b"\r\n\r\n" not in data:
-        chunk = sock.recv(4096)
-        if not chunk:
-            raise ConnectionError("closed")
-        data += chunk
-    head, _, body = data.partition(b"\r\n\r\n")
-    length = 0
-    for line in head.split(b"\r\n")[1:]:
-        name, _, value = line.partition(b":")
-        if name.strip().lower() == b"content-length":
-            length = int(value.strip())
-    while len(body) < length:
-        chunk = sock.recv(4096)
-        if not chunk:
-            raise ConnectionError("closed")
-        body += chunk
-    return int(head.split(b" ")[1]), body
+    try:
+        while b"\r\n\r\n" not in data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("closed")
+            data += chunk
+        head, _, body = data.partition(b"\r\n\r\n")
+        lines = head.split(b"\r\n")
+        status = re.fullmatch(rb"HTTP/1\.1 ([1-5][0-9][0-9]) [^\r\n]*", lines[0])
+        if status is None:
+            raise Malformed(f"status line {lines[0][:40]!r}")
+        fields = {}
+        for line in lines[1:]:
+            name, sep, value = line.partition(b":")
+            if not sep:
+                raise Malformed(f"field line {line[:40]!r}")
+            fields.setdefault(name.strip().lower(), []).append(value.strip())
+        lengths = fields.get(b"content-length", [])
+        if b"transfer-encoding" in fields:
+            raise Malformed("Transfer-Encoding")
+        if len(lengths) != 1:
+            raise Malformed(f"{len(lengths)} Content-Length fields")
+        if not lengths[0].isdigit():
+            raise Malformed(f"Content-Length {lengths[0][:20]!r}")
+        length = int(lengths[0])
+        while len(body) < length:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise Malformed(f"closed after {len(body)} of {length} body bytes")
+            body += chunk
+    except OSError as e:  # ConnectionError and socket.timeout included
+        if data:
+            raise Malformed(f"{failure(e)} after {len(data)} bytes") from e
+        raise
+    if len(body) > length:
+        raise Malformed(f"{len(body) - length} bytes after the body")
+    status = int(status.group(1))
+    if status == 200 and not expected(path, body):
+        raise Malformed(f"body {body[:40]!r}")
+    return status, fields, body
 
 
 def write(sock, data, note):
@@ -124,6 +181,8 @@ def h1_connect(port):
 
 
 def failure(e):
+    if isinstance(e, Malformed):
+        return f"malformed: {e}"
     if isinstance(e, socket.timeout):
         return "timeout"
     return str(e) or type(e).__name__
@@ -138,24 +197,26 @@ class H1:
         self.sock.settimeout(2.0)
         # A connection opened during the hold is not asked: its worker could
         # be the held one, and asking would wait for the hold.
-        self.worker = self.call("/worker")[1] if ask_worker else None
+        self.worker = self.call("/worker")[2] if ask_worker else None
         self.last = time.monotonic()
 
     def call(self, path):
         self.sock.sendall(h1_request(path, False))
-        return h1_read_response(self.sock)
+        return h1_read_response(self.sock, path)
 
 
 class H2c:
     """A minimal prior-knowledge h2c client: GET only, responses small enough
-    for the default windows, HPACK literals without Huffman coding."""
+    for the default windows, HPACK literals without Huffman coding. A stream
+    ends Malformed if its :status cannot be read, it has DATA before HEADERS
+    or no HEADERS, or it is a 200 without the body `expected` names."""
 
     def __init__(self, port):
         self.port = port
         self.sock = h1_connect(port)
         self.lock = threading.Lock()
         self.next_id = 1
-        self.waiting = {}  # stream id -> [event, outcome, status, body]
+        self.waiting = {}  # stream id -> [event, outcome, status, body, path]
         self.dead = None
         self.sock.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" + self.frame(4, 0, 0, b""))
         threading.Thread(target=self.read_loop, daemon=True).start()
@@ -174,7 +235,7 @@ class H2c:
         `write` does."""
         authority = f"127.0.0.1:{self.port}".encode()
         block = b"\x82\x86\x04" + bytes([len(path)]) + path.encode() + b"\x01" + bytes([len(authority)]) + authority
-        slot = [threading.Event(), None, None, b""]
+        slot = [threading.Event(), None, None, b"", path]
         with self.lock:
             if self.dead is not None:
                 slot[1] = self.dead
@@ -238,11 +299,23 @@ class H2c:
                 if kind == 1:  # HEADERS: the first field is :status
                     slot[2] = self.status(payload)
                 elif kind == 0:  # DATA
+                    if slot[2] is None:
+                        self.finish(stream, "malformed: DATA before HEADERS")
+                        continue
                     slot[3] += payload
                 if kind in (0, 1) and flags & 1:  # END_STREAM
-                    self.finish(stream, slot[2] if slot[2] is not None else "no status")
+                    self.finish(stream, self.outcome(slot))
         except (OSError, ConnectionError) as e:
             self.fail_all(failure(e))
+
+    @staticmethod
+    def outcome(slot):
+        status, body, path = slot[2], slot[3], slot[4]
+        if not isinstance(status, int):
+            return f"malformed: status {status}"
+        if status == 200 and not expected(path, body):
+            return f"malformed: body {body[:40]!r}"
+        return status
 
     def finish(self, stream, outcome):
         with self.lock:
@@ -310,8 +383,8 @@ class Pool:
         sock.settimeout(timeout)
         try:
             write(sock, h1_request("/health", False), note)
-            status = h1_read_response(sock)[0]
-        except (OSError, ConnectionError) as e:
+            status = h1_read_response(sock, "/health")[0]
+        except (OSError, Malformed) as e:
             sock.close()
             self.give_back(None)  # a bounded pool may open a replacement
             if self.bounded:
@@ -334,8 +407,8 @@ def h1_new_call(port, path, timeout, note):
     try:
         sock.settimeout(timeout)
         write(sock, h1_request(path, True), note)
-        return h1_read_response(sock)[0]
-    except (OSError, ConnectionError) as e:
+        return h1_read_response(sock, path)[0]
+    except (OSError, Malformed) as e:
         return failure(e)
     finally:
         sock.close()
@@ -343,34 +416,13 @@ def h1_new_call(port, path, timeout, note):
 
 def ask_worker(conn):
     """Asks `/worker` on `conn` and returns the worker number; raises unless
-    the answer is 200 with a number and keeps the connection open (no
-    `Connection: close`)."""
-    conn.sock.sendall(h1_request("/worker", False))
-    data = b""
-    while b"\r\n\r\n" not in data:
-        chunk = conn.sock.recv(4096)
-        if not chunk:
-            raise ConnectionError("closed")
-        data += chunk
-    head, _, body = data.partition(b"\r\n\r\n")
-    lines = head.split(b"\r\n")
-    length = None
-    for line in lines[1:]:
-        name, _, value = line.partition(b":")
-        name, value = name.strip().lower(), value.strip().lower()
-        if name == b"content-length":
-            length = int(value)
-        elif name == b"connection" and b"close" in value.split(b","):
-            raise ValueError("/worker answered with Connection: close")
-    if length is None:
-        raise ValueError("/worker answered without Content-Length")
-    while len(body) < length:
-        chunk = conn.sock.recv(4096)
-        if not chunk:
-            raise ConnectionError("closed")
-        body += chunk
-    if not lines[0].startswith(b"HTTP/1.1 200 ") or len(body) != length or not body.isdigit():
-        raise ValueError(f"/worker answered {lines[0]!r} {body!r}")
+    the answer is whole (`h1_read_response`), 200, and keeps the connection
+    open (no `Connection: close`)."""
+    status, fields, body = conn.call("/worker")
+    if status != 200:
+        raise ValueError(f"/worker answered {status}")
+    if any(b"close" in [t.strip() for t in v.lower().split(b",")] for v in fields.get(b"connection", [])):
+        raise ValueError("/worker answered with Connection: close")
     return body
 
 
@@ -464,7 +516,8 @@ def capacity(port, held, slow_ms, signal_path):
     this client read them; near 0 is a tie> slow=<each slow request's
     status>`; exits nonzero if the handlers do not signal, if one ended
     before all were held (the next connection went to a held worker), or if
-    a request is not answered 200, a client error included."""
+    a request is not answered 200, a client error and a malformed response
+    included."""
     fd = os.open(signal_path, os.O_RDWR)
     times = []  # (byte, when it arrived), appended by the reader as it reads
     arrived = threading.Condition()
@@ -578,7 +631,7 @@ def main():
             h1.sock.settimeout(t)
             try:
                 return h1.call(f"/slow/{slow_ms}")[0]
-            except (OSError, ConnectionError) as e:
+            except (OSError, Malformed) as e:
                 return failure(e)
 
         slow_conn = (h1.worker, slow_call)
@@ -630,7 +683,7 @@ def main():
         hold_from, hold_to = signal.times["s"], signal.times["e"]
         slow_outcome, slow_worker = slow_result[0], slow_conn[0]
     ok = lambda r: r["outcome"] == 200
-    is_lost = lambda r: "written" in r and not ok(r)
+    is_lost = lambda r: "written" in r and not ok(r) and not is_malformed(r["outcome"])
     count = lambda rs: f"{len(rs)}/{sum(map(is_lost, rs))}/{sum('write_failed' in r for r in rs)}"
     window = [r for r in results if "sent" in r and hold_from <= r["sent"] < hold_to]
     answered = sorted(r["done"] - r["sent"] for r in window if ok(r))
@@ -663,7 +716,14 @@ def main():
         line += f" write_failed_as={','.join(sorted({r['write_failed'] for r in write_failed}))}"
     if not_sent:
         line += f" not_sent_as={','.join(sorted({str(r['outcome']) for r in not_sent}))}"
+    why = lambda outcome: str(outcome).removeprefix("malformed: ")
+    malformed = [why(r["outcome"]) for r in results if is_malformed(r["outcome"])]
+    if is_malformed(slow_outcome):
+        malformed.append(f"slow: {why(slow_outcome)}")
+    if malformed:
+        line += f" malformed={len(malformed)} malformed_as={';'.join(sorted(set(malformed)))}"
     print(line, flush=True)
+    return 1 if malformed else 0
 
 
 if __name__ == "__main__":

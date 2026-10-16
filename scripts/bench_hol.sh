@@ -27,6 +27,9 @@
 # - capacity: `muntin` with 1, 2 and 4 workers and idle timeout 60000 ms,
 #   one handler fewer than the workers held and then as many as the workers
 #   (`capacity-K`): whether a new connection is answered while they run.
+# In every section, a run that gets a response that is not whole (its
+# framing, or not its route's body) is no measurement and ends the script
+# with exit 1.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
