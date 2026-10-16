@@ -1,6 +1,6 @@
 """Socket-free contract tests for the Flare adapter (M1-002; headers M3-005;
 `HEAD` M3-027; 405 M3-031; request and response body bytes M3-040, which
-replaced M3-038; request target and method bytes M3-039).
+replaced M3-038; request target and method bytes M3-039; `Host` M3-073).
 
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). Every
 dispatch goes through `MuntinHandler.serve`, a Flare handler entry point that
@@ -77,6 +77,16 @@ def app_with_routes() -> App:
     app.post["/users"](create_user)
     app.post["/echo"](echo)
     return app^
+
+
+def _flare(
+    method: String, url: String, body: List[UInt8] = List[UInt8]()
+) raises -> FlareRequest:
+    """A Flare request as its HTTP/1.1 parser builds one, with the `Host`
+    field the adapter requires of HTTP/1.1 (M3-073)."""
+    var req = FlareRequest(method, url, body=body.copy())
+    req.headers.append("Host", "test")
+    return req^
 
 
 def test_request_conversion_keeps_method_target_and_body() raises:
@@ -191,10 +201,10 @@ def test_binary_response_under_the_head_rule() raises:
     # `GET` sends the bytes; `HEAD` sends none and declares their byte
     # length, 3 (a lossy text length would be 7).
     var handler = MuntinHandler(body_app())
-    var get = handler.serve(FlareRequest("GET", "/blob"))
+    var get = handler.serve(_flare("GET", "/blob"))
     assert_true(_same_bytes(Span(get.body), Span(_octets([0xFF, 0x00, 0x80]))))
     assert_equal(_wire(get), "X-Seen: 1\r\n")
-    var head = handler.serve(FlareRequest("HEAD", "/blob"))
+    var head = handler.serve(_flare("HEAD", "/blob"))
     assert_equal(head.status, 200)
     assert_equal(len(head.body), 0)
     assert_equal(_wire(head), "X-Seen: 1\r\nContent-Length: 3\r\n")
@@ -204,9 +214,7 @@ def test_every_request_body_reaches_app_handle() raises:
     var handler = MuntinHandler(body_app())
     for body in _all_bodies():
         # The raw route echoes every body byte for byte, through middleware.
-        var out = handler.serve(
-            FlareRequest("POST", "/reached", body=body.copy())
-        )
+        var out = handler.serve(_flare("POST", "/reached", body=body.copy()))
         assert_equal(out.status, 200)
         assert_equal(len(out.body), len(body))
         assert_true(_same_bytes(Span(out.body), Span(body)))
@@ -216,23 +224,58 @@ def test_every_request_body_reaches_app_handle() raises:
         )
         # A path only `GET` matches (405) and one no route matches (404):
         # `App.handle`'s answers, through the middleware, whatever the body.
-        var other = handler.serve(
-            FlareRequest("POST", "/hello", body=body.copy())
-        )
+        var other = handler.serve(_flare("POST", "/hello", body=body.copy()))
         assert_equal(other.status, 405)
         assert_equal(_wire(other), "Allow: GET, HEAD\r\nX-Seen: 1\r\n")
         var missing = handler.serve(
-            FlareRequest("POST", "/missing", body=body.copy())
+            _flare("POST", "/missing", body=body.copy())
         )
         assert_equal(missing.status, 404)
         assert_equal(_wire(missing), "X-Seen: 1\r\n")
         # `HEAD` on a `GET` route: its answer under the `HEAD` rule (M3-027).
-        var head = handler.serve(
-            FlareRequest("HEAD", "/hello", body=body.copy())
-        )
+        var head = handler.serve(_flare("HEAD", "/hello", body=body.copy()))
         assert_equal(head.status, 200)
         assert_equal(len(head.body), 0)
         assert_equal(_wire(head), "X-Seen: 1\r\nContent-Length: 5\r\n")
+
+
+def test_request_without_host_answers_400_before_app_handle() raises:
+    # M3-073: RFC 9112 section 3.2, a later HTTP/1 minor version as 1.1 (RFC
+    # 9110 section 6.2), and HTTP/2 with neither `:authority`, which Flare
+    # writes as `Host`, nor `host` (RFC 9110 section 7.2). Neither the
+    # middleware nor a handler runs: no `X-Seen`.
+    var handler = MuntinHandler(body_app())
+    for version in ["HTTP/1.1", "HTTP/1.2", "HTTP/1.9", "HTTP/2"]:
+        var out = handler.serve(FlareRequest("GET", "/hello", version=version))
+        assert_equal(out.status, 400, version)
+        assert_equal(out.text(), "Bad Request", version)
+        assert_equal(_wire(out), "", version)
+        # `HEAD`: the adapter's 400 under the `HEAD` rule (M3-027).
+        var head = handler.serve(
+            FlareRequest("HEAD", "/hello", version=version)
+        )
+        assert_equal(head.status, 400, version)
+        assert_equal(len(head.body), 0, version)
+        assert_equal(_wire(head), "Content-Length: 11\r\n", version)
+    # Any casing, and an empty value, which RFC 9112 allows.
+    var hosts: List[Tuple[String, String]] = [
+        (String("Host"), String("test")),
+        (String("hOsT"), String("test")),
+        (String("Host"), String("")),
+        (String("host"), String("test")),
+    ]
+    for version in ["HTTP/1.1", "HTTP/2"]:
+        for host in hosts:
+            var req = FlareRequest("GET", "/hello", version=version)
+            req.headers.append(host[0], host[1])
+            var out = handler.serve(req)
+            var at = String(version, " ", host[0], ": ", host[1])
+            assert_equal(out.text(), "hello", at)
+            assert_equal(_wire(out), "X-Seen: 1\r\n", at)
+    # HTTP/1.0 needs none: `App.handle`'s answer.
+    var old = handler.serve(FlareRequest("GET", "/hello", version="HTTP/1.0"))
+    assert_equal(old.text(), "hello")
+    assert_equal(_wire(old), "X-Seen: 1\r\n")
 
 
 def test_typed_text_body_that_is_not_utf8_is_400_in_app_handle() raises:
@@ -240,12 +283,12 @@ def test_typed_text_body_that_is_not_utf8_is_400_in_app_handle() raises:
     # `App.handle`'s 400 (through middleware), never a replaced byte.
     var handler = MuntinHandler(body_app())
     for body in _ill_formed_bodies():
-        var out = handler.serve(FlareRequest("POST", "/echo", body=body.copy()))
+        var out = handler.serve(_flare("POST", "/echo", body=body.copy()))
         assert_equal(out.status, 400)
         assert_equal(out.text(), "Bad Request")
         assert_equal(_wire(out), "X-Seen: 1\r\n")
     for body in _well_formed_bodies():
-        var out = handler.serve(FlareRequest("POST", "/echo", body=body.copy()))
+        var out = handler.serve(_flare("POST", "/echo", body=body.copy()))
         var text = String(from_utf8=Span(body))
         assert_equal(out.status, 200)
         assert_equal(out.text(), "[" + text + "]")
@@ -334,12 +377,12 @@ def test_request_target_or_method_that_is_not_utf8_answers_400_before_app_handle
     var handler = MuntinHandler(target_app())
     # Neither the middleware nor a handler runs: no `X-Seen`.
     for t in _ill_formed_targets():
-        var out = handler.serve(FlareRequest("GET", t))
+        var out = handler.serve(_flare("GET", t))
         assert_equal(out.status, 400)
         assert_equal(out.text(), "Bad Request")
         assert_equal(_wire(out), "")
         # `HEAD`: the adapter's 400 under the `HEAD` rule (M3-027).
-        var head = handler.serve(FlareRequest("HEAD", t))
+        var head = handler.serve(_flare("HEAD", t))
         assert_equal(head.status, 400)
         assert_equal(len(head.body), 0)
         assert_equal(_wire(head), "Content-Length: 11\r\n")
@@ -347,22 +390,22 @@ def test_request_target_or_method_that_is_not_utf8_answers_400_before_app_handle
         # A path only `GET` matches (405 in `App.handle`) and a path no
         # route matches (404).
         for t in ["/hello", "/missing"]:
-            var out = handler.serve(FlareRequest(m, t))
+            var out = handler.serve(_flare(m, t))
             assert_equal(out.status, 400)
             assert_equal(out.text(), "Bad Request")
             assert_equal(_wire(out), "")
     # Well-formed: `App.handle`'s answers, through the middleware.
     var ok = handler.serve(
-        FlareRequest("GET", "/hello?é=" + _unchecked([0xEF, 0xBF, 0xBD]))
+        _flare("GET", "/hello?é=" + _unchecked([0xEF, 0xBF, 0xBD]))
     )
     assert_equal(ok.text(), "hello")
     assert_equal(_wire(ok), "X-Seen: 1\r\n")
-    var decoded = handler.serve(FlareRequest("GET", "/items?limit=%35"))
+    var decoded = handler.serve(_flare("GET", "/items?limit=%35"))
     assert_equal(decoded.text(), "items 5")
-    var escaped = handler.serve(FlareRequest("GET", "/items?limit=%FF"))
+    var escaped = handler.serve(_flare("GET", "/items?limit=%FF"))
     assert_equal(escaped.status, 400)
     assert_equal(_wire(escaped), "X-Seen: 1\r\n")
-    var unknown = handler.serve(FlareRequest("é", "/hello"))
+    var unknown = handler.serve(_flare("é", "/hello"))
     assert_equal(unknown.status, 405)
     assert_equal(_wire(unknown), "Allow: GET, HEAD\r\nX-Seen: 1\r\n")
 
@@ -377,8 +420,8 @@ def test_response_conversion_keeps_status_and_body() raises:
 def test_registered_routes_dispatch_through_app_handle() raises:
     var handler = MuntinHandler(app_with_routes())
 
-    var hello_response = handler.serve(FlareRequest("GET", "/hello"))
-    var goodbye_response = handler.serve(FlareRequest("GET", "/goodbye"))
+    var hello_response = handler.serve(_flare("GET", "/hello"))
+    var goodbye_response = handler.serve(_flare("GET", "/goodbye"))
 
     assert_equal(hello_response.status, 200)
     assert_equal(hello_response.text(), "hello")
@@ -389,7 +432,7 @@ def test_registered_routes_dispatch_through_app_handle() raises:
 def test_unmatched_path_is_not_found() raises:
     var handler = MuntinHandler(app_with_routes())
 
-    var response = handler.serve(FlareRequest("GET", "/missing"))
+    var response = handler.serve(_flare("GET", "/missing"))
 
     assert_equal(response.status, 404)
     assert_equal(response.text(), "Not Found")
@@ -398,7 +441,7 @@ def test_unmatched_path_is_not_found() raises:
 def test_unmatched_method_is_405_with_allow() raises:
     var handler = MuntinHandler(app_with_routes())
 
-    var response = handler.serve(FlareRequest("POST", "/hello"))
+    var response = handler.serve(_flare("POST", "/hello"))
 
     assert_equal(response.status, 405)
     assert_equal(response.text(), "Method Not Allowed")
@@ -423,7 +466,7 @@ def test_adapter_matches_in_memory_backend() raises:
         "/items",
     ]:
         var expected = client.get(path)
-        var actual = handler.serve(FlareRequest("GET", path))
+        var actual = handler.serve(_flare("GET", path))
         assert_equal(actual.status, expected.status, path)
         assert_equal(actual.text(), expected.text(), path)
 
@@ -446,18 +489,18 @@ def test_adapter_post_body_matches_in_memory_backend() raises:
         var body = String(want[1])
         var expected = client.post(path, body)
         var actual = handler.serve(
-            FlareRequest("POST", path, body=List(body.as_bytes()))
+            _flare("POST", path, body=List(body.as_bytes()))
         )
         assert_equal(actual.status, expected.status, path + " " + body)
         assert_equal(actual.text(), expected.text(), path + " " + body)
     assert_equal(
         handler.serve(
-            FlareRequest("POST", "/users", body=List("name=Ada".as_bytes()))
+            _flare("POST", "/users", body=List("name=Ada".as_bytes()))
         ).text(),
         "created Ada",
     )
     assert_equal(
-        handler.serve(FlareRequest("POST", "/echo", body=List[UInt8]())).text(),
+        handler.serve(_flare("POST", "/echo", body=List[UInt8]())).text(),
         "[]",
     )
 
@@ -515,10 +558,17 @@ def test_request_headers_are_rebuilt_in_order() raises:
 
 
 def _served(fields: List[Tuple[String, String]]) raises -> FlareResponse:
-    return MuntinHandler(App()).serve(_flare_request(fields))
+    var with_host: List[Tuple[String, String]] = [
+        (String("Host"), String("test"))
+    ]
+    with_host.extend(fields.copy())
+    return MuntinHandler(App()).serve(_flare_request(with_host))
 
 
 def test_unrepresentable_request_headers_answer_400() raises:
+    # Without the fields below the request reaches `App.handle` (404), so
+    # each 400 is the fields', not the `Host` rule's (M3-073).
+    assert_equal(_served(List[Tuple[String, String]]()).status, 404)
     # A name with `:` (Flare v0.11.0 admitted it over HTTP/2) would be
     # misread by a first-colon parse; a control byte cannot be a Muntin
     # value. Neither reaches App.
@@ -691,8 +741,8 @@ def test_head_sends_get_fields_and_length_without_body() raises:
         ("/99", 99),
     ]:
         var target = String(want[0])
-        var get = handler.serve(FlareRequest("GET", target))
-        var head = handler.serve(FlareRequest("HEAD", target))
+        var get = handler.serve(_flare("GET", target))
+        var head = handler.serve(_flare("HEAD", target))
         assert_equal(get.status, want[1], target)
         assert_true(len(get.body) > 0, target)
         assert_equal(head.status, get.status, target)
@@ -704,11 +754,11 @@ def test_head_sends_get_fields_and_length_without_body() raises:
             _wire(get) + "Content-Length: " + String(len(get.body)) + "\r\n",
             target,
         )
-    var cl = handler.serve(FlareRequest("HEAD", "/cl"))
+    var cl = handler.serve(_flare("HEAD", "/cl"))
     assert_equal(_wire(cl), "X-Request-Id: 7\r\nContent-Length: 3\r\n")
-    var bad = handler.serve(FlareRequest("HEAD", "/bad-field"))
+    var bad = handler.serve(_flare("HEAD", "/bad-field"))
     assert_equal(_wire(bad), "Content-Length: 21\r\n")
-    var not_allowed = handler.serve(FlareRequest("HEAD", "/users"))
+    var not_allowed = handler.serve(_flare("HEAD", "/users"))
     assert_equal(not_allowed.status, 405)
     assert_equal(len(not_allowed.body), 0)
     assert_equal(_wire(not_allowed), "Allow: POST\r\nContent-Length: 18\r\n")
@@ -724,21 +774,19 @@ def test_head_declares_no_length_for_statuses_without_content() raises:
         ("/304", 304),
     ]:
         var target = String(want[0])
-        var get = handler.serve(FlareRequest("GET", target))
-        var head = handler.serve(FlareRequest("HEAD", target))
+        var get = handler.serve(_flare("GET", target))
+        var head = handler.serve(_flare("HEAD", target))
         # A non-empty body that the length would otherwise come from.
         assert_equal(get.text(), "abc", target)
         assert_equal(head.status, want[1], target)
         assert_equal(len(head.body), 0, target)
         assert_equal(_wire(head), _wire(get), target)
         assert_false(head.headers.contains("content-length"), target)
-    assert_equal(
-        _wire(handler.serve(FlareRequest("HEAD", "/304"))), 'ETag: "v1"\r\n'
-    )
+    assert_equal(_wire(handler.serve(_flare("HEAD", "/304"))), 'ETag: "v1"\r\n')
 
 
 def test_head_rule_covers_the_adapters_own_400() raises:
-    var req = FlareRequest("HEAD", "/hello")
+    var req = _flare("HEAD", "/hello")
     req.headers.append("x-user:admin", "zzz")
     var head = MuntinHandler(head_app()).serve(req)
     assert_equal(head.status, 400)
@@ -748,18 +796,18 @@ def test_head_rule_covers_the_adapters_own_400() raises:
 
 def test_other_methods_keep_their_body() raises:
     var handler = MuntinHandler(head_app())
-    var get = handler.serve(FlareRequest("GET", "/cl"))
+    var get = handler.serve(_flare("GET", "/cl"))
     assert_equal(get.text(), "abc")
     assert_equal(_wire(get), "X-Request-Id: 7\r\n")
     # Only the exact token `HEAD` is the rule's: `head` is 405 in `App.handle`
     # and goes out with its body.
     for method in ["head", "Head", "OPTIONS"]:
-        var r = handler.serve(FlareRequest(method, "/hello"))
+        var r = handler.serve(_flare(method, "/hello"))
         assert_equal(r.status, 405, method)
         assert_equal(r.text(), "Method Not Allowed", method)
         assert_equal(_wire(r), "Allow: GET, HEAD\r\n", method)
     var post = handler.serve(
-        FlareRequest("POST", "/users", body=List("name=Ada".as_bytes()))
+        _flare("POST", "/users", body=List("name=Ada".as_bytes()))
     )
     assert_equal(post.text(), "created Ada")
     assert_equal(_wire(post), "")
@@ -780,7 +828,7 @@ def test_the_converted_request_is_handed_over() raises:
     # itself. `MuntinHandler.serve` answers through the same chain.
     var app = body_app()
     app.use(body_at)
-    var flare = FlareRequest("POST", "/reached", body=_octets([0x61, 0xFF]))
+    var flare = _flare("POST", "/reached", body=_octets([0x61, 0xFF]))
     var request = to_muntin_request(flare)
     var at = String(Int(request.body.unsafe_ptr()))
     var r = _handle_owned(app, request^)

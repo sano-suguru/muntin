@@ -2,9 +2,11 @@
 # Confines Muntin's unsafe handler storage to one private module (M2-004).
 # Fails if, anywhere in src/muntin except src/muntin/_handler_storage.mojo,
 # a line names an unsafe pointer/ownership operation or touches the box's
-# fields; if a module imports anything but `_Erased` or `_Shared` from it;
+# fields; if a module imports anything but `_Erased`, `_Shared` or
+# `_build_record` from it;
 # if the package root exports it; if the module imports anything but the
-# standard library and `.http`; or if it names request or body data (M2-006) or result/error
+# standard library, `.http` and the `RouteValues` trait (so `_build_record`
+# can build no other type, M3-062); or if it names request or body data (M2-006) or result/error
 # conversion (M2-013); or if `rebind_var` appears anywhere but the one guarded
 # rebind in app.mojo (M3-015, below). A confinement guard, not a safety proof:
 # the invariant itself is in the module docstring and docs/history/architecture-decisions.md
@@ -32,12 +34,13 @@ if grep -rnE --include='*.mojo' "$pattern" "$dir" | grep -v "^$storage:"; then
     status=1
 fi
 
-# Other modules may import `_Erased` or `_Shared` (M3-004) and nothing else
-# from the storage module, so its helpers (`_erase`, `_invoke_box`,
-# `_drop_box`, `_Box`, `_SharedHeader`) stay inside it.
+# Other modules may import `_Erased`, `_Shared` (M3-004) or `_build_record`
+# (M3-061) and nothing else from the storage module, so its helpers
+# (`_erase`, `_invoke_box`, `_drop_box`, `_Box`, `_SharedHeader`) stay
+# inside it.
 if grep -rnE --include='*.mojo' '_handler_storage' "$dir" | grep -v "^$storage:" |
-    grep -vE '^[^:]+:[0-9]+:([[:space:]]*#|from \._handler_storage import (_Erased|_Shared)$)'; then
-    echo "error: only 'from ._handler_storage import _Erased' or '... import _Shared' may name the storage module" >&2
+    grep -vE '^[^:]+:[0-9]+:([[:space:]]*#|from \._handler_storage import (_Erased|_Shared|_build_record)$)'; then
+    echo "error: only 'from ._handler_storage import _Erased', '... import _Shared' or '... import _build_record' may name the storage module" >&2
     status=1
 fi
 
@@ -47,8 +50,9 @@ if grep -nE '_handler_storage|_Erased' "$dir/__init__.mojo"; then
 fi
 
 if grep -nE '^[[:space:]]*(from|import)[[:space:]]' "$storage" |
-    grep -vE '^[0-9]+:[[:space:]]*from[[:space:]]+(std\.[[:alnum:]_.]+|\.http)[[:space:]]+import[[:space:]]'; then
-    echo "error: $storage may import only std and .http" >&2
+    grep -vE '^[0-9]+:[[:space:]]*from[[:space:]]+(std\.[[:alnum:]_.]+|\.http)[[:space:]]+import[[:space:]]' |
+    grep -vE '^[0-9]+:from \.route_value import RouteValues$'; then
+    echo "error: $storage may import only std, .http and RouteValues from .route_value" >&2
     status=1
 fi
 
