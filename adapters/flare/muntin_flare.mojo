@@ -206,7 +206,6 @@ from flare.utils import exit
 from flare_internals import (
     OpaquePtr as _OpaquePtr,
     ThreadHandle,
-    close_listener,
     flare_pipe,
     listener_fd,
     run_worker_loop,
@@ -917,7 +916,9 @@ def _drain_workers(block: Int, mut server: HttpServer) raises:
                     + _errno()
                     + ")"
                 )
-    close_listener(server)
+    # Flare's public `close()`; what it also does, and why that stops nothing
+    # here, is listed in `flare_internals.mojo`.
+    server.close()
     if failure:
         _stop_workers(table, count)
         raise Error(failure)

@@ -9,7 +9,13 @@ Decided in docs/history/architecture-decisions.md "Multi-worker serving
 decision (M3-049)" (revisit: the Flare pin moves).
 
 Each name also says what Flare v0.12.0's public API offers in its place and
-what taking it would cost (evaluated in pull request #111; none is taken).
+what taking it would cost (evaluated in pull request #111). One was taken
+(pull request #117): `muntin_flare` closes the `Server`'s listener with the
+public `HttpServer.close()`. What it relies on of that call is listed here
+too, so an upgrade still has one file to check: `close()` closes the
+listener, idempotently, and also sets the `HttpServer`'s own stop flag,
+which in v0.12.0 only Flare's own serving methods read, each clearing it as
+it starts; `serve[make]` runs none of them, so the flag stops nothing there.
 Keeping the internals here localizes a change of name or signature; it does
 not bound a change of behavior, which only the tests observe, and only on
 the paths they run. Outside the adapter, the tests import two Flare internals
@@ -80,11 +86,19 @@ def run_worker_loop[
 
 
 def set_stop(stop_addr: Int):
-    """Sets the stop byte at `stop_addr` that `run_worker_loop` reads (Flare's
-    release store, `store_stop_flag`). Public alternative: the same release
-    store through `std.atomic`; `store_stop_flag` also returns at once for
-    address 0, which never reaches it here (every stop byte is a cell of the
-    workers' `List[Bool]`). `flare.runtime` does not export it."""
+    """Sets the stop byte at `stop_addr` that `run_worker_loop` reads, with
+    Flare's own store (`store_stop_flag`), so the writer and the reader of
+    the flag stay one Flare protocol. Relied on, in v0.12.0: the flag is one
+    byte (the loop's `Bool`), written with a release store of 1 and read by
+    the loop with an acquire load (`load_stop_flag`), nonzero meaning stop;
+    the store does nothing for address 0, which never reaches it (every stop
+    byte is a cell of `serve[make]`'s `stops` list, allocated at its final
+    length, 1 to 256 cells, before any address is taken). Public
+    alternative, not taken (pull request #117): the same release store
+    through `std.atomic` would copy that protocol into Muntin, and would keep
+    compiling if Flare changed the flag's width, value or ordering, while
+    calling Flare's store either keeps matching its loop or fails to compile
+    when it is renamed. `flare.runtime` does not export it."""
     store_stop_flag(stop_addr, True)
 
 
@@ -100,14 +114,6 @@ def listener_fd(server: HttpServer) -> Int:
     `HttpServer` owns. Public alternative: none (`HttpServer` exposes the
     bound address only)."""
     return Int(server._listener.as_raw_fd())
-
-
-def close_listener(mut server: HttpServer):
-    """Closes the bound listener (`HttpServer._listener.close`), as Flare's own
-    `drain` does first; idempotent. Public alternative: `HttpServer.close()`,
-    which also sets the `HttpServer`'s own stop flag; in v0.12.0 only its own
-    serving methods read that flag, which a later release may change."""
-    server._listener.close()
 
 
 def tls_context_addr(server: HttpServer) -> Int:
