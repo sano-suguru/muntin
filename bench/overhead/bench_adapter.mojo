@@ -18,7 +18,7 @@ Implementations:
   that lends a named request still does.
 - `muntin+adapter`: `MuntinHandler.serve` on the Flare `Request`: the
   adapter's conversions around `App.handle` (request target, headers and a
-  copy of the body in; status, headers and a copy of the body out), what a
+  copy of the body in; status and headers out, the body moved), what a
   request served by `Server` pays besides the network.
 - `flare`: Flare's `Router.serve` (`Tracing[Router]` with the middleware).
 - `headers`: `to_muntin_headers` alone, the adapter's request header

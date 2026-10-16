@@ -623,7 +623,7 @@ def test_response_headers_follow_the_outbound_rule() raises:
     resp.headers.add("Set-Cookie", "b=2")
     resp.headers.add("X-Empty", "")
     resp.headers.add("X-Hopper", "kept")
-    var out = to_flare_response(resp)
+    var out = to_flare_response(resp^)
     assert_equal(out.status, 202)
     var wire = List[UInt8]()
     out.headers.encode_to(wire)
@@ -642,7 +642,7 @@ def test_internal_name_write_is_a_500() raises:
     var bad = Response.text("hi")
     bad.headers.add("X-Ok", "1")
     bad.headers._fields[0].value = String("a") + chr(0) + String("b")
-    var out = to_flare_response(bad)
+    var out = to_flare_response(bad^)
     assert_equal(out.status, 500)
     assert_equal(out.headers.len(), 0)
 
@@ -839,6 +839,34 @@ def test_the_converted_request_is_handed_over() raises:
     var wire = _wire(served)
     assert_true(wire.startswith("X-Body-Length: 2\r\nX-Body-At: "), wire)
     assert_true(wire.endswith("\r\nX-Seen: 1\r\n"), wire)
+
+
+def response_body_at(var request: Request, var next: Next) raises -> Response:
+    """Adds the address of the answer's body buffer as `X-Answer-At`."""
+    var response = next^.run(request^)
+    response.headers.add("X-Answer-At", String(Int(response.body.unsafe_ptr())))
+    return response^
+
+
+def test_the_response_body_is_handed_over() raises:
+    # `to_flare_response` takes the response (without `^` or `.copy()` a
+    # caller does not build) and moves its body buffer into Flare's
+    # response, so a served answer's body is the buffer `App.handle`
+    # returned, not a copy of it.
+    var body = List("a body".as_bytes())
+    var at = Int(body.unsafe_ptr())
+    var out = to_flare_response(Response(200, body^))
+    assert_equal(Int(out.body.unsafe_ptr()), at)
+    assert_equal(out.text(), "a body")
+    var app = body_app()
+    app.use(response_body_at)
+    var served = MuntinHandler(app^).serve(
+        _flare("POST", "/reached", body=_octets([0x61, 0xFF]))
+    )
+    assert_equal(served.status, 200)
+    assert_equal(
+        served.headers.get("X-Answer-At"), String(Int(served.body.unsafe_ptr()))
+    )
 
 
 def main() raises:

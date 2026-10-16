@@ -136,7 +136,7 @@ struct HeadAsGet(Handler):
         var length = len(answer.body)
         if empty or declared:
             answer.body = List[UInt8]()
-        var out = to_flare_response(answer)
+        var out = to_flare_response(answer^)
         try:
             if declared:
                 out.headers.append("Content-Length", String(length))
