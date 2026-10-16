@@ -4,9 +4,39 @@ Decision and evidence: docs/history/architecture-decisions.md, "Application stat
 (M3-001)". A handler takes state exactly when its registration passes one,
 `app.get["/users/{id}"](get_user, users)`; `State[S]` is then the handler's
 first parameter.
+
+A state's type may not borrow: "State borrowing decision (M3-074)".
 """
 
+from std.reflection import reflect
+
 from ._handler_storage import _Shared
+
+
+def _may_borrow[S: AnyType]() -> Bool:
+    """Whether `S`'s reflected name shows `{}` anywhere in it, a type
+    argument's included: how Mojo 1.1.0 prints every origin, and beside a
+    parameter pack, whose element types it does not print
+    (`Tuple[<unprintable>, {}]`) (M3-074).
+
+    A value borrows a local only through that local's origin in its type. A
+    module-level declaration cannot name a local's origin and a struct
+    cannot be declared inside a function, so that origin reaches a field
+    only as a parameter of `S` or of a type in its name, where it prints as
+    `{}` or hides in a pack. A function-valued parameter prints as
+    `<unprintable>` alone and is admitted: it is a compile-time value with
+    no address, and a field typed from what it returns needs a concrete
+    result type, whose origins are then parameters of the struct, which
+    print, or `AnyOrigin`; a parameter of an open type cannot be called
+    (tests/state_fail/state_function_parameter_*.mojo). `AnyOrigin` behind
+    a trait's associated type escapes the name
+    (tests/state_known_gaps/state_any_origin_associated_type.mojo), a
+    toolchain-wide hole. The format is undocumented; the fixtures under
+    tests/state_fail that refuse a borrowing state fail if it stops showing
+    origins.
+    """
+    comptime name = reflect[S].name()
+    return name.find("{}") >= 0
 
 
 trait _InjectedState:
@@ -36,7 +66,18 @@ struct State[S: Movable & Deinitable](Copyable, Movable, _InjectedState):
     var _shared: _Shared[Self.S]
 
     def __init__(out self, var value: Self.S):
-        """Moves `value` into a new shared allocation."""
+        """Moves `value` into a new shared allocation.
+
+        `S`'s name may not show an origin or a pack (`_may_borrow`): a route
+        erases its state and the `App`'s type does not carry `S`'s origins,
+        so nothing would keep a borrowed value alive for the `App` (M3-074).
+        """
+        comptime assert not _may_borrow[Self.S](), (
+            "State takes a value that owns its data; this type's name shows an"
+            " origin or a parameter pack ({}), so it may borrow a value the"
+            " App outlives: "
+            + reflect[Self.S].name()
+        )
         self._shared = _Shared(value^)
 
     def __getitem__(self) -> ref[origin_of(self._shared.owned()[])] Self.S:
