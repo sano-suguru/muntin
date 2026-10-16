@@ -7,7 +7,9 @@ v0.12.0 never reaches (its EPOLLRDHUP makes the kernel refuse the flag, and
 it falls back to a plain registration). rotate: the same, but a
 worker re-registers the listener (DEL then ADD) after each accept batch.
 reuseport: one SO_REUSEPORT listener per worker. Client opens K connections
-one after another, each kept open after its accept is seen.
+one after another, each kept open after its accept is seen. A held worker
+stands for one running a handler: the client opens nothing until that worker
+has said it is out of its poll and will not poll again while held.
 """
 import errno, os, select, socket, sys, threading, time
 from collections import Counter
@@ -15,13 +17,14 @@ from collections import Counter
 EPOLLEXCLUSIVE = getattr(select, "EPOLLEXCLUSIVE", 1 << 28)
 
 
-def worker(idx, lfd_sock, mode, owner, stop, held):
+def worker(idx, lfd_sock, mode, owner, stop, held, parked):
     ep = select.epoll()
     flags = select.EPOLLIN | EPOLLEXCLUSIVE
     ep.register(lfd_sock.fileno(), flags)
     conns = []
     while not stop.is_set():
         if held.get(idx):
+            parked.set()
             time.sleep(0.005)
             continue
         for fd, ev in ep.poll(0.05):
@@ -46,6 +49,7 @@ def run(mode, workers, k, held_worker=None):
     stop = threading.Event()
     owner = {}
     held = {}
+    parked = threading.Event()
     listeners = []
     if mode == "reuseport":
         port = 0
@@ -65,7 +69,7 @@ def run(mode, workers, k, held_worker=None):
         port = s.getsockname()[1]
         listeners = [s] * workers
     threads = [
-        threading.Thread(target=worker, args=(i, listeners[i], mode, owner, stop, held))
+        threading.Thread(target=worker, args=(i, listeners[i], mode, owner, stop, held, parked), daemon=True)
         for i in range(workers)
     ]
     for t in threads:
@@ -73,6 +77,8 @@ def run(mode, workers, k, held_worker=None):
     time.sleep(0.1)
     if held_worker is not None:
         held[held_worker] = True
+        if not parked.wait(1):
+            raise RuntimeError(f"worker {held_worker} did not leave its poll")
     clients = []
     for _ in range(k):
         c = socket.create_connection(("127.0.0.1", port))
@@ -82,6 +88,8 @@ def run(mode, workers, k, held_worker=None):
             time.sleep(0.0005)
         clients.append((c, lp))
     waiting = sum(1 for _, lp in clients if lp not in owner)
+    if held_worker is not None and any(owner.get(lp) == held_worker for _, lp in clients):
+        raise RuntimeError(f"held worker {held_worker} accepted a connection")
     held.clear()
     time.sleep(0.1)
     counts = Counter(owner.get(lp, -1) for _, lp in clients)

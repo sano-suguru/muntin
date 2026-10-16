@@ -60,7 +60,7 @@ def run(kind, mode, workers=4):
     lsock = make_listener()
     port = lsock.getsockname()[1]
     owner, go, stop = {}, threading.Event(), threading.Event()
-    ts = [threading.Thread(target=worker, args=(i, lsock, mode, owner, go, stop)) for i in range(workers)]
+    ts = [threading.Thread(target=worker, args=(i, lsock, mode, owner, go, stop), daemon=True) for i in range(workers)]
     for t in ts:
         t.start()
     clients = []
@@ -73,9 +73,14 @@ def run(kind, mode, workers=4):
         go.set()
         time.sleep(0.1)
         lock = threading.Lock()
+        errors = []
 
         def opener():
-            mine = [socket.create_connection(("127.0.0.1", port)) for _ in range(16)]
+            try:
+                mine = [socket.create_connection(("127.0.0.1", port)) for _ in range(16)]
+            except OSError as e:
+                errors.append(e)
+                return
             with lock:
                 clients.extend(mine)
 
@@ -84,6 +89,8 @@ def run(kind, mode, workers=4):
             t.start()
         for t in os_:
             t.join()
+        if errors:
+            raise RuntimeError(f"burst: {len(errors)} of 4 openers failed: {errors[0]!r}")
     deadline = time.monotonic() + 2
     ports = [c.getsockname()[1] for c in clients]
     while time.monotonic() < deadline and not all(p in owner for p in ports):

@@ -339,22 +339,45 @@ def h1_new_call(port, path, timeout, note):
         sock.close()
 
 
+def spread_conn(port):
+    """One kept-open HTTP/1.1 connection whose `/worker` answered 200 with a
+    worker number; raises otherwise."""
+    conn = H1(port, ask_worker=False)
+    try:
+        status, conn.worker = conn.call("/worker")
+        if status != 200 or not conn.worker.isdigit():
+            raise ValueError(f"/worker answered {status} {conn.worker!r}")
+    except BaseException:
+        conn.sock.close()
+        raise
+    return conn
+
+
 def spread(port):
     """Opens `SPREAD` keep-alive HTTP/1.1 connections one after another, each
     asking `/worker` before the next is opened and all kept open, then
-    `SPREAD` more from `SPREAD` threads released together by a barrier; prints
-    how many of each landed on each worker, busiest first."""
-    kept = [H1(port) for _ in range(SPREAD)]
-    sequential = {}
-    for conn in kept:
-        sequential[conn.worker] = sequential.get(conn.worker, 0) + 1
+    `SPREAD` more from `SPREAD` threads released together by a barrier; prints,
+    for each, how many of each landed on each worker, busiest first, and how
+    many of the `SPREAD` attempts failed. Any failure makes the counts no
+    measurement: it prints the failures and returns 1."""
+    kept, failed = [], []
+    for _ in range(SPREAD):
+        try:
+            kept.append(spread_conn(port))
+        except Exception as e:
+            failed.append(f"sequential: {e!r}")
     barrier = threading.Barrier(SPREAD)
     together = []
     lock = threading.Lock()
 
     def connect():
-        barrier.wait()
-        conn = H1(port)
+        try:
+            barrier.wait()
+            conn = spread_conn(port)
+        except BaseException as e:
+            with lock:
+                failed.append(f"concurrent: {e!r}")
+            return
         with lock:
             together.append(conn)
 
@@ -363,13 +386,20 @@ def spread(port):
         t.start()
     for t in threads:
         t.join()
-    concurrent = {}
-    for conn in together:
-        concurrent[conn.worker] = concurrent.get(conn.worker, 0) + 1
-    order = lambda d: "/".join(str(n) for n in sorted(d.values(), reverse=True))
-    print(f"spread sequential={order(sequential)} concurrent={order(concurrent)}", flush=True)
+
+    def order(conns):
+        counts = {}
+        for conn in conns:
+            counts[conn.worker] = counts.get(conn.worker, 0) + 1
+        return "/".join(str(n) for n in sorted(counts.values(), reverse=True))
+
+    print(f"spread sequential={order(kept)} ({len(kept)} of {SPREAD} answered) "
+          f"concurrent={order(together)} ({len(together)} of {SPREAD} answered)", flush=True)
     for conn in kept + together:
         conn.sock.close()
+    for f in failed:
+        print(f"  failed {f}", flush=True)
+    return 1 if failed else 0
 
 
 class Signal:
@@ -516,4 +546,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

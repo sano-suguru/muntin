@@ -8,8 +8,10 @@ and exactly that many body bytes, the body `ok`. Prints attempts, answered,
 failures by kind, answered connections per second, p50/p99 of connect-to-EOF
 over answered connections in ms, and the server's and this client's CPU
 seconds (utime + stime) per 1000 attempts. The client shares the machine's
-CPUs with the server: compare runs, not absolute numbers. Exits 1 if any
-attempt failed or none was answered.
+CPUs with the server: compare runs, not absolute numbers. Any exception
+during an attempt (a reset, an unreadable Content-Length) fails that attempt,
+by its kind; a thread that ends otherwise counts as failed too. Exits 1 if
+any attempt or thread failed or none was answered.
 """
 import os, socket, sys, threading, time
 
@@ -36,7 +38,10 @@ def check(data):
     for line in lines[1:]:
         name, _, value = line.partition(b":")
         if name.strip().lower() == b"content-length":
-            length = int(value.strip())
+            try:
+                length = int(value.strip())
+            except ValueError:
+                return "bad-length"
     if length is None:
         return "no-length"
     if len(body) != length:
@@ -48,29 +53,37 @@ lat, fails, lock = [], {}, threading.Lock()
 end = time.monotonic() + seconds
 
 
-def run():
-    mine, bad = [], {}
-    while time.monotonic() < end:
-        t0 = time.monotonic()
-        kind = None
-        try:
-            s = socket.create_connection(("127.0.0.1", port), timeout=max(0.1, end + 5 - t0))
+def attempt(t0):
+    """Returns None for an answered attempt, else the failure kind."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=max(0.1, end + 5 - t0)) as s:
             s.sendall(REQ)
             data = b""
             while chunk := s.recv(4096):
                 data += chunk
-            s.close()
-            kind = check(data)
-        except OSError as e:
-            kind = type(e).__name__
-        if kind is None:
-            mine.append(time.monotonic() - t0)
-        else:
-            bad[kind] = bad.get(kind, 0) + 1
-    with lock:
-        lat.extend(mine)
-        for k, v in bad.items():
-            fails[k] = fails.get(k, 0) + v
+        return check(data)
+    except Exception as e:
+        return type(e).__name__
+
+
+def run():
+    mine, bad = [], {}
+    try:
+        while time.monotonic() < end:
+            t0 = time.monotonic()
+            kind = attempt(t0)
+            if kind is None:
+                mine.append(time.monotonic() - t0)
+            else:
+                bad[kind] = bad.get(kind, 0) + 1
+    except BaseException as e:
+        kind = "thread: " + type(e).__name__
+        bad[kind] = bad.get(kind, 0) + 1
+    finally:
+        with lock:
+            lat.extend(mine)
+            for k, v in bad.items():
+                fails[k] = fails.get(k, 0) + v
 
 
 c0, t0 = cpu(), os.times()

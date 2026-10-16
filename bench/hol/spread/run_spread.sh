@@ -21,9 +21,10 @@
 #   EPOLL_CTL_ADD after the sixth, then 12 requests one after another;
 # - churn: churn.py, 8 threads, 5 s.
 # Spread and hold are measurements and judge nothing. The script exits 1,
-# after every section, if the patched server outlives the fault (it must end
-# with `serve`'s "reactor returned before a stop signal") or if any churn
-# attempt fails (churn.py checks each answer in full).
+# after every section, if a spread run loses a connection (its counts are
+# then no measurement), if the patched server outlives the fault (it must
+# end with `serve`'s "reactor returned before a stop signal") or if any
+# churn attempt fails (churn.py checks each answer in full).
 # The kernel probes run without Flare: python3 -I kernel_probe.py and
 # kernel_probe_more.py in this directory.
 set -euo pipefail
@@ -90,7 +91,8 @@ for server in muntin patched; do
     for ((run = 1; run <= runs; run++)); do
         start "$server" 60000
         printf '%s idle_ms=60000 ' "$server"
-        python3 -I bench/hol/hol_client.py "$port" spread 1000 "$fifo"
+        python3 -I bench/hol/hol_client.py "$port" spread 1000 "$fifo" ||
+            failed+=("spread: $server run $run lost connections")
         stop
     done
 done
