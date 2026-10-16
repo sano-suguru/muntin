@@ -313,7 +313,10 @@ struct Response(Copyable, Movable, ToResponse):
     var status: Int
     var body: List[UInt8]
     var headers: Headers
-    var _failure: Optional[Failure]
+    # The report, or empty; at most one, added only by `_failed`
+    # (docs/history/architecture-decisions.md, "Dropped error report
+    # amendment (M3-059)").
+    var _failure: List[Failure]
 
     def __init__(out self, status: Int, body: String):
         """A response whose body is the bytes of the text `body`."""
@@ -325,7 +328,7 @@ struct Response(Copyable, Movable, ToResponse):
         self.status = status
         self.body = body^
         self.headers = Headers()
-        self._failure = None
+        self._failure = List[Failure]()
 
     @staticmethod
     def text(body: String, status: Int = 200) -> Response:
@@ -341,7 +344,9 @@ struct Response(Copyable, Movable, ToResponse):
         """A copy of the report of what Muntin dropped when it made this
         response as the fixed 500 (M3-058); `None` on any other response,
         and on one the application builds."""
-        return self._failure.copy()
+        if self._failure:
+            return self._failure[0].copy()
+        return None
 
     def to_response(var self) -> Response:
         """Returns this response unchanged, by move: a handler declared
@@ -354,5 +359,5 @@ def _failed(source: StaticString, message: String) -> Response:
     `Failure` of `source` and `message` (M3-058). The message never reaches
     the body or a field."""
     var response = Response.text("Internal Server Error", status=500)
-    response._failure = Failure(_source=source, _message=message)
+    response._failure.append(Failure(_source=source, _message=message))
     return response^

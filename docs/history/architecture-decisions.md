@@ -4552,6 +4552,21 @@ Status: **decision** (M3-058, pull request #107, which holds the probes, the scr
 - Docs: `docs/DX.md` section 6 (the report and what carries one; that `message` may hold secrets, control characters and client-supplied values, so escaping and masking it in a log are the application's) and section 7 (a logging middleware registered first; a client's request ID field is not trusted); `docs/ARCHITECTURE.md` request handling (the 500 rows) and "Other current limits"; `docs/SPEC.md` (the capability row; the candidate keeps what is not in the slice).
 - Not in the slice: a default logger, request IDs, timing, metrics, tracing, reports on the 400s, on the adapter's 500 or on a stream's raise, a stack trace.
 
+### Dropped error report amendment (M3-059)
+
+Status: **amendment** to "Dropped error report decision (M3-058)", made in its slice M3-059 (pull request #116, which holds the measurements and the review that prompted it). M3-058's choice stands: each fixed 500 `src/muntin` makes carries a `Failure` that middleware reads, and no public API changes.
+
+**Delta to the slice.**
+- `Response._failure` is a `List[Failure]`, empty or holding the one report `_failed` appends to the response it has just built, instead of an `Optional[Failure]`: `Response` is 80 bytes, not 112.
+- `docs/DX.md` section 7's logging middleware quotes the method, path, request ID and message, writing each byte outside printable ASCII as `\xNN`. It passed the method and path through raw, and `repr` leaves C1 controls and other non-ASCII characters as they are, so a client could put an escape sequence in the log through the path.
+- Two premises of M3-058 are corrected in the docs; its choice is not reopened. A logging middleware registered first reads the report on the response it receives, not every dropped error: a middleware inside it that answers a 500 with a new response drops the report, and one that raises after a handler failure replaces it with its own. And a 400 is not only a status the client fixes: an application conversion that fails for a server-side reason is the same unreported 400 as bad input. Tests pin both.
+
+**Why.** The review measured the 112-byte `Response` as a cost against `main` on the success path with middleware; M3-058's revisit condition named a comparison with Flare alone, but guards against the same cost, and the `List` recovers most of it. M3-058 rejected an `ArcPointer` because its value is mutable through any copy; a `List` copies its element with the response, so no two responses share a report.
+
+**Boundary.** `Failure`, `Response.failure()`, the six sites, the sources and messages and what keeps a report are unchanged. The invariant: `_failure` holds at most one report, and only `_failed` adds it.
+
+**Revisit when**: M3-058's "an application needs the reason for a 400, or a failure the outermost middleware cannot see" now also covers a failure a middleware inside the logger drops or replaces, and a 400 an application conversion makes for a server-side reason, which needs a way for the conversion to say which it is.
+
 ### TLS with workers decision (M3-060)
 
 Status: **decision and production** (M3-060, pull request #108; `src/muntin` unchanged). The Flare reading and the tests' observations are in the pull request.

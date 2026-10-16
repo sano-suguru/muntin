@@ -3,7 +3,9 @@
 # middleware reads, through `App.handle` and `TestClient`; the client's
 # status, body and fields are unchanged. Contract:
 # docs/history/architecture-decisions.md, "Dropped error report decision
-# (M3-058)", "Next production slice"; semantics: docs/DX.md sections 6 and 7.
+# (M3-058)", "Next production slice", and "Dropped error report amendment
+# (M3-059)", whose two limits are pinned here too; semantics: docs/DX.md
+# sections 6 and 7.
 # Not reachable here, so not tested: a raise out of a route's `invoke`, which
 # no adapter makes, and a failed `Allow` write.
 
@@ -13,6 +15,7 @@ from std.testing import assert_equal, assert_false, assert_true, TestSuite
 from muntin import (
     App,
     Failure,
+    FromBody,
     FromBytes,
     FromJson,
     Headers,
@@ -92,6 +95,18 @@ struct Point(FromJson, ToJson):
         out.end_object()
 
 
+@fieldwise_init
+struct Configured(FromBody):
+    """A body conversion that fails for a server-side reason, whatever the
+    client sent."""
+
+    var text: String
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        raise Error("no parser configured")
+
+
 struct Tiny(FromBytes):
     comptime max_bytes = 4
 
@@ -163,6 +178,14 @@ def hello() -> String:
     return "hello"
 
 
+def configured(body: Configured) -> String:
+    return body.text
+
+
+def fail_with(value: String) raises -> String:
+    raise Error("no " + value)
+
+
 # Middleware.
 
 
@@ -199,23 +222,49 @@ def replaced(var request: Request, var next: Next) raises -> Response:
     return response^
 
 
+def raising_after(var request: Request, var next: Next) raises -> Response:
+    """Raises when the rest answered 500: its own report replaces the one it
+    received."""
+    var response = next^.run(request^)
+    if response.status == 500:
+        raise Error("after 500")
+    return response^
+
+
 # docs/DX.md section 7's logging middleware, as written.
+
+
+def quoted(text: String) -> String:
+    """`text` in double quotes, each byte outside printable ASCII, `"` and
+    `\\` written as `\\xNN`: no control character reaches the log as itself.
+    """
+    var out = String('"')
+    for b in text.as_bytes():
+        var c = Int(b)
+        if c < 0x20 or c > 0x7E or c == 0x22 or c == 0x5C:
+            out += "\\x"
+            for d in [c >> 4, c & 15]:
+                out += chr(d + 48 if d < 10 else d + 87)
+        else:
+            out += chr(c)
+    return out + '"'
 
 
 def failure_line(
     method: String, path: String, request_id: String, failure: Failure
 ) -> String:
-    # `repr` escapes control characters; masking secrets is the application's.
+    # Every value but `source` comes from the client or the error, so each is
+    # quoted; masking secrets is the application's.
     return String(
-        method,
+        quoted(method),
         " ",
-        path,
+        quoted(path),
         " client-id=",
-        repr(request_id),
+        quoted(request_id),
         " ",
         failure.source,
         ": ",
-        repr(failure.message),
+        quoted(failure.message),
     )
 
 
@@ -265,6 +314,8 @@ def _routes(mut app: App):
     app.post["/points"](echo_point)
     app.post["/upload"](upload)
     app.get["/hello"](hello)
+    app.get["/fail/{value}"](fail_with)
+    app.post["/configured"](configured)
 
 
 def _gap() -> Headers:
@@ -464,15 +515,59 @@ def test_outermost_logging_middleware() raises:
     assert_equal(r.text(), "Internal Server Error")
     assert_equal(
         r.headers.get("X-Log").value(),
-        "GET /orders/0 client-id='r-1' handler: 'database password is hunter2'",
+        (
+            '"GET" "/orders/0" client-id="r-1" handler: "database password is'
+            ' hunter2"'
+        ),
     )
     r = client.get("/mw")
     assert_equal(
         r.headers.get("X-Log").value(),
-        "GET /mw client-id='-' middleware: 'middleware detail'",
+        '"GET" "/mw" client-id="-" middleware: "middleware detail"',
     )
     r = client.get("/orders/1")
     assert_equal(r.text(), "order 1")
+    assert_false(r.headers.get("X-Log"))
+
+
+def test_logger_misses_a_report_an_inner_middleware_replaces() raises:
+    """A limit docs/DX.md section 6 states: the logger reads only the report
+    on the response it receives."""
+    var app = App()
+    app.use(logged)
+    app.use(replaced)
+    _routes(app)
+    var r = TestClient(app).get("/orders/0")
+    assert_equal(r.status, 500)
+    assert_equal(r.text(), "sorry")
+    assert_false(r.failure())
+    assert_false(r.headers.get("X-Log"))
+
+
+def test_logger_reads_only_the_last_of_two_failures() raises:
+    """The handler fails, then a middleware raises: only the middleware's
+    report reaches the logger (docs/DX.md section 6)."""
+    var app = App()
+    app.use(logged)
+    app.use(raising_after)
+    _routes(app)
+    var r = TestClient(app).get("/orders/0")
+    _assert_report(r, Failure.MIDDLEWARE, "after 500")
+    assert_equal(
+        r.headers.get("X-Log").value(),
+        '"GET" "/orders/0" client-id="-" middleware: "after 500"',
+    )
+
+
+def test_server_side_body_conversion_failure_is_an_unreported_400() raises:
+    """A limit docs/DX.md section 6 states: Muntin cannot tell a conversion's
+    own failure from bad input."""
+    var app = App()
+    app.use(logged)
+    _routes(app)
+    var r = TestClient(app).post("/configured", "valid")
+    assert_equal(r.status, 400)
+    assert_false(r.failure())
     assert_false(r.headers.get("X-Log"))
 
 
@@ -490,15 +585,61 @@ def test_dx_logging_example() raises:
     assert_equal(client.get("/orders/1").text(), "order 1")
 
 
-def test_failure_line_escapes_control_characters() raises:
+def _assert_inert(line: String) raises:
+    """Every byte of `line` is printable ASCII."""
+    for b in line.as_bytes():
+        assert_true(Int(b) >= 0x20 and Int(b) <= 0x7E, line)
+
+
+def test_failure_line_escapes_every_value() raises:
     var line = failure_line(
-        "GET",
-        "/x",
-        "a\nb",
-        Failure(_source=Failure.HANDLER, _message="bad\r\nX-Injected: 1"),
+        "G\x1bET",
+        "/a\x1b[2Kforged\u009b",
+        "a\nb\tc",
+        Failure(_source=Failure.HANDLER, _message="bad\r\nX: 1\x7f\u202e"),
     )
-    assert_false("\n" in line)
-    assert_false("\r" in line)
+    _assert_inert(line)
+    assert_equal(
+        line,
+        (
+            '"G\\x1bET" "/a\\x1b[2Kforged\\xc2\\x9b" client-id="a\\x0ab\\x09c"'
+            ' handler: "bad\\x0d\\x0aX: 1\\x7f\\xe2\\x80\\xae"'
+        ),
+    )
+    assert_equal(quoted('say "\\"'), '"say \\x22\\x5c\\x22"')
+    # Why the example does not use `repr`: it leaves a C1 control as it is.
+    assert_true("\u009b" in repr(String("\u009b")))
+
+
+def test_logged_line_escapes_client_values() raises:
+    """Client-controlled method, path, request ID and error text, through
+    `App.handle`: none reaches the line as itself."""
+    var app = App()
+    app.use(logged)
+    app.use(failing)
+    _routes(app)
+    var client = TestClient(app)
+    var id = Headers()
+    id.add("X-Request-Id", "r\t1\u009b")
+    var r = client.get("/fail/a\x1b[2Kforged", headers=id^)
+    assert_equal(r.status, 500)
+    _assert_report(r, Failure.HANDLER, "no a\x1b[2Kforged")
+    var line = r.headers.get("X-Log").value()
+    _assert_inert(line)
+    assert_equal(
+        line,
+        (
+            '"GET" "/fail/a\\x1b[2Kforged" client-id="r\\x091\\xc2\\x9b"'
+            ' handler: "no a\\x1b[2Kforged"'
+        ),
+    )
+    r = app.handle(Request("G\x1bET", "/mw", "", Headers()))
+    _assert_report(r, Failure.MIDDLEWARE, "middleware detail")
+    line = r.headers.get("X-Log").value()
+    _assert_inert(line)
+    assert_equal(
+        line, '"G\\x1bET" "/mw" client-id="-" middleware: "middleware detail"'
+    )
 
 
 def main() raises:
