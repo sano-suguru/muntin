@@ -8,8 +8,11 @@
    FAIL_LISTENER_ADD_ERRNO=n fails with errno n instead of ENOMEM.
    FAIL_LISTENER_ADD_EXCLUSIVE=1 instead fails every listener ADD that asks
    for EPOLLEXCLUSIVE, from the first, as a kernel before 4.5 does (with
-   EINVAL when FAIL_LISTENER_ADD_ERRNO=22). Each failure it makes writes a
-   line to standard error. */
+   EINVAL when FAIL_LISTENER_ADD_ERRNO=22). FAIL_LISTENER_ADD_DELAY_MS=n
+   makes the first failure return only after n ms, as if the worker had
+   spent them since it last read the clock (a slow handler earlier in the
+   same batch of events). Each failure it makes writes a line to standard
+   error. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
@@ -17,6 +20,7 @@
 #include <stdlib.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 static atomic_int succeeded, attempted;
@@ -45,6 +49,12 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev) {
     }
     if (fail) {
         static const char line[] = "fail_listener_add: injected\n";
+        static atomic_int delayed;
+        int delay = env("FAIL_LISTENER_ADD_DELAY_MS");
+        if (delay > 0 && atomic_exchange(&delayed, 1) == 0) {
+            struct timespec ts = {delay / 1000, (delay % 1000) * 1000000L};
+            nanosleep(&ts, NULL);
+        }
         (void)!write(2, line, sizeof line - 1);
         errno = getenv("FAIL_LISTENER_ADD_ERRNO") ? env("FAIL_LISTENER_ADD_ERRNO") : ENOMEM;
         return -1;

@@ -194,6 +194,10 @@ for section in "${sections[@]}"; do
         # - transient (ENOMEM, then ENOSPC): the next 3 attempts fail, then
         #   they succeed again; both must answer all 40 requests and keep
         #   serving;
+        # - transient-late: as transient ENOMEM, the first failure returning
+        #   only after 1500 ms, as when a slow handler ran earlier in the
+        #   batch: rotate's 1000 ms count from the failure, so it must
+        #   still recover;
         # - lasting: every attempt after 6 successes fails with ENOMEM:
         #   rotate must end, after its 1000 ms of retries, with serve's
         #   "reactor returned before a stop signal"; the pin never adds
@@ -203,12 +207,16 @@ for section in "${sections[@]}"; do
         # - old kernel: every add asking for EPOLLEXCLUSIVE fails with
         #   EINVAL, as before Linux 4.5: both must keep serving, and rotate
         #   must say so once per worker.
-        for kind in transient-enomem transient-enospc lasting lost old-kernel; do
+        # Rotate must also say each failure's errno itself (`flare:` lines;
+        # the shim's own lines do not count): retried and recovered for a
+        # transient one, the worker stopping for a lasting or lost one.
+        for kind in transient-enomem transient-enospc transient-late lasting lost old-kernel; do
             for name in pin rotate; do
                 out="$dir/port-$name.txt"
                 case $kind in
                 transient-enomem) preload=(FAIL_LISTENER_ADD_AFTER=4 FAIL_LISTENER_ADD_COUNT=3) ;;
                 transient-enospc) preload=(FAIL_LISTENER_ADD_AFTER=4 FAIL_LISTENER_ADD_COUNT=3 FAIL_LISTENER_ADD_ERRNO=28) ;;
+                transient-late) preload=(FAIL_LISTENER_ADD_AFTER=4 FAIL_LISTENER_ADD_COUNT=3 FAIL_LISTENER_ADD_DELAY_MS=1500) ;;
                 lasting) preload=(FAIL_LISTENER_ADD_AFTER=6) ;;
                 lost) preload=(FAIL_LISTENER_ADD_AFTER=6 FAIL_LISTENER_ADD_ERRNO=9) ;;
                 old-kernel) preload=(FAIL_LISTENER_ADD_EXCLUSIVE=1 FAIL_LISTENER_ADD_ERRNO=22) ;;
@@ -226,6 +234,20 @@ for section in "${sections[@]}"; do
                 injected="$(grep -c '^fail_listener_add: ' "$out" || true)"
                 refused="$(grep -c '^flare: EPOLLEXCLUSIVE refused' "$out" || true)"
                 echo "  failures injected: $injected; fallbacks reported: $refused"
+                grep '^flare: ' "$out" | sort | uniq -c | sed 's/^/  /' || true
+                case $kind in
+                transient-enospc) said=('errno 28); this worker retries' 'listener was added again') ;;
+                transient-*) said=('errno 12); this worker retries' 'listener was added again') ;;
+                lasting) said=('errno 12) after .* ms of retries; this worker stops') ;;
+                lost) said=('errno 9); this worker stops') ;;
+                *) said=() ;;
+                esac
+                if [[ $name == rotate ]]; then
+                    for line in "${said[@]}"; do
+                        grep -q "^flare: .*$line" "$out" ||
+                            failed+=("fault: rotate $kind: did not say \"$line\"")
+                    done
+                fi
                 [[ $injected -gt 0 ]] || [[ $name == pin && $kind != old-kernel ]] ||
                     failed+=("fault: $name $kind: no failure injected")
                 [[ $name != rotate || $kind != old-kernel || $refused == 4 ]] ||

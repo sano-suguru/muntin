@@ -32,32 +32,38 @@ complete 200, a hold it could not set up.
   within 3 s of the end (a listener left with a backlog not served again).
 - `trials N SERVER...`: N rounds; in each, for every server in a shuffled
   order, a hold-wait trial and an after-hold trial on a pool of 8
-  keep-alive connections opened at the start. Hold-wait: `/slow/100` on a
+  keep-alive connections opened at the start. Hold-wait: `/timed/100` on a
   pool connection and, released by the same barrier, a new connection
-  sending `/worker` with `Connection: close` (a pool connection Flare
+  sending `/stamp` with `Connection: close` (a pool connection Flare
   closes at its 100th request is replaced). After-hold: the same, the new
   connection opened only once the handler has signalled its start (M3-049's
-  contract: answered by another idle worker). A trial's new connection
-  waited if it was answered after the handler signalled its end. Prints,
-  per server and kind, waited/N, how many of those went to the slow
-  request's worker, failures, and against `pin` the difference with its
-  Newcombe 95% confidence interval and a one-sided Fisher exact p for a
-  rise.
+  contract: answered by another idle worker). Whether a trial's new
+  connection waited is read from the server, not from when this client
+  saw a signal: it waited if `/stamp` was served on the slow handler's
+  thread after that handler's end, by the server's clock, having been sent
+  before that end (both `CLOCK_MONOTONIC`). A trial whose `/stamp` was sent
+  after the handler's end tests nothing and fails the run, as does one
+  served on that thread while the handler ran. Prints, per server and kind,
+  waited/N, how many were served by another worker and how many by the
+  slow worker before its handler started, failures, and against `pin` the
+  difference with its Newcombe 95% confidence interval and a one-sided
+  Fisher exact p for a rise.
 - `stop N NAME=BINARY...`: N rounds; in each, for every binary in a shuffled
   order, starts it (`BINARY 4 60000 200`: a 200 ms grace window), checks one
   `/health`, sends SIGTERM and, after a uniform 0 to 60 ms (the stop watcher
   polls every 50 ms), opens a connection sending `/health`. Outcomes: `ok`,
   `refused` (connect refused: the listener had closed), `reset` (connected,
-  then reset or closed with no complete answer), `timeout` (3 s). Also
-  requires the server to exit 0 within 3 s. Prints counts and, against
-  `pin`, the same statistics on `reset`.
+  then reset or closed with no complete answer); anything else (another
+  status, a timeout of 3 s) fails the run, as does a server that does not
+  exit 0 within 3 s. Prints counts and, against `pin`, the same statistics
+  on `reset`.
 - `sequential PORT N`: N new connections one after another, each `/health`
   with `Connection: close` and a 2 s timeout; prints each outcome, with how
   long one that is not `ok` took; exits 1 unless all are `ok`.
 - `churnstop PORT PID`: 8 threads open connections in a loop (`/health`,
   `Connection: close`) for 2 s; SIGTERM goes to PID at 1 s. Prints outcomes
   before and after the signal; exits 1 if any attempt started before it was
-  not answered.
+  not answered, or one started after it met anything but `stop`'s outcomes.
 """
 
 import math
@@ -463,16 +469,19 @@ def arrivals(arg):
     return 1 if fails or arrival_fails or unanswered or not lat else 0
 
 
-def new_worker_call(port, timeout=3.0):
-    """`/worker` on a new connection with `Connection: close`: (worker,
-    answered at) or raises."""
+def new_stamp(port, timeout=3.0):
+    """`/stamp` on a new connection with `Connection: close`: (the serving
+    thread, when the server served it, when this client sent it), times in
+    `CLOCK_MONOTONIC` nanoseconds; raises unless answered 200."""
     s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
     try:
-        s.sendall(request("/worker", close=True))
+        sent = time.monotonic_ns()
+        s.sendall(request("/stamp", close=True))
         status, body, _ = read_response(s)
         if status != 200:
             raise ValueError(f"answered {status}")
-        return body, time.monotonic()
+        thread, served = body.split()
+        return thread, int(served), sent
     finally:
         s.close()
 
@@ -482,7 +491,8 @@ def trials(n, args):
     for arg in args:
         name, port, fifo, _ = server(arg)
         servers.append({"name": name, "port": port, "sig": Signal(fifo), "pool": open_pool(port, 8),
-                        "hold": [0, 0, {}], "after": [0, 0, {}], "n": 0})
+                        "hold": {"waited": 0, "other": 0, "before": 0, "late": 0, "fails": {}},
+                        "after": {"waited": 0, "other": 0, "before": 0, "late": 0, "fails": {}}, "n": 0})
 
     def trial(s, kind):
         conn = random.choice(s["pool"])
@@ -490,15 +500,11 @@ def trials(n, args):
         barrier = threading.Barrier(2)
         slow = []
 
-        closes = []
-
         def send_slow():
             try:
                 barrier.wait()
-                conn.sock.sendall(request("/slow/100"))
-                status, _, closed = read_response(conn.sock)
-                slow.append(status)
-                closes.append(closed)
+                conn.sock.sendall(request("/timed/100"))
+                slow.append(read_response(conn.sock))
             except Exception as e:
                 slow.append(outcome(e))
 
@@ -509,25 +515,40 @@ def trials(n, args):
             sys.exit(f"trials {s['name']}: the slow handler did not signal its start")
         tally = s[kind]
         try:
-            worker, at = new_worker_call(s["port"])
+            stamp = new_stamp(s["port"])
         except Exception as e:
-            worker, at = None, None
-            tally[2][outcome(e)] = tally[2].get(outcome(e), 0) + 1
+            stamp = None
+            tally["fails"][outcome(e)] = tally["fails"].get(outcome(e), 0) + 1
         t.join()
-        if slow != [200]:
+        if not isinstance(slow[0], tuple) or slow[0][0] != 200:
             sys.exit(f"trials {s['name']}: the slow request answered {slow}")
-        if closes == [True]:  # Flare's 100th request on that connection
+        status, body, closes = slow[0]
+        if closes:  # Flare's 100th request on that connection
             conn.sock.close()
             fresh = Conn(s["port"])
             fresh.ask_worker()
             s["pool"][s["pool"].index(conn)] = fresh
         if not s["sig"].wait(base + 2, 2.0):
             sys.exit(f"trials {s['name']}: the slow handler did not signal its end")
-        ended = s["sig"].seen[base + 1][1]
-        if at is not None and at > ended:
-            tally[0] += 1
-            if worker == conn.worker:
-                tally[1] += 1
+        if stamp is None:
+            return
+        slow_thread, start, end = body.split()
+        start, end = int(start), int(end)
+        thread, served, sent = stamp
+        if kind == "after" and sent < start:
+            sys.exit(f"trials {s['name']}: /stamp sent at {sent}, before the handler it waited for "
+                     f"started at {start}")
+        if sent >= end:
+            tally["late"] += 1
+        elif thread != slow_thread:
+            tally["other"] += 1
+        elif served < start:
+            tally["before"] += 1
+        elif served <= end:
+            sys.exit(f"trials {s['name']}: /stamp served at {served} on the slow handler's thread, "
+                     f"which ran from {start} to {end}")
+        else:
+            tally["waited"] += 1
 
     for _ in range(n):
         order = servers[:]
@@ -540,13 +561,21 @@ def trials(n, args):
     failed = False
     for s in servers:
         for kind, label in (("hold", "hold-wait"), ("after", "after-hold")):
-            waited, same, fails = s[kind]
-            line = f"{s['name']} {label} waited {waited}/{s['n']} (on the slow worker {same}) failed {sum(fails.values())} {fails or ''}"
+            t = s[kind]
+            line = (f"{s['name']} {label} waited {t['waited']}/{s['n']} (another worker {t['other']}, "
+                    f"the slow worker before it started {t['before']}, sent after it ended {t['late']}) "
+                    f"failed {sum(t['fails'].values())} {t['fails'] or ''}")
             if pin is not None and s is not pin:
-                line += " " + against_pin(waited, s["n"], pin[kind][0], pin["n"])
+                line += " " + against_pin(t["waited"], s["n"], pin[kind]["waited"], pin["n"])
             print(line, flush=True)
-            failed |= bool(fails)
+            failed |= bool(t["fails"]) or t["late"] > 0
     return 1 if failed else 0
+
+
+# What a connection opened as a stop starts may meet: answered, refused by a
+# closed listener, or reset by a closing one. Anything else (another status,
+# a timeout) is a broken server, not a stop, and fails the run.
+STOP_OUTCOMES = ("ok", "refused", "reset")
 
 
 def stop(n, args):
@@ -590,6 +619,8 @@ def stop(n, args):
             result = outcome(e)
         v["counts"][result] = v["counts"].get(result, 0) + 1
         v["n"] += 1
+        if result not in STOP_OUTCOMES:
+            bad.append(f"{v['name']}: opened {delay * 1000:.0f} ms after SIGTERM: {result}")
         try:
             code = p.wait(timeout=3)
         except subprocess.TimeoutExpired:
@@ -670,7 +701,7 @@ def churnstop(port, pid):
     for t in threads:
         t.join()
     print(f"before {before} after {after}", flush=True)
-    return 0 if set(before) == {"ok"} else 1
+    return 0 if set(before) == {"ok"} and set(after) <= set(STOP_OUTCOMES) else 1
 
 
 def main():

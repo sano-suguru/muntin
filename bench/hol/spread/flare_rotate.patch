@@ -1,5 +1,5 @@
 diff --git a/flare/http/_unified_reactor_impl.mojo b/flare/http/_unified_reactor_impl.mojo
-index c6c4e962..4947f0c1 100644
+index c6c4e962..fac6fc57 100644
 --- a/flare/http/_unified_reactor_impl.mojo
 +++ b/flare/http/_unified_reactor_impl.mojo
 @@ -56,6 +56,7 @@ kernel wakes one worker per accept event.
@@ -10,7 +10,7 @@ index c6c4e962..4947f0c1 100644
  from std.collections import Dict, Optional
  from std.ffi import c_int, get_errno
  from std.memory import Pointer
-@@ -1099,12 +1100,44 @@ def _run_unified_loop_for_fd[
+@@ -1099,12 +1100,46 @@ def _run_unified_loop_for_fd[
      var conns = Dict[Int, Int]()
      var timers = Dict[Int, UInt64]()
  
@@ -50,24 +50,38 @@ index c6c4e962..4947f0c1 100644
          reactor.register(c_int(listener_fd), LISTENER_TOKEN, INTEREST_READ)
 +    # When an add after a batch fails with ENOMEM or ENOSPC, the worker
 +    # keeps serving its open connections and tries again on every
-+    # iteration (polling at most 10 ms meanwhile); after 1000 ms without
-+    # success, or on any other errno, it ends as on a failed poll.
++    # iteration (polling at most 10 ms meanwhile); after 1000 ms from that
++    # failure without success, or on any other errno, it ends as on a
++    # failed poll. Each failure, recovery and end says why on standard
++    # error, with its errno.
 +    var unlisted_since_ms = UInt64(0)
  
      var listener_fds = Dict[Int, Bool]()
      for i in range(len(extra_fds)):
-@@ -1120,9 +1153,22 @@ def _run_unified_loop_for_fd[
+@@ -1120,9 +1155,34 @@ def _run_unified_loop_for_fd[
      var stopping_addr = Int(Pointer[Bool, _](to=stopping))
      while not load_stop_flag(stopping_addr):
          store_worker_stat(stats_addr, WORKER_STAT_INFLIGHT, len(conns))
 +        if unlisted_since_ms != 0:
 +            var err = reactor.add_exclusive(c_int(listener_fd), LISTENER_TOKEN)
++            var retried_ms = UInt64(_monotonic_ms()) - unlisted_since_ms
 +            if err == 0:
++                print(
++                    "flare: the listener was added again after "
++                    + String(retried_ms)
++                    + " ms",
++                    file=stderr,
++                )
 +                unlisted_since_ms = 0
-+            elif (
-+                (err != 12 and err != 28)
-+                or UInt64(_monotonic_ms()) - unlisted_since_ms > 1000
-+            ):
++            elif (err != 12 and err != 28) or retried_ms > 1000:
++                print(
++                    "flare: adding the listener again failed (errno "
++                    + String(err)
++                    + ") after "
++                    + String(retried_ms)
++                    + " ms of retries; this worker stops",
++                    file=stderr,
++                )
 +                exit_status = WORKER_STATUS_CRASHED
 +                break
          events.clear()
@@ -80,7 +94,7 @@ index c6c4e962..4947f0c1 100644
          except:
              exit_status = WORKER_STATUS_CRASHED
              break
-@@ -1130,6 +1176,7 @@ def _run_unified_loop_for_fd[
+@@ -1130,6 +1190,7 @@ def _run_unified_loop_for_fd[
          var now_ms = UInt64(_monotonic_ms())
          _advance_timer_wheel_unified(now_ms, wheel, conns, timers, reactor)
  
@@ -88,7 +102,7 @@ index c6c4e962..4947f0c1 100644
          for i in range(len(events)):
              var evt = events[i]
              if evt.is_wakeup():
-@@ -1145,6 +1192,15 @@ def _run_unified_loop_for_fd[
+@@ -1145,6 +1206,30 @@ def _run_unified_loop_for_fd[
                      config.max_connections,
                      tls_ctx_addr,
                  )
@@ -98,13 +112,28 @@ index c6c4e962..4947f0c1 100644
 +                        c_int(listener_fd), LISTENER_TOKEN
 +                    )
 +                    if err == 12 or err == 28:  # ENOMEM, ENOSPC
-+                        unlisted_since_ms = now_ms if now_ms != 0 else 1
++                        # Timed from this failure, not from now_ms: a
++                        # handler earlier in this batch may have run since.
++                        var failed_ms = UInt64(_monotonic_ms())
++                        unlisted_since_ms = failed_ms if failed_ms != 0 else 1
++                        print(
++                            "flare: adding the listener again failed (errno "
++                            + String(err)
++                            + "); this worker retries for up to 1000 ms",
++                            file=stderr,
++                        )
 +                    elif err != 0:
++                        print(
++                            "flare: adding the listener again failed (errno "
++                            + String(err)
++                            + "); this worker stops",
++                            file=stderr,
++                        )
 +                        listener_lost = True
                  continue
              var fd = Int(evt.token)
              if len(listener_fds) > 0 and fd in listener_fds:
-@@ -1176,6 +1232,9 @@ def _run_unified_loop_for_fd[
+@@ -1176,6 +1261,9 @@ def _run_unified_loop_for_fd[
                  timers,
                  ws_hooks.copy(),
              )

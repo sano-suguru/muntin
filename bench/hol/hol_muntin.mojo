@@ -17,11 +17,19 @@ Routes:
 - `GET /health`: answers `ok` at once.
 - `GET /worker`: answers the serving thread's `pthread_self()`, so a client
   can tell which worker serves each of its connections.
+- `GET /timed/{ms}`: `/slow/{ms}`, signals included, answering
+  `<pthread_self()> <start> <end>`: `CLOCK_MONOTONIC` nanoseconds read as the
+  handler starts and as it returns.
+- `GET /stamp`: answers `<pthread_self()> <now>`, `now` as above. With
+  `/timed`, a client tells from the server's own thread and clock whether a
+  request was served by the worker running a slow handler, and before or
+  after it (M3-069's trials).
 """
 
 from std.ffi import external_call
+from std.memory import stack_allocation
 from std.os import getenv
-from std.sys import argv
+from std.sys import CompilationTarget, argv
 from std.time import sleep
 
 from muntin import App
@@ -43,6 +51,29 @@ def slow(ms: Int) raises -> String:
     return "slow"
 
 
+def monotonic_ns() -> Int:
+    """`CLOCK_MONOTONIC` in nanoseconds: the clock Python's
+    `time.monotonic_ns()` reads, so a client on the same machine can compare
+    its own times with the server's."""
+    comptime clock = 6 if CompilationTarget.is_macos() else 1
+    var ts = stack_allocation[2, Int64]()
+    _ = external_call["clock_gettime", Int32](Int32(clock), ts)
+    return Int(ts[unsafe_offset=0]) * 1_000_000_000 + Int(ts[unsafe_offset=1])
+
+
+def timed(ms: Int) raises -> String:
+    var start = monotonic_ns()
+    signal("s")
+    sleep(Float64(ms) / 1000.0)
+    var end = monotonic_ns()
+    signal("e")
+    return worker() + " " + String(start) + " " + String(end)
+
+
+def stamp() -> String:
+    return worker() + " " + String(monotonic_ns())
+
+
 def health() -> String:
     return "ok"
 
@@ -56,6 +87,8 @@ def make_app() -> App:
     app.get["/slow/{ms}"](slow)
     app.get["/health"](health)
     app.get["/worker"](worker)
+    app.get["/timed/{ms}"](timed)
+    app.get["/stamp"](stamp)
     return app^
 
 
