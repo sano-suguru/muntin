@@ -40,6 +40,8 @@ MODE is where the probes go:
   connection.
 - `spread`: no slow request; how a server spreads kept-open connections
   over its workers (`spread` below).
+- `capacity-K`: K slow requests held at once, then one `/health` on a new
+  connection (`capacity` below): how many blocking handlers stop a server.
 
 It prints one line: `MODE n=<probes sent during the hold> during=<answered
 before the hold ended> after=<answered after it> lost=<written, not
@@ -372,6 +374,70 @@ def spread(port):
         conn.sock.close()
 
 
+def capacity(port, held, slow_ms, signal_path):
+    """Holds `held` handlers at once and asks `/health` on a new connection
+    while they run. Each `GET /slow/SLOW_MS` goes on a new HTTP/1.1
+    connection, opened only once the previous one's handler has signalled
+    its start, so the held workers no longer poll and the next connection
+    goes to a worker that does; then `/health` goes on a new connection.
+    Prints `capacity held=<n> health=<status> during=<yes if answered
+    before the first held handler signalled its end, and when none is held>
+    health_ms=<from sending> margin_ms=<that first end minus the answer, as
+    this client read them; near 0 is a tie> slow=<each slow request's
+    status>`; exits nonzero if the handlers do not signal, if one ended
+    before all were held (the next connection went to a held worker), or if
+    a request is not answered 200."""
+    fd = os.open(signal_path, os.O_RDWR)
+    times = []  # (byte, when it arrived), appended by the reader as it reads
+    arrived = threading.Condition()
+
+    def read_signal():
+        # O_RDWR keeps a writer present, so this read never sees EOF (Linux).
+        while len(times) < 2 * held:
+            byte = os.read(fd, 1).decode()
+            with arrived:
+                times.append((byte, time.monotonic()))
+                arrived.notify_all()
+
+    threading.Thread(target=read_signal, daemon=True).start()
+    starts = lambda: [b for b, _ in times].count("s")
+    slow = []
+    threads = []
+    for i in range(held):
+        note = {}
+        t = threading.Thread(
+            target=lambda n=note: slow.append(h1_new_call(port, f"/slow/{slow_ms}", slow_ms / 1000 + ANSWER_BOUND_S, n)),
+            daemon=True,
+        )
+        t.start()
+        threads.append(t)
+        with arrived:
+            if not arrived.wait_for(lambda: starts() == i + 1, ANSWER_BOUND_S):
+                sys.exit(f"capacity: handler {i + 1} of {held} did not signal its start: {times}")
+    with arrived:
+        if any(b == "e" for b, _ in times):
+            sys.exit(f"capacity: a handler ended before {held} were held: {times}")
+    note = {}
+    status = h1_new_call(port, "/health", slow_ms / 1000 + ANSWER_BOUND_S, note)
+    done = time.monotonic()
+    for t in threads:
+        t.join()
+    with arrived:
+        if not arrived.wait_for(lambda: len(times) == 2 * held, ANSWER_BOUND_S):
+            sys.exit(f"capacity: the held handlers did not signal their ends: {times}")
+    ends = [at for b, at in times if b == "e"]
+    during = "yes" if not ends or done < min(ends) else "no"
+    margin = f"{(min(ends) - done) * 1000:.1f}" if ends else "none"
+    health_ms = (done - note["sent"]) * 1000 if "sent" in note else float("nan")
+    print(
+        f"capacity held={held} health={status} during={during} health_ms={health_ms:.0f} margin_ms={margin} "
+        f"slow={','.join(str(s) for s in slow) or 'none'}",
+        flush=True,
+    )
+    if status != 200 or any(s != 200 for s in slow):
+        sys.exit("capacity: a request was not answered 200")
+
+
 class Signal:
     """Reads the slow handler's `s` and `e` from the FIFO, with the time each
     arrived."""
@@ -395,6 +461,8 @@ def main():
     port, mode, slow_ms, signal_path = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), sys.argv[4]
     if mode == "spread":
         return spread(port)
+    if mode.startswith("capacity-"):
+        return capacity(port, int(mode.removeprefix("capacity-")), slow_ms, signal_path)
     control = slow_ms == 0
     slow_s = slow_ms / 1000 if not control else CONTROL_S
     end_s = HOLD_AT_S + slow_s + TAIL_S
