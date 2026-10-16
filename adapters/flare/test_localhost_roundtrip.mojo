@@ -242,6 +242,15 @@ them, through the middleware. Over HTTP/1.1 Flare refuses every such byte
 itself, well-formed or not, with its own `400 Bad Request` body, and the
 child keeps answering.
 
+M3-073 serves `targets_app()` again and sends requests without `Host`.
+Over HTTP/1.1, and over HTTP/1.9, which Flare admits and RFC 9110 section
+6.2 has processed as 1.1, each is the adapter's 400 `Bad Request` before
+`App.handle`, without the middleware's field (under the `HEAD` rule for
+`HEAD`), on a path a route matches and on one none does. An empty `Host`, a
+`Host` in another casing and HTTP/1.0 without one are answered by
+`App.handle`, as is an h2c request with neither `:authority` nor `host`, or
+with `host` only. The child keeps answering.
+
 M3-044 serves `receive_app()` (a middleware `counted` that counts the
 requests it sees and adds `X-Seen`, a raw echo, a `FromBytes` route with
 `max_bytes` 256 and one with 16, each counting its `from_bytes` and handler
@@ -1447,11 +1456,12 @@ def h2_exchange(
     fields: List[Tuple[String, String]],
     body: List[UInt8],
     split: Bool = False,
+    authority: String = "localhost",
 ) raises -> Tuple[List[HpackHeader], List[UInt8], Int]:
     """As `h2_request`, with `body` sent in one DATA frame after the HEADERS
     frame (none when empty) and the response body returned as bytes. With
     `split`, the body goes out in two DATA frames (`_halves`), only the last
-    ending the stream."""
+    ending the stream. `authority` as in `_h2_block`."""
     var wire = List(H2_PREFACE.as_bytes())
     wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
     var end = FrameFlags.END_STREAM() if len(body) == 0 else UInt8(0)
@@ -1461,7 +1471,7 @@ def h2_exchange(
                 FrameType.HEADERS(),
                 FrameFlags.END_HEADERS() | end,
                 1,
-                _h2_block(method, path, fields),
+                _h2_block(method, path, fields, authority),
             )
         )
     )
@@ -1530,15 +1540,20 @@ def h2_in_turn(
 
 
 def _h2_block(
-    method: String, path: String, fields: List[Tuple[String, String]]
+    method: String,
+    path: String,
+    fields: List[Tuple[String, String]],
+    authority: String = "localhost",
 ) -> List[UInt8]:
     """A request header block: `method`'s and `path`'s bytes as given (a
-    test may pass bytes that are not UTF-8), then `fields`."""
+    test may pass bytes that are not UTF-8), `authority` (none when
+    empty), then `fields`."""
     var hdrs = List[HpackHeader]()
     hdrs.append(HpackHeader(":method", method))
     hdrs.append(HpackHeader(":scheme", "http"))
     hdrs.append(HpackHeader(":path", path))
-    hdrs.append(HpackHeader(":authority", "localhost"))
+    if authority.byte_length() > 0:
+        hdrs.append(HpackHeader(":authority", authority))
     for f in fields:
         hdrs.append(HpackHeader(f[0], f[1]))
     return HpackEncoder().encode(Span[HpackHeader, _](hdrs))
@@ -1605,12 +1620,20 @@ def _h2_answers(
 def h1_raw(port: Int, method: String, path: String) raises -> String:
     """One HTTP/1.1 request with `Connection: close` and no body; every byte
     of the response until the server closes the connection."""
-    var wire = String(
-        method,
-        " ",
-        path,
-        " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    return h1_wire(
+        port,
+        String(
+            method,
+            " ",
+            path,
+            " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        ),
     )
+
+
+def h1_wire(port: Int, wire: String) raises -> String:
+    """`wire` written as is on a new connection; every byte of the response
+    until the server closes the connection."""
     var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     stream.set_recv_timeout(TIMEOUT_MS)
     stream.write_all(wire.as_bytes())
@@ -3070,6 +3093,74 @@ def test_request_target_and_method_bytes_over_h2c_and_http1() raises:
         )
         assert_equal(h1_ok[0], "HTTP/1.1 200 OK")
         assert_equal(String(from_utf8=Span(h1_ok[2])), "name é")
+        assert_true(_running(child.pid))
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+def test_http1_request_without_host_is_400_over_localhost() raises:
+    """An HTTP/1.1 request without `Host` is the adapter's 400 before
+    `App.handle`; HTTP/1.0 and h2c need none (M3-073)."""
+    var child = _serve_in_child(targets_app())
+    try:
+        var close = String("Connection: close\r\n\r\n")
+        # (request head, whether `App.handle` answers it)
+        var cases: List[Tuple[String, Bool]] = [
+            (String("GET /hello HTTP/1.1\r\n") + close, False),
+            (String("GET /missing HTTP/1.1\r\n") + close, False),
+            (String("GET /hello HTTP/1.9\r\n") + close, False),
+            (String("GET /hello HTTP/1.1\r\nHost:\r\n") + close, True),
+            (
+                String("GET /hello HTTP/1.1\r\nhOsT: localhost\r\n") + close,
+                True,
+            ),
+            (String("GET /hello HTTP/1.0\r\n") + close, True),
+        ]
+        for c in cases:
+            var got = h1_wire(child.port, c[0])
+            print("observed without Host:", repr(c[0]), "->", repr(got))
+            var head_end = got.find("\r\n\r\n")
+            assert_true(head_end > 0, c[0])
+            var head = String(got[byte=:head_end])
+            var body = String(got[byte = head_end + 4 :])
+            if c[1]:
+                assert_true(head.startswith("HTTP/1.1 200 OK\r\n"), c[0])
+                assert_true("\r\nX-Seen: 1" in head, c[0])
+                assert_equal(body, "hello", c[0])
+            else:
+                # The adapter's body, not Flare's own `400 Bad Request`.
+                assert_true(
+                    head.startswith("HTTP/1.1 400 Bad Request\r\n"), c[0]
+                )
+                assert_true("X-Seen" not in head, c[0])
+                assert_equal(body, "Bad Request", c[0])
+            assert_true(_running(child.pid), c[0])
+        # `HEAD`: the adapter's 400 under the `HEAD` rule (M3-027).
+        var head = h1_wire(
+            child.port, String("HEAD /hello HTTP/1.1\r\n") + close
+        )
+        print("observed HEAD without Host:", repr(head))
+        assert_true(head.startswith("HTTP/1.1 400 Bad Request\r\n"), head)
+        assert_true("\r\nContent-Length: 11\r\n" in head, head)
+        assert_true("X-Seen" not in head, head)
+        assert_true(head.endswith("\r\n\r\n"), head)
+
+        # h2c: Flare writes `:authority` as `Host`; a request with neither,
+        # or with `host` only, is `App.handle`'s.
+        var none = List[Tuple[String, String]]()
+        var host_only: List[Tuple[String, String]] = [
+            (String("host"), String("localhost"))
+        ]
+        for fields in [none.copy(), host_only.copy()]:
+            var h2 = h2_exchange(
+                child.port, "GET", "/hello", fields, List[UInt8](), authority=""
+            )
+            var at = String("h2c fields ", len(fields))
+            print("observed", at, _h2_fields(h2[0]))
+            assert_equal(_h2_field(h2[0], ":status"), "200", at)
+            assert_equal(String(from_utf8=Span(h2[1])), "hello", at)
+            assert_equal(_h2_field(h2[0], "x-seen"), "1", at)
         assert_true(_running(child.pid))
     finally:
         _ = kill(child.pid, SIGKILL)

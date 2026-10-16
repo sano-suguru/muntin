@@ -60,7 +60,8 @@ Later items changed the contract. An amendment adds to it; a reopen changes what
 - M3-048 amended it (bodyless typed `post`, `put` and `patch` handlers): [Bodyless typed post, put and patch handlers decision (M3-048)](history/architecture-decisions.md#bodyless-typed-post-put-and-patch-handlers-decision-m3-048);
 - M3-050 amended it (an opt-in `Param` names a route value's placeholder, checked at compile time; of two values both or neither are `Param`s, and two bare values register as before): [Named route values decision (M3-050)](history/architecture-decisions.md#named-route-values-decision-m3-050);
 - M3-053 reopened it (a registration that overlaps an earlier route of its method which is not more specific, a repeated path included, aborts): [Route conflict decision (M3-053)](history/architecture-decisions.md#route-conflict-decision-m3-053);
-- M3-055 amended it (an application type conforming to `FromRouteValue` is a route value; one that is also a body is rejected): [Application route-value types decision (M3-054)](history/architecture-decisions.md#application-route-value-types-decision-m3-054).
+- M3-055 amended it (an application type conforming to `FromRouteValue` is a route value; one that is also a body is rejected): [Application route-value types decision (M3-054)](history/architecture-decisions.md#application-route-value-types-decision-m3-054);
+- M3-073 reopened it (an HTTP/1.1 request without `Host` is the adapter's 400): [HTTP/1.1 Host decision (M3-073)](history/architecture-decisions.md#http11-host-decision-m3-073).
 
 Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it, except one: the contract's opening sentence holds for `HEAD`'s answer but not for its content. The in-memory response to `HEAD` keeps the body, and keeping it off the wire, with the length, is each network backend's obligation ([HEAD decision (M3-026)](history/architecture-decisions.md#head-decision-m3-026)). What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
 
@@ -95,6 +96,7 @@ What each capability does for an application: `docs/DX.md`; how and why: its dec
 | middleware functions (`app.use(f)`, compile-time configuration only) | [M3-034](history/architecture-decisions.md#middleware-decision-m3-034) | shipped |
 | a request handed to `App.handle` reaches middleware without a copy (the owning `App.handle`, M3-064) | [M3-063](history/architecture-decisions.md#request-context-decision-m3-063) | shipped |
 | request method and target bytes kept exactly through Flare | [M3-039](history/architecture-decisions.md#request-target-and-method-bytes-decision-m3-039) | shipped |
+| HTTP/1.1 requests without `Host` refused (400) through Flare | [M3-073](history/architecture-decisions.md#http11-host-decision-m3-073) | shipped |
 | binary request and response bodies (`List[UInt8]`) | [M3-040](history/architecture-decisions.md#binary-request-and-response-bodies-decision-m3-040) | shipped |
 | typed binary request bodies (`FromBytes`) | [M3-041](history/architecture-decisions.md#typed-binary-request-bodies-decision-m3-041) | shipped |
 | typed binary request bodies with header fields (`WithHeaders[B]` around a `FromBytes`) | [M3-042](history/architecture-decisions.md#typed-binary-request-bodies-with-header-fields-decision-m3-042) | shipped |

@@ -4684,3 +4684,33 @@ def me(user: Context[CurrentUser]) -> String:
 - Measure: the pull request's copy timing again, with middleware, through the owning `handle`: flat across body sizes.
 - Docs: `docs/DX.md` sections 7, 11 and 15; `docs/ARCHITECTURE.md` (request handling, Request/Response ownership); `docs/SPEC.md`.
 - Not in the slice: `Context`, the adapter's body copy, a raw handler's body copy.
+
+### HTTP/1.1 Host decision (M3-073)
+
+Status: **decision and production** (M3-073, pull request #PR; `src/muntin` unchanged). The Flare reading, the RFC text and the tests' observations are in the pull request. It changes what the Flare adapter answers for one class of requests, so it reopens M2 under [M2-016](#m2-closure-m2-016), as [M3-039](#request-target-and-method-bytes-decision-m3-039) did.
+
+**Question and what settles it.** RFC 9112 section 3.2: "A server MUST respond with a 400 (Bad Request) status code to any HTTP/1.1 request message that lacks a Host header field". Flare v0.12.0 refuses a second `Host` but admits an HTTP/1.1 request with none (`compat/flare/headers/flare_header_probe.mojo`, "2. HTTP/1.1 request without Host accepted"), and the adapter did not look, so `App.handle` answered it; no document listed the gap. Should the adapter answer it 400, and what of HTTP/1.0 and h2c, or should the gap be recorded with a revisit condition? Settled by the RFCs' requirements per protocol, what Flare v0.12.0 hands the adapter for each (read in its source: the HTTP/1 parser's version, `take_request`'s `:authority`, the `Upgrade: h2c` path), and loopback requests through the changed adapter.
+
+**Choice: the adapter answers an HTTP/1.1 request without `Host` with its 400 `Bad Request`, before the conversion and `App.handle`.** `_answer` checks `request.version` and `request.headers.contains("host")` (any casing) first: a version `HTTP/1.1`, or a later HTTP/1 minor version, which RFC 9110 section 6.2 says a server should process as 1.1 (Flare's HTTP/1 parser admits `HTTP/<digit>.<digit>` only, and reads a request line without a version as `HTTP/1.1`), without a `Host` field gets the adapter's existing 400, under the `HEAD` rule (M3-027) for `HEAD`, with no middleware, route scan or handler, whatever the path. The rest is unchanged:
+- An empty `Host` value is kept: RFC 9112 section 3.2 has a client send one when the target URI has no authority.
+- HTTP/1.0 needs no `Host` and is served as before.
+- h2c is served as before. RFC 9113 section 8.3.1 has a client send `:authority` unless there is no authority to convey, and asks no server to refuse a request with neither field; Flare v0.12.0 writes `:authority` as `Host` (`take_request`), so the request without `Host` is the one that carried neither, and a `host` field alone arrives as itself. Flare reports every HTTP/2 request as `HTTP/2`.
+- The value is not checked (RFC 9112's 400 for "a Host header field with an invalid field value"), and a request upgraded with `Upgrade: h2c` reaches the adapter as `HTTP/2`, so one whose upgrading HTTP/1.1 request had no `Host` is served: "Other current limits" in `docs/ARCHITECTURE.md`.
+
+**Rejected.**
+- Record it as a known gap and keep serving: a MUST of the protocol the `Server` speaks, which costs one check where the adapter already answers requests it refuses.
+- Refuse in `App.handle`: `TestClient` and in-memory requests have no version and no `Host`; which protocol requires it is the backend's knowledge.
+- Also refuse h2c requests with neither `:authority` nor `host`: no RFC asks it, and it would refuse requests whose target has no authority.
+- Wait for Flare to refuse it: nothing in Flare v0.12.0 does, and the pin moves only with the owner's approval.
+
+**Revisit when:**
+- the Flare pin moves and Flare refuses the request itself (the probe's case changes): the adapter's check stays as Muntin's guarantee, and the docs say whose 400 the client sees;
+- a backend reports an HTTP/1.1 request in a way other than `version`, or an HTTP/2 request upgraded from HTTP/1.1 apart from one opened with prior knowledge;
+- an application needs the `Host` value validated or routed on.
+
+**Next production slice (M3-073, in this item).**
+- Code: `adapters/flare/muntin_flare.mojo` only: `_lacks_host` and `_answer`'s check before the conversion; the module's conversion policy says so.
+- Tests: in `adapters/flare/test_muntin_flare.mojo`, `MuntinHandler` answers `HTTP/1.1`, `HTTP/1.2` and `HTTP/1.9` without `Host` 400 `Bad Request` with no field, without the middleware, and under the `HEAD` rule; `Host` in another casing and an empty one, `HTTP/1.0` and `HTTP/2` without one reach `App.handle`; the other tests' requests carry `Host`. In `adapters/flare/test_localhost_roundtrip.mojo`, a new case, since every request the others send carries `Host`: over HTTP/1.1 through `Server`, the same answers on a path a route matches and on one none does, the `HEAD` one with `Content-Length: 11` and no content, and HTTP/1.9; over h2c, neither field and `host` alone answered by `App.handle`; the child keeps serving.
+- The in-process benchmarks (`bench/routing/bench_routing.mojo`, `bench/overhead/bench_adapter.mojo`) give their Flare requests `Host`, so they still measure a routed request.
+- Docs: `docs/DX.md` section 9 (what the adapter answers 400), `docs/ARCHITECTURE.md` (the adapter's policy, "Other current limits", the revisit index), `docs/SPEC.md` (the M2 reopen list and the M3 table).
+- Not in the slice: checking the `Host` value, a `Host` for the `Upgrade: h2c` path, refusing h2c requests without `:authority`, an upstream Flare change.
