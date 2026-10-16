@@ -7,7 +7,14 @@ application through `App.handle` and never appear in this package's API.
 from .app import App, Middleware, Next
 from .body import FromBody, FromBytes
 from .headers_body import WithHeaders
-from .http import Headers, Request, Response, ToErrorResponse, ToResponse
+from .http import (
+    Failure,
+    Headers,
+    Request,
+    Response,
+    ToErrorResponse,
+    ToResponse,
+)
 from .json import FromJson, Json, JsonValue, JsonWriter, ToJson
 from .route_value import FromRouteValue, Param, RouteValues
 from .state import State
