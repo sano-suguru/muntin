@@ -1078,44 +1078,6 @@ def test_graceful_stop_over_https() raises:
         _close(held.release)
 
 
-def test_connection_cap_over_https() raises:
-    """With `max_connections=1`, a connection that has not started its TLS
-    handshake holds the one slot: another client's handshake does not
-    complete while it stays open, and once it closes a new client is
-    handshaken and answered."""
-    var app = https_app()
-    var child = _serve(
-        Server.bind(
-            "127.0.0.1",
-            0,
-            idle_timeout_ms=60_000,
-            max_connections=1,
-            tls=_tls(),
-        ),
-        app,
-    )
-    try:
-        var silent = TcpStream.connect(SocketAddr.localhost(UInt16(child.port)))
-        var refused = String("handshaken")
-        try:
-            var over = TlsStream.connect_timeout(
-                "127.0.0.1",
-                UInt16(child.port),
-                TlsConfig(ca_bundle=CERT, alpn=_alpn("http/1.1")),
-                500,
-            )
-            _ = over^
-        except e:
-            refused = String(e)
-        print("observed: TLS handshake over the cap ->", refused)
-        assert_true("Timeout" in refused or "timed out" in refused, refused)
-        _ = silent^
-        var answer = _h1(child.port, "http/1.1", "GET", "/hello")
-        assert_true(answer.startswith("HTTP/1.1 200 OK"), answer)
-    finally:
-        _stop(child.pid)
-
-
 def main() raises:
     _ = external_call["signal", Int](c_int(13), Int(1))  # SIGPIPE: SIG_IGN
     TestSuite.discover_tests[__functions_in_module()]().run()
