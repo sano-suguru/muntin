@@ -201,6 +201,15 @@ and `HEAD` are `App.handle`'s, through the middleware; the JSON route parses
 a sent U+FFFD and answers a `0xFF` 400; a binary `GET` answer and its `HEAD`
 length go out exactly; and the same `Server` answers afterwards.
 
+M3-062 adds docs/DX.md's route-value record routes to `bodies_app()`:
+`GET` and the stateful `PATCH` on
+`/organizations/{org_id}/projects/{project_id}/tasks/{task_id}`, whose
+handlers take one `TaskAt` record (and, for the `PATCH`, a `Json` body).
+Over HTTP/1.1 and h2c the three values reach the handler (`042` as 42),
+a bad field is 400 before the body's 415, and a missing `Content-Type` is
+415; each status and body equals `TestClient`'s, with the middleware's
+`X-Seen`.
+
 M3-041 adds two typed binary routes to `bodies_app()`: `POST /typed-bytes`,
 whose body is a `FromBytes` type (`Payload`), and the stateful
 `PUT /typed-bytes/{id}`, a `State`, a route value and the same body. Every
@@ -241,6 +250,18 @@ lowercase method, 404, 405 and `HEAD`) are answered as `App.handle` answers
 them, through the middleware. Over HTTP/1.1 Flare refuses every such byte
 itself, well-formed or not, with its own `400 Bad Request` body, and the
 child keeps answering.
+
+M3-073 serves `targets_app()` again and sends requests without `Host`.
+Over HTTP/1.1, and over HTTP/1.9, which Flare admits and RFC 9110 section
+6.2 has processed as 1.1, each is the adapter's 400 `Bad Request` before
+`App.handle`, without the middleware's field (under the `HEAD` rule for
+`HEAD`), on a path a route matches and on one none does. So is an h2c
+request with neither `:authority` nor `host`, and one upgraded from
+HTTP/1.1 with `Upgrade: h2c` without `Host` (Flare answers the upgrade
+101 and the request on stream 1). An empty `Host`, a `Host` in another
+casing, HTTP/1.0 without one, an h2c request with `host` only and an
+upgrade with `Host` are answered by `App.handle`. The child keeps
+answering.
 
 M3-044 serves `receive_app()` (a middleware `counted` that counts the
 requests it sees and adds `X-Seen`, a raw echo, a `FromBytes` route with
@@ -309,6 +330,7 @@ from muntin import (
     Next,
     Request,
     Response,
+    RouteValues,
     State,
     ToErrorResponse,
     ToJson,
@@ -1447,11 +1469,12 @@ def h2_exchange(
     fields: List[Tuple[String, String]],
     body: List[UInt8],
     split: Bool = False,
+    authority: String = "localhost",
 ) raises -> Tuple[List[HpackHeader], List[UInt8], Int]:
     """As `h2_request`, with `body` sent in one DATA frame after the HEADERS
     frame (none when empty) and the response body returned as bytes. With
     `split`, the body goes out in two DATA frames (`_halves`), only the last
-    ending the stream."""
+    ending the stream. `authority` as in `_h2_block`."""
     var wire = List(H2_PREFACE.as_bytes())
     wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
     var end = FrameFlags.END_STREAM() if len(body) == 0 else UInt8(0)
@@ -1461,7 +1484,7 @@ def h2_exchange(
                 FrameType.HEADERS(),
                 FrameFlags.END_HEADERS() | end,
                 1,
-                _h2_block(method, path, fields),
+                _h2_block(method, path, fields, authority),
             )
         )
     )
@@ -1530,15 +1553,20 @@ def h2_in_turn(
 
 
 def _h2_block(
-    method: String, path: String, fields: List[Tuple[String, String]]
+    method: String,
+    path: String,
+    fields: List[Tuple[String, String]],
+    authority: String = "localhost",
 ) -> List[UInt8]:
     """A request header block: `method`'s and `path`'s bytes as given (a
-    test may pass bytes that are not UTF-8), then `fields`."""
+    test may pass bytes that are not UTF-8), `authority` (none when
+    empty), then `fields`."""
     var hdrs = List[HpackHeader]()
     hdrs.append(HpackHeader(":method", method))
     hdrs.append(HpackHeader(":scheme", "http"))
     hdrs.append(HpackHeader(":path", path))
-    hdrs.append(HpackHeader(":authority", "localhost"))
+    if authority.byte_length() > 0:
+        hdrs.append(HpackHeader(":authority", authority))
     for f in fields:
         hdrs.append(HpackHeader(f[0], f[1]))
     return HpackEncoder().encode(Span[HpackHeader, _](hdrs))
@@ -1605,12 +1633,89 @@ def _h2_answers(
 def h1_raw(port: Int, method: String, path: String) raises -> String:
     """One HTTP/1.1 request with `Connection: close` and no body; every byte
     of the response until the server closes the connection."""
-    var wire = String(
-        method,
-        " ",
-        path,
-        " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    return h1_wire(
+        port,
+        String(
+            method,
+            " ",
+            path,
+            " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        ),
     )
+
+
+def h2c_upgraded(
+    port: Int, head: String
+) raises -> Tuple[String, List[HpackHeader], List[UInt8]]:
+    """`head`, an HTTP/1.1 request asking for `Upgrade: h2c`, on a new
+    connection, then, once a `101` has answered it, the client preface and
+    a SETTINGS frame: the status line answering `head`, and the response
+    on stream 1, the upgraded request's (RFC 7540 section 3.2), as its
+    decoded header fields and its body; none when the status is not
+    `101`. A GOAWAY, an RST_STREAM on stream 1 or a close before it ends
+    raises."""
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.set_recv_timeout(TIMEOUT_MS)
+    stream.write_all(head.as_bytes())
+    var acc = List[UInt8]()
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    var end = -1
+    while end < 0:
+        var n = stream.read(buf.unsafe_ptr(), len(buf))
+        if n == 0:
+            raise Error("connection closed before the upgrade was answered")
+        for k in range(n):
+            acc.append(buf[k])
+        for i in range(len(acc) - 3):
+            if (
+                acc[i] == 13
+                and acc[i + 1] == 10
+                and acc[i + 2] == 13
+                and acc[i + 3] == 10
+            ):
+                end = i
+                break
+    var text = String(from_utf8_lossy=Span(acc)[:end])
+    var status = String(text.split("\r\n")[0])
+    var fields = List[HpackHeader]()
+    var body = List[UInt8]()
+    if not status.startswith("HTTP/1.1 101 "):
+        return (status^, fields^, body^)
+    var wire = List(H2_PREFACE.as_bytes())
+    wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
+    stream.write_all(Span[UInt8, _](wire))
+    var decoder = HpackDecoder()
+    var pos = end + 4
+    while True:
+        var maybe = parse_frame(Span[UInt8, _](acc)[pos:])
+        if not maybe:
+            var n = stream.read(buf.unsafe_ptr(), len(buf))
+            if n == 0:
+                raise Error("connection closed before the response ended")
+            for k in range(n):
+                acc.append(buf[k])
+            continue
+        var f = maybe.value().copy()
+        pos += 9 + f.header.length
+        if f.header.type.value == FrameType.GOAWAY().value:
+            raise Error("GOAWAY")
+        if f.header.stream_id != 1:
+            continue
+        if f.header.type.value == FrameType.HEADERS().value:
+            fields = decoder.decode(Span[UInt8, _](f.payload))
+        elif f.header.type.value == FrameType.DATA().value:
+            body.extend(Span[UInt8, _](f.payload))
+        elif f.header.type.value == FrameType.RST_STREAM().value:
+            raise Error("RST_STREAM")
+        if f.header.flags.has(FrameFlags.END_STREAM()):
+            break
+    return (status^, fields^, body^)
+
+
+def h1_wire(port: Int, wire: String) raises -> String:
+    """`wire` written as is on a new connection; every byte of the response
+    until the server closes the connection."""
     var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     stream.set_recv_timeout(TIMEOUT_MS)
     stream.write_all(wire.as_bytes())
@@ -2196,6 +2301,31 @@ def limited_fields(
     return Response(200, out^)
 
 
+@fieldwise_init
+struct TaskAt(RouteValues):
+    var org_id: Int
+    var project_id: Int
+    var task_id: Int
+
+
+def get_task(at: TaskAt) -> Json[Greeting]:
+    return Json(
+        Greeting(
+            String("task ", at.org_id, "/", at.project_id, "/", at.task_id)
+        )
+    )
+
+
+def update_task(
+    tag: State[Tag], at: TaskAt, var body: Json[Greeting]
+) -> Json[Greeting]:
+    var g = body^.take()
+    return Json(Greeting(String(tag[].tag, " ", at.task_id, " ", g.name)))
+
+
+comptime TASK = "/organizations/{org_id}/projects/{project_id}/tasks/{task_id}"
+
+
 def marked(var request: Request, var next: Next) raises -> Response:
     """Adds `X-Seen: 1` to every answer `App.handle` gives."""
     var response = next^.run(request^)
@@ -2218,6 +2348,8 @@ def bodies_app() -> App:
     app.patch["/typed-bytes-fields/{id}"](typed_bytes_fields, State(Tag("f")))
     app.post["/limited"](limited)
     app.patch["/limited-fields/{id}"](limited_fields, State(Tag("l")))
+    app.get[TASK](get_task)
+    app.patch[TASK](update_task, State(Tag("r")))
     return app^
 
 
@@ -2664,6 +2796,73 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
         assert_equal(String(from_utf8=Span(b1[2])), "Bad Request")
         var b2 = h2_exchange(child.port, "POST", "/greet", json, bad_json, True)
         assert_equal(_h2_fields(b2[0]), ":status=400;x-seen=1;")
+        # DX's route-value record (M3-062): one `TaskAt` carrying three
+        # values on `GET` and, before a JSON body, on the stateful `PATCH`;
+        # a bad field is 400 before the body's 415, as in memory.
+        var nothing = List[Tuple[String, String]]()
+        var edit = List('{"name":"renamed"}'.as_bytes())
+        var records: List[Tuple[String, String, Bool, Int, String]] = [
+            (
+                String("GET"),
+                String("/organizations/1/projects/2/tasks/3"),
+                False,
+                200,
+                String('{"hello":"task 1/2/3"}'),
+            ),
+            (
+                String("GET"),
+                String("/organizations/1/projects/x/tasks/3"),
+                False,
+                400,
+                String("Bad Request"),
+            ),
+            (
+                String("PATCH"),
+                String("/organizations/1/projects/2/tasks/042"),
+                True,
+                200,
+                String('{"hello":"r 42 renamed"}'),
+            ),
+            (
+                String("PATCH"),
+                String("/organizations/1/projects/2/tasks/x"),
+                False,
+                400,
+                String("Bad Request"),
+            ),
+            (
+                String("PATCH"),
+                String("/organizations/1/projects/2/tasks/3"),
+                False,
+                415,
+                String("Unsupported Media Type"),
+            ),
+        ]
+        for r in records:
+            var method = r[0]
+            var at = method + " " + r[1]
+            var fields = json.copy() if r[2] else nothing.copy()
+            var sent = edit.copy() if method == "PATCH" else List[UInt8]()
+            var local: Response
+            if method == "PATCH":
+                var h = Headers()
+                if r[2]:
+                    h.add("Content-Type", "application/json")
+                local = client.patch(r[1], sent.copy(), headers=h^)
+            else:
+                local = client.get(r[1])
+            assert_equal(local.status, r[3], at)
+            assert_equal(local.text(), r[4], at)
+            var w1 = h1_exchange(child.port, method, r[1], fields, sent)
+            print("observed HTTP/1.1", at, w1[0])
+            assert_true(w1[0].startswith(String("HTTP/1.1 ", r[3], " ")), at)
+            assert_true("X-Seen: 1;" in w1[1], at)
+            assert_equal(String(from_utf8=Span(w1[2])), r[4], at)
+            var w2 = h2_exchange(child.port, method, r[1], fields, sent)
+            print("observed h2c", at, _h2_fields(w2[0]))
+            assert_equal(w2[0][0].value, String(r[3]), at)
+            assert_true("x-seen=1;" in _h2_fields(w2[0]), at)
+            assert_equal(String(from_utf8=Span(w2[1])), r[4], at)
         # The DX example: a PNG signature back byte for byte, with the
         # handler's own Content-Type, on both protocols.
         var sig = _octets([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
@@ -3070,6 +3269,111 @@ def test_request_target_and_method_bytes_over_h2c_and_http1() raises:
         )
         assert_equal(h1_ok[0], "HTTP/1.1 200 OK")
         assert_equal(String(from_utf8=Span(h1_ok[2])), "name é")
+        assert_true(_running(child.pid))
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+def test_request_without_host_is_400_over_localhost() raises:
+    """An HTTP/1.1 request without `Host`, and an h2c one with neither
+    `:authority` nor `host`, upgraded or not, are the adapter's 400 before
+    `App.handle`; HTTP/1.0 needs none (M3-073)."""
+    var child = _serve_in_child(targets_app())
+    try:
+        var close = String("Connection: close\r\n\r\n")
+        # (request head, whether `App.handle` answers it)
+        var cases: List[Tuple[String, Bool]] = [
+            (String("GET /hello HTTP/1.1\r\n") + close, False),
+            (String("GET /missing HTTP/1.1\r\n") + close, False),
+            (String("GET /hello HTTP/1.9\r\n") + close, False),
+            (String("GET /hello HTTP/1.1\r\nHost:\r\n") + close, True),
+            (
+                String("GET /hello HTTP/1.1\r\nhOsT: localhost\r\n") + close,
+                True,
+            ),
+            (String("GET /hello HTTP/1.0\r\n") + close, True),
+        ]
+        for c in cases:
+            var got = h1_wire(child.port, c[0])
+            print("observed without Host:", repr(c[0]), "->", repr(got))
+            var head_end = got.find("\r\n\r\n")
+            assert_true(head_end > 0, c[0])
+            var head = String(got[byte=:head_end])
+            var body = String(got[byte = head_end + 4 :])
+            if c[1]:
+                assert_true(head.startswith("HTTP/1.1 200 OK\r\n"), c[0])
+                assert_true("\r\nX-Seen: 1" in head, c[0])
+                assert_equal(body, "hello", c[0])
+            else:
+                # The adapter's body, not Flare's own `400 Bad Request`.
+                assert_true(
+                    head.startswith("HTTP/1.1 400 Bad Request\r\n"), c[0]
+                )
+                assert_true("X-Seen" not in head, c[0])
+                assert_equal(body, "Bad Request", c[0])
+            assert_true(_running(child.pid), c[0])
+        # `HEAD`: the adapter's 400 under the `HEAD` rule (M3-027).
+        var head = h1_wire(
+            child.port, String("HEAD /hello HTTP/1.1\r\n") + close
+        )
+        print("observed HEAD without Host:", repr(head))
+        assert_true(head.startswith("HTTP/1.1 400 Bad Request\r\n"), head)
+        assert_true("\r\nContent-Length: 11\r\n" in head, head)
+        assert_true("X-Seen" not in head, head)
+        assert_true(head.endswith("\r\n\r\n"), head)
+
+        # h2c: Flare writes `:authority` as `Host`; with neither it is the
+        # adapter's 400, with `host` only `App.handle`'s answer.
+        var none = List[Tuple[String, String]]()
+        var bare = h2_exchange(
+            child.port, "GET", "/hello", none, List[UInt8](), authority=""
+        )
+        print("observed h2c without :authority or host:", _h2_fields(bare[0]))
+        assert_equal(_h2_field(bare[0], ":status"), "400")
+        assert_equal(String(from_utf8=Span(bare[1])), "Bad Request")
+        assert_equal(_h2_field(bare[0], "x-seen"), "<none>")
+        var host_only: List[Tuple[String, String]] = [
+            (String("host"), String("localhost"))
+        ]
+        var hosted = h2_exchange(
+            child.port, "GET", "/hello", host_only, List[UInt8](), authority=""
+        )
+        print("observed h2c with host only:", _h2_fields(hosted[0]))
+        assert_equal(_h2_field(hosted[0], ":status"), "200")
+        assert_equal(String(from_utf8=Span(hosted[1])), "hello")
+        assert_equal(_h2_field(hosted[0], "x-seen"), "1")
+
+        # `Upgrade: h2c` (RFC 7540 section 3.2; obsolete in RFC 9113, still
+        # served by Flare v0.12.0): the request is HTTP/1.1, answered on
+        # stream 1 after the 101. `AAMAAABk` is SETTINGS_MAX_CONCURRENT_STREAMS
+        # = 100, base64url.
+        var upgrade = String(
+            "GET /hello HTTP/1.1\r\nConnection: Upgrade, HTTP2-Settings\r\n"
+            "Upgrade: h2c\r\nHTTP2-Settings: AAMAAABk\r\n"
+        )
+        var without = h2c_upgraded(child.port, upgrade + "\r\n")
+        print(
+            "observed upgrade without Host:",
+            without[0],
+            _h2_fields(without[1]),
+        )
+        assert_true(without[0].startswith("HTTP/1.1 101 "), without[0])
+        assert_equal(_h2_field(without[1], ":status"), "400")
+        assert_equal(String(from_utf8=Span(without[2])), "Bad Request")
+        assert_equal(_h2_field(without[1], "x-seen"), "<none>")
+        var with_host = h2c_upgraded(
+            child.port, upgrade + "Host: localhost\r\n\r\n"
+        )
+        print(
+            "observed upgrade with Host:",
+            with_host[0],
+            _h2_fields(with_host[1]),
+        )
+        assert_true(with_host[0].startswith("HTTP/1.1 101 "), with_host[0])
+        assert_equal(_h2_field(with_host[1], ":status"), "200")
+        assert_equal(String(from_utf8=Span(with_host[2])), "hello")
+        assert_equal(_h2_field(with_host[1], "x-seen"), "1")
         assert_true(_running(child.pid))
     finally:
         _ = kill(child.pid, SIGKILL)
