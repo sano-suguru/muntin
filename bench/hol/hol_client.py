@@ -25,7 +25,9 @@ could not be opened, the h2c connection was already gone) is neither, but
 not sent. A response that began to arrive but is not whole
 (`h1_read_response` and `H2c` say what that means: framing, and the body
 each route answers) is malformed, not lost, whichever request it answers;
-any malformed response makes the run no measurement, and the client exits 1
+an answer that comes after its probe gave up is still read and checked
+until the end of the run (`H2c.settle`, `Late`), and the probe stays lost.
+Any malformed response makes the run no measurement, and the client exits 1
 after printing its line.
 
 With SLOW_MS 0 (a control) no slow request is sent, and the window is the
@@ -479,9 +481,11 @@ class H2c:
     bytes, CONTINUATION out of place, PUSH_PROMISE, bad padding, the
     connection ending inside a frame) and an error of the reader itself are
     malformed too: every open and later stream gets it, and `errors` keeps
-    it for the end of the run. A frame still not whole at the end of the
-    run (`unfinished`) is malformed too: until it is, no stream it may
-    belong to can be told apart from a timeout."""
+    it for the end of the run. A stream's outcome is fixed when `call`
+    returns it; the checks go on after a timeout, and what they find then
+    is kept in `late`. `settle` ends the connection at the end of the run:
+    a frame still not whole then is a connection error, since no stream it
+    may belong to can be told apart from a timeout."""
 
     def __init__(self, port):
         self.port = port
@@ -492,11 +496,14 @@ class H2c:
         self.ended = {}  # stream id -> whether frames may still come for it
         self.dead = None
         self.errors = []
+        self.late = []  # malformed verdicts on streams `call` had already given up on
+        self.closing = False  # `settle` shut the connection
         self.inside = 0  # bytes of the frame being read that have arrived, while the reader reads
         self.hpack = Hpack()
         no_push = struct.pack(">HI", 2, 0)  # SETTINGS_ENABLE_PUSH = 0
         self.sock.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" + self.frame(4, 0, 0, no_push))
-        threading.Thread(target=self.read_loop, daemon=True).start()
+        self.reader = threading.Thread(target=self.read_loop, daemon=True)
+        self.reader.start()
         stream = self.get("/worker")
         if not stream.event.wait(2.0) or stream.outcome != 200:
             raise ConnectionError(f"h2c warm-up failed: {stream.outcome}")
@@ -543,6 +550,8 @@ class H2c:
                     raise Malformed(f"the connection ended {self.inside} bytes into a frame: {failure(e)}") from e
                 raise
             if not chunk:
+                if self.inside and self.closing:
+                    raise Malformed(f"a frame left {self.inside} bytes in at the end of the run")
                 if self.inside:
                     raise Malformed(f"the connection closed {self.inside} bytes into a frame")
                 raise ConnectionError("closed")
@@ -706,38 +715,57 @@ class H2c:
             return f"malformed: body {body[:40]!r}"
         return status
 
+    def decide(self, stream, outcome):
+        """Gives `stream` its `outcome`, under the lock. Once `call` gave up
+        on it, its outcome (a timeout) stays, and a malformed `outcome` goes
+        to `late`: an answer that came too late is still checked."""
+        if not stream.event.is_set():
+            stream.outcome = outcome
+            stream.event.set()
+        elif is_malformed(outcome):
+            self.late.append(f"{stream.path} after its {stream.outcome}: {outcome.removeprefix('malformed: ')}")
+
     def finish(self, sid, outcome):
-        """Ends stream `sid` with `outcome`, unless `call` already gave up on
-        it; frames may still come for a stream ended malformed or given up."""
+        """Ends stream `sid` with `outcome`; frames may still come for a
+        stream ended malformed or given up."""
         with self.lock:
             stream = self.waiting.pop(sid, None)
             if stream is None:
                 return
-            decided = stream.event.is_set()
-            self.ended[sid] = decided or is_malformed(outcome)
-            if not decided:
-                stream.outcome = outcome
-                stream.event.set()
+            self.ended[sid] = stream.event.is_set() or is_malformed(outcome)
+            self.decide(stream, outcome)
 
     def fail_all(self, reason, every=False):
-        """Ends every open stream with `reason` (`cut`, unless `every`), and
-        every later one too."""
+        """Ends every open stream with `reason` (`cut`, unless `every`: then
+        `errors` already holds it), and every later one too."""
         with self.lock:
             self.dead = reason
             streams = list(self.waiting.values())
             self.waiting.clear()
             for stream in streams:
-                if not stream.event.is_set():
-                    stream.outcome = reason if every else self.cut(stream, reason)
-                    stream.event.set()
+                if every:
+                    if not stream.event.is_set():
+                        stream.outcome = reason
+                        stream.event.set()
+                else:
+                    self.decide(stream, self.cut(stream, reason))
 
-    def unfinished(self, grace):
-        """How many bytes of a frame that began to arrive the reader still
-        holds after waiting up to `grace` seconds for the rest; 0 if none."""
+    def settle(self, grace):
+        """Ends the connection at the end of the run, so that `errors` and
+        `late` then hold every verdict it will give: waits up to `grace`
+        seconds for its open streams (given up ones included) and a frame
+        that began to arrive, then shuts the socket and waits for the
+        reader to stop. A frame still not whole is then a connection error,
+        and a stream whose response began is cut."""
         deadline = time.monotonic() + grace
-        while self.inside and time.monotonic() < deadline:
+        while (self.waiting or self.inside) and self.reader.is_alive() and time.monotonic() < deadline:
             time.sleep(0.01)
-        return self.inside
+        self.closing = True
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.reader.join()
 
     def call(self, path, timeout, note=None):
         stream = self.get(path, note)
@@ -749,12 +777,77 @@ class H2c:
         return stream.outcome
 
 
-class Pool:
-    """HTTP/1.1 keep-alive connections; `bounded` caps them at `POOL`."""
+class Late:
+    """HTTP/1.1 answers still owed when their request was given up: a
+    timeout after the request was written, before any byte of the answer.
+    Each is read on, in a thread of its own, and checked as any other is
+    (`h1_read_response`, then `expect_eof` where the connection closes), so
+    an answer that comes too late and broken still fails the run: `found`.
+    The request's outcome stays the timeout."""
 
-    def __init__(self, port, bounded):
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.watched = []  # (thread, socket)
+        self.found = []
+        self.closing = False  # `settle` shut the sockets
+
+    def watch(self, sock, path, close):
+        """Reads the answer to `path` on `sock` (`close`: the request said
+        `Connection: close`), then closes `sock`."""
+
+        def read():
+            try:
+                sock.settimeout(None)
+                _, fields, _ = h1_read_response(sock, path)
+                if close or closes(fields):
+                    expect_eof(sock)
+                    if self.closing:
+                        raise Malformed("the connection still open at the end of the run")
+            except Malformed as e:
+                with self.lock:
+                    self.found.append(f"{path} after its timeout: {e}")
+            except OSError:
+                pass  # no answer by the end of the run: the request stays lost
+            finally:
+                sock.close()
+
+        thread = threading.Thread(target=read, daemon=True)
+        with self.lock:
+            self.watched.append((thread, sock))
+        thread.start()
+
+    def settle(self, grace):
+        """Waits up to `grace` seconds for the answers still owed, then
+        shuts their sockets and waits for every reader, so that `found` then
+        holds every verdict. An answer begun but not whole then is
+        Malformed; one not begun stays lost."""
+        deadline = time.monotonic() + grace
+        while any(thread.is_alive() for thread, _ in self.watched) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.closing = True
+        for _, sock in self.watched:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        for thread, _ in self.watched:
+            thread.join()
+
+
+def owed(e, note):
+    """Whether a request whose call raised `e` may still be answered: its
+    write completed and it timed out before any byte of an answer."""
+    return isinstance(e, socket.timeout) and "written" in note
+
+
+class Pool:
+    """HTTP/1.1 keep-alive connections; `bounded` caps them at `POOL`. An
+    answer still owed after a timeout goes to `late`."""
+
+    def __init__(self, port, bounded, late):
         self.port = port
         self.bounded = bounded
+        self.late = late
         self.cond = threading.Condition()
         self.idle = [H1(port) for _ in range(POOL)]
 
@@ -797,7 +890,11 @@ class Pool:
             if closes(fields):
                 expect_eof(sock)
         except (OSError, Malformed) as e:
-            self.drop(conn)
+            if owed(e, note):
+                self.late.watch(sock, "/health", False)
+                self.drop(conn, close=False)
+            else:
+                self.drop(conn)
             return failure(e)
         except BaseException:
             self.drop(conn)
@@ -809,10 +906,11 @@ class Pool:
             self.give_back(conn)
         return status
 
-    def drop(self, conn):
-        """Closes `conn` instead of giving it back; a bounded pool opens a
-        replacement."""
-        conn.sock.close()
+    def drop(self, conn, close=True):
+        """Closes `conn` (unless not `close`) instead of giving it back; a
+        bounded pool opens a replacement."""
+        if close:
+            conn.sock.close()
         self.give_back(None)
         if self.bounded:
             try:
@@ -821,10 +919,11 @@ class Pool:
                 pass
 
 
-def h1_new_call(port, path, timeout, note):
+def h1_new_call(port, path, timeout, note, late=None):
     """GET `path` on a new connection with `Connection: close`: its status,
     or why not (`failure`). Sets note["answered"] when the whole response
-    has been read, before the wait for EOF."""
+    has been read, before the wait for EOF. An answer still owed after a
+    timeout goes to `late`, if given."""
     try:
         sock = h1_connect(port)
     except OSError as e:
@@ -839,9 +938,13 @@ def h1_new_call(port, path, timeout, note):
         expect_eof(sock)
         return status
     except (OSError, Malformed) as e:
+        if late is not None and owed(e, note):
+            late.watch(sock, path, True)
+            sock = None
         return failure(e)
     finally:
-        sock.close()
+        if sock is not None:
+            sock.close()
 
 
 def ask_worker(conn):
@@ -1040,10 +1143,11 @@ def main():
     slow_conn = None  # (worker, call)
     kept_open = lambda: []  # the HTTP/1.1 connections open at the end
     h2_conns = []
+    late = Late()
     if mode == "h1-new":
-        probe = lambda t, note: h1_new_call(port, "/health", t, note)
+        probe = lambda t, note: h1_new_call(port, "/health", t, note, late)
     elif mode in ("h1-pool", "h1-pool-fixed"):
-        pool = Pool(port, mode == "h1-pool-fixed")
+        pool = Pool(port, mode == "h1-pool-fixed", late)
         probe = pool.probe
         kept_open = lambda: [conn.sock for conn in pool.idle]
     elif mode in ("h2c-same", "h2c-other"):
@@ -1063,14 +1167,23 @@ def main():
         sys.exit(f"unknown mode {mode}")
     if slow_conn is None and not control:
         h1 = H1(port)
+        h1_owed = []
         pool_open = kept_open
-        kept_open = lambda: pool_open() + [h1.sock]
+        kept_open = lambda: pool_open() + ([] if h1_owed else [h1.sock])
 
         def slow_call(t):
             h1.sock.settimeout(t)
+            note = {}
             try:
-                return h1.call(f"/slow/{slow_ms}")[0]
+                write(h1.sock, h1_request(f"/slow/{slow_ms}", False), note)
+                status, fields, _ = h1_read_response(h1.sock, f"/slow/{slow_ms}")
+                if closes(fields):
+                    expect_eof(h1.sock)
+                return status
             except (OSError, Malformed) as e:
+                if owed(e, note):
+                    h1_owed.append(True)
+                    late.watch(h1.sock, f"/slow/{slow_ms}", False)
                 return failure(e)
 
         slow_conn = (h1.worker, slow_call)
@@ -1170,9 +1283,10 @@ def main():
         if n := pending(sock):
             malformed.append(f"{n} bytes after the last response on a kept-open connection")
     for conn in h2_conns:
-        malformed += [f"connection: {e}" for e in conn.errors]
-        if n := conn.unfinished(1.0):
-            malformed.append(f"connection: a frame left {n} bytes in at the end of the run")
+        conn.settle(1.0)
+        malformed += [f"connection: {e}" for e in conn.errors] + [f"late: {e}" for e in conn.late]
+    late.settle(1.0)
+    malformed += [f"late: {e}" for e in late.found]
     if malformed:
         line += f" malformed={len(malformed)} malformed_as={';'.join(sorted(set(malformed)))}"
     errors = [str(o) for o in [r["outcome"] for r in results] + [slow_outcome] if str(o).startswith("client error: ")]

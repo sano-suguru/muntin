@@ -112,8 +112,8 @@ def lit(name, value):
 
 def h2_server(answer):
     """Serves prior-knowledge h2c; `answer(stream, path)` returns the frames
-    to send for each request (bytes, "close", or "reset": closed with a TCP
-    reset)."""
+    to send for each request (bytes, a float: seconds to wait, "close", or
+    "reset": closed with a TCP reset)."""
 
     def serve(conn):
         data = b""
@@ -139,7 +139,10 @@ def h2_server(answer):
                     return
                 if part == "close":
                     return
-                conn.sendall(part)
+                if isinstance(part, float):
+                    time.sleep(part)
+                else:
+                    conn.sendall(part)
 
     return Server(serve)
 
@@ -267,16 +270,17 @@ def headers_then_ok(block, flags=0x4):
 class H2cStreams(unittest.TestCase):
     def call(self, answer, path="/health", timeout=2.0):
         """(outcome of one `path`, outcome of a second `/health`, the
-        connection's errors) on a fresh H2c connection whose warm-up and
-        later streams are answered whole; `answer(stream)` answers the
-        first."""
+        connection's errors and late verdicts once settled) on a fresh H2c
+        connection whose warm-up and later streams are answered whole;
+        `answer(stream)` answers the first."""
         server = h2_server(lambda s, p: ok_frames(s, p) if p == "/worker" or s > 3 else answer(s))
         try:
             conn = hol_client.H2c(server.port)
             first = conn.call(path, timeout)
             second = conn.call("/health", timeout)
+            conn.settle(0.2)
             conn.sock.close()
-            return first, second, conn.errors
+            return first, second, conn.errors + conn.late
         finally:
             server.close()
 
@@ -393,20 +397,43 @@ class H2cStreams(unittest.TestCase):
                     self.assertMalformed(second)
                     self.assertTrue(errors)
 
-    def test_a_frame_left_unfinished_is_counted(self):
+    def settled(self, rest, timeout=0.3, grace=1.0):
+        """(outcome, errors, late) of one `/health` whose answer is the
+        first 8 bytes of a HEADERS 200, then `rest`, on a connection
+        settled after the call."""
+        head = frame(1, 0x4, 3, b"\x88")
+        server = h2_server(lambda s, p: ok_frames(s, p) if s == 1 else [head[:8]] + rest)
+        try:
+            conn = hol_client.H2c(server.port)
+            outcome = conn.call("/health", timeout)
+            conn.settle(grace)
+            conn.sock.close()
+            return outcome, conn.errors, conn.late
+        finally:
+            server.close()
+
+    def test_a_frame_left_unfinished_fails_the_connection(self):
         # A stall inside a frame's header: its stream cannot be named, so the
-        # streams waiting time out, and the run sees the frame left unfinished.
-        for n in (1, 8, 10):
-            with self.subTest(bytes=n):
-                server = h2_server(lambda s, p: ok_frames(s, p) if s == 1 else [frame(1, 0x4, s, b"\x88\x88")[:n]])
-                try:
-                    conn = hol_client.H2c(server.port)
-                    self.assertEqual(conn.unfinished(0), 0)
-                    conn.call("/health", 0.3)
-                    self.assertEqual(conn.unfinished(0.1), n)
-                    conn.sock.close()
-                finally:
-                    server.close()
+        # streams waiting time out, and settling cuts the frame short.
+        outcome, errors, late = self.settled([], grace=0.1)
+        self.assertEqual((outcome, late), ("timeout", []))
+        self.assertTrue(errors)
+
+    def test_what_the_grace_finds_is_kept(self):
+        # #133 third review: an error, or the stream's verdict, that came
+        # after the timeout and during the end-of-run wait was dropped.
+        outcome, errors, late = self.settled([0.6, "close"])
+        self.assertEqual((outcome, late), ("timeout", []))
+        self.assertTrue(errors)
+        outcome, errors, late = self.settled([0.6, frame(1, 0x4, 3, b"\x88")[8:], frame(0, 0x1, 3, b"no")])
+        self.assertEqual((outcome, errors), ("timeout", []))
+        self.assertTrue(late, late)
+        # Its head whole, then nothing until the connection is settled.
+        outcome, errors, late = self.settled([0.6, frame(1, 0x4, 3, b"\x88")[8:]])
+        self.assertEqual((outcome, errors), ("timeout", []))
+        self.assertTrue(late, late)
+        # A whole answer after the timeout leaves the timeout as it was.
+        self.assertEqual(self.settled([0.6, frame(1, 0x4, 3, b"\x88")[8:], frame(0, 0x1, 3, b"ok")]), ("timeout", [], []))
 
     def test_a_stream_cut_before_its_response_began_is_not_malformed(self):
         self.assertEqual(self.call(lambda s: ["close"])[0], "closed")
@@ -525,6 +552,14 @@ class Runs(unittest.TestCase):
             "cut 8 bytes into HEADERS": lambda s, p: ok_frames(s, p) if p == "/worker" else [frame(1, 0x4, s, b"\x88")[:8], "close"],
             "stalled 8 bytes into HEADERS": lambda s, p: (
                 ok_frames(s, p) if p == "/worker" else [frame(1, 0x4, s, b"\x88")[:8]] if s == 3 else []),
+            # #133 third review: both came after the probes timed out, during
+            # the end-of-run wait (each probe times out 1.35 s into the run).
+            "stalled 8 bytes into HEADERS, then closed": lambda s, p: (
+                ok_frames(s, p) if p == "/worker" else [frame(1, 0x4, s, b"\x88")[:8], 1.6, "close"] if s == 3 else []),
+            "stalled 8 bytes into HEADERS, then another body": lambda s, p: (
+                ok_frames(s, p) if p == "/worker" else [
+                    frame(1, 0x4, s, b"\x88")[:8], 1.6, frame(1, 0x4, s, b"\x88")[8:], frame(0, 0x1, s, b"no")]
+                if s == 3 else []),
             "a space in a field name": lambda s, p: (
                 ok_frames(s, p) if p == "/worker" else headers_then_ok(b"\x88" + lit(b"bad name", b"y"))(s)),
             "CR LF in a field value": lambda s, p: (
@@ -536,6 +571,25 @@ class Runs(unittest.TestCase):
         }.items():
             with self.subTest(case=name, mode="h2c-same"):
                 self.assertEqual(self.run_main(h2_server(answer), "h2c-same"), 1)
+
+    def test_an_answer_after_its_timeout_is_still_checked(self):
+        # #133 third review, over HTTP/1.1: each probe times out 1.35 s into
+        # the run, and its answer comes 1.6 s after its request.
+        for name, answer, code in (
+            ("whole", lambda p: [1.6, h1_response(OK[p])] if p == "/health" else [h1_response(OK[p])], 0),
+            ("another body", lambda p: [1.6, h1_response(b"no")] if p == "/health" else [h1_response(OK[p])], 1),
+            ("a head, then nothing", lambda p: (
+                [1.6, h1_response(OK[p])[:-2]] if p == "/health" else [h1_response(OK[p])]), 1),
+        ):
+            for mode in ("h1-new", "h1-pool", "h1-pool-fixed"):
+                with self.subTest(case=name, mode=mode):
+                    self.assertEqual(self.run_main(h1_server(answer), mode), code)
+        # After a `Connection: close` request, the late answer must still be
+        # followed by EOF.
+        for name, after in (("a stray byte", [0.05, b"X"]), ("still open at the end", [1.5])):
+            answer = lambda p: [1.6, h1_response(OK[p])] + after if p == "/health" else [h1_response(OK[p])]
+            with self.subTest(case=name, mode="h1-new"):
+                self.assertEqual(self.run_main(h1_server(answer), "h1-new"), 1)
 
     def test_a_client_error_exits_1(self):
         # The review: an exception the probe did not catch ended its thread,
