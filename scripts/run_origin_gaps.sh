@@ -13,6 +13,8 @@ cd "$(dirname "$0")/.."
 gaps=(
     tests/context_known_gaps/erasure_drops_origin.mojo
     tests/state_known_gaps/state_borrows_dropped_local.mojo
+    tests/state_known_gaps/state_borrows_dropped_local_post.mojo
+    tests/state_known_gaps/state_borrows_dropped_local_raw.mojo
 )
 export SANITIZE=address
 export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}log_path=stderr"

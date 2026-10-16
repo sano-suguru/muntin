@@ -353,7 +353,7 @@ If one of these pins changes (a pinned fixture unexpectedly compiles, fails to c
 | `adapters/flare/test_server.mojo`'s stop tests | [Graceful shutdown decision (M3-045)](history/architecture-decisions.md#graceful-shutdown-decision-m3-045) |
 | `compat/flare/stream/stream_probe.mojo` | [Streaming responses and cancellation decision (M3-056)](history/architecture-decisions.md#streaming-responses-and-cancellation-decision-m3-056) |
 | `tests/context_known_gaps/reflected_names_collide.mojo` (must build) | [Request context decision (M3-063)](history/architecture-decisions.md#request-context-decision-m3-063) |
-| `tests/context_known_gaps/erasure_drops_origin.mojo` and `tests/state_known_gaps/state_borrows_dropped_local.mojo` (must build; `scripts/run_origin_gaps.sh` runs them under AddressSanitizer); `tests/context_fail` | [Request context storage decision (M3-065)](history/architecture-decisions.md#request-context-storage-decision-m3-065); the `State` one also [#122](https://github.com/sano-suguru/muntin/issues/122) |
+| `tests/context_known_gaps/erasure_drops_origin.mojo` and `tests/state_known_gaps/state_borrows_dropped_local*.mojo` (must build; `scripts/run_origin_gaps.sh` runs them under AddressSanitizer); `tests/context_fail` | [Request context storage decision (M3-065)](history/architecture-decisions.md#request-context-storage-decision-m3-065); the `State` one also [#122](https://github.com/sano-suguru/muntin/issues/122) |
 
 ## Request/Response ownership
 

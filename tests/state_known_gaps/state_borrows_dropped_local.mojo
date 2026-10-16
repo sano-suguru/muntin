@@ -11,12 +11,20 @@
 # request reads it. It takes a handler instantiated with the local's origin, in
 # safe code that names no `_` member.
 #
+# Its twins `state_borrows_dropped_local_post.mojo` (a typed `post` route) and
+# `state_borrows_dropped_local_raw.mojo` (a raw handler) take the other
+# registration paths. Each `main` asserts what a request must give once the
+# borrow is kept alive: status 200 and the body "42", which only the handler
+# produces, by reading the borrowed value. Today the sanitizer stops the run at
+# that read, before the assertions.
+#
 # If this file stops building, registration refuses a state that borrows a
-# local; if it stops reporting, the borrow is kept alive: either way, check
-# #122's acceptance criteria and update docs/DX.md section 8 and
-# docs/ARCHITECTURE.md.
+# local; if it stops reporting, check that it exits 0 with no report (its
+# assertions passed) rather than failing them: either way, check #122's
+# acceptance criteria and update docs/DX.md section 8 and docs/ARCHITECTURE.md.
 
 from std.memory import OwnedPointer
+from std.testing import assert_equal
 
 from muntin import App, State
 from muntin.testing import TestClient
@@ -43,4 +51,6 @@ def main() raises:
     var app = App()
     build(app)
     var client = TestClient(app)
-    _ = client.get("/")
+    var response = client.get("/")
+    assert_equal(response.status, 200)
+    assert_equal(response.text(), "42")
