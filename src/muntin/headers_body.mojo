@@ -14,7 +14,7 @@ type is.
 from .body import FromBody, FromBytes, _FromBodyOrBytes, _body_text
 from .http import Headers
 from .json import _JsonBody
-from .route_value import FromRouteValue
+from .route_value import FromRouteValue, RouteValues
 
 
 trait _HeaderCarrier(Deinitable, Movable):
@@ -52,6 +52,13 @@ trait _HeaderCarrier(Deinitable, Movable):
         """Whether the carried body type is also a `FromRouteValue`
         (M3-055): `_kind` then rejects the carrier as it does such a type
         bare, so neither conversion is picked silently."""
+        ...
+
+    @staticmethod
+    def _carries_record() -> Bool:
+        """Whether the carried body type is also a `RouteValues` record
+        (M3-061): `_kind` then rejects the carrier as it does such a type
+        bare."""
         ...
 
 
@@ -130,3 +137,7 @@ struct WithHeaders[B: _FromBodyOrBytes](
     @staticmethod
     def _carries_route_value() -> Bool:
         return conforms_to(Self.B, FromRouteValue)
+
+    @staticmethod
+    def _carries_record() -> Bool:
+        return conforms_to(Self.B, RouteValues)

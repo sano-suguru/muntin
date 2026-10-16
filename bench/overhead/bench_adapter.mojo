@@ -27,6 +27,7 @@ Implementations:
   body copy costs; `echo` cases without the middleware.
 
 Cases, each with and without the middleware (`mw=1`, `mw=0`):
+Every request carries `Host: bench` first (M3-073), then:
 - `plaintext`, with `h` request header fields named `X-Bench-000` up to
   `X-Bench-127`, each name distinct, so `to_muntin_headers` calls Flare's
   `get_all` once per field and each call scans every field (before #110,
@@ -187,6 +188,8 @@ struct Case(Copyable):
 
     def request(self) raises -> FlareRequest:
         var req = FlareRequest(self.method, self.path)
+        # The adapter answers an HTTP/1.1 request without one 400 (M3-073).
+        req.headers.append("Host", "bench")
         for i in range(self.headers):
             var n = String(i)
             while n.byte_length() < 3:
@@ -335,7 +338,7 @@ def measure[
     if c.label == "echo":
         expect = String(unsafe_from_utf8=c.request().body)
     elif impl == "headers":
-        expect = String(c.headers)
+        expect = String(c.headers + 1)  # the `X-Bench` fields and `Host`
     if d.body() != expect:
         raise Error(name + ": unexpected body")
     if counting:
