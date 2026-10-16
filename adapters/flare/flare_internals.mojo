@@ -58,10 +58,10 @@ def run_worker_loop[
     caller owns and keeps open, serving with `handler` until `stop` is set.
     Relied on: it registers `listener_fd` (on Linux without `EPOLLEXCLUSIVE`:
     Linux refuses the flag with `EPOLLRDHUP`, which v0.12.0 asks for, and it
-    registers again plainly, so every idle worker wakes for a connection),
-    reads `stop` with an acquire load before its first poll and every turn,
-    leaves its accept loop on `ENOTSOCK`, returns without raising on a failed
-    poll, and closes its connections when it leaves. `tls_context` is
+    registers again plainly, so every idle worker wakes for a connection;
+    M3-068), reads `stop` with an acquire load before its first poll and
+    every turn, leaves its accept loop on `ENOTSOCK`, returns without raising
+    on a failed poll, and closes its connections when it leaves. `tls_context` is
     `tls_context_addr`'s value, or 0 for cleartext: with one, every accepted
     connection starts as a TLS handshake on this reactor, as on Flare's own
     workers, which share the one context the same way. Public alternative,

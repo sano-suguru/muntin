@@ -22,7 +22,8 @@
 # - idle: `muntin`, 1 worker, idle timeouts 750 to 2000 ms, the fixed pool
 #   and h2c on one connection: where the lost requests stop;
 # - spread: `muntin`, `flare` and `flare-shared` with 4 workers, how each
-#   spreads kept-open connections over its workers;
+#   spreads kept-open connections over its workers; a run that loses a
+#   connection is no measurement and ends the script with exit 1;
 # - capacity: `muntin` with 1, 2 and 4 workers and idle timeout 60000 ms,
 #   one handler fewer than the workers held and then as many as the workers
 #   (`capacity-K`): whether a new connection is answered while they run.

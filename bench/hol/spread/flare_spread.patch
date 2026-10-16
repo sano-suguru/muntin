@@ -1,0 +1,141 @@
+diff --git a/flare/http/_unified_reactor_impl.mojo b/flare/http/_unified_reactor_impl.mojo
+index c6c4e96..9fcd4c8 100644
+--- a/flare/http/_unified_reactor_impl.mojo
++++ b/flare/http/_unified_reactor_impl.mojo
+@@ -56,6 +56,7 @@ kernel wakes one worker per accept event.
+ """
+ 
+ from std.builtin.debug_assert import debug_assert
++from std.sys import CompilationTarget
+ from std.collections import Dict, Optional
+ from std.ffi import c_int, get_errno
+ from std.memory import Pointer
+@@ -1080,9 +1081,12 @@ def _run_unified_loop_for_fd[
+     """Shared body for the unified reactor loops.
+ 
+     Identical poll-and-dispatch core for the dedicated
+-    (``is_shared=False``) and shared (``is_shared=True``) variants;
+-    the only listener-side difference is ``register`` vs
+-    ``register_exclusive``.
++    (``is_shared=False``) and shared (``is_shared=True``) variants.
++    The listener-side differences are ``register`` vs
++    ``register_exclusive`` and, in the shared variant on Linux, removing
++    and adding ``listener_fd`` again after each accept batch, so that
++    the next connection wakes another idle worker. ``extra_fds`` keep
++    the registration they had before and are not registered again.
+ 
+     ``listener_fd`` registers under ``token = LISTENER_TOKEN`` (a value no
+     fd can take, so a client that ``accept`` hands fd 0 is not mistaken for
+@@ -1101,7 +1105,10 @@ def _run_unified_loop_for_fd[
+ 
+     comptime if is_shared:
+         reactor.register_exclusive(
+-            c_int(listener_fd), LISTENER_TOKEN, INTEREST_READ
++            c_int(listener_fd),
++            LISTENER_TOKEN,
++            INTEREST_READ,
++            without_rdhup=True,
+         )
+     else:
+         reactor.register(c_int(listener_fd), LISTENER_TOKEN, INTEREST_READ)
+@@ -1130,6 +1137,7 @@ def _run_unified_loop_for_fd[
+         var now_ms = UInt64(_monotonic_ms())
+         _advance_timer_wheel_unified(now_ms, wheel, conns, timers, reactor)
+ 
++        var listener_lost = False
+         for i in range(len(events)):
+             var evt = events[i]
+             if evt.is_wakeup():
+@@ -1145,6 +1153,25 @@ def _run_unified_loop_for_fd[
+                     config.max_connections,
+                     tls_ctx_addr,
+                 )
++                # Linux offers a new connection on a shared listener to the
++                # first waiting worker in the listener's wait queue (an
++                # implementation detail, not epoll_ctl(2)'s contract), so a
++                # worker that stays first takes every connection while it
++                # is idle. Registering again moves this worker to the tail.
++                comptime if is_shared and CompilationTarget.is_linux():
++                    reactor.unregister(c_int(listener_fd))
++                    try:
++                        reactor.register_exclusive(
++                            c_int(listener_fd),
++                            LISTENER_TOKEN,
++                            INTEREST_READ,
++                            without_rdhup=True,
++                        )
++                    except:
++                        # Neither the exclusive nor the plain registration
++                        # took: this worker can no longer see new
++                        # connections, so it ends as on a failed poll.
++                        listener_lost = True
+                 continue
+             var fd = Int(evt.token)
+             if len(listener_fds) > 0 and fd in listener_fds:
+@@ -1176,6 +1203,9 @@ def _run_unified_loop_for_fd[
+                 timers,
+                 ws_hooks.copy(),
+             )
++        if listener_lost:
++            exit_status = WORKER_STATUS_CRASHED
++            break
+ 
+     store_worker_stat(stats_addr, WORKER_STAT_STATUS, exit_status)
+     # Publish what was actually still in flight when the loop stopped,
+diff --git a/flare/runtime/reactor.mojo b/flare/runtime/reactor.mojo
+index 79f909e..47c9cc7 100644
+--- a/flare/runtime/reactor.mojo
++++ b/flare/runtime/reactor.mojo
+@@ -315,7 +315,12 @@ struct Reactor(Movable):
+         self._register_raw(fd, token, interest)
+ 
+     def register_exclusive(
+-        mut self, fd: c_int, token: UInt64, interest: Int
++        mut self,
++        fd: c_int,
++        token: UInt64,
++        interest: Int,
++        *,
++        without_rdhup: Bool = False,
+     ) raises -> None:
+         """Register ``fd`` with ``EPOLLEXCLUSIVE`` semantics on Linux.
+ 
+@@ -336,8 +341,11 @@ struct Reactor(Movable):
+ 
+         ``EPOLLEXCLUSIVE`` is only valid on the initial ``EPOLL_CTL_ADD``
+         — modifying an existing registration to add it is rejected by
+-        the kernel. The shared-listener path therefore registers once
+-        per worker and never modifies the listener entry.
++        the kernel. A loop that changes the listener's entry therefore
++        removes it and adds it again: the unified shared loop does so
++        after each accept batch, to spread connections; the other
++        shared-listener loops register once per worker and never modify
++        the listener entry.
+ 
+         Args:
+             fd: Listener fd, expected to be shared across workers.
+@@ -345,6 +353,12 @@ struct Reactor(Movable):
+                       ``WAKEUP_TOKEN``.
+             interest: Bitmask; in practice always ``INTEREST_READ`` for
+                       the listener path.
++            without_rdhup: Leave ``EPOLLRDHUP`` out, which the kernel
++                      refuses beside ``EPOLLEXCLUSIVE`` (``EINVAL``), so
++                      the exclusive registration takes. Off by default:
++                      a loop that sets it must also spread connections
++                      (see the unified shared loop), or one idle worker
++                      takes every connection.
+ 
+         Raises:
+             NetworkError: Same conditions as ``register``.
+@@ -362,7 +376,10 @@ struct Reactor(Movable):
+             var ev = stack_allocation[EPOLL_EVENT_SIZE, UInt8]()
+             for i in range(EPOLL_EVENT_SIZE):
+                 ev.unsafe_offset(i).unsafe_write(UInt8(0))
+-            var bits = _interest_to_epoll(interest) | EPOLLEXCLUSIVE
++            var base = _interest_to_epoll(interest)
++            if without_rdhup:
++                base = base & ~EPOLLRDHUP
++            var bits = base | EPOLLEXCLUSIVE
+             _epoll_event_set(ev, bits, token)
+             var rc = _epoll_ctl(self._fd, EPOLL_CTL_ADD, fd, ev)
+             if rc < c_int(0):
