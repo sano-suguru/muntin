@@ -31,7 +31,8 @@ tls_example=examples/hello_https.mojo
 # M3-032's must-not-build fixtures for Server (docs/history/architecture-decisions.md
 # "Serving entrypoint decision (M3-032)") and M3-044's ("Server receive body
 # limit decision (M3-044)") and M3-049's ("Multi-worker serving decision
-# (M3-049)"), built with -I src -I $adapter.
+# (M3-049)"), and pull request #136's for `to_flare_response`, which takes
+# the response, built with -I src -I $adapter.
 serve_fixtures=(
     compat/flare/serve/workers_need_copyable.mojo
     compat/flare/serve/server_handler_not_copyable.mojo
@@ -40,6 +41,7 @@ serve_fixtures=(
     compat/flare/serve/server_bind_positional_limit.mojo
     compat/flare/serve/serve_workers_capturing_make.mojo
     compat/flare/serve/serve_workers_runtime_closure.mojo
+    compat/flare/convert/response_not_handed_over.mojo
 )
 
 step() { printf '\n== %s\n' "$*"; }
