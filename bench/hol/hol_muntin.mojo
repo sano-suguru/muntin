@@ -1,8 +1,9 @@
 """The head-of-line blocking measurement's server, written with Muntin.
 
 Not part of Muntin and not run by CI. `scripts/bench_hol.sh` builds it in the
-`flare` environment and runs it as `hol_muntin WORKERS IDLE_MS`: it binds
-`Server` on an ephemeral loopback port with `idle_timeout_ms=IDLE_MS`,
+`flare` environment and runs it as `hol_muntin WORKERS IDLE_MS [GRACE_MS]`: it
+binds `Server` on an ephemeral loopback port with `idle_timeout_ms=IDLE_MS`
+(and `shutdown_grace_ms=GRACE_MS` when given, as M3-069's stop trials do),
 prints `port <n>` and serves with `serve(app)` when `WORKERS` is 1 and with
 `serve[make_app](workers=WORKERS)` otherwise. bench/hol/hol_flare.mojo is the
 same server written against Flare alone.
@@ -60,10 +61,15 @@ def make_app() -> App:
 
 def main() raises:
     var args = argv()
-    if len(args) != 3:
-        raise Error("usage: hol_muntin WORKERS IDLE_MS")
+    if len(args) != 3 and len(args) != 4:
+        raise Error("usage: hol_muntin WORKERS IDLE_MS [GRACE_MS]")
     var workers = Int(args[1])
-    var server = Server.bind("127.0.0.1", 0, idle_timeout_ms=Int(args[2]))
+    var server = Server.bind(
+        "127.0.0.1",
+        0,
+        idle_timeout_ms=Int(args[2]),
+        shutdown_grace_ms=Int(args[3]) if len(args) == 4 else 5000,
+    )
     print("port", server.port(), flush=True)
     if workers == 1:
         var app = make_app()

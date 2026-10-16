@@ -1,0 +1,77 @@
+diff --git a/adapters/flare/muntin_flare.mojo b/adapters/flare/muntin_flare.mojo
+index 63fa15f..40acae5 100644
+--- a/adapters/flare/muntin_flare.mojo
++++ b/adapters/flare/muntin_flare.mojo
+@@ -859,6 +859,59 @@ def _dup_over_cloexec(src: Int, dst: Int) -> Int:
+             return -1
+ 
+ 
++def _reuseport_listener(listener: Int, i: Int) -> Int:
++    """MEASUREMENT ONLY (M3-069, bench/hol/spread/muntin_reuseport.patch):
++    worker `i`'s listener on Linux. Worker 0 gets a close-on-exec copy of
++    the `Server`'s listener, with `SO_REUSEPORT` set on it (Linux takes it
++    after `bind`, and the next socket bound with it joins its group); every
++    other worker a new non-blocking, close-on-exec socket with
++    `SO_REUSEPORT`, bound to the same address and listening. -1 with
++    `errno` set on failure."""
++    var one = List[c_int](length=1, fill=1)
++    if (
++        external_call["setsockopt", c_int](
++            c_int(listener), c_int(1), c_int(15), one.unsafe_ptr(), c_int(4)
++        )
++        != 0
++    ):
++        return -1
++    if i == 0:
++        return _dup_cloexec(listener)
++    var addr = List[UInt8](length=16, fill=0)
++    var size = List[c_int](length=1, fill=16)
++    if (
++        external_call["getsockname", c_int](
++            c_int(listener), addr.unsafe_ptr(), size.unsafe_ptr()
++        )
++        != 0
++    ):
++        return -1
++    # AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC
++    var fd = Int(
++        external_call["socket", c_int](
++            c_int(2), c_int(1 | 2048 | 524288), c_int(0)
++        )
++    )
++    if fd < 0:
++        return -1
++    if (
++        external_call["setsockopt", c_int](
++            c_int(fd), c_int(1), c_int(15), one.unsafe_ptr(), c_int(4)
++        )
++        != 0
++        or external_call["bind", c_int](
++            c_int(fd), addr.unsafe_ptr(), size[0]
++        )
++        != 0
++        or external_call["listen", c_int](c_int(fd), c_int(4096)) != 0
++    ):
++        var failure = get_errno()
++        _close_fd(fd)
++        set_errno(failure)
++        return -1
++    return fd
++
++
+ def _pipe_cloexec(fds: Pointer[c_int, _]) -> Int:
+     """`pipe` with both ends close-on-exec: 0, or -1 with `errno` set. Linux
+     sets the flag in the same call (`pipe2`); macOS just after, as
+@@ -1735,7 +1788,11 @@ struct Server(Movable):
+             _store(_row(base, i), _W_FD, -1)
+         for i in range(workers):
+             var row = _row(base, i)
+-            var fd = _dup_cloexec(listener)
++            var fd: Int
++            comptime if CompilationTarget.is_linux():
++                fd = _reuseport_listener(listener, i)
++            else:
++                fd = _dup_cloexec(listener)
+             if fd < 0:
+                 var failure = _errno()
+                 _close_workers_fds(base, workers)
