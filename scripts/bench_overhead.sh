@@ -11,11 +11,19 @@
 # 1. runs bench_adapter: nanoseconds per request in process, no network, by
 #    request header count and body size, with and without middleware
 #    (bench/overhead/bench_adapter.mojo says what it measures);
-# 2. serves the application from each implementation on loopback and loads
+# 2. on Linux with glibc and a C compiler (`cc`), runs `bench_adapter count`
+#    under bench/overhead/count_alloc.c: the same cases' allocations per
+#    request (bench_adapter.mojo says what they stand for and how it checks
+#    that first); elsewhere it says the section is skipped;
+# 3. serves the application from each implementation on loopback and loads
 #    it with wrk over HTTP/1.1 keep-alive: requests per second, latency p50
-#    and p99 (wrk's), errors, and the server's peak resident memory (VmHWM;
-#    Linux only, `-` elsewhere), for each worker count, middleware off and
-#    on, endpoint and connection count.
+#    and p99 (wrk's), the responses received (`requests`), errors (responses
+#    other than 2xx or 3xx, and socket errors), of them timeouts, and the
+#    server's peak resident memory since it started (VmHWM; Linux only, `-`
+#    elsewhere), for each worker count, middleware off and on, endpoint and
+#    connection count, ROUNDS times, then summarizes the rounds. A server
+#    serves every connection count and round of one endpoint, so its peak
+#    covers every load of that endpoint up to the line, not that load alone.
 #
 # Endpoints: plaintext (GET /plaintext), plaintext-h16 (the same with 16
 # more request header fields, X-Bench-000 to X-Bench-015; wrk alone sends
@@ -33,6 +41,24 @@
 # FLARE_REUSEPORT_WORKERS=0, one shared listener as Muntin's workers use).
 # Flare's workers are not pinned to cores (bench/overhead/server_flare.mojo).
 #
+# Rounds: each endpoint's servers start once; round r then loads every
+# connection count, the implementations in the order above in odd rounds and
+# in the reverse order in even ones (two rounds: muntin, flare, flare,
+# muntin), so that no implementation always runs first or last. Each line
+# names its round. With more than one round, a summary follows, one line per
+# configuration and pair: the median requests per second of each, the ratio
+# of the second to the first in each round (median, minimum and maximum), and
+# `order`, how much higher that ratio was in the rounds where the first of
+# the pair ran first than in those where it ran last (geometric means):
+# `flare/muntin` and, with several workers, `flare-shared/flare`. A ratio
+# whose minimum and maximum are on the same side of 1 held in every round.
+# Pairs with an error in any round are summarized apart, with each side's
+# errors, timeouts and errors per response received (`-` with none): an
+# overloaded server's requests per second are not a throughput comparison.
+# A round in which either side answered nothing gives no ratio;
+# `unanswered_rounds` counts them, and a pair with no ratio at all prints `-`
+# for it.
+#
 # CPUs: where taskset exists (Linux), the allowed CPUs (Cpus_allowed_list in
 # /proc/self/status, at least 2) are split in two: the first half runs the
 # servers, the second wrk and the in-process program (on its last CPU).
@@ -42,6 +68,7 @@
 #   WARMUP    seconds of the unmeasured wrk run before it (default 2)
 #   CONNS     connection counts (default "1 16 256")
 #   WORKERS   worker counts (default "1 N", N the server CPU count, at least 2)
+#   ROUNDS    loopback rounds (default 1)
 #   RUNS      timed runs per in-process case (default 15)
 #   WRK       the wrk command (default: wrk 4.2.0 from conda-forge through
 #             `pixi exec`, linux-64 only; elsewhere set WRK=wrk)
@@ -58,9 +85,11 @@ uint() { # NAME VALUE: refuses VALUE unless a decimal integer 1..999999
 duration="${DURATION-10}"
 warmup="${WARMUP-2}"
 runs="${RUNS-15}"
+rounds="${ROUNDS-1}"
 uint DURATION "$duration"
 uint WARMUP "$warmup"
 uint RUNS "$runs"
+uint ROUNDS "$rounds"
 read -r -a conns <<<"${CONNS-1 16 256}"
 for c in "${conns[@]}"; do uint CONNS "$c"; done
 if ((${#conns[@]} == 0)); then
@@ -129,6 +158,17 @@ done
 echo
 echo "== in process (ns per request)"
 ${bench_pin[@]+"${bench_pin[@]}"} "./$out/bench_adapter" "$runs"
+
+echo
+echo "== in process (allocations per request)"
+if [[ $(uname -s) == Linux ]] && getconf GNU_LIBC_VERSION >/dev/null 2>&1 &&
+    command -v cc >/dev/null; then
+    cc -shared -fPIC -O2 -o "$out/count_alloc.so" bench/overhead/count_alloc.c -ldl
+    LD_PRELOAD="$PWD/$out/count_alloc.so" ${bench_pin[@]+"${bench_pin[@]}"} \
+        "./$out/bench_adapter" count
+else
+    echo "# skipped: needs Linux with glibc and cc"
+fi
 
 # Request bodies, and wrk scripts that send them.
 printf '{"name":"Ada","age":36}' >"$out/json-post.body"
@@ -250,20 +290,94 @@ load() { # IMPL ENDPOINT PORT CONNS PID LABEL: one warm-up run and one measured 
     local result
     result="$(${wrk_pin[@]+"${wrk_pin[@]}"} "${wrk[@]}" -t "$threads" -c "$c" -d "${duration}s" \
         --timeout 10s --latency ${args[@]+"${args[@]}"} "$url")"
-    local rps p50 p99 errors
+    local rps p50 p99 requests errors timeouts
     rps="$(awk '/^Requests\/sec:/ { print $2 }' <<<"$result")"
     p50="$(to_us "$(awk '$1 == "50%" { print $2 }' <<<"$result")")"
     p99="$(to_us "$(awk '$1 == "99%" { print $2 }' <<<"$result")")"
+    requests="$(awk '$2 == "requests" && $3 == "in" { print $1 }' <<<"$result")"
     errors="$(awk '
         /^  Non-2xx or 3xx responses:/ { n += $5 }
         /^  Socket errors:/ { gsub(",", ""); n += $4 + $6 + $8 + $10 }
         END { print n + 0 }' <<<"$result")"
-    printf '%s\tc=%s\t%s\treq_s=%s\tp50_us=%s\tp99_us=%s\terrors=%s\tpeak_rss_kib=%s\n' \
-        "$6" "$c" "$1" "$rps" "$p50" "$p99" "$errors" "$(peak_rss "$5")"
+    timeouts="$(awk '/^  Socket errors:/ { gsub(",", ""); n += $10 } END { print n + 0 }' <<<"$result")"
+    printf '%s\tc=%s\t%s\treq_s=%s\tp50_us=%s\tp99_us=%s\trequests=%s\terrors=%s\ttimeouts=%s\tpeak_rss_kib=%s\n' \
+        "$6" "$c" "$1" "$rps" "$p50" "$p99" "${requests:-0}" "$errors" "$timeouts" "$(peak_rss "$5")" |
+        tee -a "$out/loopback.tsv"
+}
+
+summarize() { # ERRORS: the rounds of $out/loopback.tsv, one line per configuration and pair;
+    # ERRORS 0: the pairs with no error in any round, 1: the others
+    awk -F '\t' -v want_errors="$1" '
+        function median(list,    v, n, i, j, t) {
+            n = split(list, v, " ")
+            for (i = 2; i <= n; i++)
+                for (j = i; j > 1 && v[j - 1] + 0 > v[j] + 0; j--) {
+                    t = v[j]; v[j] = v[j - 1]; v[j - 1] = t
+                }
+            return n % 2 ? v[(n + 1) / 2] : (v[n / 2] + v[n / 2 + 1]) / 2
+        }
+        function rate(errors, responses) {
+            return responses ? sprintf("%.4f", errors / responses) : "-"
+        }
+        function pair(key, a, b,    ratios, r, n, lo, hi, x, odd, even, no, ne, order, unanswered) {
+            if (!((key, a) in rps) || !((key, b) in rps)) return
+            if ((errs[key, a] + errs[key, b] > 0) != want_errors) return
+            n = 0; no = 0; ne = 0; odd = 0; even = 0
+            unanswered = 0
+            for (r = 1; r <= rounds; r++) {
+                if (!((key, a, r) in one) || !((key, b, r) in one)) continue
+                if (one[key, a, r] <= 0 || one[key, b, r] <= 0) { unanswered++; continue }
+                x = one[key, b, r] / one[key, a, r]
+                ratios = ratios " " x
+                if (n == 0 || x < lo) lo = x
+                if (n == 0 || x > hi) hi = x
+                n++
+                if (r % 2) { odd += log(x); no++ } else { even += log(x); ne++ }
+            }
+            order = (no && ne) ? sprintf("%+.1f%%", (exp(odd / no - even / ne) - 1) * 100) : "-"
+            printf "%s\t%s/%s\t%s=%.0f\t%s=%.0f\tratio_median=%s\tratio_min=%s\tratio_max=%s\torder=%s\trounds=%d",
+                key, b, a, a, median(rps[key, a]), b, median(rps[key, b]),
+                n ? sprintf("%.3f", median(ratios)) : "-", n ? sprintf("%.3f", lo) : "-",
+                n ? sprintf("%.3f", hi) : "-", order, n
+            if (unanswered) printf "\tunanswered_rounds=%d", unanswered
+            if (want_errors)
+                printf "\t%s_errors=%d\t%s_timeouts=%d\t%s_error_rate=%s\t%s_errors=%d\t%s_timeouts=%d\t%s_error_rate=%s",
+                    a, errs[key, a], a, tos[key, a], a, rate(errs[key, a], reqs[key, a]),
+                    b, errs[key, b], b, tos[key, b], b, rate(errs[key, b], reqs[key, b])
+            printf "\n"
+        }
+        {
+            delete f
+            for (i = 1; i <= NF; i++)
+                if (split($i, kv, "=") == 2) f[kv[1]] = kv[2]
+            if (NF != 13 || !("round" in f) || !("req_s" in f) || $6 !~ /^(muntin|flare|flare-shared)$/) {
+                printf "summarize: %s line %d is not a load line\n", FILENAME, NR > "/dev/stderr"
+                bad = 1
+                exit 1
+            }
+            key = $1 "\t" $2 "\t" $3 "\t" $5
+            r = f["round"] + 0
+            if (!(key in seen)) { seen[key] = 1; keys[++nkeys] = key }
+            rps[key, $6] = rps[key, $6] " " f["req_s"]
+            one[key, $6, r] = f["req_s"]
+            reqs[key, $6] += f["requests"]
+            errs[key, $6] += f["errors"]
+            tos[key, $6] += f["timeouts"]
+            if (r > rounds) rounds = r
+        }
+        END {
+            if (bad) exit 1
+            for (k = 1; k <= nkeys; k++) {
+                pair(keys[k], "muntin", "flare")
+                pair(keys[k], "flare", "flare-shared")
+            }
+        }' "$out/loopback.tsv"
 }
 
 echo
-echo "== over loopback (wrk, HTTP/1.1 keep-alive, ${duration} s after ${warmup} s of warm-up)"
+tab=$'\t'
+echo "== over loopback (wrk, HTTP/1.1 keep-alive, ${duration} s after ${warmup} s of warm-up, $rounds round(s))"
+: >"$out/loopback.tsv"
 for w in "${workers[@]}"; do
     impls=(muntin flare)
     ((w > 1)) && impls+=(flare-shared)
@@ -283,10 +397,17 @@ for w in "${workers[@]}"; do
                     exit 1
                 fi
             done
-            for c in "${conns[@]}"; do
-                for impl in "${impls[@]}"; do
-                    load "$impl" "$ep" "${port_of[$impl]}" "$c" "${pid_of[$impl]}" \
-                        "workers=$w	mw=$mw	$ep"
+            for ((r = 1; r <= rounds; r++)); do
+                order=("${impls[@]}")
+                if ((r % 2 == 0)); then
+                    order=()
+                    for ((i = ${#impls[@]} - 1; i >= 0; i--)); do order+=("${impls[i]}"); done
+                fi
+                for c in "${conns[@]}"; do
+                    for impl in "${order[@]}"; do
+                        load "$impl" "$ep" "${port_of[$impl]}" "$c" "${pid_of[$impl]}" \
+                            "workers=$w${tab}mw=$mw${tab}$ep${tab}round=$r"
+                    done
                 done
             done
             for impl in "${impls[@]}"; do
@@ -297,3 +418,12 @@ for w in "${workers[@]}"; do
         done
     done
 done
+
+if ((rounds > 1)); then
+    echo
+    echo "== over loopback, the rounds summarized: pairs with no error in any round (requests per second)"
+    summarize 0
+    echo
+    echo "== over loopback, the rounds summarized: pairs with errors (overloaded; not a throughput comparison)"
+    summarize 1
+fi
