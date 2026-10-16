@@ -46,6 +46,7 @@ echo "ok"
 
 step "architecture boundary"
 ./scripts/check_boundaries.sh src/muntin
+./scripts/check_flare_reliance.sh
 
 step "unsafe confinement"
 ./scripts/check_unsafe.sh
