@@ -4,10 +4,13 @@ by header shape, in process. Not part of Muntin and not run by CI;
 
 Each case builds one Flare request before timing; a timed iteration is one
 conversion and the `Headers` it returns, dropped. Before timing, the
-conversion is checked to return every field. Each line printed is one case:
-nanoseconds per conversion, the median and the minimum over the timed runs.
-The program builds against any commit that has `to_muntin_headers`, so a
-change is measured by running it at the base and at the change.
+conversion is checked to return every field. Each case is measured twice:
+`adapter`, the adapter's `to_muntin_headers`, and `pieces`, the rebuild
+M3-066 rejected (`pieces_rebuild.mojo`, a prototype), with the same
+calibration rule and their timed runs
+alternating, so both see the same machine state. Each line printed is one
+case and one conversion: nanoseconds per conversion, the median and the
+minimum over the timed runs.
 
 Cases: `browser12` (a browser's `GET`: 12 fields, 11 names), `distinctN`
 (N fields, each its own name, all names 7 bytes long), `sameN` (N fields
@@ -23,6 +26,7 @@ from std.time import perf_counter_ns
 
 from flare.http import Request as FlareRequest
 from muntin_flare import to_muntin_headers
+from pieces_rebuild import rebuild_fields
 
 
 comptime MIN_RUN_NS = 20_000_000
@@ -96,27 +100,38 @@ def distinct_two_byte(n: Int) raises -> FlareRequest:
     return r^
 
 
-def _run(r: FlareRequest, iters: Int) raises -> Int:
+def _convert(r: FlareRequest, pieces: Bool) raises -> Int:
+    """How many fields one conversion returns."""
+    if pieces:
+        var h = rebuild_fields(r.headers)
+        if not h:
+            raise Error("write_to's pieces changed")
+        return len(h.value())
+    return len(to_muntin_headers(r))
+
+
+def _run(r: FlareRequest, iters: Int, pieces: Bool) raises -> Int:
     """Nanoseconds for `iters` conversions."""
     var fields = 0
     var start = perf_counter_ns()
     for _ in range(iters):
-        fields += len(to_muntin_headers(r))
+        fields += _convert(r, pieces)
     var elapsed = Int(perf_counter_ns() - start)
     if fields != iters * r.headers.len():
         raise Error("a conversion lost fields")
     return elapsed
 
 
-def measure(label: String, r: FlareRequest, runs: Int) raises:
-    if len(to_muntin_headers(r)) != r.headers.len():
-        raise Error(label + ": a field is missing")
+def _calibrate(r: FlareRequest, pieces: Bool) raises -> Int:
     var iters = 1
-    while _run(r, iters) < MIN_RUN_NS:
+    while _run(r, iters, pieces) < MIN_RUN_NS:
         iters *= 2
-    var times = List[Int]()
-    for _ in range(runs):
-        times.append(_run(r, iters) // iters)
+    return iters
+
+
+def _report(
+    label: String, kind: String, fields: Int, mut times: List[Int], iters: Int
+):
     sort(times)
     var m = len(times) // 2
     var median = (
@@ -124,8 +139,10 @@ def measure(label: String, r: FlareRequest, runs: Int) raises:
     )
     print(
         label,
+        "\t",
+        kind,
         "\tfields=",
-        r.headers.len(),
+        fields,
         "\tmedian_ns=",
         median,
         "\tmin_ns=",
@@ -134,6 +151,26 @@ def measure(label: String, r: FlareRequest, runs: Int) raises:
         iters,
         sep="",
     )
+
+
+def measure(label: String, r: FlareRequest, runs: Int) raises:
+    for pieces in [False, True]:
+        if _convert(r, pieces) != r.headers.len():
+            raise Error(label + ": a field is missing")
+    var adapter_iters = _calibrate(r, False)
+    var pieces_iters = _calibrate(r, True)
+    var adapter = List[Int]()
+    var pieces = List[Int]()
+    for i in range(runs):
+        # Alternate which goes first, so neither always runs warm.
+        if i % 2 == 0:
+            adapter.append(_run(r, adapter_iters, False) // adapter_iters)
+            pieces.append(_run(r, pieces_iters, True) // pieces_iters)
+        else:
+            pieces.append(_run(r, pieces_iters, True) // pieces_iters)
+            adapter.append(_run(r, adapter_iters, False) // adapter_iters)
+    _report(label, "adapter", r.headers.len(), adapter, adapter_iters)
+    _report(label, "pieces", r.headers.len(), pieces, pieces_iters)
 
 
 def main() raises:
