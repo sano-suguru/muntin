@@ -3,8 +3,11 @@
 # tests, its `Server` tests and its real localhost round trips
 # (adapters/flare), and builds examples/hello_server.mojo, against the Flare
 # release pinned in pixi.toml's `flare` environment, and checks that the
-# default environment (which builds src/muntin) cannot see Flare. Exits nonzero
-# on any failure.
+# default environment (which builds src/muntin) cannot see Flare. It also
+# builds bench/overhead/bench_adapter.mojo and, on Linux with glibc and `cc`,
+# runs its allocation count once (a smoke run of the counter
+# scripts/bench_overhead.sh uses, not a measurement). Exits nonzero on any
+# failure.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -131,6 +134,7 @@ build_bg_known json_loopback_probe -I src -I tests -I "$adapter" compat/flare/js
 build_bg head_probe -I src -I "$adapter" compat/flare/head/head_probe.mojo
 build_bg body_probe compat/flare/body/body_probe.mojo
 build_bg stream_probe compat/flare/stream/stream_probe.mojo
+build_bg bench_adapter -I src -I "$adapter" -I bench/routing -I bench/overhead bench/overhead/bench_adapter.mojo
 built=0
 for i in "${!pids[@]}"; do
     log="$tmp/build_${outs[i]}.log"
@@ -521,6 +525,23 @@ fi
 if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/stream_probe.log"; then
     echo "error: compat/flare/stream/stream_probe.mojo ran no tests" >&2
     exit 1
+fi
+
+step "allocation counter smoke run (bench/overhead/count_alloc.c under bench_adapter count)"
+if [[ $(uname -s) == Linux ]] && getconf GNU_LIBC_VERSION >/dev/null 2>&1 &&
+    command -v cc >/dev/null; then
+    cc -shared -fPIC -O2 -Wall -Wextra -Werror -o "$tmp/count_alloc.so" \
+        bench/overhead/count_alloc.c -ldl
+    # `count` raises unless its calibration counts 0 to 3 body copies exactly.
+    LD_PRELOAD="$tmp/count_alloc.so" ./build/bench_adapter count >"$tmp/count.log"
+    grep -E '^calibration|^echo.h=0.b=1048576.mw=0' "$tmp/count.log" || true
+    if [[ $(grep -c '^calibration' "$tmp/count.log") != 4 ]] ||
+        ! grep -qP '^echo\th=0\tb=1048576\tmw=0\tmuntin\+adapter\tallocs=' "$tmp/count.log"; then
+        echo "error: bench_adapter count printed no calibration or no 1 MiB echo count" >&2
+        exit 1
+    fi
+else
+    echo "skipped: needs Linux with glibc and cc"
 fi
 
 step "default environment excludes Flare"
