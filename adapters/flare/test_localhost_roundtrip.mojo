@@ -302,7 +302,10 @@ h2c also UTF-8 beyond ASCII; up to 100 fields as Flare hands them over,
 exactly 100 included) over HTTP/1.1 and h2c: the
 handler reads each field the client sent, name, value and order, byte for
 byte, except that over h2c Flare first turns `:authority` into `Host` and
-joins `cookie` fields into one last field (`_h2_delivered`).
+joins `cookie` fields into one last field (`_h2_delivered`). M3-067 sends
+101 fields as Flare hands them over, on each protocol, and gets the adapter's
+431 with the server still serving; over h2c 101 `cookie` fields, which Flare
+joins into one, are served.
 """
 
 from std.ffi import c_int, c_uint, external_call
@@ -4717,6 +4720,41 @@ def test_every_request_field_reaches_the_handler_over_http1_and_h2c() raises:
             assert_equal(got[0][0].value, "200")
             assert_equal(got[1], _echoed(delivered))
         assert_equal(longest, 100)
+        # M3-067: one field more is the adapter's 431, on either protocol,
+        # and the server keeps serving.
+        var over = String()
+        for i in range(99):
+            over += String("X-F", i, ": v\r\n")
+        var refused = h1_fields(child.port, over)
+        assert_true(
+            refused.startswith(
+                "HTTP/1.1 431 Request Header Fields Too Large\r\n"
+            ),
+            refused,
+        )
+        assert_true(
+            refused.endswith("\r\n\r\nRequest Header Fields Too Large"),
+            refused,
+        )
+        var h2_over = List[Tuple[String, String]]()
+        for i in range(100):
+            h2_over.append((String("x-f", i), String("v")))
+        assert_equal(len(_h2_delivered(h2_over)), 101)
+        var h2_refused = h2_request(child.port, "GET", "/fields", h2_over)
+        assert_equal(h2_refused[0][0].value, "431")
+        assert_equal(h2_refused[1], "Request Header Fields Too Large")
+        # Over h2c the fields are counted as Flare hands them over: 101
+        # `cookie` fields are one.
+        var crumbs = List[Tuple[String, String]]()
+        for i in range(101):
+            crumbs.append((String("cookie"), String("c", i, "=1")))
+        var joined = _h2_delivered(crumbs)
+        assert_equal(len(joined), 2)
+        var served = h2_request(child.port, "GET", "/fields", crumbs)
+        assert_equal(served[0][0].value, "200")
+        assert_equal(served[1], _echoed(joined))
+        var after = h1_fields(child.port, "")
+        assert_true(after.startswith("HTTP/1.1 200"), after)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
