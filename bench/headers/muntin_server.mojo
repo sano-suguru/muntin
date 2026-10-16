@@ -27,7 +27,7 @@ def read(req: Request) raises -> Response:
         "Authorization",
         "X-Request-Id",
         "X-Forwarded-For",
-        "x-h0099",
+        "x-h0098",
     ]:
         var v = req.headers.get(name)
         if v:

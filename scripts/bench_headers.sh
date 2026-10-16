@@ -18,7 +18,7 @@
 # loopback line starts with its server and round; each server's peak RSS
 # follows its run (Linux), and the medians over the rounds come last
 # (bench/headers/median.py, which fails unless every server has a line of
-# every kind in every round). The in-process program and each server are
+# every case bench/headers/load.py lists in every round). The in-process program and each server are
 # pinned with taskset, where it exists (Linux), to the last CPU this
 # process may run on; the client is not pinned.
 # Needs python3.
@@ -103,4 +103,5 @@ for round in $(seq 1 "$rounds"); do
     done
 done
 echo "# loopback medians over $rounds round(s)"
-python3 -I bench/headers/median.py "$rounds" "${servers[@]}" <"$out/loopback.log"
+python3 -I bench/headers/load.py --cases >"$out/cases.tsv"
+python3 -I bench/headers/median.py "$rounds" "$out/cases.tsv" "${servers[@]}" <"$out/loopback.log"

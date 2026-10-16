@@ -1,4 +1,5 @@
-"""HTTP/1.1 client for scripts/bench_headers.sh: PORT SECONDS.
+"""HTTP/1.1 client for scripts/bench_headers.sh: PORT SECONDS, or `--cases`
+to list the cases a run prints (`CASES`).
 
 For each header shape, against the server on 127.0.0.1:PORT:
 - `single`: one request at a time on a new connection, 200 times for
@@ -36,7 +37,8 @@ included, stops the run with exit status 1 after printing each failure
 the request is sent again on a new one, at most RETRIES times in a row;
 each line prints how many requests were sent again (`resent`), so the
 server may have received up to that many more requests than were
-answered. `distinctN` is N lines `x-hNNNN: v`, each its own name, as
+answered. `distinctN` is N fields, as many as a limit of N admits: `Host`
+(every request's) and N - 1 lines `x-hNNNN: v`, each its own name, as
 bench/headers/bench_headers.mojo's; `same4000` and `distinct2600` are the
 largest shapes Flare v0.12.0 admits over HTTP/1.1 (`max_header_size` 8192
 counts header lines without CRLF): 4000 lines `a:`, and 2600 lines, each a
@@ -51,7 +53,6 @@ import threading
 import time
 import traceback
 
-port, seconds = int(sys.argv[1]), float(sys.argv[2])
 TIMEOUT_S = 30.0
 RETRIES = 3
 RATE = 200
@@ -72,8 +73,8 @@ BROWSER = [
 ]
 SHAPES = {
     "browser12": "".join(f"{k}: {v}\r\n" for k, v in BROWSER),
-    "distinct100": "".join(f"x-h{i:04}: v\r\n" for i in range(100)),
-    "distinct256": "".join(f"x-h{i:04}: v\r\n" for i in range(256)),
+    "distinct100": "".join(f"x-h{i:04}: v\r\n" for i in range(99)),
+    "distinct256": "".join(f"x-h{i:04}: v\r\n" for i in range(255)),
     "same4000": "a:\r\n" * 4000,
     "distinct2600": "".join(f"{n}:\r\n" for n in TWO[:2600]),
 }
@@ -84,6 +85,14 @@ class Failed(Exception):
 
 
 BOUNDED = ("browser12", "distinct100", "distinct256")
+HEAVY = ("same4000", "distinct2600")
+CASES = (
+    [(s, "single") for s in SHAPES]
+    + [(s, "rate") for s in BOUNDED]
+    + [(s, k) for s in HEAVY for k in ("load", "open")]
+)
+"""Every (shape, kind) a run prints, in order; `load.py --cases` lists them
+for bench/headers/median.py."""
 
 
 def request(fields, path="/"):
@@ -339,19 +348,16 @@ def rate(name, failures):
     print(f"{name}\trate\tper_s={RATE}\t{percentiles('rate', latency)}\t{percentiles('start', lag)}\tresent={sum(resent)}")
 
 
+if sys.argv[1:] == ["--cases"]:
+    for shape, kind in CASES:
+        print(f"{shape}\t{kind}")
+    raise SystemExit(0)
+port, seconds = int(sys.argv[1]), float(sys.argv[2])
+RUN = {"single": lambda shape, _: single(shape), "rate": rate, "load": load, "open": open_loop}
 failures = []
 try:
-    for shape in SHAPES:
-        single(shape)
-    for shape in BOUNDED:
-        rate(shape, failures)
-        if failures:
-            break
-    for shape in () if failures else ("same4000", "distinct2600"):
-        load(shape, failures)
-        if failures:
-            break
-        open_loop(shape, failures)
+    for shape, kind in CASES:
+        RUN[kind](shape, failures)
         if failures:
             break
 except Failed as e:

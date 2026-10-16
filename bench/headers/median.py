@@ -1,22 +1,27 @@
 """Reads scripts/bench_headers.sh's loopback lines (SERVER round=N SHAPE KIND
 key=value...) from standard input and prints, per shape, kind and server,
 the number of rounds and each value's median over them: median.py ROUNDS
-SERVER.... Fails, printing why, on a line of another form, a server not
-named, or unless every named server has exactly one line of each shape and
-kind in each of rounds 1 to ROUNDS, with the same keys."""
+CASES SERVER..., where CASES is a file of `SHAPE<tab>KIND` lines (what
+`bench/headers/load.py --cases` prints). Fails, printing why, on a line of
+another form, a server or case not named, or unless every named server has
+exactly one line of every named case in each of rounds 1 to ROUNDS, with
+the same keys."""
 
 import collections
 import statistics
 import sys
 
-rounds, servers = int(sys.argv[1]), sys.argv[2:]
+rounds, servers = int(sys.argv[1]), sys.argv[3:]
+cases = [tuple(line.rstrip("\n").split("\t")) for line in open(sys.argv[2])]
+if not cases or any(len(c) != 2 for c in cases):
+    raise SystemExit(f"error: {sys.argv[2]} is not SHAPE<tab>KIND lines")
 rows = collections.defaultdict(dict)
 problems = []
 for n, line in enumerate(sys.stdin, 1):
     fields = line.rstrip("\n").split("\t")
     try:
         server, rnd, shape, kind = fields[:4]
-        if server not in servers or not rnd.startswith("round="):
+        if server not in servers or (shape, kind) not in cases or not rnd.startswith("round="):
             raise ValueError
         values = dict(f.split("=", 1) for f in fields[4:])
         if not values:
@@ -25,20 +30,18 @@ for n, line in enumerate(sys.stdin, 1):
             float(v)
         r = int(rnd[len("round="):])
     except ValueError:
-        problems.append(f"line {n} is not SERVER round=N SHAPE KIND key=value...: {line!r}")
+        problems.append(f"line {n} is not SERVER round=N SHAPE KIND key=value... of a named server and case: {line!r}")
         continue
     if r in rows[(shape, kind, server)]:
         problems.append(f"line {n}: a second {shape} {kind} line for {server} round {r}")
     rows[(shape, kind, server)][r] = values
-for shape, kind in sorted({(s, k) for s, k, _ in rows}):
+for shape, kind in cases:
     for server in servers:
         got = rows.get((shape, kind, server), {})
         if sorted(got) != list(range(1, rounds + 1)):
             problems.append(f"{shape} {kind} {server}: rounds {sorted(got)}, expected 1 to {rounds}")
         elif len({tuple(v) for v in got.values()}) != 1:
             problems.append(f"{shape} {kind} {server}: rounds report different keys")
-if not rows:
-    problems.append("no loopback lines")
 if problems:
     for p in problems:
         print(f"error: {p}", file=sys.stderr)

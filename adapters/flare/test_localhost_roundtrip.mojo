@@ -297,8 +297,9 @@ overflow Flare's scanner 400 and keeps serving.
 M3-066 serves `fields_app()`, a raw `GET /fields` that answers every request
 field with its length, and sends fixed and generated field lists (repeated
 and interleaved names in two casings, `Authorization` and `Cookie` values
-holding `;` and `=`, empty values, spaces and tabs inside a value, up to
-100 fields; over h2c also UTF-8 beyond ASCII) over HTTP/1.1 and h2c: the
+holding `;` and `=`, empty values, spaces and tabs inside a value; over
+h2c also UTF-8 beyond ASCII; up to 100 fields as Flare hands them over,
+exactly 100 included) over HTTP/1.1 and h2c: the
 handler reads each field the client sent, name, value and order, byte for
 byte, except that over h2c Flare first turns `:authority` into `Host` and
 joins `cookie` fields into one last field (`_h2_delivered`).
@@ -4532,8 +4533,10 @@ struct _FieldRng:
         return Int(x % UInt64(n))
 
 
-def _field_list(mut rng: _FieldRng, h2: Bool) -> List[Tuple[String, String]]:
-    """1 to 100 fields. For HTTP/2 names are lowercase (its rule) and values
+def _field_list(
+    mut rng: _FieldRng, h2: Bool, most: Int
+) -> List[Tuple[String, String]]:
+    """1 to `most` fields. For HTTP/2 names are lowercase (its rule) and values
     may hold UTF-8 beyond ASCII (Flare answers such a byte over HTTP/1.1
     400 itself, DX.md section 9)."""
     var known: List[String] = [
@@ -4563,7 +4566,7 @@ def _field_list(mut rng: _FieldRng, h2: Bool) -> List[Tuple[String, String]]:
         parts.append("日")
     var token = String("abcdefghijklmnopqrstuvwxyz0123456789-_!#$%&'*+.^`|~")
     var fields = List[Tuple[String, String]]()
-    for _ in range(1 + rng.next(100)):
+    for _ in range(1 + rng.next(most)):
         var name: String
         var pick = rng.next(3)
         if pick == 0:
@@ -4625,7 +4628,12 @@ def _echoed(fields: List[Tuple[String, String]]) -> String:
     return out^
 
 
-def _fixed_field_lists(lower: Bool) -> List[List[Tuple[String, String]]]:
+def _fixed_field_lists(
+    lower: Bool, longest: Int
+) -> List[List[Tuple[String, String]]]:
+    """Two short lists, then `longest` fields named `X-F0`, `X-F1`, ...: the
+    longest list a 100-field limit admits once Flare's own fields are
+    counted."""
     var cases: List[List[Tuple[String, String]]] = [
         [
             (String("Authorization"), String("Bearer a;b=c")),
@@ -4640,6 +4648,10 @@ def _fixed_field_lists(lower: Bool) -> List[List[Tuple[String, String]]]:
             (String("X-A"), String("3")),
         ],
     ]
+    var many = List[Tuple[String, String]]()
+    for i in range(longest):
+        many.append((String("X-F", i), String("v")))
+    cases.append(many^)
     if lower:
         for j in range(len(cases)):
             for i in range(len(cases[j])):
@@ -4651,10 +4663,15 @@ def test_every_request_field_reaches_the_handler_over_http1_and_h2c() raises:
     var child = _serve_in_child(fields_app())
     try:
         var rng = _FieldRng(0x2545F4914F6CDD1D)
+        # Counted as Flare hands the fields to the adapter, so that no list
+        # passes the 100-field limit M3-066 decides: over HTTP/1.1 `Host`
+        # and `Connection` are fields too; over h2c `:authority` becomes
+        # `Host` and the `cookie` fields one.
+        var longest = 0
         # HTTP/1.1: names in the client's casing.
-        var h1 = _fixed_field_lists(False)
+        var h1 = _fixed_field_lists(False, 98)
         for _ in range(30):
-            h1.append(_field_list(rng, False))
+            h1.append(_field_list(rng, False, 98))
         for c in h1:
             var lines = String()
             for f in c:
@@ -4664,18 +4681,26 @@ def test_every_request_field_reaches_the_handler_over_http1_and_h2c() raises:
             sent.append((String("Host"), String("localhost")))
             sent.extend(c.copy())
             sent.append((String("Connection"), String("close")))
+            assert_true(len(sent) <= 100)
+            longest = max(longest, len(sent))
             assert_true(raw.startswith("HTTP/1.1 200"), lines + raw)
             assert_equal(
                 String(raw[byte = raw.find("\r\n\r\n") + 4 :]), _echoed(sent)
             )
         # h2c: lowercase names, as HTTP/2 requires.
-        var h2 = _fixed_field_lists(True)
+        assert_equal(longest, 100)
+        longest = 0
+        var h2 = _fixed_field_lists(True, 99)
         for _ in range(30):
-            h2.append(_field_list(rng, True))
+            h2.append(_field_list(rng, True, 99))
         for c in h2:
+            var delivered = _h2_delivered(c)
+            assert_true(len(delivered) <= 100)
+            longest = max(longest, len(delivered))
             var got = h2_request(child.port, "GET", "/fields", c)
             assert_equal(got[0][0].value, "200")
-            assert_equal(got[1], _echoed(_h2_delivered(c)))
+            assert_equal(got[1], _echoed(delivered))
+        assert_equal(longest, 100)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)

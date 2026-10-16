@@ -24,7 +24,7 @@ def hello(req: Request) raises -> Response:
         "Authorization",
         "X-Request-Id",
         "X-Forwarded-For",
-        "x-h0099",
+        "x-h0098",
     ]:
         seen += req.headers.get(name).byte_length()
     return ok(String(seen))
