@@ -4890,7 +4890,7 @@ Status: **decision and production** (M3-073, pull request #130; `src/muntin` unc
 
 ### State borrowing decision (M3-074)
 
-Status: **decision and production** (M3-074, pull request #PR; issue [#122](https://github.com/sano-suguru/muntin/issues/122)). The probes and the base builds are in the pull request.
+Status: **decision and production** (M3-074, pull request #135; issue [#122](https://github.com/sano-suguru/muntin/issues/122)). The probes and the base builds are in the pull request.
 
 **Question and what settles it.** A route erases its `State[S]` (`_Bound[H, S]` in `_Erased`), and the `App`'s type does not carry the origins in `S`, so a state whose type borrows a local registered, the checker ended the local at its last use, and a request read freed memory, in safe code ([M3-065](#request-context-storage-decision-m3-065) found it; issue #122). How can registration refuse such an `S` without refusing a state that owns its data, including one passed through a helper generic over `S` ([M3-015](#registration-structure-amendment-generic-forwarding-m3-015))? Settled by #122's acceptance criteria: each of its three reproductions refused at compile time by a must-not-build fixture, or served under AddressSanitizer; every existing `State` registration and test unchanged; probes of each candidate with Mojo 1.1.0.
 
