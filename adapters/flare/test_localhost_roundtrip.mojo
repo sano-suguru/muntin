@@ -293,6 +293,16 @@ conversion or handler. A `Server` with 0 takes only empty bodies, one bound
 with no limit takes 10 MiB and refuses one byte more on both protocols, and
 one with the largest value (2^59 - 1) answers chunk-size lines that would
 overflow Flare's scanner 400 and keeps serving.
+
+M3-066 serves `fields_app()`, a raw `GET /fields` that answers every request
+field with its length, and sends fixed and generated field lists (repeated
+and interleaved names in two casings, `Authorization` and `Cookie` values
+holding `;` and `=`, empty values, spaces and tabs inside a value; over
+h2c also UTF-8 beyond ASCII; up to 100 fields as Flare hands them over,
+exactly 100 included) over HTTP/1.1 and h2c: the
+handler reads each field the client sent, name, value and order, byte for
+byte, except that over h2c Flare first turns `:authority` into `Host` and
+joins `cookie` fields into one last field (`_h2_delivered`).
 """
 
 from std.ffi import c_int, c_uint, external_call
@@ -653,6 +663,23 @@ def reset_content(var req: Request) -> Response:
 def form(req: Request) -> Response:
     """A raw `post` route, the only route on its path (M3-031)."""
     return Response.text("form")
+
+
+def every_field(req: Request) raises -> Response:
+    """Each request field as `<name length>:<name><value length>:<value>;`,
+    in order, so names and values holding `:` or `;` read back exactly."""
+    var out = String()
+    for i in range(len(req.headers)):
+        var n = req.headers.name(i)
+        var v = req.headers.value(i)
+        out += String(n.byte_length(), ":", n, v.byte_length(), ":", v, ";")
+    return Response.text(out)
+
+
+def fields_app() -> App:
+    var app = App()
+    app.get["/fields"](every_field)
+    return app^
 
 
 def headers_app() -> App:
@@ -1732,6 +1759,30 @@ def h2c_upgraded(
 def h1_wire(port: Int, wire: String) raises -> String:
     """`wire` written as is on a new connection; every byte of the response
     until the server closes the connection."""
+    var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
+    stream.set_recv_timeout(TIMEOUT_MS)
+    stream.write_all(wire.as_bytes())
+    var acc = List[UInt8]()
+    var buf = List[UInt8]()
+    buf.resize(4096, 0)
+    while True:
+        var n = stream.read(buf.unsafe_ptr(), len(buf))
+        if n == 0:
+            break
+        for k in range(n):
+            acc.append(buf[k])
+    return String(from_utf8_lossy=Span(acc))
+
+
+def h1_fields(port: Int, lines: String) raises -> String:
+    """`GET /fields` over HTTP/1.1 with `Host`, then `lines` (field lines,
+    each ending in CRLF), then `Connection: close`; every byte of the
+    response until the server closes the connection."""
+    var wire = String(
+        "GET /fields HTTP/1.1\r\nHost: localhost\r\n",
+        lines,
+        "Connection: close\r\n\r\n",
+    )
     var stream = TcpStream.connect(SocketAddr.localhost(UInt16(port)))
     stream.set_recv_timeout(TIMEOUT_MS)
     stream.write_all(wire.as_bytes())
@@ -4476,6 +4527,196 @@ def test_largest_receive_limit_keeps_chunk_sizes_from_overflowing() raises:
             assert_true(_running(child.pid), line)
             var hi = h1_exchange(child.port, "GET", "/hello", [], List[UInt8]())
             assert_equal(String(from_utf8=Span(hi[2])), "hello", line)
+    finally:
+        _ = kill(child.pid, SIGKILL)
+        waitpid(child.pid)
+
+
+struct _FieldRng:
+    """xorshift64: the same generated fields on every run."""
+
+    var state: UInt64
+
+    def __init__(out self, seed: UInt64):
+        self.state = seed
+
+    def next(mut self, n: Int) -> Int:
+        var x = self.state
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        self.state = x
+        return Int(x % UInt64(n))
+
+
+def _field_list(
+    mut rng: _FieldRng, h2: Bool, most: Int
+) -> List[Tuple[String, String]]:
+    """1 to `most` fields. For HTTP/2 names are lowercase (its rule) and values
+    may hold UTF-8 beyond ASCII (Flare answers such a byte over HTTP/1.1
+    400 itself, DX.md section 9)."""
+    var known: List[String] = [
+        "Authorization",
+        "Cookie",
+        "Accept",
+        "X-Forwarded-For",
+        "X-A",
+        "x-a",
+    ]
+    var parts: List[String] = [
+        "a",
+        "Z",
+        "0",
+        " ",
+        "\t",
+        ";",
+        "=",
+        ":",
+        ",",
+        "/",
+        "Bearer t0k",
+        "q=0.9",
+    ]
+    if h2:
+        parts.append("é")
+        parts.append("日")
+    var token = String("abcdefghijklmnopqrstuvwxyz0123456789-_!#$%&'*+.^`|~")
+    var fields = List[Tuple[String, String]]()
+    for _ in range(1 + rng.next(most)):
+        var name: String
+        var pick = rng.next(3)
+        if pick == 0:
+            name = known[rng.next(len(known))]
+        elif pick == 1 and len(fields) > 0:
+            name = fields[rng.next(len(fields))][0]
+        else:
+            name = String()
+            for _ in range(1 + rng.next(12)):
+                var i = rng.next(token.byte_length())
+                name += String(token[byte = i : i + 1])
+        if h2:
+            name = name.lower()
+        var value = String()
+        for _ in range(rng.next(8)):
+            value += parts[rng.next(len(parts))]
+        var b = value.as_bytes()
+        var start = 0
+        var end = len(b)
+        while start < end and (b[start] == 32 or b[start] == 9):
+            start += 1
+        while end > start and (b[end - 1] == 32 or b[end - 1] == 9):
+            end -= 1
+        var kept = String(value[byte=start:end])
+        value = kept^
+        if h2 and name == "cookie" and value.byte_length() == 0:
+            value = "c=1"  # Flare's join drops or trails an empty crumb
+        fields.append((name, value^))
+    return fields^
+
+
+def _h2_delivered(
+    sent: List[Tuple[String, String]],
+) -> List[Tuple[String, String]]:
+    """What Flare hands the adapter over HTTP/2 (RFC 9113 sections 8.3.1 and
+    8.2.3): `:authority` first as `Host` (a `host` field dropped), then the
+    fields in order, `cookie` fields joined with `; ` into one last field."""
+    var out = List[Tuple[String, String]]()
+    out.append((String("Host"), String("localhost")))
+    var cookie = String()
+    for f in sent:
+        if f[0] == "cookie":
+            if cookie.byte_length() > 0:
+                cookie += "; "
+            cookie += f[1]
+        elif f[0] != "host":
+            out.append(f.copy())
+    if cookie.byte_length() > 0:
+        out.append((String("cookie"), cookie^))
+    return out^
+
+
+def _echoed(fields: List[Tuple[String, String]]) -> String:
+    var out = String()
+    for f in fields:
+        out += String(
+            f[0].byte_length(), ":", f[0], f[1].byte_length(), ":", f[1], ";"
+        )
+    return out^
+
+
+def _fixed_field_lists(
+    lower: Bool, longest: Int
+) -> List[List[Tuple[String, String]]]:
+    """Two short lists, then `longest` fields named `X-F0`, `X-F1`, ...: the
+    longest list a 100-field limit admits once Flare's own fields are
+    counted."""
+    var cases: List[List[Tuple[String, String]]] = [
+        [
+            (String("Authorization"), String("Bearer a;b=c")),
+            (String("Cookie"), String("a=1; b=2")),
+            (String("Cookie"), String("c=3")),
+        ],
+        [
+            (String("X-A"), String("1")),
+            (String("x-b"), String("")),
+            (String("x-a"), String("2")),
+            (String("X-B"), String("a \t b")),
+            (String("X-A"), String("3")),
+        ],
+    ]
+    var many = List[Tuple[String, String]]()
+    for i in range(longest):
+        many.append((String("X-F", i), String("v")))
+    cases.append(many^)
+    if lower:
+        for j in range(len(cases)):
+            for i in range(len(cases[j])):
+                cases[j][i] = (cases[j][i][0].lower(), cases[j][i][1])
+    return cases^
+
+
+def test_every_request_field_reaches_the_handler_over_http1_and_h2c() raises:
+    var child = _serve_in_child(fields_app())
+    try:
+        var rng = _FieldRng(0x2545F4914F6CDD1D)
+        # Counted as Flare hands the fields to the adapter, so that no list
+        # passes the 100-field limit M3-066 decides: over HTTP/1.1 `Host`
+        # and `Connection` are fields too; over h2c `:authority` becomes
+        # `Host` and the `cookie` fields one.
+        var longest = 0
+        # HTTP/1.1: names in the client's casing.
+        var h1 = _fixed_field_lists(False, 98)
+        for _ in range(30):
+            h1.append(_field_list(rng, False, 98))
+        for c in h1:
+            var lines = String()
+            for f in c:
+                lines += f[0] + ": " + f[1] + "\r\n"
+            var raw = h1_fields(child.port, lines)
+            var sent = List[Tuple[String, String]]()
+            sent.append((String("Host"), String("localhost")))
+            sent.extend(c.copy())
+            sent.append((String("Connection"), String("close")))
+            assert_true(len(sent) <= 100)
+            longest = max(longest, len(sent))
+            assert_true(raw.startswith("HTTP/1.1 200"), lines + raw)
+            assert_equal(
+                String(raw[byte = raw.find("\r\n\r\n") + 4 :]), _echoed(sent)
+            )
+        # h2c: lowercase names, as HTTP/2 requires.
+        assert_equal(longest, 100)
+        longest = 0
+        var h2 = _fixed_field_lists(True, 99)
+        for _ in range(30):
+            h2.append(_field_list(rng, True, 99))
+        for c in h2:
+            var delivered = _h2_delivered(c)
+            assert_true(len(delivered) <= 100)
+            longest = max(longest, len(delivered))
+            var got = h2_request(child.port, "GET", "/fields", c)
+            assert_equal(got[0][0].value, "200")
+            assert_equal(got[1], _echoed(delivered))
+        assert_equal(longest, 100)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
