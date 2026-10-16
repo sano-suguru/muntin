@@ -62,7 +62,8 @@ docs/history/architecture-decisions.md "Request header conversion decision
 65,535) after the idle timeout and before anything is bound, and `serve(app)`
 and every worker answer a request with more fields 431 (the round trips over
 HTTP/1.1 and h2c with the default are in
-`adapters/flare/test_localhost_roundtrip.mojo`).
+`adapters/flare/test_localhost_roundtrip.mojo`, over TLS in
+`adapters/flare/test_tls.mojo`).
 
 Idle timeout (M3-047, decided in docs/history/architecture-decisions.md
 "Server idle timeout decision (M3-047)"): the head-of-line blocking cases run
@@ -3863,9 +3864,9 @@ def _answers_by_field_count(port: Int, limit: Int) raises:
     assert_equal(_content(_exchange(port, _with_fields(0))), "hello")
 
 
-def test_serve_and_its_workers_keep_the_servers_field_limit() raises:
-    """`serve(app)` and every worker of `serve[make]` answer by the limit
-    the `Server` was bound with, 3 here, not the default."""
+def test_serve_keeps_the_servers_field_limit() raises:
+    """`serve(app)` answers by the limit the `Server` was bound with, 3
+    here, not the default."""
     var single = _fork_stoppable(
         Server.bind("127.0.0.1", 0, max_header_fields=3), borrowed_app()
     )
@@ -3873,15 +3874,84 @@ def test_serve_and_its_workers_keep_the_servers_field_limit() raises:
         _answers_by_field_count(single.port, 3)
     finally:
         _stop(single.pid)
-    var workers = _fork_workers[borrowed_app](
-        Server.bind("127.0.0.1", 0, max_header_fields=3), WORKERS
+
+
+def limit_app() -> App:
+    """`who` and `held`, for the workers' field limit test."""
+    var app = App()
+    app.get["/who"](who, State(BuiltOn(current_thread_id())))
+    app.get["/held/{started}/{release}"](held)
+    return app^
+
+
+def _kept_open(target: String, extra: Int) -> String:
+    """`GET target` with `Host` and `extra` fields named `X-F0`, `X-F1`,
+    ...: `extra` + 1 fields, the connection kept open."""
+    var lines = String()
+    for i in range(extra):
+        lines += String("X-F", i, ": v\r\n")
+    return String(
+        "GET ", target, " HTTP/1.1\r\nHost: muntin\r\n", lines, "\r\n"
     )
+
+
+def _served_by(raw: String) raises -> String:
+    """The thread that answered `who`, checked to be the one that built its
+    `App`."""
+    assert_equal(_status_line(raw), "HTTP/1.1 200 OK")
+    var parts = _content(raw).split(" ")
+    assert_equal(len(parts), 2, raw)
+    assert_equal(parts[0], parts[1], "answered off its App's thread")
+    return String(parts[1])
+
+
+def _refused_on(mut stream: TcpStream) raises:
+    """Sends 4 fields on `stream`, which must be answered 431."""
+    stream.write_all(_kept_open("/who", 3).as_bytes())
+    var raw = _one_response(stream)
+    assert_equal(
+        _status_line(raw), "HTTP/1.1 431 Request Header Fields Too Large"
+    )
+    assert_equal(_content(raw), "Request Header Fields Too Large")
+
+
+def test_every_worker_keeps_the_servers_field_limit() raises:
+    """With `WORKERS` workers bound with `max_header_fields=3`, each worker
+    answers by it: while one runs a held request, a connection opened
+    meanwhile is the other's (M3-049's contract); on each worker's own
+    kept-open connection 3 fields reach that worker's `App` and 4 are the
+    adapter's 431. The two answers come from two threads."""
+    var pipes = _held_pipes()
+    var child = _fork_workers[limit_app](
+        Server.bind(
+            "127.0.0.1",
+            0,
+            shutdown_grace_ms=SHORT_GRACE_MS,
+            idle_timeout_ms=PATIENT_IDLE_MS,
+            max_header_fields=3,
+        ),
+        WORKERS,
+    )
+    _close(pipes[1])
+    _close(pipes[2])
+    var held = pipes[0].copy()
     try:
-        # Whichever worker accepts each connection answers by the limit.
-        for _ in range(4):
-            _answers_by_field_count(workers.port, 3)
+        var first = _send(child.port, _kept_open(held.path, 2))
+        assert_equal(_read_byte(held.started), 1, "the handler never started")
+        var other = _send(child.port, _kept_open("/who", 2))
+        var free = _served_by(_one_response(other))
+        _refused_on(other)
+        _write_byte(held.release)
+        assert_equal(_content(_one_response(first)), "released after the stop")
+        first.write_all(_kept_open("/who", 2).as_bytes())
+        var busy = _served_by(_one_response(first))
+        _refused_on(first)
+        print("observed: field limit 3 on workers", busy, "and", free)
+        assert_true(busy != free, "one worker answered both connections")
     finally:
-        _stop(workers.pid)
+        _stop(child.pid)
+        _close(held.started)
+        _close(held.release)
 
 
 def main() raises:
