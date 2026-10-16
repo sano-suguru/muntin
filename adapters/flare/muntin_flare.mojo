@@ -40,7 +40,17 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   so a value that is not UTF-8 fails the check. A field that fails the
   check or `Headers.add` (a control byte, a non-token name, a value that
   is not UTF-8) cannot be represented: the answer is 400.
-- version and peer: dropped.
+- `Host` (M3-073, decided in docs/history/architecture-decisions.md
+  "Request Host decision (M3-073)"): an HTTP/1.1 request without a `Host`
+  field is answered 400 before the conversion and `App.handle` (RFC 9112
+  section 3.2); a later HTTP/1 minor version counts as 1.1 (RFC 9110
+  section 6.2 says to process it so). Flare v0.12.0 admits such a request
+  and refuses a second `Host` itself. An HTTP/2 request with neither
+  `:authority`, which Flare writes as `Host`, nor `host` is answered 400
+  too (RFC 9110 section 7.2 has a client send one); this also covers a request upgraded with
+  `Upgrade: h2c`, which Flare answers 101 and hands over as HTTP/2.
+  HTTP/1.0 needs none. The value is not checked.
+- version and peer: dropped after the `Host` rule reads the version.
 - response: status, body bytes (whatever they are; M3-040) and header
   fields copied; no `Content-Type` is added or changed; reason left unset,
   so Flare's default applies. Header fields go out in order, except those
@@ -372,21 +382,57 @@ def _without_content(var response: FlareResponse) -> FlareResponse:
     return response^
 
 
+def _handle_owned(app: App, var request: Request) -> Response:
+    """`app`'s answer to the converted `request`, handed to the owning
+    `App.handle` (M3-064), so middleware receives it instead of a copy.
+
+    `request` is `var`, so a caller that leaves out the `^` does not build
+    (`cannot be implicitly copied`), where `app.handle(request)` would build
+    and silently pick the borrowing, copying overload. The `^` below is
+    checked by `test_muntin_flare.mojo`, which compares body addresses."""
+    return app.handle(request^)
+
+
+def _lacks_host(request: FlareRequest) -> Bool:
+    """Whether `request` is an HTTP/1.1 or HTTP/2 request without a `Host`
+    field (M3-073). Flare v0.12.0's HTTP/1 parser admits a version of the
+    form `HTTP/<digit>.<digit>` only (`HTTP/1.1` for a request line without
+    one); its HTTP/2 requests, an `Upgrade: h2c` one included, say
+    `HTTP/2`, with `:authority` written as `Host`. Its minimal parser
+    (`ServerConfig.skip_header_decode_for_short_requests`, off by default,
+    which `_server_config` keeps) stores no fields, so this would refuse
+    every HTTP/1.1 request under it."""
+    var v = request.version.as_bytes()
+    var http2 = request.version == "HTTP/2"
+    if not http2:
+        if len(v) != 8 or not request.version.startswith("HTTP/1."):
+            return False
+        if Int(v[7]) < ord("1") or Int(v[7]) > ord("9"):
+            return False  # HTTP/1.0
+    return not request.headers.contains("host")
+
+
+def _bad_request() -> FlareResponse:
+    return FlareResponse(
+        status=400, body=List(String("Bad Request").as_bytes())
+    )
+
+
 def _answer(app: App, request: FlareRequest) -> FlareResponse:
+    if _lacks_host(request):
+        return _bad_request()
     var muntin_request: Request
     try:
         muntin_request = to_muntin_request(request)
     except:
-        return FlareResponse(
-            status=400, body=List(String("Bad Request").as_bytes())
-        )
-    return to_flare_response(app.handle(muntin_request))
+        return _bad_request()
+    return to_flare_response(_handle_owned(app, muntin_request^))
 
 
 def _serve_app(app: App, request: FlareRequest) -> FlareResponse:
-    """`app`'s answer to `request` as the adapter sends it: the conversion,
-    `App.handle`, the adapter's 400 and 500, and the `HEAD` rule. Every
-    handler in this module answers through it."""
+    """`app`'s answer to `request` as the adapter sends it: the `Host` rule,
+    the conversion, `App.handle`, the adapter's 400 and 500, and the `HEAD`
+    rule. Every handler in this module answers through it."""
     if request.method == "HEAD":
         return _without_content(_answer(app, request))
     return _answer(app, request)

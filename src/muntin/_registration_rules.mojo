@@ -23,10 +23,12 @@ registration; and `_match` in `app.mojo` classifies each route segment with
 `_path_params` and in `_match`, which splits the request path with it too.
 """
 
+from std.reflection import reflect
+
 from .body import FromBody, FromBytes
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response
-from .route_value import FromRouteValue, Param, _NamedValue
+from .route_value import FromRouteValue, Param, RouteValues, _NamedValue
 from .state import _InjectedState
 
 
@@ -159,6 +161,8 @@ comptime _TWO_BODIES = 10
 comptime _NEGATIVE_LIMIT = 11
 comptime _APP_VALUE = 12  # a `FromRouteValue` type (M3-055)
 comptime _VALUE_AND_BODY = 13  # a `FromRouteValue` that is also a body
+comptime _RECORD = 14  # a `RouteValues` record (M3-061)
+comptime _AMBIGUOUS_RECORD = 15  # a record that is also a route value or body
 
 
 def _kind[A: AnyType]() -> Int:
@@ -179,7 +183,11 @@ def _kind[A: AnyType]() -> Int:
     M3-055), unless it is also a `FromBody` or a `FromBytes`: then it is a
     kind of its own (`_VALUE_AND_BODY`), which `_rule` rejects wherever it
     is, so neither conversion is picked by this function's order; so is a
-    carrier around one (`_HeaderCarrier._carries_route_value`)."""
+    carrier around one (`_HeaderCarrier._carries_route_value`). A
+    `RouteValues` type is a route-value record (`_RECORD`, M3-061), unless
+    it is also a `FromRouteValue`, a `FromBody` or a `FromBytes`: then it is
+    `_AMBIGUOUS_RECORD`, which `_rule` rejects wherever it is, and so is a
+    carrier around one (`_HeaderCarrier._carries_record`)."""
     comptime if A == _NoSlot:
         return _ABSENT
     elif A == Int:
@@ -194,6 +202,15 @@ def _kind[A: AnyType]() -> Int:
         return _OPT_INT
     elif A == Optional[String]:
         return _OPT_TEXT
+    elif conforms_to(A, RouteValues):
+        comptime if (
+            conforms_to(A, FromRouteValue)
+            or conforms_to(A, FromBody)
+            or conforms_to(A, FromBytes)
+        ):
+            return _AMBIGUOUS_RECORD
+        else:
+            return _RECORD
     elif conforms_to(A, _NamedValue):
         return _named_kind[A]()
     elif conforms_to(A, _InjectedState):
@@ -207,6 +224,8 @@ def _kind[A: AnyType]() -> Int:
         return _TWO_BODIES
     elif conforms_to(A, _HeaderCarrier):
         var conversions = A._conversions()
+        if conversions > 0 and A._carries_record():
+            return _AMBIGUOUS_RECORD
         if conversions > 0 and A._carries_route_value():
             return _VALUE_AND_BODY
         if conversions == 2:
@@ -226,14 +245,19 @@ def _named_kind[A: _NamedValue]() -> Int:
     """The kind of a named route value (M3-050): its value type's kind when
     `A` is a `Param` (exactly, so another type conforming to the private
     marker is no route value) and its value type a route value that is not
-    itself named, or a type that is both a route value and a body, which
-    `_rule` rejects as it does bare; otherwise `_OTHER`."""
+    itself named, or a type that is both a route value and a body, or a
+    record that is also either, which `_rule` rejects as it does bare;
+    otherwise `_OTHER` (a record included)."""
     comptime if A != Param[A._placeholder, A._Value] or conforms_to(
         A._Value, _NamedValue
     ):
         return _OTHER
     var k = _kind[A._Value]()
-    return k if _is_value(k) or k == _VALUE_AND_BODY else _OTHER
+    return (
+        k if _is_value(k)
+        or k == _VALUE_AND_BODY
+        or k == _AMBIGUOUS_RECORD else _OTHER
+    )
 
 
 def _is_named[A: AnyType]() -> Bool:
@@ -265,6 +289,18 @@ def _placeholder_name(route: StaticString, j: Int) -> StaticString:
             return _param_name(item)
         n += 1
     return ""
+
+
+def _placeholder_names(route: StaticString) -> List[StaticString]:
+    """The names of a well-formed literal's placeholders in binding order,
+    each `_placeholder_name(route, j)`, in one pass over the literal."""
+    var names = List[StaticString]()
+    for segment in _path_part(route).split("/"):
+        if _is_param(segment):
+            names.append(_param_name(segment))
+    for item in _query_items(route):
+        names.append(_param_name(item))
+    return names^
 
 
 def _misnamed[path: StaticString, A: AnyType, B: AnyType]() -> Int:
@@ -343,6 +379,154 @@ comptime _NAME_MISMATCH = 39
 comptime _VALUE_OR_BODY = 40
 comptime _GET_VALUE_PLACES = 41
 comptime _POST_VALUE_BODY_PLACES = 42
+comptime _RECORD_AMBIGUOUS = 43
+comptime _RECORD_PLACE = 44
+comptime _RECORD_BESIDE_VALUE = 45
+comptime _RECORD_NO_FIELD = 46
+comptime _RECORD_FIELD_KIND = 47
+comptime _RECORD_COUNT = 48
+comptime _RECORD_PLACEHOLDER_TWICE = 49
+comptime _RECORD_NAME = 50
+comptime _RECORD_OPTIONAL_AT_PATH = 51
+comptime _RECORD_FIELD_AMBIGUOUS = 52
+
+
+def _record_fault[path: StaticString, A: AnyType]() -> Tuple[Int, Int]:
+    """The first of a route-value record's own rules (M3-061) that `A`
+    breaks on the well-formed literal `path`, and the field (from 0) or
+    placeholder position its message names (-1 for none); `(_OK, -1)` when
+    it breaks none or is no record. In order: the record has a field; each
+    field is a bare route value (not a `Param` or a record, and not a route
+    value that is also a body); it has one field per
+    placeholder; the placeholders are named once each; each field is named
+    after the placeholder at its position; an `Optional` field binds a query
+    placeholder."""
+    comptime if not conforms_to(A, RouteValues):
+        return (_OK, -1)
+    else:
+        comptime r = reflect[A]
+        comptime n = r.field_count()
+        comptime types = r.field_types()
+        comptime names = r.field_names()
+        if n == 0:
+            return (_RECORD_NO_FIELD, -1)
+        comptime for i in range(n):
+            comptime F = types[i]
+            comptime if conforms_to(F, _NamedValue):
+                return (_RECORD_FIELD_KIND, i)
+            else:
+                var k = _kind[F]()
+                if k == _VALUE_AND_BODY:
+                    return (_RECORD_FIELD_AMBIGUOUS, i)
+                if not _is_value(k):
+                    return (_RECORD_FIELD_KIND, i)
+        var paths = _path_params(path)
+        var count = paths + _query_params(path)
+        if n != count:
+            return (_RECORD_COUNT, -1)
+        var placeholders = _placeholder_names(path)
+        for j in range(count):
+            for k in range(j):
+                if placeholders[j] == placeholders[k]:
+                    return (_RECORD_PLACEHOLDER_TWICE, j)
+        comptime for i in range(n):
+            comptime name = names[i]
+            if String(name) != String(placeholders[i]):
+                return (_RECORD_NAME, i)
+        comptime for i in range(n):
+            comptime F = types[i]
+            if i < paths and _is_optional(_kind[F]()):
+                return (_RECORD_OPTIONAL_AT_PATH, i)
+        return (_OK, -1)
+
+
+def _field_name[A: AnyType](i: Int) -> String:
+    """The name of field `i` (from 0) of record `A`, or `""`."""
+    comptime if conforms_to(A, RouteValues):
+        comptime names = reflect[A].field_names()
+        comptime for j in range(reflect[A].field_count()):
+            if j == i:
+                comptime name = names[j]
+                return String(name)
+    return String("")
+
+
+def _record_message[path: StaticString, A: AnyType]() -> String:
+    """The message of the record rule `A` breaks on `path`
+    (`_record_fault`), naming the field and the placeholder it binds, or
+    the counts; `""` when it breaks none."""
+    comptime if not conforms_to(A, RouteValues):
+        return String("")
+    else:
+        var fault = _record_fault[path, A]()
+        var rule = fault[0]
+        var i = fault[1]
+        if rule == _RECORD_FIELD_KIND:
+            return String(
+                "field ",
+                i + 1,
+                " of the RouteValues record, ",
+                _field_name[A](i),
+                (
+                    ", is not a bare route value: a field is an Int, a String,"
+                    " an Optional of either or a FromRouteValue type, never a"
+                    " Param or a record"
+                ),
+            )
+        if rule == _RECORD_FIELD_AMBIGUOUS:
+            return String(
+                "field ",
+                i + 1,
+                " of the RouteValues record, ",
+                _field_name[A](i),
+                (
+                    ", conforms to FromRouteValue and to FromBody or"
+                    " FromBytes; a type is a route value or a body, not both"
+                ),
+            )
+        if rule == _RECORD_COUNT:
+            comptime n = reflect[A].field_count()
+            return String(
+                "the RouteValues record has ",
+                n,
+                " fields but the route declares ",
+                _path_params(path) + _query_params(path),
+                (
+                    " path and query parameters; a record has one field per"
+                    " parameter"
+                ),
+            )
+        if rule == _RECORD_PLACEHOLDER_TWICE:
+            return String(
+                "the route declares the parameter {",
+                _placeholder_name(path, i),
+                (
+                    "} twice; a RouteValues record binds each parameter to the"
+                    " field of its name"
+                ),
+            )
+        if rule == _RECORD_NAME:
+            return String(
+                "field ",
+                i + 1,
+                " of the RouteValues record is ",
+                _field_name[A](i),
+                " but binds {",
+                _placeholder_name(path, i),
+                "}; ",
+                _BINDING_ORDER,
+            )
+        if rule == _RECORD_OPTIONAL_AT_PATH:
+            return String(
+                "field ",
+                i + 1,
+                " of the RouteValues record, ",
+                _field_name[A](i),
+                ", is an Optional but binds the path parameter {",
+                _placeholder_name(path, i),
+                "}; an Optional field binds a query parameter",
+            )
+        return String("")
 
 
 def _takes_none(paths: Int, queries: Int) -> Int:
@@ -534,7 +718,14 @@ def _rule[
     literal that repeats a query key breaks the last rule (M3-022). The
     result rule itself is each overload's `where` clause. A slot that is
     both a route value and a body (`_VALUE_AND_BODY`, M3-055) breaks a rule
-    before the family rules, wherever it is. A shape the family
+    before the family rules, wherever it is, and so does a record that is
+    also either (`_AMBIGUOUS_RECORD`, M3-061). Beside a record, a `State`
+    among the request slots then gets the family's `State` message. A
+    route-value record is then
+    checked before the family rules: it is the first slot, no other route
+    value is beside it, and it passes its own rules (`_record_fault`);
+    the family rules then see it as one route value on one placeholder,
+    so it takes the shapes of one bare value. A shape the family
     rule accepts is then checked for names (M3-050): of two route values,
     both or neither are `Param`s, and each `Param` must name the placeholder
     at its position."""
@@ -547,6 +738,32 @@ def _rule[
     var k3 = _kind[C]()
     if k1 == _VALUE_AND_BODY or k2 == _VALUE_AND_BODY or k3 == _VALUE_AND_BODY:
         return _VALUE_OR_BODY
+    if (
+        k1 == _AMBIGUOUS_RECORD
+        or k2 == _AMBIGUOUS_RECORD
+        or k3 == _AMBIGUOUS_RECORD
+    ):
+        return _RECORD_AMBIGUOUS
+    var record = k1 == _RECORD or k2 == _RECORD or k3 == _RECORD
+    if record and (k1 == _STATE or k2 == _STATE or k3 == _STATE):
+        # A forgotten state argument or a second `State`, not the record's
+        # place, is what such a handler gets wrong.
+        if stateful:
+            return _ONE_STATE
+        if method == "GET" or method == "DELETE":
+            return _GET_STATE_ARGUMENT
+        return _POST_STATE_ARGUMENT
+    if k2 == _RECORD or k3 == _RECORD:
+        return _RECORD_PLACE
+    if k1 == _RECORD:
+        if _is_value(k2):
+            return _RECORD_BESIDE_VALUE
+        var own = _record_fault[path, A]()[0]
+        if own != _OK:
+            return own
+        k1 = _TEXT
+        paths = 1
+        queries = 0
     var rule: Int
     if method == "GET" or method == "DELETE":
         rule = _get_rule(stateful, k1, k2, k3, R == Response, paths, queries)
@@ -591,6 +808,7 @@ def _check[
     (`get`, `delete`, `post`, `put`, `patch`; M3-020)."""
     comptime rule = _rule[method, stateful, path, R, A, B, C]()
     comptime name = String(method).lower()
+    comptime record_message = _record_message[path, A]()
     comptime assert rule != _MALFORMED, "malformed route literal"
     comptime assert (
         rule != _PATH_TAKES_NONE
@@ -741,4 +959,26 @@ def _check[
         "handler takes one route value and the request body; route"
         " must declare exactly one path or query parameter"
     )
+    comptime assert rule != _RECORD_AMBIGUOUS, (
+        "a parameter's type conforms to RouteValues and to FromRouteValue,"
+        " FromBody or FromBytes; a route-value record is none of them"
+    )
+    comptime assert rule != _RECORD_PLACE, (
+        "a handler takes at most one RouteValues record, as its first"
+        " parameter after any State"
+    )
+    comptime assert rule != _RECORD_BESIDE_VALUE, (
+        "a handler that takes a RouteValues record takes no other route"
+        " value; the record has a field for each"
+    )
+    comptime assert rule != _RECORD_NO_FIELD, (
+        "the RouteValues record has no field; a record has one field per"
+        " path or query parameter"
+    )
+    comptime assert rule != _RECORD_FIELD_KIND, record_message
+    comptime assert rule != _RECORD_FIELD_AMBIGUOUS, record_message
+    comptime assert rule != _RECORD_COUNT, record_message
+    comptime assert rule != _RECORD_PLACEHOLDER_TWICE, record_message
+    comptime assert rule != _RECORD_NAME, record_message
+    comptime assert rule != _RECORD_OPTIONAL_AT_PATH, record_message
     comptime assert rule == _OK, "internal: a registration rule has no message"
