@@ -4894,11 +4894,12 @@ Status: **decision and production** (M3-074, pull request #PR; issue [#122](http
 
 **Question and what settles it.** A route erases its `State[S]` (`_Bound[H, S]` in `_Erased`), and the `App`'s type does not carry the origins in `S`, so a state whose type borrows a local registered, the checker ended the local at its last use, and a request read freed memory, in safe code ([M3-065](#request-context-storage-decision-m3-065) found it; issue #122). How can registration refuse such an `S` without refusing a state that owns its data, including one passed through a helper generic over `S` ([M3-015](#registration-structure-amendment-generic-forwarding-m3-015))? Settled by #122's acceptance criteria: each of its three reproductions refused at compile time by a must-not-build fixture, or served under AddressSanitizer; every existing `State` registration and test unchanged; probes of each candidate with Mojo 1.1.0.
 
-**Choice: `State.__init__` refuses, at compile time, an `S` whose reflected name shows an origin or a parameter Mojo cannot print.** A `comptime assert` on `reflect[S].name()`: no `{}` (how every origin prints, static and `AnyOrigin` included) and no `<unprintable>` (variadic packs, function values), with Muntin's message naming the type.
-- Sound for what safe code can write: a value borrows only through an origin in its type; a struct field cannot name a local's origin or `AnyOrigin`, and a struct cannot be declared inside a function, so an origin that reaches a field is a parameter of `S` or of a type in its name, and a closure that captures by reference prints its origin too. Every `State` comes from this initializer, so every registration path (`get`, `post`, `put`, `patch`, `delete`, raw, every arity) is covered by one check.
+**Choice: `State.__init__` refuses, at compile time, an `S` whose reflected name shows an origin or a parameter Mojo cannot print.** A `comptime assert` on `reflect[S].name()`: no `{}` (how every origin prints, static and `AnyOrigin` included; a struct value prints `{...}` with content and passes) and no `<unprintable>` (variadic packs, function values), with Muntin's message naming the type.
+- What it closes: a value borrows a local only through that local's origin in its type; no module-level declaration (a field, a `comptime` member, a trait's associated type) can name it, and a struct cannot be declared inside a function, so it reaches a field only as a parameter of `S` or of a type in its name; a closure that captures by reference prints its origin too.
+- What it does not: `AnyOrigin` reached through a trait's associated type (a field typed `Self.T.Ptr`) shows in no name, although a field written as that type is refused, so a pointer to a local built with `ImmutAnyOrigin` still registers (`tests/state_known_gaps/state_any_origin_associated_type.mojo`, heap-use-after-free under `scripts/run_origin_gaps.sh`). It is the toolchain-wide `AnyOrigin` hole (`tests/registration_known_gaps/safe_dangling_any_origin_slice.mojo`), which #122 left out; Muntin claims nothing for values built with `AnyOrigin`. Every `State` comes from this initializer, so every registration path (`get`, `post`, `put`, `patch`, `delete`, raw, every arity) is covered by one check.
 - It reads an undocumented format, which [M3-065](#request-context-storage-decision-m3-065) rejected as a type identity. Here it is a filter whose failure is visible: if Mojo stops printing an origin as `{}`, the `tests/state_fail/state_origin_*` fixtures build and `check.sh` fails, so the gap cannot reopen silently. A false refusal costs a wrapper struct.
 - Generic forwarding keeps working: the assert runs on the instantiated type, so a helper generic over `S` needs no clause.
-- It refuses more than borrowing types: a static origin (`State(StaticString(...))`), `AnyOrigin`, `Tuple`. A field holding such a value is fine.
+- It refuses more than borrowing types: a static origin anywhere in the type (`StaticString`, `List[StaticString]`), `AnyOrigin`, `Tuple`, `Variant`, a function-valued parameter. A field holding such a value is fine. No existing registration or test is refused.
 
 **Rejected.**
 - A `where` clause on the overloads: the prover evaluates no non-builtin function, so a predicate function refuses every `S`, owned ones included; and no builtin expression of `S` tells an origin apart (`S == S` holds for a local's origin, and generic `==` ignores origin identity).
@@ -4911,11 +4912,13 @@ Status: **decision and production** (M3-074, pull request #PR; issue [#122](http
 - a `tests/state_fail/state_origin_*` or `state_unprintable_*` fixture builds: the name stopped showing an origin or what a parameter holds; find another check before the Mojo change merges;
 - Mojo gains an origin bound generic code can state (an outlives or `'static` constraint) or documents a parameter reflection: replace the name check;
 - an application needs a state with a static origin or a type Mojo cannot print: weigh admitting it;
-- another value is erased (M3-057's stream source, a request context group): it applies this rule.
+- another value is erased (M3-057's stream source, a request context group): it applies this rule;
+- `tests/state_known_gaps/state_any_origin_associated_type.mojo` stops building or reporting: the `AnyOrigin` hole closed or moved; re-read the bullets above.
 
 **Next production slice (M3-074, in this item).**
 - Code: `src/muntin/state.mojo`: `_may_borrow[S]` and the assert in `State.__init__`.
 - Tests: #122's three reproductions move from `tests/state_known_gaps` to `tests/state_fail/state_origin_local_{get,post,raw}.mojo`; `state_origin_in_type_argument`, `_mut`, `_closure`, `_static`, `_any`, `state_unprintable_tuple` and `state_unprintable_function_parameter` pin the other refused shapes; `test_owned_state_types_register` in `tests/test_state.mojo` registers and serves owned ones (`List[String]`, `Dict[String, Int]`, `ArcPointer`, a value parameter, a `StaticString` field).
-- `scripts/run_origin_gaps.sh` keeps only the context gap.
+- `scripts/run_origin_gaps.sh` drops the three reproductions.
 - Docs: `docs/DX.md` section 8; `docs/ARCHITECTURE.md` (storage and ownership, revisit index); `docs/SPEC.md`; `docs/DEVELOPMENT.md` section 3.
-- Not in the slice: the toolchain-wide `AnyOrigin` hole outside `State`; request context.
+- `tests/state_known_gaps/state_any_origin_associated_type.mojo` pins what the rule does not see; `scripts/run_origin_gaps.sh` runs it.
+- Not in the slice: the toolchain-wide `AnyOrigin` hole; request context.

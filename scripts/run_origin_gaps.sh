@@ -12,6 +12,7 @@ cd "$(dirname "$0")/.."
 # Named, so that a deleted file fails the run.
 gaps=(
     tests/context_known_gaps/erasure_drops_origin.mojo
+    tests/state_known_gaps/state_any_origin_associated_type.mojo
 )
 export SANITIZE=address
 export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}log_path=stderr"

@@ -14,18 +14,22 @@ from ._handler_storage import _Shared
 
 
 def _may_borrow[S: AnyType]() -> Bool:
-    """Whether `S`'s reflected name shows an origin parameter, printed `{}`
-    anywhere in it (a type argument's included), or a parameter Mojo 1.1.0
-    cannot print, `<unprintable>` (M3-074).
+    """Whether `S`'s reflected name shows an origin, printed `{}` anywhere in
+    it (a type argument's included), or a parameter Mojo 1.1.0 cannot print,
+    `<unprintable>` (M3-074).
 
-    A value can borrow only through an origin in its type, and a struct
-    field cannot name a local's origin or `AnyOrigin`, so an origin that
-    reaches a field is a parameter of `S` or of a type in its name. The
-    format is undocumented; the fixtures under tests/state_fail that refuse
-    a borrowing state fail if it stops showing origins.
+    A value borrows a local only through that local's origin in its type. A
+    module-level declaration cannot name a local's origin and a struct
+    cannot be declared inside a function, so that origin reaches a field
+    only as a parameter of `S` or of a type in its name. `AnyOrigin` behind
+    a trait's associated type escapes the name
+    (tests/state_known_gaps/state_any_origin_associated_type.mojo), a
+    toolchain-wide hole. The format is undocumented; the fixtures under
+    tests/state_fail that refuse a borrowing state fail if it stops showing
+    origins.
     """
     comptime name = reflect[S].name()
-    return name.find("{") >= 0 or name.find("<unprintable>") >= 0
+    return name.find("{}") >= 0 or name.find("<unprintable>") >= 0
 
 
 trait _InjectedState:

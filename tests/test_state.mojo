@@ -437,9 +437,10 @@ def test_dx_section_8_example() raises:
     assert_equal(client.get("/users/1").text(), "no user 1")
 
 
-# A state's type may not borrow (M3-074): the rule refuses an origin in the
-# type's name, so these types, whose parameters are owned types or values and
-# whose static text sits in a field, still register and answer. The refused
+# A state's type may not borrow (M3-074): the rule refuses an origin (`{}`) in
+# the type's name, so these types, whose parameters are owned types or values
+# (an `Int`, a struct value) and whose static text sits in a field, still
+# register and answer. The refused
 # side is tests/state_fail/state_origin_*.mojo.
 
 
@@ -451,6 +452,20 @@ struct Label(Movable):
 
 
 struct Sized[n: Int](Movable):
+    def __init__(out self):
+        pass
+
+
+@fieldwise_init
+struct Mode(Equatable, ImplicitlyCopyable, Movable):
+    """A struct value as a parameter prints with braces (`{0 : ...}`) but no
+    `{}`, so it is not taken for an origin."""
+
+    var level: Int
+    comptime FAST = Mode(2)
+
+
+struct Tuned[mode: Mode](Movable):
     def __init__(out self):
         pass
 
@@ -478,6 +493,10 @@ def sized_n(sized: State[Sized[3]]) -> String:
     return String(sized[].n)
 
 
+def tuned_level(tuned: State[Tuned[Mode.FAST]]) -> String:
+    return String(tuned[].mode.level)
+
+
 def test_owned_state_types_register() raises:
     var names = List[String]()
     names.append("ada")
@@ -491,6 +510,7 @@ def test_owned_state_types_register() raises:
     app.get["/dict"](dict_value, State(scores^))
     app.get["/arc"](shared_name, State(ArcPointer(Users(users^))))
     app.get["/sized"](sized_n, State(Sized[3]()))
+    app.get["/tuned"](tuned_level, State(Tuned[Mode.FAST]()))
     var client = TestClient(app)
     var label = client.get("/label")
     assert_equal(label.status, 200)
@@ -499,6 +519,7 @@ def test_owned_state_types_register() raises:
     assert_equal(client.get("/dict").text(), "7")
     assert_equal(client.get("/arc").text(), "bob")
     assert_equal(client.get("/sized").text(), "3")
+    assert_equal(client.get("/tuned").text(), "2")
 
 
 def main() raises:
