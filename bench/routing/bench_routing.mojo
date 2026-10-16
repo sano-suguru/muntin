@@ -18,9 +18,9 @@ timed answers are checked by status.
 
 Implementations here:
 - `muntin`: `App.handle(Request)`, Muntin's routing and dispatch alone.
-- `muntin+adapter`: `MuntinHandler.serve` on a Flare `Request`: the
-  adapter's conversions around `App.handle`, what a request served by
-  `Server` pays besides the network.
+- `muntin+adapter`: `MuntinHandler.serve` on a Flare `Request` with one
+  field, `Host` (M3-073): the adapter's conversions around `App.handle`,
+  what a request served by `Server` pays besides the network.
 - `flare-router`: Flare's runtime `Router.serve`.
 """
 
@@ -53,11 +53,13 @@ struct MuntinAdapter(Dispatch):
     var handler: MuntinHandler
     var request: FlareRequest
 
-    def __init__(out self, method: String, path: String):
+    def __init__(out self, method: String, path: String) raises:
         var app = App()
         register(app)
         self.handler = MuntinHandler(app^)
         self.request = FlareRequest(method, path)
+        # The adapter answers an HTTP/1.1 request without one 400 (M3-073).
+        self.request.headers.append("Host", "bench")
 
     def status(self) raises -> Int:
         return self.handler.serve(self.request).status
@@ -75,6 +77,7 @@ struct FlareRouter(Dispatch):
         for i in range(N):
             self.router.get(route_path(i), flare_handler(i))
         self.request = FlareRequest(method, path)
+        self.request.headers.append("Host", "bench")
 
     def status(self) raises -> Int:
         return self.router.serve(self.request).status
