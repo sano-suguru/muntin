@@ -127,7 +127,6 @@ build_bg hello_server -I src -I "$adapter" "$example"
 build_bg hello_https -I src -I "$adapter" "$tls_example"
 build_bg flare_header_probe -I src -I "$adapter" compat/flare/headers/flare_header_probe.mojo
 build_bg inbound_rebuild -I src -I tests -I "$adapter" compat/flare/headers/inbound_rebuild.mojo
-build_bg write_to_pieces -I src -I "$adapter" -I compat/flare/headers compat/flare/headers/write_to_pieces.mojo
 build_bg_known json_loopback_probe -I src -I tests -I "$adapter" compat/flare/json/json_loopback_probe.mojo
 build_bg head_probe -I src -I "$adapter" compat/flare/head/head_probe.mojo
 build_bg body_probe compat/flare/body/body_probe.mojo
@@ -425,22 +424,6 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' <<<"$out"; then
     exit 1
 fi
 
-# M3-066 (docs/history/architecture-decisions.md "Request header conversion
-# decision (M3-066)"): the four pieces per field that Flare's
-# `HeaderMap.write_to` writes, which the chosen rebuild reads, and its
-# prototype against the adapter's current conversion.
-step "HeaderMap.write_to pieces and their rebuild (M3-066)"
-if ! out="$(./build/write_to_pieces 2>&1)"; then
-    printf '%s\n' "$out"
-    echo "error: Flare's HeaderMap.write_to no longer writes the pieces M3-066 relies on, or their rebuild differs" >&2
-    exit 1
-fi
-printf '%s\n' "$out"
-if ! grep -qE 'Summary .* [1-9][0-9]* tests run' <<<"$out"; then
-    echo "error: compat/flare/headers/write_to_pieces.mojo ran no tests" >&2
-    exit 1
-fi
-
 step "candidate D: Flare HeaderMap in a Copyable Request (must not build)"
 fixture_d=compat/flare/headers/headermap_in_request.mojo
 expected_d="$(sed -n 's/^# Expected diagnostic (checked by scripts\/check_flare.sh): //p' "$fixture_d")"
@@ -541,7 +524,7 @@ if ! grep -qE 'Summary .* [1-9][0-9]* tests run' "$tmp/stream_probe.log"; then
 fi
 
 step "default environment excludes Flare"
-for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$tls_tests" "$tls_probe" "$stop_driver" "$example" "$tls_example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/headers/write_to_pieces.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo compat/flare/body/body_probe.mojo compat/flare/stream/stream_probe.mojo; do
+for src in "$fixture" "$adapter_tests" "$serve_probe" "$roundtrip" "$server_tests" "$tls_tests" "$tls_probe" "$stop_driver" "$example" "$tls_example" "${serve_fixtures[@]}" compat/flare/headers/flare_header_probe.mojo compat/flare/headers/inbound_rebuild.mojo compat/flare/json/json_loopback_probe.mojo compat/flare/head/head_probe.mojo compat/flare/body/body_probe.mojo compat/flare/stream/stream_probe.mojo; do
     if "${DEFAULT[@]}" build -I src -I "$adapter" "$src" -o "$tmp/should_not_build" >"$tmp/log" 2>&1; then
         echo "error: $src built in the default environment; Flare leaked into it" >&2
         exit 1

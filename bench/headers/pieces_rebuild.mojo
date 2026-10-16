@@ -1,17 +1,16 @@
-"""The request header rebuild M3-066 chooses, as a prototype (pull request
-#119). Not part of Muntin, and not used by the adapter: the M3-067 slice
-moves it into `adapters/flare/muntin_flare.mojo` and deletes this file.
-`write_to_pieces.mojo` tests it; `bench/headers/bench_headers.mojo`
-measures it beside the adapter's `to_muntin_headers`, and
-`scripts/bench_headers.sh` serves it over loopback through a copy of the
-adapter (`bench/headers/pieces_adapter.py`).
+"""The request header rebuild M3-066 rejected, as a prototype (pull request
+#119), kept as the measurement its "Revisit when" asks for. Not part of
+Muntin, and not used by the adapter. `write_to_pieces.mojo` tests it;
+`bench_headers.mojo` measures it beside the adapter's `to_muntin_headers`,
+and `scripts/bench_headers.sh` serves it over loopback through a copy of
+the adapter (`pieces_adapter.py`).
 
 Flare v0.12.0's `HeaderMap.write_to` calls
 `writer.write(name, ": ", value, "\\r\\n")` once per field, and a `Writer`
 receives that as four `write_string` calls, one per piece. That split is
-how v0.12.0 is written, not a documented contract of `HeaderMap`: it is a
-compatibility condition of the pinned Flare, which `write_to_pieces.mojo`
-pins and `write_to_splits_fields` checks at run time. Reading the fields
+how v0.12.0 is written, not a documented contract of `HeaderMap`, which
+`write_to_pieces.mojo` checks and `write_to_splits_fields` would check at
+run time. Reading the fields
 by position from the pieces needs no parse at a colon and no by-name
 lookup, so it is linear in the fields' bytes.
 """

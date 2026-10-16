@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Request header conversion benchmark: the Flare adapter's
-# `to_muntin_headers` and M3-066's prototype rebuild in process by header
+# `to_muntin_headers` and the rebuild M3-066 rejected, a prototype, in process by header
 # shape (bench/headers/bench_headers.mojo says what it measures), then the
 # same shapes over HTTP/1.1 loopback (bench/headers/load.py says what it
 # sends) against three servers: a Muntin `Server` (`muntin_server`), the
 # same with the adapter's conversion routed through the prototype
-# (`muntin_pieces_server`, bench/headers/pieces_adapter.py) and Flare's
+# (`muntin_pieces_server`, bench/headers/pieces_adapter.py, after
+# bench/headers/write_to_pieces.mojo's tests of it pass) and Flare's
 # `HttpServer` alone (`flare_server`). Not run by CI.
 #
 #   ./scripts/bench_headers.sh [RUNS] [SECONDS] [ROUNDS]
@@ -16,7 +17,8 @@
 # server later, so each is measured as often and in every position. Each
 # loopback line starts with its server and round; each server's peak RSS
 # follows its run (Linux), and the medians over the rounds come last
-# (bench/headers/median.py). The in-process program and each server are
+# (bench/headers/median.py, which fails unless every server has a line of
+# every kind in every round). The in-process program and each server are
 # pinned with taskset, where it exists (Linux), to the last CPU this
 # process may run on; the client is not pinned.
 # Needs python3.
@@ -54,11 +56,14 @@ fi
 
 out=build/bench_headers
 mkdir -p "$out"
-for prog in bench_headers muntin_server flare_server; do
-    "${FLARE[@]}" build -I src -I adapters/flare -I compat/flare/headers "bench/headers/$prog.mojo" -o "$out/$prog"
+for prog in bench_headers write_to_pieces muntin_server flare_server; do
+    "${FLARE[@]}" build -I src -I adapters/flare -I bench/headers "bench/headers/$prog.mojo" -o "$out/$prog"
 done
 python3 -I bench/headers/pieces_adapter.py adapters/flare "$out/pieces_adapter"
-"${FLARE[@]}" build -I src -I "$out/pieces_adapter" -I compat/flare/headers bench/headers/muntin_server.mojo -o "$out/muntin_pieces_server"
+"${FLARE[@]}" build -I src -I "$out/pieces_adapter" -I bench/headers bench/headers/muntin_server.mojo -o "$out/muntin_pieces_server"
+
+echo "# the prototype rebuild against the adapter's conversion (bench/headers/write_to_pieces.mojo)"
+"./$out/write_to_pieces"
 
 echo "# in process: to_muntin_headers (adapter) and the M3-066 rebuild (pieces)"
 ${pin[@]+"${pin[@]}"} "./$out/bench_headers" "$runs"
@@ -86,7 +91,9 @@ for round in $(seq 1 "$rounds"); do
             sleep 0.1
         done
         echo "# loopback: $server round=$round"
-        python3 -I bench/headers/load.py "$port" "$seconds" | sed "s/^/$server\tround=$round\t/" | tee -a "$out/loopback.log"
+        python3 -I bench/headers/load.py "$port" "$seconds" |
+            awk -v s="$server" -v r="round=$round" 'BEGIN { OFS = "\t" } { print s, r, $0 }' |
+            tee -a "$out/loopback.log"
         if [[ -r /proc/$pid/status ]]; then
             echo "# $server round=$round peak_rss_kb=$(sed -n 's/^VmHWM:[[:space:]]*\([0-9]*\).*/\1/p' "/proc/$pid/status")"
         fi
@@ -96,4 +103,4 @@ for round in $(seq 1 "$rounds"); do
     done
 done
 echo "# loopback medians over $rounds round(s)"
-python3 -I bench/headers/median.py <"$out/loopback.log"
+python3 -I bench/headers/median.py "$rounds" "${servers[@]}" <"$out/loopback.log"

@@ -2,8 +2,15 @@
 
 For each header shape, against the server on 127.0.0.1:PORT:
 - `single`: one request at a time on a new connection, 200 times for
-  `browser12` and 5 times otherwise; the median and minimum in ms;
-- `load` (not for `browser12`): four connections each send the shape one
+  `browser12`, `distinct100` and `distinct256` and 5 times otherwise; the
+  median and minimum in ms;
+- `rate` (`browser12`, `distinct100` and `distinct256`, within a field
+  limit of 100 or 256): a request due every 1/RATE s whatever the
+  answers, each on a new connection of its own, for SECONDS; latency
+  counted from when it was due, its percentiles in ms and, as `start`, how
+  late each request's thread began (see `open`). The same arrivals for
+  every server, so their percentiles compare;
+- `load` (`same4000` and `distinct2600`): four connections each send the shape one
   request after another for SECONDS while a fifth sends a bare `GET /`,
   waits for its answer and sleeps 10 ms before the next. A closed loop:
   the slower the bare answers, the fewer are sent (`bare_n`; with few
@@ -18,6 +25,9 @@ For each header shape, against the server on 127.0.0.1:PORT:
   per second, the bare requests' latency percentiles in ms and, as
   `start`, how late each request's thread began (Python's thread start
   and scheduling, part of the latency but not the server's).
+`browser12`, `distinct100` and `distinct256` ask `GET /read`, whose
+handler looks up 10 names and walks every field (bench/headers/
+muntin_server.mojo); the others ask `GET /`.
 Every answer must be `HTTP/1.1 200` with a well-formed head, and each
 request, its connects, sends and receives together (a resend included),
 must end within TIMEOUT_S of its start. Anything else, an unexpected exception on any thread
@@ -26,10 +36,11 @@ included, stops the run with exit status 1 after printing each failure
 the request is sent again on a new one, at most RETRIES times in a row;
 each line prints how many requests were sent again (`resent`), so the
 server may have received up to that many more requests than were
-answered. Shapes are the largest Flare v0.12.0 admits over HTTP/1.1
-(`max_header_size` 8192 counts header lines without CRLF): `same4000`
-(4000 lines `a:`) and `distinct2600` (2600 lines, each a distinct
-two-byte name and no value)."""
+answered. `distinctN` is N lines `x-hNNNN: v`, each its own name, as
+bench/headers/bench_headers.mojo's; `same4000` and `distinct2600` are the
+largest shapes Flare v0.12.0 admits over HTTP/1.1 (`max_header_size` 8192
+counts header lines without CRLF): 4000 lines `a:`, and 2600 lines, each a
+distinct two-byte name and no value."""
 
 import itertools
 import re
@@ -43,6 +54,7 @@ import traceback
 port, seconds = int(sys.argv[1]), float(sys.argv[2])
 TIMEOUT_S = 30.0
 RETRIES = 3
+RATE = 200
 TOKENS = string.ascii_lowercase + string.digits + "!#$%&'*+-.^_`|~"
 TWO = ["".join(p) for p in itertools.product(TOKENS, repeat=2)]
 BROWSER = [
@@ -60,6 +72,8 @@ BROWSER = [
 ]
 SHAPES = {
     "browser12": "".join(f"{k}: {v}\r\n" for k, v in BROWSER),
+    "distinct100": "".join(f"x-h{i:04}: v\r\n" for i in range(100)),
+    "distinct256": "".join(f"x-h{i:04}: v\r\n" for i in range(256)),
     "same4000": "a:\r\n" * 4000,
     "distinct2600": "".join(f"{n}:\r\n" for n in TWO[:2600]),
 }
@@ -69,8 +83,15 @@ class Failed(Exception):
     """A request that did not get its 200."""
 
 
-def request(fields):
-    return ("GET / HTTP/1.1\r\nHost: x\r\n" + fields + "\r\n").encode()
+BOUNDED = ("browser12", "distinct100", "distinct256")
+
+
+def request(fields, path="/"):
+    return (f"GET {path} HTTP/1.1\r\nHost: x\r\n" + fields + "\r\n").encode()
+
+
+def shaped(name):
+    return request(SHAPES[name], "/read" if name in BOUNDED else "/")
 
 
 BARE = request("")
@@ -109,9 +130,11 @@ def parse_head(head):
             if not value.strip().isdigit():
                 raise Failed(f"malformed Content-Length: {value!r}")
             lengths.append(int(value))
-    if len(set(lengths)) > 1:
-        raise Failed(f"conflicting Content-Length: {lengths}")
-    return m.group(1), lengths[0] if lengths else 0
+    # Flare frames every answer here with one Content-Length; anything else
+    # would leave where the next answer starts unknown.
+    if len(lengths) != 1:
+        raise Failed(f"expected one Content-Length, got {lengths}")
+    return m.group(1), lengths[0]
 
 
 def roundtrip(sock, data, buf, deadline):
@@ -193,14 +216,14 @@ def run_threads(targets, failures):
 def percentiles(prefix, latency):
     latency.sort()
     pct = lambda p: latency[min(len(latency) - 1, int(p * len(latency)))]
-    return f"{prefix}_n={len(latency)}\t{prefix}_p50_ms={pct(0.5):.2f}\t{prefix}_p99_ms={pct(0.99):.2f}\t{prefix}_max_ms={latency[-1]:.2f}"
+    return f"{prefix}_n={len(latency)}\t{prefix}_p50_ms={pct(0.5):.2f}\t{prefix}_p95_ms={pct(0.95):.2f}\t{prefix}_p99_ms={pct(0.99):.2f}\t{prefix}_max_ms={latency[-1]:.2f}"
 
 
 def single(name):
-    data = request(SHAPES[name])
+    data = shaped(name)
     times = []
     resent = 0
-    for _ in range(200 if name == "browser12" else 5):
+    for _ in range(200 if name in BOUNDED else 5):
         conn = [None, b""]
         try:
             start = time.perf_counter()
@@ -226,7 +249,7 @@ def heavy_senders(data, stop, answered, resent, failures):
 
 
 def load(name, failures):
-    data = request(SHAPES[name])
+    data = shaped(name)
     stop = time.perf_counter() + seconds
     answered = [0] * 4
     resent = [0] * 5
@@ -252,28 +275,24 @@ def load(name, failures):
     print(f"{name}\tload\theavy_per_s={sum(answered) / seconds:.1f}\t{percentiles('bare', latency)}\tresent={sum(resent)}")
 
 
-def open_loop(name, failures):
-    data = request(SHAPES[name])
+def arrivals(data, interval, resent, latency, lag, failures):
+    """A sender of `data` due every `interval` s from now for SECONDS, each
+    on a new connection and thread, with `latency` counted from when it was
+    due and `lag` how late its thread began; and the number due."""
     begin = time.perf_counter()
-    stop = begin + seconds
-    answered = [0] * 4
-    resent = [0] * 4
-    bare_resent = []
-    latency = []
-    lag = []
-    due = [begin + k * INTERVAL_S for k in range(int(seconds / INTERVAL_S))]
+    due = [begin + k * interval for k in range(int(seconds / interval))]
 
     def one(t):
         lag.append((time.perf_counter() - t) * 1000)
         conn = [None, b""]
         try:
             # list.append is atomic; `+=` on a shared cell is not.
-            bare_resent.append(call(conn, BARE))
+            resent.append(call(conn, data))
             latency.append((time.perf_counter() - t) * 1000)
         finally:
             close(conn)
 
-    def bare():
+    def send():
         threads = []
         for t in due:
             if failures:
@@ -285,20 +304,50 @@ def open_loop(name, failures):
         for th in threads:
             th.join()
 
+    return send, len(due)
+
+
+def open_loop(name, failures):
+    data = shaped(name)
+    stop = time.perf_counter() + seconds
+    answered = [0] * 4
+    resent = [0] * 4
+    bare_resent = []
+    latency = []
+    lag = []
+    bare, due = arrivals(BARE, INTERVAL_S, bare_resent, latency, lag, failures)
     run_threads(heavy_senders(data, stop, answered, resent, failures) + [bare], failures)
     if failures:
         return
-    if len(latency) != len(due):
-        failures.append(f"{name} open: {len(latency)} of {len(due)} bare requests answered")
+    if len(latency) != due:
+        failures.append(f"{name} open: {len(latency)} of {due} bare requests answered")
         return
     print(f"{name}\topen\theavy_per_s={sum(answered) / seconds:.1f}\t{percentiles('open', latency)}\t{percentiles('start', lag)}\tresent={sum(resent) + sum(bare_resent)}")
+
+
+def rate(name, failures):
+    resent = []
+    latency = []
+    lag = []
+    send, due = arrivals(shaped(name), 1 / RATE, resent, latency, lag, failures)
+    run_threads([send], failures)
+    if failures:
+        return
+    if len(latency) != due:
+        failures.append(f"{name} rate: {len(latency)} of {due} requests answered")
+        return
+    print(f"{name}\trate\tper_s={RATE}\t{percentiles('rate', latency)}\t{percentiles('start', lag)}\tresent={sum(resent)}")
 
 
 failures = []
 try:
     for shape in SHAPES:
         single(shape)
-    for shape in ("same4000", "distinct2600"):
+    for shape in BOUNDED:
+        rate(shape, failures)
+        if failures:
+            break
+    for shape in () if failures else ("same4000", "distinct2600"):
         load(shape, failures)
         if failures:
             break

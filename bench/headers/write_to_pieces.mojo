@@ -1,12 +1,14 @@
-"""Pins the compatibility condition M3-066 rests on and tests its prototype
-rebuild (pull request #119; runs only in the `flare` environment, from
-scripts/check_flare.sh).
+"""Tests the rebuild M3-066 rejected, as a prototype (pull request #119):
+whether the pinned Flare still splits fields as it relies on, and whether
+it rebuilds what the adapter does. Runs only in the `flare` environment,
+from scripts/bench_headers.sh before it serves the prototype; not CI's,
+since the adapter does not rely on the split.
 
 `pieces_rebuild.mojo` reads request fields from the pieces Flare v0.12.0's
 `HeaderMap.write_to` hands a `Writer`: name, `": "`, value and CRLF, four
 `write_string` calls per field. Nothing in Flare documents that split, so
-these tests pin it for the fields an adapter must read exactly, and a pin
-change that alters it fails here before any request is misread. They also
+these tests pin it for the fields an adapter would have to read exactly.
+They also
 check that the prototype rebuilds what the adapter's current
 `to_muntin_headers` rebuilds and refuses what it refuses, and that pieces
 of another shape are refused as the server's fault (`None`), not the

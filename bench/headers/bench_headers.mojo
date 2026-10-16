@@ -6,8 +6,8 @@ Each case builds one Flare request before timing; a timed iteration is one
 conversion and the `Headers` it returns, dropped. Before timing, the
 conversion is checked to return every field. Each case is measured twice:
 `adapter`, the adapter's `to_muntin_headers`, and `pieces`, the rebuild
-M3-066 chose (`compat/flare/headers/pieces_rebuild.mojo`, a prototype
-until its slice), with the same calibration rule and their timed runs
+M3-066 rejected (`pieces_rebuild.mojo`, a prototype), with the same
+calibration rule and their timed runs
 alternating, so both see the same machine state. Each line printed is one
 case and one conversion: nanoseconds per conversion, the median and the
 minimum over the timed runs.
