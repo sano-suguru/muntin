@@ -6,7 +6,7 @@ This file is the current state: the thesis, the invariants, the [current archite
 
 ## Architectural thesis
 
-Muntin's leverage should come from application-level developer experience and compile-time/type-system guarantees. Networking machinery is replaceable infrastructure.
+Muntin's leverage should come from application-level developer experience and compile-time/type-system guarantees. Networking machinery is replaceable infrastructure behind `App.handle`; where that ends is in [Flare policy](#flare-policy).
 
 The architectural fulcrum is the boundary between the **Muntin-owned application model** and **transport/backend adapters**.
 
@@ -372,15 +372,20 @@ Not allowed in durable Muntin public APIs:
 
 A pinned Flare version is required once M1 depends on it. Track `main` only for explicit compatibility investigation, never as the default reproducible dependency.
 
-Replaceability ends at `App.handle` ([Backend coupling decision (M3-070)](history/architecture-decisions.md#backend-coupling-decision-m3-070)): everything behind it is backend-independent (A2, A3). `Server` is the Flare adapter's, not a seam: its stop watcher, worker table and listener parking drive Flare's per-worker loop through the internals in `adapters/flare/flare_internals.mojo` and rely on how that loop registers, polls and leaves, and its contract (`docs/DX.md` section 1) is in large part Flare v0.12.0's behavior. Another backend would keep applications' handlers, middleware, `State` and tests, and replace the adapter's conversion and `Server` (`docs/DX.md` section 11).
+Replaceability ends at `App.handle` ([Backend coupling decision (M3-070)](history/architecture-decisions.md#backend-coupling-decision-m3-070)): everything behind it is backend-independent (A2, A3). `Server` is the Flare adapter's, not a seam: with workers, its stop watcher, worker table and listener parking drive Flare's per-worker loop through the internals in `adapters/flare/flare_internals.mojo` and rely on how that loop registers, polls and leaves, and its contract (`docs/DX.md` section 1) is in large part Flare v0.12.0's behavior. What a change of backend keeps and replaces: `docs/DX.md` section 11.
 
-A change that makes the adapter rely on something no public contract states (a Flare name that is not public, a behavior Flare's documentation does not promise, or an operating-system behavior its manual does not promise, such as an order of wake-ups or a silent fallback):
+A change that makes the adapter's code (not its tests, which list their own Flare internals in `flare_internals.mojo`'s docstring) rely on something no public contract states:
+
+- a Flare name that is not public;
+- a behavior of Flare's or of the operating system's that its documentation at the pin does not state (Flare's docstrings and README, the system's manual pages), which the serving lifecycle depends on: threads, the listener and its registration, polling, accepting and the stop, such as an order of wake-ups or a silent fallback. What the request and response conversion relies on is covered instead by its loopback cases (`docs/DEVELOPMENT.md` section 3).
+
+Such a change:
 
 - names it where the code relies on it: a Flare name in `flare_internals.mojo` with what it is relied on for, a behavior in a "Relied on" statement beside the code that relies on it;
 - has a test that fails when it stops holding, on each platform that relies on it, or says beside the statement why none can: the statement alone is a claim, not a check;
-- is a decision item whose record counts the reliance among the candidate's costs and says why Flare's public API, and a proposal to Flare's maintainers, were not taken instead.
+- has a record (the decision item's, or the one whose slice it implements) that counts the reliance among the candidate's costs and says why Flare's public API, and a proposal to Flare's maintainers, were not taken instead.
 
-Removing a reliance needs none of this.
+Removing a reliance needs none of this. Replacing a non-public Flare name with a public one whose undocumented behavior is then relied on needs the first two only.
 
 ## Adapter translation policy
 
