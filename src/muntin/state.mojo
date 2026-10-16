@@ -24,8 +24,11 @@ def _may_borrow[S: AnyType]() -> Bool:
     cannot be declared inside a function, so that origin reaches a field
     only as a parameter of `S` or of a type in its name, where it prints as
     `{}` or hides in a pack. A function-valued parameter prints as
-    `<unprintable>` alone, but its type is built from the struct's other
-    parameters, which print, so it is admitted. `AnyOrigin` behind
+    `<unprintable>` alone and is admitted: it is a compile-time value with
+    no address, and a field typed from what it returns needs a concrete
+    result type, whose origins are then parameters of the struct, which
+    print, or `AnyOrigin`; a parameter of an open type cannot be called
+    (tests/state_fail/state_function_parameter_*.mojo). `AnyOrigin` behind
     a trait's associated type escapes the name
     (tests/state_known_gaps/state_any_origin_associated_type.mojo), a
     toolchain-wide hole. The format is undocumented; the fixtures under
