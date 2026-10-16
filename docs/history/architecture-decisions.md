@@ -4685,9 +4685,9 @@ def me(user: Context[CurrentUser]) -> String:
 - Docs: `docs/DX.md` sections 7, 11 and 15; `docs/ARCHITECTURE.md` (request handling, Request/Response ownership); `docs/SPEC.md`.
 - Not in the slice: `Context`, the adapter's body copy, a raw handler's body copy.
 
-### Handler execution model decision (M3-070)
+### Handler execution model decision (M3-071)
 
-Status: **decision, standing constraint** (M3-070, pull request #129; `src/muntin` unchanged). The readings, the probes and the measurement are in the pull request.
+Status: **decision, standing constraint** (M3-071, pull request #129; `src/muntin` unchanged). The readings, the probes and the measurement are in the pull request.
 
 **Question and what settles it.** A handler runs on the thread of the reactor that owns its connection ([M3-046](#head-of-line-blocking-decision-m3-046)): while it runs, that worker accepts, reads, writes and times out nothing, so with `workers=n`, n handlers that block stop every new connection, and nothing stops a running handler (Flare v0.12.0 documents `handler_timeout_ms` as "not enforced yet"). Spreading connections over workers ([pull request #109](https://github.com/sano-suguru/muntin/pull/109)) changes which worker holds a connection and a connection cap limits connections; neither changes this. An outside review of pull request #120 asked which execution model should lift it: moving the work to other threads, cooperative (async) handlers, or isolating processes. Settled by: what Mojo 1.1.0 offers for asynchronous code (its documentation, and a probe registering an `async def` handler); what Flare v0.12.0, its newest tag on 2026-10-16, offers to finish a request later or run work elsewhere (read in code); what each candidate does to the account `App` and `State` rely on (M3-046, [M3-049](#multi-worker-serving-decision-m3-049)); and how many blocking handlers stop a `Server` today (measured).
 
