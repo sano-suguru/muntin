@@ -201,6 +201,15 @@ and `HEAD` are `App.handle`'s, through the middleware; the JSON route parses
 a sent U+FFFD and answers a `0xFF` 400; a binary `GET` answer and its `HEAD`
 length go out exactly; and the same `Server` answers afterwards.
 
+M3-062 adds docs/DX.md's route-value record routes to `bodies_app()`:
+`GET` and the stateful `PATCH` on
+`/organizations/{org_id}/projects/{project_id}/tasks/{task_id}`, whose
+handlers take one `TaskAt` record (and, for the `PATCH`, a `Json` body).
+Over HTTP/1.1 and h2c the three values reach the handler (`042` as 42),
+a bad field is 400 before the body's 415, and a missing `Content-Type` is
+415; each status and body equals `TestClient`'s, with the middleware's
+`X-Seen`.
+
 M3-041 adds two typed binary routes to `bodies_app()`: `POST /typed-bytes`,
 whose body is a `FromBytes` type (`Payload`), and the stateful
 `PUT /typed-bytes/{id}`, a `State`, a route value and the same body. Every
@@ -321,6 +330,7 @@ from muntin import (
     Next,
     Request,
     Response,
+    RouteValues,
     State,
     ToErrorResponse,
     ToJson,
@@ -2291,6 +2301,31 @@ def limited_fields(
     return Response(200, out^)
 
 
+@fieldwise_init
+struct TaskAt(RouteValues):
+    var org_id: Int
+    var project_id: Int
+    var task_id: Int
+
+
+def get_task(at: TaskAt) -> Json[Greeting]:
+    return Json(
+        Greeting(
+            String("task ", at.org_id, "/", at.project_id, "/", at.task_id)
+        )
+    )
+
+
+def update_task(
+    tag: State[Tag], at: TaskAt, var body: Json[Greeting]
+) -> Json[Greeting]:
+    var g = body^.take()
+    return Json(Greeting(String(tag[].tag, " ", at.task_id, " ", g.name)))
+
+
+comptime TASK = "/organizations/{org_id}/projects/{project_id}/tasks/{task_id}"
+
+
 def marked(var request: Request, var next: Next) raises -> Response:
     """Adds `X-Seen: 1` to every answer `App.handle` gives."""
     var response = next^.run(request^)
@@ -2313,6 +2348,8 @@ def bodies_app() -> App:
     app.patch["/typed-bytes-fields/{id}"](typed_bytes_fields, State(Tag("f")))
     app.post["/limited"](limited)
     app.patch["/limited-fields/{id}"](limited_fields, State(Tag("l")))
+    app.get[TASK](get_task)
+    app.patch[TASK](update_task, State(Tag("r")))
     return app^
 
 
@@ -2759,6 +2796,73 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
         assert_equal(String(from_utf8=Span(b1[2])), "Bad Request")
         var b2 = h2_exchange(child.port, "POST", "/greet", json, bad_json, True)
         assert_equal(_h2_fields(b2[0]), ":status=400;x-seen=1;")
+        # DX's route-value record (M3-062): one `TaskAt` carrying three
+        # values on `GET` and, before a JSON body, on the stateful `PATCH`;
+        # a bad field is 400 before the body's 415, as in memory.
+        var nothing = List[Tuple[String, String]]()
+        var edit = List('{"name":"renamed"}'.as_bytes())
+        var records: List[Tuple[String, String, Bool, Int, String]] = [
+            (
+                String("GET"),
+                String("/organizations/1/projects/2/tasks/3"),
+                False,
+                200,
+                String('{"hello":"task 1/2/3"}'),
+            ),
+            (
+                String("GET"),
+                String("/organizations/1/projects/x/tasks/3"),
+                False,
+                400,
+                String("Bad Request"),
+            ),
+            (
+                String("PATCH"),
+                String("/organizations/1/projects/2/tasks/042"),
+                True,
+                200,
+                String('{"hello":"r 42 renamed"}'),
+            ),
+            (
+                String("PATCH"),
+                String("/organizations/1/projects/2/tasks/x"),
+                False,
+                400,
+                String("Bad Request"),
+            ),
+            (
+                String("PATCH"),
+                String("/organizations/1/projects/2/tasks/3"),
+                False,
+                415,
+                String("Unsupported Media Type"),
+            ),
+        ]
+        for r in records:
+            var method = r[0]
+            var at = method + " " + r[1]
+            var fields = json.copy() if r[2] else nothing.copy()
+            var sent = edit.copy() if method == "PATCH" else List[UInt8]()
+            var local: Response
+            if method == "PATCH":
+                var h = Headers()
+                if r[2]:
+                    h.add("Content-Type", "application/json")
+                local = client.patch(r[1], sent.copy(), headers=h^)
+            else:
+                local = client.get(r[1])
+            assert_equal(local.status, r[3], at)
+            assert_equal(local.text(), r[4], at)
+            var w1 = h1_exchange(child.port, method, r[1], fields, sent)
+            print("observed HTTP/1.1", at, w1[0])
+            assert_true(w1[0].startswith(String("HTTP/1.1 ", r[3], " ")), at)
+            assert_true("X-Seen: 1;" in w1[1], at)
+            assert_equal(String(from_utf8=Span(w1[2])), r[4], at)
+            var w2 = h2_exchange(child.port, method, r[1], fields, sent)
+            print("observed h2c", at, _h2_fields(w2[0]))
+            assert_equal(w2[0][0].value, String(r[3]), at)
+            assert_true("x-seen=1;" in _h2_fields(w2[0]), at)
+            assert_equal(String(from_utf8=Span(w2[1])), r[4], at)
         # The DX example: a PNG signature back byte for byte, with the
         # handler's own Content-Type, on both protocols.
         var sig = _octets([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
