@@ -25,7 +25,15 @@ from ._registration_rules import (
 )
 from .body import FromBody, FromBytes, _body_text
 from .headers_body import _HeaderCarrier
-from .http import Headers, Request, Response, ToErrorResponse, ToResponse
+from .http import (
+    Failure,
+    Headers,
+    Request,
+    Response,
+    ToErrorResponse,
+    ToResponse,
+    _failed,
+)
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
 from .route_value import FromRouteValue, RouteValues, _NamedValue
 from .state import State
@@ -652,9 +660,25 @@ def _content_too_large() -> Response:
 
 
 def _internal_error() -> Response:
-    """The fixed answer to a handler error: status 500 and a fixed body.
-    The error's own text never reaches the client."""
+    """The fixed 500 without a report. `src/muntin` answers with `_failed`,
+    which carries one (M3-058); this stays for the spikes under `tests/`
+    that import it."""
     return Response.text("Internal Server Error", status=500)
+
+
+comptime _REBUILD_FAILED = "the request's header fields could not be rebuilt"
+"""The report of a `_Reject(500)`: `_slot` drops the rebuild's error, which
+only the M3-002 `_fields` gap raises."""
+
+
+def _error_text[E: AnyType](e: E) -> String:
+    """A `Failure`'s message for a caught `e` (M3-058): its text when `E` is
+    `Writable` (`Error` included), else `<`, `E`'s module-qualified name and
+    `>`."""
+    comptime if conforms_to(E, Writable):
+        return String(e)
+    else:
+        return "<" + reflect[E].name() + ">"
 
 
 def _handler_error[E: Deinitable](var e: E) -> Response:
@@ -663,9 +687,10 @@ def _handler_error[E: Deinitable](var e: E) -> Response:
     `E` is the handler's declared error type: `Never` for a non-raising
     handler, `Error` for `raises`, the application's type for `raises T`.
     If `E` conforms to `ToErrorResponse`, the error converts itself, once,
-    by move. Otherwise the answer is `_internal_error()` and the value is
-    dropped unread: an `Error`'s message may carry internal details and is
-    never mapped, no observability hook exists yet, and `ToResponse` alone
+    by move. Otherwise the answer is the fixed 500 carrying a
+    `Failure.HANDLER` report of its text or type name (`_error_text`,
+    M3-058), and the value is dropped: an `Error`'s message may carry
+    internal details and never reaches the client, and `ToResponse` alone
     does not convert a raised value (a returned value of that type
     converts; a raised one does not). Resolved at compile time per
     instantiation, so no error type must conform to anything.
@@ -673,7 +698,7 @@ def _handler_error[E: Deinitable](var e: E) -> Response:
     comptime if conforms_to(E, ToErrorResponse):
         return e^.to_error_response()
     else:
-        return _internal_error()
+        return _failed(Failure.HANDLER, _error_text(e))
 
 
 comptime _GUARD_DRIFT = "registration rule check and guard disagree"
@@ -797,11 +822,12 @@ struct _Reject(Movable):
 
 
 def _rejected(r: _Reject) -> Response:
-    """The response for a `_Reject`."""
+    """The response for a `_Reject`; a 500 carries a `Failure.MUNTIN`
+    report naming the rebuild (M3-058)."""
     if r.status == 400:
         return _bad_request()
     if r.status == 500:
-        return _internal_error()
+        return _failed(Failure.MUNTIN, _REBUILD_FAILED)
     return _body_rejection_answer(r.status)
 
 
@@ -2795,16 +2821,18 @@ struct App(Movable):
     def _run(self, index: Int, var request: Request) -> Response:
         """The answer of the middleware at `index` and everything after it;
         past the last middleware, the routes'. A raise out of the middleware
-        is the fixed 500 here, at its own call, so the middleware outside it
-        receives an ordinary response from its `next` (M3-034)."""
+        is the fixed 500 here, at its own call, carrying a
+        `Failure.MIDDLEWARE` report of the error's text (M3-058), so the
+        middleware outside it receives an ordinary response from its `next`
+        (M3-034)."""
         if index == len(self._middleware):
             return self._dispatch(request)
         try:
             return self._middleware[index](
                 request^, Next(_app=self, _index=index + 1)
             )
-        except:
-            return _internal_error()
+        except e:
+            return _failed(Failure.MIDDLEWARE, String(e))
 
     def _dispatch(self, request: Request) -> Response:
         """The routes' answer to `request`, as `handle` describes it."""
@@ -2873,8 +2901,8 @@ struct App(Movable):
             # never a client error.
             try:
                 return route.handler.invoke(args, request.body)
-            except:
-                return _internal_error()
+            except e:
+                return _failed(Failure.MUNTIN, String(e))
         # No route selected: 405 when some route matches the path (M3-030).
         var allowed = _allowed(self._routes, request.path)
         if len(allowed) == 0:
@@ -2882,6 +2910,6 @@ struct App(Movable):
         var response = Response.text("Method Not Allowed", status=405)
         try:
             response.headers.add("Allow", ", ".join(allowed))
-        except:
-            return _internal_error()
+        except e:
+            return _failed(Failure.MUNTIN, String(e))
         return response^
