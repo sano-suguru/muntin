@@ -427,6 +427,9 @@ def test_two_query_values_bind_in_the_literals_order() raises:
     _expect(app, "/q?q=mojo&limit=5", 200, "str-int mojo,5")
     _expect(app, "/q?limit=5&q=mojo", 200, "str-int mojo,5")
     _expect(app, "/q?x=1&limit=%31&q=a+b", 200, "str-int a b,1")
+    _expect(app, "/q?x=日本語&limit=5&q=mojo", 200, "str-int mojo,5")
+    _expect(app, "/q?q=a&&x=y=z&limit=2", 200, "str-int a,2")
+    _expect(app, "/q?limit=1&q=x=y", 200, "str-int x=y,1")
 
 
 def test_duplicate_path_names_bind_by_position() raises:

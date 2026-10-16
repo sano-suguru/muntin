@@ -11,6 +11,12 @@ values, both or neither are `Param`s (docs/history/architecture-decisions.md,
 `FromRouteValue` makes an application type a route value: `def
 get_user(id: UserId)` on `/users/{id}` (docs/history/architecture-decisions.md,
 "Application route-value types decision (M3-054)").
+
+`RouteValues` makes an application struct one request slot carrying every
+route value of its route, one field per placeholder: `def get_task(at:
+TaskAt)` on `/organizations/{org_id}/projects/{project_id}/tasks/{task_id}`
+(docs/history/architecture-decisions.md, "Route-value records decision
+(M3-061)").
 """
 
 
@@ -98,3 +104,39 @@ trait FromRouteValue(Deinitable, Movable):
         too, so keep it to reading the text and leave work that can fail
         for other reasons to the handler."""
         ...
+
+
+trait RouteValues(Deinitable, Movable):
+    """A record of route values: one request slot carrying every route value
+    of its route (M3-061).
+
+    Conforming consents to Muntin initializing the fields directly: the
+    record's `__init__` is never called, so neither it nor an invariant
+    across fields (`start_id <= end_id`) is enforced. A record is a
+    transport type, not a domain type: validate a field in its type (a
+    `FromRouteValue`) and build the domain type that establishes a relation
+    between fields in the handler. Muntin cannot tell a record that declares its own `__init__`
+    (Mojo 1.1.0 reflects fields, not initializers), so it does not refuse
+    one. The destructor runs once for a completed record and never for a
+    partial one, and must not rely on anything only `__init__` would
+    establish.
+
+    The record has one field per placeholder of its route, in the literal's
+    order (path placeholders left to right, then query ones), each named
+    after the placeholder it binds (`{org-id}` binds a backquoted
+    `` `org-id` `` field), so two fields in the other order are a compile
+    error naming both. Each field is a bare route value: an `Int`, a
+    `String`, a `FromRouteValue` type, or an `Optional[Int]` or
+    `Optional[String]` binding a query placeholder; a `Param` or another
+    record is not a field. Each field converts as a bare slot of its type,
+    in field order: the first invalid value is 400 and nothing after it,
+    the body included, is converted.
+
+    A handler takes at most one record, as its first parameter after any
+    `State`, and no other route value beside it; a `Headers` or a body may
+    follow it as for one bare value. A record is not also a
+    `FromRouteValue`, `FromBody` or `FromBytes`: such a type is rejected at
+    registration wherever it appears.
+    """
+
+    pass
