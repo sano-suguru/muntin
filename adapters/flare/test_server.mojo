@@ -2933,14 +2933,44 @@ def _disposition(sig: Int) -> List[Int]:
     return out^
 
 
+comptime _SA_RESTART = 0x2 if CompilationTarget.is_macos() else 0x10000000
+comptime _SA_NODEFER = 0x10 if CompilationTarget.is_macos() else 0x40000000
+comptime SIGHUP = 1
+comptime SIGQUIT = 3
+
+
+def _set_default_disposition(sig: Int, mask: UInt8, flags: Int) -> Bool:
+    """Sets `sig` to its default action with `mask` as the first byte of its
+    mask (bit 0 is SIGHUP, bit 2 SIGQUIT, on Linux and macOS) and `flags`,
+    so a restore that kept only the handler would read back differently.
+    Whether `sigaction` succeeded."""
+    var action = List[UInt8](length=256, fill=0)
+    action[_SA_MASK_AT] = mask
+    action.unsafe_ptr().unsafe_offset(_SA_FLAGS_AT).unsafe_bitcast[
+        Int32
+    ]()[] = Int32(flags)
+    var done = (
+        Int(
+            external_call["sigaction", c_int](
+                c_int(sig), Int(action.unsafe_ptr()), 0
+            )
+        )
+        == 0
+    )
+    _ = action^
+    return done
+
+
 def test_a_reactor_that_fails_to_start_is_reported() raises:
     """When a worker's reactor raises as it starts, `serve[make]` raises its
     error, `serve: a worker's reactor raised: <error>`, rather than losing it
-    (Flare's public `HttpFrontend` would, pull request #111), and puts back
-    both stop dispositions whole (handler, mask and flags). The failure is
+    (Flare's public `HttpFrontend` would, pull request #111), with the
+    reactor's own message after the prefix, and puts back both stop
+    dispositions whole: before serving, each is given its own nonempty mask
+    and flags, which must read back unchanged after. The failure is
     injected by `app_with_no_descriptors_left`, which shows the process can
-    open no descriptor before the reactor starts; the error's own text is
-    the system's and is not checked."""
+    open no descriptor before the reactor starts; the message's text is the
+    system's, so only its presence is checked."""
     var server = Server.bind("127.0.0.1", 0)
     var pid = fork()
     if pid < 0:
@@ -2948,10 +2978,23 @@ def test_a_reactor_that_fails_to_start_is_reported() raises:
     if pid == 0:
         _ = external_call["alarm", c_uint](c_uint(REFUSAL_ALARM_S))
         _default_sigpipe()
+        if not _set_default_disposition(
+            SIGTERM, 0x1, _SA_RESTART
+        ) or not _set_default_disposition(
+            SIGINT, 0x5, _SA_RESTART | _SA_NODEFER
+        ):
+            exit(2)
         var term = _disposition(SIGTERM)
         var int = _disposition(SIGINT)
         if len(term) == 0 or len(int) == 0:
             exit(3)
+        if (
+            term[1] != _SA_RESTART
+            or term[2] != 0x1
+            or int[1] != _SA_RESTART | _SA_NODEFER
+            or int[2] != 0x5
+        ):
+            exit(2)
         try:
             server.serve[app_with_no_descriptors_left](workers=1)
             exit(9)
@@ -2961,7 +3004,11 @@ def test_a_reactor_that_fails_to_start_is_reported() raises:
                 exit(4)
             if String(e).startswith("serve: a worker's make raised: "):
                 exit(5)
-            if String(e).startswith("serve: a worker's reactor raised: "):
+            comptime raised = "serve: a worker's reactor raised: "
+            var message = String(e)
+            if message.startswith(raised):
+                if String(message[byte = raised.byte_length() :].strip()) == "":
+                    exit(6)
                 exit(7)
             exit(8)
     _ = server^
@@ -2970,8 +3017,9 @@ def test_a_reactor_that_fails_to_start_is_reported() raises:
         _exit_code(ended[0]),
         7,
         (
-            "3: no disposition read, 4: a disposition not put back, 5: the"
-            " injection did not hold, 8: another error, 9: serve returned"
+            "2: a test disposition not set, 3: no disposition read, 4: a"
+            " disposition not put back, 5: the injection did not hold, 6:"
+            " the reactor's message lost, 8: another error, 9: serve returned"
         ),
     )
 
