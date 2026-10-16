@@ -376,12 +376,12 @@ Replaceability ends at `App.handle` ([Backend coupling decision (M3-070)](histor
 
 A change that makes the adapter's code (not its tests, which list their own Flare internals in `flare_internals.mojo`'s docstring) rely on something no public contract states:
 
-- a Flare name that is not public;
-- a behavior of Flare's or of the operating system's that its documentation at the pin does not state (Flare's docstrings and README, the system's manual pages), which the serving lifecycle depends on: threads, the listener and its registration, polling, accepting and the stop, such as an order of wake-ups or a silent fallback. What the request and response conversion relies on is covered instead by its loopback cases (`docs/DEVELOPMENT.md` section 3).
+- a Flare name that is not public, anywhere in the adapter;
+- a behavior that the serving lifecycle (threads, the listener and its registration, polling, accepting and the stop) depends on and that its owner's documentation at the pin does not state: Flare's (the docstrings of its public names and its README), a library's Flare loads, such as OpenSSL's, or the operating system's (its manual pages). Examples: an order of wake-ups, a silent fallback. A behavior the request and response conversion relies on is not in the rule; its loopback cases cover it (`docs/DEVELOPMENT.md` section 3).
 
 Such a change:
 
-- names it where the code relies on it: a Flare name in `flare_internals.mojo` with what it is relied on for, a behavior in a "Relied on" statement beside the code that relies on it;
+- names it where the code relies on it: a Flare name in `flare_internals.mojo` with what it is relied on for, a behavior in a "Relied on" statement beside the code that relies on it (or in `flare_internals.mojo`'s docstring, with a comment at that code pointing to it);
 - has a test that fails when it stops holding, on each platform that relies on it, or says beside the statement why none can: the statement alone is a claim, not a check;
 - has a record (the decision item's, or the one whose slice it implements) that counts the reliance among the candidate's costs and says why Flare's public API, and a proposal to Flare's maintainers, were not taken instead.
 
