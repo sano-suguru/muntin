@@ -190,19 +190,29 @@ for section in "${sections[@]}"; do
         ;;
     fault)
         # fail_listener_add.so counts the listener adds that succeed: the
-        # first 4 are the workers' own. Transient: the next 3 attempts fail
-        # (ENOMEM), then they succeed again: rotate must keep serving.
-        # Lasting: every attempt after 6 successes fails: rotate must end,
-        # within its 1000 ms give-up, with serve's "reactor returned before
-        # a stop signal"; the pin never adds again and keeps serving.
-        for kind in transient lasting; do
+        # first 4 are the workers' own. Each case runs the pin and rotate:
+        # - transient (ENOMEM, then ENOSPC): the next 3 attempts fail, then
+        #   they succeed again; both must answer all 40 requests and keep
+        #   serving;
+        # - lasting: every attempt after 6 successes fails with ENOMEM:
+        #   rotate must end, after its 1000 ms of retries, with serve's
+        #   "reactor returned before a stop signal"; the pin never adds
+        #   again and must keep serving;
+        # - lost: the same with EBADF, which rotate does not retry: it must
+        #   end the same way, without the 1000 ms wait;
+        # - old kernel: every add asking for EPOLLEXCLUSIVE fails with
+        #   EINVAL, as before Linux 4.5: both must keep serving, and rotate
+        #   must say so once per worker.
+        for kind in transient-enomem transient-enospc lasting lost old-kernel; do
             for name in pin rotate; do
                 out="$dir/port-$name.txt"
-                if [[ $kind == transient ]]; then
-                    preload=(FAIL_LISTENER_ADD_AFTER=4 FAIL_LISTENER_ADD_COUNT=3)
-                else
-                    preload=(FAIL_LISTENER_ADD_AFTER=6)
-                fi
+                case $kind in
+                transient-enomem) preload=(FAIL_LISTENER_ADD_AFTER=4 FAIL_LISTENER_ADD_COUNT=3) ;;
+                transient-enospc) preload=(FAIL_LISTENER_ADD_AFTER=4 FAIL_LISTENER_ADD_COUNT=3 FAIL_LISTENER_ADD_ERRNO=28) ;;
+                lasting) preload=(FAIL_LISTENER_ADD_AFTER=6) ;;
+                lost) preload=(FAIL_LISTENER_ADD_AFTER=6 FAIL_LISTENER_ADD_ERRNO=9) ;;
+                old-kernel) preload=(FAIL_LISTENER_ADD_EXCLUSIVE=1 FAIL_LISTENER_ADD_ERRNO=22) ;;
+                esac
                 env LD_PRELOAD="$PWD/$dir/fail_listener_add.so" "${preload[@]}" \
                     "$dir/hol_$name" 4 60000 >"$out" 2>&1 &
                 pid=$!
@@ -210,25 +220,31 @@ for section in "${sections[@]}"; do
                 for _ in $(seq 50); do [[ -s $out ]] && break; sleep 0.1; done
                 port="$(awk '$1 == "port" { print $2 }' "$out")"
                 printf '%s %s: ' "$name" "$kind"
-                python3 -I "$here/compare.py" sequential "$port" 40 || true
+                answered=0
+                python3 -I "$here/compare.py" sequential "$port" 40 || answered=$?
                 sleep 1.2
                 injected="$(grep -c '^fail_listener_add: ' "$out" || true)"
-                echo "  failures injected: $injected"
-                [[ $name == pin || $injected -gt 0 ]] || failed+=("fault: rotate $kind: no failure injected")
+                refused="$(grep -c '^flare: EPOLLEXCLUSIVE refused' "$out" || true)"
+                echo "  failures injected: $injected; fallbacks reported: $refused"
+                [[ $injected -gt 0 ]] || [[ $name == pin && $kind != old-kernel ]] ||
+                    failed+=("fault: $name $kind: no failure injected")
+                [[ $name != rotate || $kind != old-kernel || $refused == 4 ]] ||
+                    failed+=("fault: rotate old-kernel: $refused fallbacks reported, not 4")
                 if kill -0 "$pid" 2>/dev/null; then
                     printf '  server still running; then: '
                     python3 -I "$here/compare.py" sequential "$port" 12 ||
                         failed+=("fault: $name $kind: a running server did not answer")
                     stop_all
-                    [[ $name == pin || $kind == transient ]] ||
-                        failed+=("fault: rotate outlived a lasting failure")
+                    [[ $name == pin || $kind == transient-* || $kind == old-kernel ]] ||
+                        failed+=("fault: rotate outlived a $kind failure")
+                    [[ $answered == 0 ]] || failed+=("fault: $name $kind: a request failed before")
                 else
                     status=0
                     wait "$pid" || status=$?
                     pids=()
                     why="$(grep 'serve:' "$out" | head -n 1)"
                     echo "  server exited $status: $why"
-                    [[ $name == rotate && $kind == lasting && $status != 0 &&
+                    [[ $name == rotate && ($kind == lasting || $kind == lost) && $status != 0 &&
                         $why == *"reactor returned before a stop signal"* ]] ||
                         failed+=("fault: $name $kind: ended otherwise than its policy says")
                 fi

@@ -52,8 +52,8 @@ complete 200, a hold it could not set up.
   requires the server to exit 0 within 3 s. Prints counts and, against
   `pin`, the same statistics on `reset`.
 - `sequential PORT N`: N new connections one after another, each `/health`
-  with `Connection: close` and a 2 s timeout; prints each outcome; exits 1
-  unless all are `ok`.
+  with `Connection: close` and a 2 s timeout; prints each outcome, with how
+  long one that is not `ok` took; exits 1 unless all are `ok`.
 - `churnstop PORT PID`: 8 threads open connections in a loop (`/health`,
   `Connection: close`) for 2 s; SIGTERM goes to PID at 1 s. Prints outcomes
   before and after the signal; exits 1 if any attempt started before it was
@@ -620,6 +620,7 @@ def stop(n, args):
 def sequential(port, n):
     results = []
     for _ in range(n):
+        t0 = time.monotonic()
         try:
             s = socket.create_connection(("127.0.0.1", port), timeout=2)
             try:
@@ -630,6 +631,8 @@ def sequential(port, n):
                 s.close()
         except Exception as e:
             results.append(outcome(e))
+        if results[-1] != "ok":
+            results[-1] += f"@{(time.monotonic() - t0) * 1000:.0f}ms"
     print(" ".join(results), flush=True)
     return 0 if all(r == "ok" for r in results) else 1
 

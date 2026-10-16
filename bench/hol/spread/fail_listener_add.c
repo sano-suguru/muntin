@@ -4,8 +4,12 @@
    succeeded (an ADD the kernel refuses, such as Flare v0.12.0's
    EPOLLEXCLUSIVE with EPOLLRDHUP, is not counted). From then on every one
    fails, or, with FAIL_LISTENER_ADD_COUNT=n, only the next n attempts, or,
-   with FAIL_LISTENER_ADD_EVERY=n, the first of every n attempts. Each
-   failure it makes writes a line to standard error. */
+   with FAIL_LISTENER_ADD_EVERY=n, the first of every n attempts.
+   FAIL_LISTENER_ADD_ERRNO=n fails with errno n instead of ENOMEM.
+   FAIL_LISTENER_ADD_EXCLUSIVE=1 instead fails every listener ADD that asks
+   for EPOLLEXCLUSIVE, from the first, as a kernel before 4.5 does (with
+   EINVAL when FAIL_LISTENER_ADD_ERRNO=22). Each failure it makes writes a
+   line to standard error. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
@@ -27,18 +31,23 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev) {
     if (!real) real = dlsym(RTLD_NEXT, "epoll_ctl");
     int listening = 0;
     socklen_t len = sizeof listening;
-    if (op != EPOLL_CTL_ADD || !getenv("FAIL_LISTENER_ADD_AFTER") ||
+    int exclusive = env("FAIL_LISTENER_ADD_EXCLUSIVE");
+    if (op != EPOLL_CTL_ADD || (!exclusive && !getenv("FAIL_LISTENER_ADD_AFTER")) ||
         getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &len) != 0 || !listening)
         return real(epfd, op, fd, ev);
-    if (atomic_load(&succeeded) >= env("FAIL_LISTENER_ADD_AFTER")) {
+    int fail = 0;
+    if (exclusive) {
+        fail = ev && (ev->events & EPOLLEXCLUSIVE);
+    } else if (atomic_load(&succeeded) >= env("FAIL_LISTENER_ADD_AFTER")) {
         int n = atomic_fetch_add(&attempted, 1);
         int count = env("FAIL_LISTENER_ADD_COUNT"), every = env("FAIL_LISTENER_ADD_EVERY");
-        if (count > 0 ? n < count : every > 0 ? n % every == 0 : 1) {
-            static const char line[] = "fail_listener_add: ENOMEM\n";
-            (void)!write(2, line, sizeof line - 1);
-            errno = ENOMEM;
-            return -1;
-        }
+        fail = count > 0 ? n < count : every > 0 ? n % every == 0 : 1;
+    }
+    if (fail) {
+        static const char line[] = "fail_listener_add: injected\n";
+        (void)!write(2, line, sizeof line - 1);
+        errno = getenv("FAIL_LISTENER_ADD_ERRNO") ? env("FAIL_LISTENER_ADD_ERRNO") : ENOMEM;
+        return -1;
     }
     int rc = real(epfd, op, fd, ev);
     if (rc == 0) atomic_fetch_add(&succeeded, 1);

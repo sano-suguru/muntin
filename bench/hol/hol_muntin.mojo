@@ -65,10 +65,12 @@ def main() raises:
         raise Error("usage: hol_muntin WORKERS IDLE_MS [GRACE_MS]")
     var workers = Int(args[1])
     var server = Server.bind(
+        "127.0.0.1", 0, idle_timeout_ms=Int(args[2])
+    ) if len(args) == 3 else Server.bind(
         "127.0.0.1",
         0,
         idle_timeout_ms=Int(args[2]),
-        shutdown_grace_ms=Int(args[3]) if len(args) == 4 else 5000,
+        shutdown_grace_ms=Int(args[3]),
     )
     print("port", server.port(), flush=True)
     if workers == 1:
