@@ -11,9 +11,9 @@
 # started server; SLOW_MS is how long the slow handler blocks its thread
 # (default 1000). It builds bench/hol/hol_muntin.mojo and hol_flare.mojo in
 # the `flare` environment, then prints one line per run, prefixed with its
-# case (`<server> workers=<n> idle_ms=<ms> `), in four sections:
+# case (`<server> workers=<n> idle_ms=<ms> `), in five sections:
 # - hold: every server, 1 and 4 workers, idle timeout 500 ms (Flare's
-#   default) and 60000 ms, every client mode but `spread`. Servers: `muntin`,
+#   default) and 60000 ms, every client mode but `spread` and `capacity-K`. Servers: `muntin`,
 #   `flare` (Flare's own workers, one SO_REUSEPORT listener each) and, with 4
 #   workers only, `flare-shared` (the same with FLARE_REUSEPORT_WORKERS=0: one
 #   listener shared by every worker, as Muntin's workers share one);
@@ -23,7 +23,10 @@
 #   and h2c on one connection: where the lost requests stop;
 # - spread: `muntin`, `flare` and `flare-shared` with 4 workers, how each
 #   spreads kept-open connections over its workers; a run that loses a
-#   connection is no measurement and ends the script with exit 1.
+#   connection is no measurement and ends the script with exit 1;
+# - capacity: `muntin` with 1, 2 and 4 workers and idle timeout 60000 ms,
+#   one handler fewer than the workers held and then as many as the workers
+#   (`capacity-K`): whether a new connection is answered while they run.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -119,4 +122,10 @@ done
 echo "## spread"
 for server in muntin flare flare-shared; do
     measure "$server" 4 60000 spread "$slow_ms"
+done
+echo "## capacity"
+for workers in 1 2 4; do
+    for held in $((workers - 1)) "$workers"; do
+        measure muntin "$workers" 60000 "capacity-$held" "$slow_ms"
+    done
 done
