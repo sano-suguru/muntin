@@ -537,6 +537,17 @@ every key; above it, it looks the key up in the route's `query_index`, so a
 pair costs one lookup however many keys a route has."""
 
 
+def _query_index(keys: List[String]) -> Dict[String, Int]:
+    """Each of `keys` with its position, the index `_query_spans` looks keys
+    up in; empty for `_LINEAR_QUERY_KEYS` keys or fewer, which it compares
+    instead, so a route with few keys keeps no index."""
+    var index = Dict[String, Int]()
+    if len(keys) > _LINEAR_QUERY_KEYS:
+        for k in range(len(keys)):
+            index[keys[k]] = k
+    return index^
+
+
 def _query_spans(
     query: String, keys: List[String], index: Dict[String, Int]
 ) raises -> List[Int]:
@@ -545,7 +556,8 @@ def _query_spans(
     without copying any value: entries `2k` and `2k + 1` are the byte offsets
     where key `k`'s value starts and ends, both -1 when the key is absent
     (a pair without `=` has an empty value). `index` maps each key to its
-    position, for routes with more than `_LINEAR_QUERY_KEYS` keys. Raises if
+    position (`_query_index`), consulted only for more than
+    `_LINEAR_QUERY_KEYS` keys. Raises if
     one of `keys` appears more than once; other keys may repeat."""
     var spans = List[Int](length=2 * len(keys), fill=-1)
     if len(keys) == 0:
@@ -1211,8 +1223,8 @@ struct _Route(Movable):
     """Keys of the route's `{key}` query parameters, in the literal's order
     (none if it has no query part)."""
     var query_index: Dict[String, Int]
-    """Each of `query_keys` with its position, for `_query_spans` on a
-    route with many query keys (a `RouteValues` record's)."""
+    """`_query_index` of `query_keys`: empty unless the route has more than
+    `_LINEAR_QUERY_KEYS` query keys (a `RouteValues` record's)."""
     var query_optional: List[Bool]
     """For each of `query_keys`, whether its value binds an `Optional` slot
     (M3-025): `App.handle` then passes an absent key or an empty value on
@@ -1253,10 +1265,9 @@ struct _Route(Movable):
         self.raw = raw
         self.path = String(_path_part(route))
         self.query_keys = List[String]()
-        self.query_index = Dict[String, Int]()
         for item in _query_items(route):
-            self.query_index[String(_param_name(item))] = len(self.query_keys)
             self.query_keys.append(String(_param_name(item)))
+        self.query_index = _query_index(self.query_keys)
         self.query_optional = List[Bool](
             length=len(self.query_keys), fill=False
         )
