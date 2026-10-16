@@ -9,7 +9,7 @@
 #
 # If this file builds, the reflected name stopped showing the origin
 # (`{}`) or the rule was removed: a borrowing state registers again.
-# Expected diagnostic (checked by scripts/check.sh): State takes a value that owns its data; this type has an origin parameter (printed {}) or one Mojo cannot print, so it may borrow a value the App outlives: state_origin_local_post.View[{}, {}]
+# Expected diagnostic (checked by scripts/check.sh): State takes a value that owns its data; this type's name shows an origin or a parameter pack ({}), so it may borrow a value the App outlives: state_origin_local_post.View[{}, {}]
 
 from std.memory import OwnedPointer
 from std.testing import assert_equal

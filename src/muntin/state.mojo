@@ -14,14 +14,18 @@ from ._handler_storage import _Shared
 
 
 def _may_borrow[S: AnyType]() -> Bool:
-    """Whether `S`'s reflected name shows an origin, printed `{}` anywhere in
-    it (a type argument's included), or a parameter Mojo 1.1.0 cannot print,
-    `<unprintable>` (M3-074).
+    """Whether `S`'s reflected name shows `{}` anywhere in it, a type
+    argument's included: how Mojo 1.1.0 prints every origin, and beside a
+    parameter pack, whose element types it does not print
+    (`Tuple[<unprintable>, {}]`) (M3-074).
 
     A value borrows a local only through that local's origin in its type. A
     module-level declaration cannot name a local's origin and a struct
     cannot be declared inside a function, so that origin reaches a field
-    only as a parameter of `S` or of a type in its name. `AnyOrigin` behind
+    only as a parameter of `S` or of a type in its name, where it prints as
+    `{}` or hides in a pack. A function-valued parameter prints as
+    `<unprintable>` alone, but its type is built from the struct's other
+    parameters, which print, so it is admitted. `AnyOrigin` behind
     a trait's associated type escapes the name
     (tests/state_known_gaps/state_any_origin_associated_type.mojo), a
     toolchain-wide hole. The format is undocumented; the fixtures under
@@ -29,7 +33,7 @@ def _may_borrow[S: AnyType]() -> Bool:
     origins.
     """
     comptime name = reflect[S].name()
-    return name.find("{}") >= 0 or name.find("<unprintable>") >= 0
+    return name.find("{}") >= 0
 
 
 trait _InjectedState:
@@ -61,14 +65,14 @@ struct State[S: Movable & Deinitable](Copyable, Movable, _InjectedState):
     def __init__(out self, var value: Self.S):
         """Moves `value` into a new shared allocation.
 
-        `S` may not have an origin parameter (`_may_borrow`): a route erases
-        its state and the `App`'s type does not carry `S`'s origins, so
-        nothing would keep a borrowed value alive for the `App` (M3-074).
+        `S`'s name may not show an origin or a pack (`_may_borrow`): a route
+        erases its state and the `App`'s type does not carry `S`'s origins,
+        so nothing would keep a borrowed value alive for the `App` (M3-074).
         """
         comptime assert not _may_borrow[Self.S](), (
-            "State takes a value that owns its data; this type has an origin"
-            " parameter (printed {}) or one Mojo cannot print, so it may"
-            " borrow a value the App outlives: "
+            "State takes a value that owns its data; this type's name shows an"
+            " origin or a parameter pack ({}), so it may borrow a value the"
+            " App outlives: "
             + reflect[Self.S].name()
         )
         self._shared = _Shared(value^)

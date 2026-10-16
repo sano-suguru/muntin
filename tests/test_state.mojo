@@ -4,7 +4,8 @@
 # state decision (M3-001)". Must-not-compile counterparts: tests/state_get_fail
 # and tests/compile_fail/state_*.
 
-from std.memory import ArcPointer
+from std.memory import ArcPointer, OwnedPointer
+from std.utils import Variant
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from muntin import App, Response, State, ToErrorResponse, ToResponse
@@ -439,8 +440,8 @@ def test_dx_section_8_example() raises:
 
 # A state's type may not borrow (M3-074): the rule refuses an origin (`{}`) in
 # the type's name, so these types, whose parameters are owned types or values
-# (an `Int`, a struct value) and whose static text sits in a field, still
-# register and answer. The refused
+# (an `Int`, a struct value, a function value) and whose static text sits in a
+# field, still register and answer. The refused
 # side is tests/state_fail/state_origin_*.mojo.
 
 
@@ -470,6 +471,41 @@ struct Tuned[mode: Mode](Movable):
         pass
 
 
+def five() -> Int:
+    return 5
+
+
+struct Computed[f: def() thin -> Int](Movable):
+    """A function-valued parameter prints as `<unprintable>` and no `{}`."""
+
+    def __init__(out self):
+        pass
+
+
+struct Pair(Movable):
+    """The migration for an owned `Tuple` state, which the rule refuses as the
+    whole state (tests/state_fail/state_pack_tuple.mojo): a field of the
+    application's own struct."""
+
+    var value: Tuple[Int, String]
+
+    def __init__(out self, var value: Tuple[Int, String]):
+        self.value = value^
+
+
+struct Choice(Movable):
+    """The same migration for an owned `Variant`."""
+
+    var value: Variant[Int, String]
+
+    def __init__(out self, var value: Variant[Int, String]):
+        self.value = value^
+
+
+def peek[o: Origin[mut=False]]() -> Int:
+    return 7
+
+
 def label_text(label: State[Label]) -> String:
     return String(label[].text)
 
@@ -497,6 +533,55 @@ def tuned_level(tuned: State[Tuned[Mode.FAST]]) -> String:
     return String(tuned[].mode.level)
 
 
+def computed(value: State[Computed[five]]) -> String:
+    return String(value[].f())
+
+
+def pair_text(pair: State[Pair]) -> String:
+    return String(pair[].value[0]) + pair[].value[1]
+
+
+def choice_text(choice: State[Choice]) -> String:
+    return choice[].value[String]
+
+
+def register_hidden_origin(mut app: App):
+    """A function-valued parameter can bind a local's origin, which its name
+    (`<unprintable>`) hides, but a function value is a compile-time value and
+    carries no address: a closure over the local cannot be a parameter
+    (tests/state_fail/state_function_parameter_captures_*.mojo), and the
+    pointer it would read sits in a field whose type prints
+    (state_origin_in_function_parameter_type.mojo). The local is gone before
+    the request; under `SANITIZE=address` nothing reads it."""
+    var token = OwnedPointer(42)
+    comptime f = peek[origin_of(token)]
+    app.get["/hidden"](computed_peek[f], State(Computed[f]()))
+
+
+def computed_peek[f: def() thin -> Int](value: State[Computed[f]]) -> String:
+    return String(value[].f())
+
+
+def test_owned_values_in_a_wrapper_register() raises:
+    var app = App()
+    app.get["/pair"](pair_text, State(Pair(Tuple(1, String("a")))))
+    app.get["/choice"](
+        choice_text, State(Choice(Variant[Int, String](String("b"))))
+    )
+    var client = TestClient(app)
+    assert_equal(client.get("/pair").text(), "1a")
+    assert_equal(client.get("/choice").text(), "b")
+
+
+def test_function_parameter_hides_no_address() raises:
+    var app = App()
+    register_hidden_origin(app)
+    var client = TestClient(app)
+    var response = client.get("/hidden")
+    assert_equal(response.status, 200)
+    assert_equal(response.text(), "7")
+
+
 def test_owned_state_types_register() raises:
     var names = List[String]()
     names.append("ada")
@@ -511,6 +596,7 @@ def test_owned_state_types_register() raises:
     app.get["/arc"](shared_name, State(ArcPointer(Users(users^))))
     app.get["/sized"](sized_n, State(Sized[3]()))
     app.get["/tuned"](tuned_level, State(Tuned[Mode.FAST]()))
+    app.get["/computed"](computed, State(Computed[five]()))
     var client = TestClient(app)
     var label = client.get("/label")
     assert_equal(label.status, 200)
@@ -520,6 +606,7 @@ def test_owned_state_types_register() raises:
     assert_equal(client.get("/arc").text(), "bob")
     assert_equal(client.get("/sized").text(), "3")
     assert_equal(client.get("/tuned").text(), "2")
+    assert_equal(client.get("/computed").text(), "5")
 
 
 def main() raises:

@@ -2,7 +2,7 @@
 # borrowing decision (M3-074)": an origin inside a type argument (`Box[View[o]]`)
 # is refused like a direct one (state_origin_local_get.mojo). Built against the
 # base it registers, as #122's reproductions did.
-# Expected diagnostic (checked by scripts/check.sh): State takes a value that owns its data; this type has an origin parameter (printed {}) or one Mojo cannot print, so it may borrow a value the App outlives: state_origin_in_type_argument.Box[state_origin_in_type_argument.View[{}, {}]]
+# Expected diagnostic (checked by scripts/check.sh): State takes a value that owns its data; this type's name shows an origin or a parameter pack ({}), so it may borrow a value the App outlives: state_origin_in_type_argument.Box[state_origin_in_type_argument.View[{}, {}]]
 
 from std.memory import OwnedPointer
 
