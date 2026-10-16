@@ -53,8 +53,11 @@
 # `flare/muntin` and, with several workers, `flare-shared/flare`. A ratio
 # whose minimum and maximum are on the same side of 1 held in every round.
 # Pairs with an error in any round are summarized apart, with each side's
-# errors, timeouts and errors per response received: an overloaded server's
-# requests per second are not a throughput comparison.
+# errors, timeouts and errors per response received (`-` with none): an
+# overloaded server's requests per second are not a throughput comparison.
+# A round in which either side answered nothing gives no ratio;
+# `unanswered_rounds` counts them, and a pair with no ratio at all prints `-`
+# for it.
 #
 # CPUs: where taskset exists (Linux), the allowed CPUs (Cpus_allowed_list in
 # /proc/self/status, at least 2) are split in two: the first half runs the
@@ -313,12 +316,17 @@ summarize() { # ERRORS: the rounds of $out/loopback.tsv, one line per configurat
                 }
             return n % 2 ? v[(n + 1) / 2] : (v[n / 2] + v[n / 2 + 1]) / 2
         }
-        function pair(key, a, b,    ratios, r, n, lo, hi, x, odd, even, no, ne, order) {
+        function rate(errors, responses) {
+            return responses ? sprintf("%.4f", errors / responses) : "-"
+        }
+        function pair(key, a, b,    ratios, r, n, lo, hi, x, odd, even, no, ne, order, unanswered) {
             if (!((key, a) in rps) || !((key, b) in rps)) return
             if ((errs[key, a] + errs[key, b] > 0) != want_errors) return
             n = 0; no = 0; ne = 0; odd = 0; even = 0
+            unanswered = 0
             for (r = 1; r <= rounds; r++) {
                 if (!((key, a, r) in one) || !((key, b, r) in one)) continue
+                if (one[key, a, r] <= 0 || one[key, b, r] <= 0) { unanswered++; continue }
                 x = one[key, b, r] / one[key, a, r]
                 ratios = ratios " " x
                 if (n == 0 || x < lo) lo = x
@@ -327,19 +335,26 @@ summarize() { # ERRORS: the rounds of $out/loopback.tsv, one line per configurat
                 if (r % 2) { odd += log(x); no++ } else { even += log(x); ne++ }
             }
             order = (no && ne) ? sprintf("%+.1f%%", (exp(odd / no - even / ne) - 1) * 100) : "-"
-            printf "%s\t%s/%s\t%s=%.0f\t%s=%.0f\tratio_median=%.3f\tratio_min=%.3f\tratio_max=%.3f\torder=%s\trounds=%d",
+            printf "%s\t%s/%s\t%s=%.0f\t%s=%.0f\tratio_median=%s\tratio_min=%s\tratio_max=%s\torder=%s\trounds=%d",
                 key, b, a, a, median(rps[key, a]), b, median(rps[key, b]),
-                median(ratios), lo, hi, order, n
+                n ? sprintf("%.3f", median(ratios)) : "-", n ? sprintf("%.3f", lo) : "-",
+                n ? sprintf("%.3f", hi) : "-", order, n
+            if (unanswered) printf "\tunanswered_rounds=%d", unanswered
             if (want_errors)
-                printf "\t%s_errors=%d\t%s_timeouts=%d\t%s_error_rate=%.4f\t%s_errors=%d\t%s_timeouts=%d\t%s_error_rate=%.4f",
-                    a, errs[key, a], a, tos[key, a], a, errs[key, a] / (reqs[key, a] ? reqs[key, a] : 1),
-                    b, errs[key, b], b, tos[key, b], b, errs[key, b] / (reqs[key, b] ? reqs[key, b] : 1)
+                printf "\t%s_errors=%d\t%s_timeouts=%d\t%s_error_rate=%s\t%s_errors=%d\t%s_timeouts=%d\t%s_error_rate=%s",
+                    a, errs[key, a], a, tos[key, a], a, rate(errs[key, a], reqs[key, a]),
+                    b, errs[key, b], b, tos[key, b], b, rate(errs[key, b], reqs[key, b])
             printf "\n"
         }
         {
             delete f
             for (i = 1; i <= NF; i++)
                 if (split($i, kv, "=") == 2) f[kv[1]] = kv[2]
+            if (NF != 13 || !("round" in f) || !("req_s" in f) || $6 !~ /^(muntin|flare|flare-shared)$/) {
+                printf "summarize: %s line %d is not a load line\n", FILENAME, NR > "/dev/stderr"
+                bad = 1
+                exit 1
+            }
             key = $1 "\t" $2 "\t" $3 "\t" $5
             r = f["round"] + 0
             if (!(key in seen)) { seen[key] = 1; keys[++nkeys] = key }
@@ -351,6 +366,7 @@ summarize() { # ERRORS: the rounds of $out/loopback.tsv, one line per configurat
             if (r > rounds) rounds = r
         }
         END {
+            if (bad) exit 1
             for (k = 1; k <= nkeys; k++) {
                 pair(keys[k], "muntin", "flare")
                 pair(keys[k], "flare", "flare-shared")
@@ -359,6 +375,7 @@ summarize() { # ERRORS: the rounds of $out/loopback.tsv, one line per configurat
 }
 
 echo
+tab=$'\t'
 echo "== over loopback (wrk, HTTP/1.1 keep-alive, ${duration} s after ${warmup} s of warm-up, $rounds round(s))"
 : >"$out/loopback.tsv"
 for w in "${workers[@]}"; do
@@ -389,7 +406,7 @@ for w in "${workers[@]}"; do
                 for c in "${conns[@]}"; do
                     for impl in "${order[@]}"; do
                         load "$impl" "$ep" "${port_of[$impl]}" "$c" "${pid_of[$impl]}" \
-                            "workers=$w	mw=$mw	$ep	round=$r"
+                            "workers=$w${tab}mw=$mw${tab}$ep${tab}round=$r"
                     done
                 done
             done
