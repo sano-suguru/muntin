@@ -4687,7 +4687,7 @@ def me(user: Context[CurrentUser]) -> String:
 
 ### Backend coupling decision (M3-070)
 
-Status: **decision, standing constraint** (M3-070, pull request #PRNUM; `src/muntin` and the adapter's code unchanged). The line counts, the count of `docs/DX.md` section 1's statements and the map from each relied-on behavior to the test that observes it are in the pull request.
+Status: **decision, standing constraint** (M3-070, pull request #128; `src/muntin` and the adapter's code unchanged). The line counts, the count of `docs/DX.md` section 1's statements and the map from each relied-on behavior to the test that observes it are in the pull request.
 
 **Question and what settles it.** An outside review of pull request #120 judged that the Flare adapter no longer adapts Flare but builds one server together with Flare's internals: `adapters/flare/flare_internals.mojo` reaches Flare's private reactor loop and its stop byte, `HttpServer`'s listener and TLS context address, and Flare's thread and pipe, and the adapter runs its own stop watcher, worker table and listener parking around them; an import boundary does not make that backend replaceable, and the coupling should weigh more as debt. Pull request #111 listed each Flare name with its public alternative and #117 proposes replacing one, but neither says what replacing the backend costs or how a new reliance is weighed. What does "replaceable backend" hold for today, and what must an item that adds coupling show? Settled by reading what a second backend would keep and rewrite, how much of `docs/DX.md` section 1, `Server`'s contract, states Flare's behavior, and which relied-on behaviors a test observes.
 
