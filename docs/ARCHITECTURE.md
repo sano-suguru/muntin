@@ -372,6 +372,16 @@ Not allowed in durable Muntin public APIs:
 
 A pinned Flare version is required once M1 depends on it. Track `main` only for explicit compatibility investigation, never as the default reproducible dependency.
 
+Replaceability ends at `App.handle` ([Backend coupling decision (M3-070)](history/architecture-decisions.md#backend-coupling-decision-m3-070)): everything behind it is backend-independent (A2, A3). `Server` is the Flare adapter's, not a seam: its stop watcher, worker table and listener parking drive Flare's per-worker loop through the internals in `adapters/flare/flare_internals.mojo` and rely on how that loop registers, polls and leaves, and its contract (`docs/DX.md` section 1) is in large part Flare v0.12.0's behavior. Another backend would keep applications' handlers, middleware, `State` and tests, and replace the adapter's conversion and `Server` (`docs/DX.md` section 11).
+
+A change that makes the adapter rely on something no public contract states (a Flare name that is not public, a behavior Flare's documentation does not promise, or an operating-system behavior its manual does not promise, such as an order of wake-ups or a silent fallback):
+
+- names it where the code relies on it: a Flare name in `flare_internals.mojo` with what it is relied on for, a behavior in a "Relied on" statement beside the code that relies on it;
+- has a test that fails when it stops holding, on each platform that relies on it, or says beside the statement why none can: the statement alone is a claim, not a check;
+- is a decision item whose record counts the reliance among the candidate's costs and says why Flare's public API, and a proposal to Flare's maintainers, were not taken instead.
+
+Removing a reliance needs none of this.
+
 ## Adapter translation policy
 
 It is acceptable for `muntin/adapters/flare` to contain inelegant conversion code if that keeps the public/core model stable. Do not contort the Muntin API merely to make one adapter thin.
@@ -398,4 +408,5 @@ Record a decision before:
 - adding unsafe memory/lifetime machinery to a public contract;
 - changing request/response ownership semantics;
 - changing the backend seam in a way that breaks adapters;
+- making the Flare adapter rely on something no public contract states ([Flare policy](#flare-policy));
 - making a provisional DX example a frozen compatibility promise.

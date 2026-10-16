@@ -1649,6 +1649,8 @@ in-memory  Flare
 
 Flare is an implementation backend, not part of Muntin's durable application contract.
 
+What a change of backend keeps ([Backend coupling decision (M3-070)](history/architecture-decisions.md#backend-coupling-decision-m3-070)): handlers, middleware, `State`, how an `App` is built and every test through `TestClient`. What it does not: serving. `Server` is the Flare adapter module's (`muntin_flare`), and so is every serving behavior section 1 describes beyond `App.handle`'s answers, such as Flare's own refusals, one request at a time per reactor, the idle timeout, the stop and its window and the settings `Server.bind` takes. Another backend would bring its own serving entrypoint and state its own behavior.
+
 The backend boundary is `App.handle`, which takes the request either way and answers it alike: handed over (`app.handle(request^)`, or a temporary such as `app.handle(Request("GET", "/hello"))`), or lent (`app.handle(request)`, a named value the caller keeps). Mojo picks the owning overload for the first and the borrowing one for the second. `TestClient` and the Flare adapter hand their request over. The only difference is cost: with middleware, a lent request is copied for the chain (section 7, "Cost"), so a backend or test of the application's own that lends its request pays that copy. Proven by `tests/test_middleware.mojo`.
 
 ## 12. Compile-time route information

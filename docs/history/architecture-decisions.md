@@ -4684,3 +4684,27 @@ def me(user: Context[CurrentUser]) -> String:
 - Measure: the pull request's copy timing again, with middleware, through the owning `handle`: flat across body sizes.
 - Docs: `docs/DX.md` sections 7, 11 and 15; `docs/ARCHITECTURE.md` (request handling, Request/Response ownership); `docs/SPEC.md`.
 - Not in the slice: `Context`, the adapter's body copy, a raw handler's body copy.
+
+### Backend coupling decision (M3-070)
+
+Status: **decision, standing constraint** (M3-070, pull request #PRNUM; `src/muntin` and the adapter's code unchanged). The line counts, the count of `docs/DX.md` section 1's statements and the map from each relied-on behavior to the test that observes it are in the pull request.
+
+**Question and what settles it.** An outside review of pull request #120 judged that the Flare adapter no longer adapts Flare but builds one server together with Flare's internals: `adapters/flare/flare_internals.mojo` reaches Flare's private reactor loop and its stop byte, `HttpServer`'s listener and TLS context address, and Flare's thread and pipe, and the adapter runs its own stop watcher, worker table and listener parking around them; an import boundary does not make that backend replaceable, and the coupling should weigh more as debt. Pull request #111 listed each Flare name with its public alternative and #117 proposes replacing one, but neither says what replacing the backend costs or how a new reliance is weighed. What does "replaceable backend" hold for today, and what must an item that adds coupling show? Settled by reading what a second backend would keep and rewrite, how much of `docs/DX.md` section 1, `Server`'s contract, states Flare's behavior, and which relied-on behaviors a test observes.
+
+**Choice: accept the coupling as the Flare adapter's, say where replaceability ends, and make every new reliance a weighed cost.** Everything behind `App.handle` (routing, extraction, middleware, `State`, errors, `TestClient`) is backend-independent, and checked to be (A2, A3). `Server` is not a seam: its stop watcher, worker table and listener parking (with `Server` itself, about 1,150 of `muntin_flare.mojo`'s 1,844 lines) drive Flare's per-worker loop through its stop byte and rely on how that loop registers, polls and leaves, and about a third of the sentences of `docs/DX.md` section 1 describe what Flare v0.12.0 does (its refusals, one request at a time per reactor, its idle timer, its `drain`). Another backend would keep an application's handlers, middleware, `State` and tests, and would replace the adapter's conversion, `Server` and that contract. That is accepted: each alternative below either moves names without removing the reliance or gives up shipped behavior, and A7 rules out a serving abstraction over one backend. What is not accepted is coupling that grows unweighed, so a new reliance on something no public contract states needs three things (the rule, owned by `docs/ARCHITECTURE.md`, "Flare policy"): it is named where the code relies on it, a test fails when it stops holding (or the code says why none can), and its decision record counts it as a cost against Flare's public API and a proposal to Flare's maintainers. A "Relied on" line is a claim, not a check: `run_worker_loop`'s said that the loop registers the listener with `EPOLLEXCLUSIVE` on Linux, which Linux refuses for the mask Flare v0.12.0 asks for (Flare then registers without it), and no test noticed (found in pull request #120's investigation).
+
+**Rejected.**
+- Leaving it to #111's inventory: it localizes a change of name or signature, not of behavior, and nothing makes a new reliance a cost; the first revision of M3-068 (pull request #120) chose to rely on a kernel's wake-up order, and nothing required it to weigh that.
+- Replacing the Flare internals with Muntin's own (`pthread_create`, `pipe`, a `std.atomic` stop store): the names move, the reliance on Flare's loop stays, and a copied protocol keeps compiling after Flare changes it (the reason #117 keeps Flare's own stop store).
+- Flare's public multi-worker path (`HttpServer.serve(handler, num_workers)`, `Scheduler`, `HttpFrontend.run_worker`): [M3-049](#multi-worker-serving-decision-m3-049)'s and #111's reasons (a `Copyable` handler, a stop with no window, a lost start error).
+- A backend-neutral serving contract or trait now: one network backend (A7), so what a second would share is unknown.
+- Dropping the stop watcher or the workers to keep the adapter thin: undoes [M3-045](#graceful-shutdown-decision-m3-045) and M3-049.
+- Vendoring or forking Flare's reactor: Muntin would own a reactor, which `AGENTS.md` and `docs/SPEC.md`'s product boundaries exclude.
+
+**Revisit when:**
+- a second network backend is started: decide what of `docs/DX.md` section 1 both serve, and whether `Server` becomes a shared contract;
+- Flare publishes a per-worker loop that borrows a listener and keeps its start error, or a multi-worker `drain` with a window: the adapter can drop internals (M3-049's revisit);
+- the Flare pin moves: check every "Relied on" statement against the tests that observe it, as M3-049 says;
+- the rule stops an item the owner wants to take anyway: amend this record rather than skip the rule.
+
+**Next production slice:** none (a standing constraint, `docs/DEVELOPMENT.md` section 2). Its owner is `docs/ARCHITECTURE.md`, "Flare policy", which this record's pull request writes, with where replaceability ends for applications in `docs/DX.md` section 11.
