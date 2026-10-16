@@ -119,6 +119,7 @@ from muntin_flare import (
     _drain_workers,
     _server_config,
     _serving_held,
+    _worker_share,
 )
 
 comptime TIMEOUT_MS = 5_000
@@ -3587,6 +3588,331 @@ def test_docs_workers_example() raises:
     finally:
         if not reaped:
             _stop(child.pid)
+
+
+# Connection cap (M3-072) --------------------------------------------------
+
+
+def _bind_cap_error(host: String, cap: Int) -> String:
+    """The text `Server.bind(host, 0, max_connections=cap)` raises, or what
+    it bound."""
+    try:
+        var server = Server.bind(host, 0, max_connections=cap)
+        return "bound port " + String(server.port())
+    except e:
+        return String(e)
+
+
+def test_bind_raises_for_a_connection_cap_out_of_range() raises:
+    """A cap below 1 raises before anything is bound: on a host name the
+    raise is the cap, not the host, and it is checked after the idle
+    timeout. 1 and `Int.MAX` bind, and the bound `Server` holds the cap;
+    with none Flare's field stays 0, no cap."""
+    for cap in [Int.MIN, -1, 0]:
+        var error = _bind_cap_error("127.0.0.1", cap)
+        print("observed: max_connections", cap, "->", error)
+        assert_equal(error, "max_connections out of range: " + String(cap))
+    assert_equal(
+        _bind_cap_error("localhost", 0), "max_connections out of range: 0"
+    )
+    var error: String
+    try:
+        var server = Server.bind(
+            "127.0.0.1", 0, idle_timeout_ms=0, max_connections=0
+        )
+        error = "bound port " + String(server.port())
+    except e:
+        error = String(e)
+    assert_equal(error, "idle_timeout_ms out of range: 0")
+    for cap in [1, Int.MAX]:
+        var server = Server.bind("127.0.0.1", 0, max_connections=cap)
+        assert_true(server.port() > 0)
+        assert_equal(server._server.config.max_connections, cap)
+    var plain = Server.bind("127.0.0.1", 0)
+    assert_equal(plain._server.config.max_connections, 0)
+
+
+def test_server_config_sets_the_connection_cap() raises:
+    """`_server_config` writes the cap into Flare's one field and changes
+    nothing else; with none the field keeps Flare's default, 0."""
+    var flare = ServerConfig()
+    assert_equal(flare.max_connections, 0)
+    assert_equal(_server_config(64).max_connections, 0)
+    var config = _server_config(64, 1234, 4321, 7)
+    assert_equal(config.max_connections, 7)
+    assert_equal(config.max_body_size, 64)
+    assert_equal(config.shutdown_timeout_ms, 1234)
+    assert_equal(config.idle_timeout_ms, 4321)
+
+
+def test_worker_shares_add_up_to_the_cap() raises:
+    """`_worker_share` gives every worker `cap // workers`, the first
+    `cap % workers` one more, so the shares add up to the cap and differ by
+    at most one."""
+    for workers in [1, 2, 3, 7, 256]:
+        for cap in [workers, workers + 1, 2 * workers - 1, 1000, Int.MAX]:
+            var total = 0
+            for i in range(workers):
+                var share = _worker_share(cap, workers, i)
+                assert_true(share >= 1, "a worker with no share")
+                assert_true(
+                    share == cap // workers or share == cap // workers + 1
+                )
+                total += share
+            assert_equal(total, cap)
+    assert_equal(_worker_share(5, 2, 0), 3)
+    assert_equal(_worker_share(5, 2, 1), 2)
+
+
+comptime CAP_WAIT_MS = 500
+"""How long a connection over the cap is shown to get no answer."""
+
+comptime KEEP_ALIVE_HELLO = "GET /hello HTTP/1.1\r\nHost: muntin\r\n\r\n"
+
+
+def _connections_wait_over_the_cap(cap: Optional[Int]) raises:
+    """With `max_connections=2`, two kept-open HTTP/1.1 connections are
+    answered, a third gets no answer while they stay open (it waits in the
+    listen queue), the held ones are still answered meanwhile, and once one
+    closes the third is answered. With no cap the third is answered at
+    once: the control."""
+    var app = borrowed_app()
+    var child = _fork_stoppable(
+        Server.bind(
+            "127.0.0.1",
+            0,
+            idle_timeout_ms=PATIENT_IDLE_MS,
+            max_connections=cap,
+        ),
+        app,
+    )
+    try:
+        var first = _send(child.port, KEEP_ALIVE_HELLO)
+        assert_equal(_content(_one_response(first)), "hello")
+        var second = _send(child.port, KEEP_ALIVE_HELLO)
+        assert_equal(_content(_one_response(second)), "hello")
+        var third = _send(child.port, KEEP_ALIVE_HELLO)
+        var early = _answer_within(third, CAP_WAIT_MS)
+        print(
+            "observed: cap",
+            String(cap.value()) if cap else "none",
+            "-> third connection early:",
+            repr(early),
+        )
+        if not cap:
+            assert_equal(_content(early), "hello")
+            return
+        assert_equal(early, "", "a connection over the cap was answered")
+        second.write_all(KEEP_ALIVE_HELLO.as_bytes())
+        assert_equal(_content(_one_response(second)), "hello")
+        _ = first^
+        var freed_at = monotonic_now_ms()
+        assert_equal(_content(_one_response(third)), "hello")
+        print(
+            "observed: third answered",
+            monotonic_now_ms() - freed_at,
+            "ms after a slot freed",
+        )
+    finally:
+        _stop(child.pid)
+
+
+def test_h1_a_connection_over_the_cap_waits_for_a_free_slot() raises:
+    _connections_wait_over_the_cap(2)
+
+
+def test_h1_with_no_cap_a_third_connection_is_answered() raises:
+    _connections_wait_over_the_cap(None)
+
+
+def test_h2c_a_connection_counts_once_whatever_its_streams() raises:
+    """With `max_connections=2`, an h2c connection and an HTTP/1.1 one fill
+    the cap: the h2c connection still serves two streams, a third (h2c)
+    connection's preface gets no SETTINGS while both stay open (each is
+    still served meanwhile), and once the h2c one closes it does."""
+    var app = borrowed_app()
+    var child = _fork_stoppable(
+        Server.bind(
+            "127.0.0.1", 0, idle_timeout_ms=PATIENT_IDLE_MS, max_connections=2
+        ),
+        app,
+    )
+    try:
+        var h2 = _H2Client(child.port)
+        h2.get(1, "/hello")
+        h2.get(3, "/users/7")
+        assert_equal(h2.read_within(2), "ended")
+        assert_equal(h2.answers[0], "200 hello")
+        assert_equal(h2.answers[1], "200 user 7")
+        var h1 = _send(child.port, KEEP_ALIVE_HELLO)
+        assert_equal(_content(_one_response(h1)), "hello")
+        var third = TcpStream.connect(SocketAddr.localhost(UInt16(child.port)))
+        var wire = List(H2_PREFACE.as_bytes())
+        wire.extend(Span(_h2_frame(FrameType.SETTINGS(), 0, 0, List[UInt8]())))
+        third.write_all(Span[UInt8, _](wire))
+        var early = _answer_within(third, CAP_WAIT_MS)
+        print("observed: h2c over the cap ->", early.byte_length(), "bytes")
+        assert_equal(early, "", "a connection over the cap was answered")
+        h2.get(5, "/hello")
+        assert_equal(h2.read_within(3), "ended")
+        assert_equal(h2.answers[2], "200 hello")
+        h1.write_all(KEEP_ALIVE_HELLO.as_bytes())
+        assert_equal(_content(_one_response(h1)), "hello")
+        _ = h2^
+        third.set_recv_timeout(TIMEOUT_MS)
+        var buf = List[UInt8](length=4096, fill=0)
+        var n = third.read(buf.unsafe_ptr(), len(buf))
+        var frame = parse_frame(Span[UInt8, _](buf)[:n])
+        assert_true(Bool(frame), "no frame after a slot freed")
+        assert_equal(
+            frame.value().header.type.value, FrameType.SETTINGS().value
+        )
+    finally:
+        _stop(child.pid)
+
+
+def test_a_stop_with_a_connection_over_the_cap_returns() raises:
+    """With `max_connections=1`, one kept-open connection and a second
+    waiting in the listen queue: SIGTERM still ends `serve` within its
+    window and bound with status 0, the held connection is closed by the
+    window's end, and the waiting one is never answered."""
+    var app = borrowed_app()
+    var child = _fork_stoppable(
+        Server.bind(
+            "127.0.0.1",
+            0,
+            shutdown_grace_ms=SHORT_GRACE_MS,
+            idle_timeout_ms=PATIENT_IDLE_MS,
+            max_connections=1,
+        ),
+        app,
+    )
+    var reaped = False
+    try:
+        var held = _send(child.port, KEEP_ALIVE_HELLO)
+        assert_equal(_content(_one_response(held)), "hello")
+        var waiting = _send(child.port, KEEP_ALIVE_HELLO)
+        assert_equal(_answer_within(waiting, CAP_WAIT_MS), "")
+        var signaled_at = monotonic_now_ms()
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        var after = monotonic_now_ms() - signaled_at
+        var held_end = _read_all(held)
+        var waiting_end = _read_all(waiting)
+        print(
+            "observed: stop at the cap -> status",
+            ended[0],
+            "after",
+            after,
+            "ms; held",
+            repr(held_end[0]),
+            held_end[1],
+            "; waiting",
+            repr(waiting_end[0]),
+            waiting_end[1],
+        )
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+        assert_true(
+            after <= _WATCH_SLACK_MS + SHORT_GRACE_MS + STOP_BOUND_MS,
+            "ended after the bound",
+        )
+        assert_equal(held_end[0], "")
+        assert_equal(waiting_end[0], "", "the waiting connection was answered")
+    finally:
+        if not reaped:
+            _stop(child.pid)
+
+
+def thread() -> String:
+    return String(current_thread_id())
+
+
+def thread_app() raises -> App:
+    var app = App()
+    app.get["/thread"](thread)
+    return app^
+
+
+def test_workers_split_the_cap() raises:
+    """`max_connections=3` over two workers: three kept-open connections are
+    answered, no worker answers more than two of them (shares 2 and 1), a
+    fourth gets no answer while they stay open, and once one closes it is
+    answered."""
+    var child = _fork_workers[thread_app](
+        Server.bind(
+            "127.0.0.1",
+            0,
+            shutdown_grace_ms=SHORT_GRACE_MS,
+            idle_timeout_ms=PATIENT_IDLE_MS,
+            max_connections=3,
+        ),
+        WORKERS,
+    )
+    var request = "GET /thread HTTP/1.1\r\nHost: muntin\r\n\r\n"
+    try:
+        var held = List[TcpStream]()
+        var threads = List[String]()
+        for _ in range(3):
+            held.append(_send(child.port, request))
+            threads.append(_content(_one_response(held[len(held) - 1])))
+        print("observed: cap 3 over 2 workers ->", ", ".join(threads))
+        for t in threads:
+            assert_true(threads.count(t) <= 2, "a worker passed its share")
+        var fourth = _send(child.port, request)
+        assert_equal(
+            _answer_within(fourth, CAP_WAIT_MS),
+            "",
+            "a connection over the cap was answered",
+        )
+        _ = held.pop(0)
+        assert_true(_content(_one_response(fourth)) != "")
+    finally:
+        _stop(child.pid)
+
+
+def test_serve_workers_raises_for_a_cap_below_the_workers() raises:
+    """A `Server` bound with `max_connections` below `workers` raises before
+    anything is served or any signal is touched; `workers` out of range is
+    checked first, and a cap equal to `workers` is not refused."""
+    var server = Server.bind("127.0.0.1", 0, max_connections=2)
+    var got = String("served")
+    try:
+        server.serve[borrowed_app](workers=3)
+    except e:
+        got = String(e)
+    assert_equal(got, "serve: max_connections (2) is below workers (3)")
+    assert_false(_serving_held(), "the serving claim was taken")
+    got = "served"
+    try:
+        server.serve[borrowed_app](workers=0)
+    except e:
+        got = String(e)
+    assert_equal(got, "workers out of range: 0")
+    var child = _fork_workers[borrowed_app](
+        Server.bind(
+            "127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS, max_connections=2
+        ),
+        2,
+    )
+    var reaped = False
+    try:
+        var raw = _exchange(child.port, _request("GET", "/hello"))
+        assert_equal(_content(raw), "hello")
+        assert_equal(kill(child.pid, SIGTERM), 0)
+        var ended = _reap_within(child.pid, SHORT_GRACE_MS + STOP_BOUND_MS)
+        reaped = ended[0] >= 0
+        assert_equal(_exit_code(ended[0]), 0, "serve did not return")
+    finally:
+        if not reaped:
+            _stop(child.pid)
+
+
+def test_docs_connection_cap_example() raises:
+    """The `docs/DX.md` section 1 connection cap example's `bind`, on port
+    0: the cap reaches Flare's field."""
+    var server = Server.bind("0.0.0.0", 0, max_connections=10_000)
+    assert_equal(server._server.config.max_connections, 10_000)
 
 
 def main() raises:

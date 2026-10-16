@@ -76,10 +76,12 @@ listener. `server.port()` is the bound port. `server.serve(app)` borrows
 does; a raise propagates and a return returns, with one exception: a raise
 after a stop signal (below) returns. It returns after a graceful stop or
 when the reactor stopped on a failed poll. There is no stop call or backend configuration
-other than the body limit, the grace window, the idle timeout and TLS below.
+other than the body limit, the grace window, the idle timeout, the connection
+cap and TLS below.
 `_BorrowedHandler` is not `Copyable`, which keeps Flare's multi-worker
 `serve` out of reach: workers (below) never share an `App`. `Server`'s one initializer takes keyword-only `_host`,
-`_port`, `_max_body_bytes`, `_shutdown_grace_ms`, `_idle_timeout_ms` and `_tls`, so
+`_port`, `_max_body_bytes`, `_shutdown_grace_ms`, `_idle_timeout_ms`,
+`_max_connections` and `_tls`, so
 `Server.bind` is the one public spelling.
 `MuntinHandler` stays for the adapter's own tests and probes.
 
@@ -111,6 +113,19 @@ both read: how long a connection stays open while nothing arrives on it.
 `_server_config` checks it after the grace window and before the host is
 parsed: 1 to 86,400,000 (`idle_timeout_ms out of range: <value>`
 otherwise), since Flare reads 0 and negative values as no idle timer.
+
+Connection cap (M3-072, decided in docs/history/architecture-decisions.md
+"Server connection cap decision (M3-072)"): `Server.bind`'s keyword-only
+`max_connections` (none when not given) caps the connections the `Server`
+holds open at once. `_server_config` checks it after the idle timeout and
+before the host is parsed (1 or more; `max_connections out of range:
+<value>` otherwise) and writes it into Flare's `max_connections`, which each
+reactor checks before it accepts: at the cap it leaves new connections in
+the listen queue, unanswered, until one of its connections closes, and
+while one waits its loop spins on the still-readable listener (as it does
+at the descriptor limit with no cap). `serve(app)` runs one reactor with the
+whole cap; `serve[make]` gives worker `i` `_worker_share`, so the workers'
+fixed shares add up to the cap.
 
 Workers (M3-049, decided in docs/history/architecture-decisions.md
 "Multi-worker serving decision (M3-049)"): `server.serve[make](workers=n)`
@@ -1168,6 +1183,7 @@ def _server_config(
     max_body_bytes: Int,
     shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
     idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
+    max_connections: Optional[Int] = None,
 ) raises -> ServerConfig:
     """Flare's default `ServerConfig` with `max_body_bytes` as the request body
     limit of both protocols: `max_body_size` (HTTP/1.1) and
@@ -1178,7 +1194,11 @@ def _server_config(
     protocols read. Raises `max_body_bytes out of range: <value>` outside 0
     to 2^59 - 1, then `shutdown_grace_ms out of range: <value>` outside 0 to
     86,400,000, then `idle_timeout_ms out of range: <value>` outside 1 to
-    86,400,000 (Flare reads 0, and a negative value, as no idle timer)."""
+    86,400,000 (Flare reads 0, and a negative value, as no idle timer),
+    then `max_connections out of range: <value>` below 1. `max_connections`
+    goes into Flare's `max_connections`, the cap on one reactor's open
+    connections (0, none, when not given); `serve[make]` splits it over its
+    workers (M3-072)."""
     if max_body_bytes < 0 or max_body_bytes > _LARGEST_MAX_BODY_BYTES:
         raise Error("max_body_bytes out of range: " + String(max_body_bytes))
     if shutdown_grace_ms < 0 or shutdown_grace_ms > _LARGEST_SHUTDOWN_GRACE_MS:
@@ -1187,11 +1207,24 @@ def _server_config(
         )
     if idle_timeout_ms < 1 or idle_timeout_ms > _LARGEST_IDLE_TIMEOUT_MS:
         raise Error("idle_timeout_ms out of range: " + String(idle_timeout_ms))
+    if max_connections and max_connections.value() < 1:
+        raise Error(
+            "max_connections out of range: " + String(max_connections.value())
+        )
     var config = ServerConfig(max_body_size=max_body_bytes)
     config.h2.max_body_size = max_body_bytes
     config.shutdown_timeout_ms = shutdown_grace_ms
     config.idle_timeout_ms = idle_timeout_ms
+    if max_connections:
+        config.max_connections = max_connections.value()
     return config^
+
+
+def _worker_share(cap: Int, workers: Int, i: Int) -> Int:
+    """Worker `i`'s share of a `Server`'s `max_connections` over `workers`
+    (M3-072): `cap // workers`, plus one for the first `cap % workers`, so
+    the shares add up to `cap`."""
+    return cap // workers + (1 if i < cap % workers else 0)
 
 
 def _close_workers_fds(table: Int, count: Int):
@@ -1509,12 +1542,16 @@ struct Server(Movable):
         _max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
         _shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
         _idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
+        _max_connections: Optional[Int] = None,
         _tls: Optional[Tls] = None,
     ) raises:
         if _port < 0 or _port > 65535:
             raise Error("port out of range: " + String(_port))
         var config = _server_config(
-            _max_body_bytes, _shutdown_grace_ms, _idle_timeout_ms
+            _max_body_bytes,
+            _shutdown_grace_ms,
+            _idle_timeout_ms,
+            _max_connections,
         )
         if not _tls:
             self._server = HttpServer.bind(
@@ -1546,6 +1583,7 @@ struct Server(Movable):
         max_body_bytes: Int = _DEFAULT_MAX_BODY_BYTES,
         shutdown_grace_ms: Int = _DEFAULT_SHUTDOWN_GRACE_MS,
         idle_timeout_ms: Int = _DEFAULT_IDLE_TIMEOUT_MS,
+        max_connections: Optional[Int] = None,
         tls: Optional[Tls] = None,
     ) raises -> Server:
         """Binds and listens on `host` (an IPv4 or IPv6 literal) and `port`
@@ -1561,11 +1599,16 @@ struct Server(Movable):
         or SIGINT (M3-045; docs/DX.md section 1). `idle_timeout_ms` (1 to
         86,400,000; 500 when not given) is how long Flare keeps a
         connection open, over HTTP/1.1 and h2c, while nothing arrives on it
-        (M3-047; docs/DX.md section 1). With `tls`, it serves HTTPS
+        (M3-047; docs/DX.md section 1). `max_connections` (1 or more; no
+        cap when not given) is how many connections the `Server` holds open
+        at once, whatever the protocol: past it a new connection waits,
+        unanswered, in the system's listen queue until one closes (M3-072;
+        docs/DX.md section 1). With `tls`, it serves HTTPS
         instead, HTTP/1.1 and HTTP/2 chosen in the TLS handshake (ALPN), with
-        the same three settings (M3-051; docs/DX.md section 1); the files are
+        the same settings (M3-051; docs/DX.md section 1); the files are
         read and checked here, after the host is parsed.
-        Raises for a port, limit, grace or idle timeout out of range, a TLS
+        Raises for a port, limit, grace, idle timeout or connection cap out
+        of range, a TLS
         file that cannot be read or loaded (naming it), a host that is not
         an IP literal, an address in use or any other OS error."""
         return Server(
@@ -1574,6 +1617,7 @@ struct Server(Movable):
             _max_body_bytes=max_body_bytes,
             _shutdown_grace_ms=shutdown_grace_ms,
             _idle_timeout_ms=idle_timeout_ms,
+            _max_connections=max_connections,
             _tls=tls,
         )
 
@@ -1663,7 +1707,16 @@ struct Server(Movable):
         the worker that accepted it, and each worker runs its handlers one
         at a time, as `serve(app)` does.
 
+        With `max_connections`, each worker holds at most
+        `max_connections // workers` connections, the first
+        `max_connections % workers` workers one more, so together they hold
+        at most `max_connections` (M3-072). The shares are fixed: a full
+        worker leaves a new connection in the listen queue for a worker
+        with room, but does not take another's unused share.
+
         Raises `workers out of range: <value>` outside 1 to 256, then
+        `serve: max_connections (<cap>) is below workers (<workers>)` when the
+        `Server` was bound with a cap smaller than `workers`, then
         `FLARE_BUFRING_HANDLER=1 is unsupported by Muntin with Flare v0.12.0`
         and `Server.serve is already serving in this process` as `serve(app)`
         does, all before serving. If `make` raises on a worker, or a worker's reactor raises
@@ -1685,6 +1738,15 @@ struct Server(Movable):
         `_STAGE_*` points."""
         if workers < 1 or workers > _LARGEST_WORKERS:
             raise Error("workers out of range: " + String(workers))
+        var cap = self._server.config.max_connections
+        if cap > 0 and cap < workers:
+            raise Error(
+                "serve: max_connections ("
+                + String(cap)
+                + ") is below workers ("
+                + String(workers)
+                + ")"
+            )
         if getenv("FLARE_BUFRING_HANDLER") == "1":
             raise Error(_BUFRING_UNSUPPORTED)
         var listener = listener_fd(self._server)
@@ -1696,6 +1758,8 @@ struct Server(Movable):
         var base = Int(table.unsafe_ptr())
         for i in range(workers):
             configs.append(self._server.config.copy())
+            if cap > 0:
+                configs[i].max_connections = _worker_share(cap, workers, i)
             _store(_row(base, i), _W_FD, -1)
         for i in range(workers):
             var row = _row(base, i)

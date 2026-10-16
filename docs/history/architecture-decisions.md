@@ -4684,3 +4684,30 @@ def me(user: Context[CurrentUser]) -> String:
 - Measure: the pull request's copy timing again, with middleware, through the owning `handle`: flat across body sizes.
 - Docs: `docs/DX.md` sections 7, 11 and 15; `docs/ARCHITECTURE.md` (request handling, Request/Response ownership); `docs/SPEC.md`.
 - Not in the slice: `Context`, the adapter's body copy, a raw handler's body copy.
+
+### Server connection cap decision (M3-072)
+
+Status: **decision and production** (M3-072, pull request to be linked on merge; `src/muntin` unchanged). Flare's code read for it, the measurements and the review are in the pull request.
+
+**Question and what settles it.** `Server` accepts connections until the process runs out of file descriptors, and an application cannot set Flare's cap (an outside review of pull request #120, finding 6; [M3-047](#server-idle-timeout-decision-m3-047)'s revisit condition "a cap on the number of connections"). Should `Server.bind` take a cap, counted per worker or for the whole `Server`, and what does a client over it see? Settled by Flare v0.12.0's accept path, read in code, and by real connections showing what a connection over the cap gets, whether it is served once a slot frees, what the serving process spends while one waits, how an uncapped `Server` behaves at its descriptor limit, and how a cap spreads over workers.
+
+**Choice: `max_connections`, counted for the whole `Server` (the owner's choice).** `Server.bind(..., max_connections: Optional[Int] = None)`, keyword-only: none is no cap, today's behavior; a value of 1 or more caps the connections the `Server` holds open at once over HTTP/1.1, h2c and TLS, an h2c connection counting once whatever its streams. Flare's `ServerConfig.max_connections` caps one reactor: its accept loop stops while the reactor's table is full and leaves new connections in the listen queue, unanswered (Flare's plain path has no 503), until one closes. So `serve(app)` gives its reactor the whole cap, and `serve[make](workers=n)` gives each worker `cap // n`, the first `cap % n` one more, and raises before serving when `cap < n` (a worker with 0 would have no cap). The shares are fixed: a full worker does not use another's unused share, but it leaves a waiting connection in the shared listener's queue, where a worker with room accepts it (measured). The cap counts the whole `Server` because an operator budgets descriptors and memory per process, and the worker count is chosen at `serve`, after `bind`. Known limit, stated in the contract: while a connection waits, each full worker spins a core, because Flare's level-triggered poll keeps returning the readable listener; with no cap Flare spins the same way once `accept` fails with `EMFILE`, so the cap moves the point where the server stops accepting from the descriptor limit to a number the application chooses, and does not add the spin.
+
+**Rejected.**
+- A cap per worker, Flare's meaning, as `max_connections`: with `workers=n` the process holds n times the number written.
+- A cap per worker named `max_connections_per_worker`: the operator's bound must still be multiplied, and changing the worker count changes it.
+- A finite default: changes every application's admission, and a full worker spins while connections wait.
+- An `Int` with 0 for no cap: a magic value, where `tls` already uses `Optional`.
+- Sharing one cap dynamically between workers: Flare's cap is a per-reactor field read before each `accept`, so it would need a counter shared through Flare's internals.
+- A 503 over the cap: Flare's plain path has none; adding one means accepting, answering and closing inside Flare's loop.
+
+**Revisit when:**
+- Flare stops polling the listener while a reactor is at its cap or at `EMFILE`, or answers over the cap on the plain path: the spin, or the unanswered wait, leaves the contract;
+- the listener's registration becomes effectively exclusive (`EPOLLEXCLUSIVE`, pull request #120): a full worker woken alone could leave a waiting connection queued while another has room; re-run `test_workers_split_the_cap`;
+- applications need the live connection count (Flare's reactor writes it to a stats address the adapter does not pass), a shared or per-client cap, or a cap on h2c streams;
+- the Flare pin moves: re-run the connection cap tests.
+
+**Next production slice (M3-072, in this item).**
+- `adapters/flare/muntin_flare.mojo`: `Server.bind`'s `max_connections`, checked by `_server_config` after `idle_timeout_ms` and before the host (`max_connections out of range: <value>` below 1) and written into `ServerConfig.max_connections`; `serve[make]` refuses a cap below `workers` (`serve: max_connections (<cap>) is below workers (<workers>)`, after the range check) and writes `_worker_share` into each worker's config copy.
+- Tests, `adapters/flare/test_server.mojo`: the range and its order, the configuration, the shares; with a cap of 2 a third HTTP/1.1 connection unanswered while two stay open and served, then answered when one closes, and the same without a cap answered at once; an h2c connection serving its streams counts once and a third connection's preface waits; a stop with a connection waiting returns within its bound; a cap of 3 over 2 workers (no worker over 2, a fourth waits, then is answered); a cap below the workers refused, equal accepted; the `docs/DX.md` example's `bind`. `adapters/flare/test_tls.mojo`: with a cap of 1, a connection that has not started its handshake keeps another client's handshake from completing until it closes.
+- Docs: `docs/DX.md` section 1 (Connection cap, Workers, HTTPS, Protocols), `docs/ARCHITECTURE.md` (Flare adapter, limits, revisit index), `docs/SPEC.md`.
