@@ -13,7 +13,7 @@
 # the `flare` environment, then prints one line per run, prefixed with its
 # case (`<server> workers=<n> idle_ms=<ms> `), in five sections:
 # - hold: every server, 1 and 4 workers, idle timeout 500 ms (Flare's
-#   default) and 60000 ms, every client mode but `spread`. Servers: `muntin`,
+#   default) and 60000 ms, every client mode but `spread` and `capacity-K`. Servers: `muntin`,
 #   `flare` (Flare's own workers, one SO_REUSEPORT listener each) and, with 4
 #   workers only, `flare-shared` (the same with FLARE_REUSEPORT_WORKERS=0: one
 #   listener shared by every worker, as Muntin's workers share one);
