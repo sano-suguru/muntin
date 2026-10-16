@@ -8,7 +8,7 @@ its own. Every mode prints one line per server (prefixed by NAME) and exits 1
 when the run is no measurement: a connection lost, an answer that is not a
 complete 200, a hold it could not set up.
 
-- `backlog SERVER`: holds every worker (each `/slow/4000` on a connection
+- `backlog SERVER`: holds every worker (each `/slow/6000` on a connection
   opened only once the previous handler has signalled its start; a
   connection that lands on a held worker, unanswered after 200 ms, is set
   aside), then opens 16
@@ -34,7 +34,8 @@ complete 200, a hold it could not set up.
   order, a hold-wait trial and an after-hold trial on a pool of 8
   keep-alive connections opened at the start. Hold-wait: `/slow/100` on a
   pool connection and, released by the same barrier, a new connection
-  sending `/worker` with `Connection: close`. After-hold: the same, the new
+  sending `/worker` with `Connection: close` (a pool connection Flare
+  closes at its 100th request is replaced). After-hold: the same, the new
   connection opened only once the handler has signalled its start (M3-049's
   contract: answered by another idle worker). A trial's new connection
   waited if it was answered after the handler signalled its end. Prints,
@@ -259,12 +260,13 @@ def backlog(arg):
         except (socket.timeout, TimeoutError):
             aside.append(conn)  # on a held worker
             continue
-        conn.sock.settimeout(5.0)
-        conn.sock.sendall(request("/slow/4000"))
+        conn.sock.settimeout(8.0)
+        conn.sock.sendall(request("/slow/6000"))
         if not sig.wait(len(held) + 1, 2.0):
             sys.exit(f"backlog {name}: handler {len(held) + 1} did not signal its start")
         if worker in held:
-            sys.exit(f"backlog {name}: worker {worker!r} answered while held")
+            sys.exit(f"backlog {name}: worker {worker!r} answered /worker while held "
+                     f"(its handler signals: {[b for b, _ in sig.seen]})")
         held[worker] = conn
         t = threading.Thread(target=finish_slow, args=(conn, slow))
         t.start()
@@ -275,7 +277,7 @@ def backlog(arg):
         sys.exit(f"backlog {name}: a handler ended before every worker was held")
     waiting = []
     for _ in range(16):
-        conn = Conn(port, timeout=5.0)
+        conn = Conn(port, timeout=8.0)
         conn.sock.sendall(request("/worker"))
         waiting.append(conn)
     if any(b == "e" for b, _ in sig.seen):
@@ -488,12 +490,15 @@ def trials(n, args):
         barrier = threading.Barrier(2)
         slow = []
 
+        closes = []
+
         def send_slow():
             try:
                 barrier.wait()
                 conn.sock.sendall(request("/slow/100"))
-                status, _, _ = read_response(conn.sock)
+                status, _, closed = read_response(conn.sock)
                 slow.append(status)
+                closes.append(closed)
             except Exception as e:
                 slow.append(outcome(e))
 
@@ -511,6 +516,11 @@ def trials(n, args):
         t.join()
         if slow != [200]:
             sys.exit(f"trials {s['name']}: the slow request answered {slow}")
+        if closes == [True]:  # Flare's 100th request on that connection
+            conn.sock.close()
+            fresh = Conn(s["port"])
+            fresh.ask_worker()
+            s["pool"][s["pool"].index(conn)] = fresh
         if not s["sig"].wait(base + 2, 2.0):
             sys.exit(f"trials {s['name']}: the slow handler did not signal its end")
         ended = s["sig"].seen[base + 1][1]
@@ -554,11 +564,17 @@ def stop(n, args):
             p.kill()
             sys.exit(f"stop {v['name']}: no port: {line}")
         port = int(line[1])
-        s = socket.create_connection(("127.0.0.1", port), timeout=3)
-        s.sendall(request("/health", close=True))
-        if read_response(s)[0] != 200:
-            sys.exit(f"stop {v['name']}: the check before the stop failed")
-        s.close()
+        try:
+            s = socket.create_connection(("127.0.0.1", port), timeout=3)
+            s.sendall(request("/health", close=True))
+            if read_response(s)[0] != 200:
+                raise ValueError("not 200")
+            s.close()
+        except Exception as e:
+            p.kill()
+            rest = p.communicate()[0]
+            bad.append(f"{v['name']}: the check before the stop: {outcome(e)} (port {port}): {rest.strip()[:300]}")
+            return
         delay = random.uniform(0, 0.06)
         p.send_signal(signals.SIGTERM)
         time.sleep(delay)
