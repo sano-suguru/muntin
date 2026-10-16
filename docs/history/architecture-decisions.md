@@ -4687,7 +4687,7 @@ def me(user: Context[CurrentUser]) -> String:
 
 ### Server connection cap decision (M3-072)
 
-Status: **decision and production** (M3-072, pull request to be linked on merge; `src/muntin` unchanged). Flare's code read for it, the measurements and the review are in the pull request.
+Status: **decision and production** (M3-072, [pull request #131](https://github.com/sano-suguru/muntin/pull/131); `src/muntin` unchanged). Flare's code read for it, the measurements and the review are in the pull request.
 
 **Question and what settles it.** `Server` accepts connections until the process runs out of file descriptors, and an application cannot set Flare's cap (an outside review of pull request #120, finding 6; [M3-047](#server-idle-timeout-decision-m3-047)'s revisit condition "a cap on the number of connections"). Should `Server.bind` take a cap, counted per worker or for the whole `Server`, and what does a client over it see? Settled by Flare v0.12.0's accept path, read in code, and by real connections showing what a connection over the cap gets, whether it is served once a slot frees, what the serving process spends while one waits, how an uncapped `Server` behaves at its descriptor limit, and how a cap spreads over workers.
 
