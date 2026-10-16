@@ -239,11 +239,13 @@ def test_every_request_body_reaches_app_handle() raises:
         assert_equal(_wire(head), "X-Seen: 1\r\nContent-Length: 5\r\n")
 
 
-def test_http11_request_without_host_answers_400_before_app_handle() raises:
-    # M3-073: RFC 9112 section 3.2, and a later HTTP/1 minor version as 1.1
-    # (RFC 9110 section 6.2). Neither the middleware nor a handler runs: no `X-Seen`.
+def test_request_without_host_answers_400_before_app_handle() raises:
+    # M3-073: RFC 9112 section 3.2, a later HTTP/1 minor version as 1.1 (RFC
+    # 9110 section 6.2), and HTTP/2 with neither `:authority`, which Flare
+    # writes as `Host`, nor `host` (RFC 9110 section 7.2). Neither the
+    # middleware nor a handler runs: no `X-Seen`.
     var handler = MuntinHandler(body_app())
-    for version in ["HTTP/1.1", "HTTP/1.2", "HTTP/1.9"]:
+    for version in ["HTTP/1.1", "HTTP/1.2", "HTTP/1.9", "HTTP/2"]:
         var out = handler.serve(FlareRequest("GET", "/hello", version=version))
         assert_equal(out.status, 400, version)
         assert_equal(out.text(), "Bad Request", version)
@@ -260,18 +262,20 @@ def test_http11_request_without_host_answers_400_before_app_handle() raises:
         (String("Host"), String("test")),
         (String("hOsT"), String("test")),
         (String("Host"), String("")),
+        (String("host"), String("test")),
     ]
-    for host in hosts:
-        var req = FlareRequest("GET", "/hello")
-        req.headers.append(host[0], host[1])
-        var out = handler.serve(req)
-        assert_equal(out.text(), "hello", host[0])
-        assert_equal(_wire(out), "X-Seen: 1\r\n", host[0])
-    # HTTP/1.0 and HTTP/2 need none: `App.handle`'s answer.
-    for version in ["HTTP/1.0", "HTTP/2"]:
-        var out = handler.serve(FlareRequest("GET", "/hello", version=version))
-        assert_equal(out.text(), "hello", version)
-        assert_equal(_wire(out), "X-Seen: 1\r\n", version)
+    for version in ["HTTP/1.1", "HTTP/2"]:
+        for host in hosts:
+            var req = FlareRequest("GET", "/hello", version=version)
+            req.headers.append(host[0], host[1])
+            var out = handler.serve(req)
+            var at = String(version, " ", host[0], ": ", host[1])
+            assert_equal(out.text(), "hello", at)
+            assert_equal(_wire(out), "X-Seen: 1\r\n", at)
+    # HTTP/1.0 needs none: `App.handle`'s answer.
+    var old = handler.serve(FlareRequest("GET", "/hello", version="HTTP/1.0"))
+    assert_equal(old.text(), "hello")
+    assert_equal(_wire(old), "X-Seen: 1\r\n")
 
 
 def test_typed_text_body_that_is_not_utf8_is_400_in_app_handle() raises:
