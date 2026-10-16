@@ -386,7 +386,7 @@ def capacity(port, held, slow_ms, signal_path):
     this client read them; near 0 is a tie> slow=<each slow request's
     status>`; exits nonzero if the handlers do not signal, if one ended
     before all were held (the next connection went to a held worker), or if
-    a request is not answered 200."""
+    a request is not answered 200, a client error included."""
     fd = os.open(signal_path, os.O_RDWR)
     times = []  # (byte, when it arrived), appended by the reader as it reads
     arrived = threading.Condition()
@@ -401,14 +401,19 @@ def capacity(port, held, slow_ms, signal_path):
 
     threading.Thread(target=read_signal, daemon=True).start()
     starts = lambda: [b for b, _ in times].count("s")
-    slow = []
+    # One slot per request, so a client thread that raises leaves a mark
+    # instead of a missing entry that the final check would not see.
+    slow = [None] * held
+
+    def call(i, note):
+        try:
+            slow[i] = h1_new_call(port, f"/slow/{slow_ms}", slow_ms / 1000 + ANSWER_BOUND_S, note)
+        except Exception as e:
+            slow[i] = f"{type(e).__name__}: {e}"
+
     threads = []
     for i in range(held):
-        note = {}
-        t = threading.Thread(
-            target=lambda n=note: slow.append(h1_new_call(port, f"/slow/{slow_ms}", slow_ms / 1000 + ANSWER_BOUND_S, n)),
-            daemon=True,
-        )
+        t = threading.Thread(target=call, args=(i, {}), daemon=True)
         t.start()
         threads.append(t)
         with arrived:
