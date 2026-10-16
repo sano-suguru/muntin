@@ -18,7 +18,7 @@ Implementations:
   that lends a named request still does.
 - `muntin+adapter`: `MuntinHandler.serve` on the Flare `Request`: the
   adapter's conversions around `App.handle` (request target, headers and a
-  copy of the body in; status, headers and a copy of the body out), what a
+  copy of the body in; status and headers out, the body moved), what a
   request served by `Server` pays besides the network. Its field limit
   (M3-066) is raised to `MAX_FIELDS`, so the 128-field case is converted, as
   by a `Server` bound with `max_header_fields` that high, not answered 431.

@@ -58,8 +58,9 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   conversion's fields × distinct names comparisons stay bounded. Its reason
   phrase is set here: Flare v0.12.0's table has none for 431.
 - version and peer: dropped after the `Host` rule reads the version.
-- response: status, body bytes (whatever they are; M3-040) and header
-  fields copied; no `Content-Type` is added or changed; reason left unset,
+- response: status and header fields copied, body bytes (whatever they
+  are; M3-040) moved into Flare's response, not copied (`to_flare_response`
+  takes the response); no `Content-Type` is added or changed; reason left unset,
   so Flare's default applies. Header fields go out in order, except those
   the backend owns or that are connection-specific (`Content-Length`,
   `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`,
@@ -346,8 +347,12 @@ def _internal_error() -> FlareResponse:
     )
 
 
-def to_flare_response(response: Response) -> FlareResponse:
-    var out = FlareResponse(status=response.status, body=response.body.copy())
+def to_flare_response(var response: Response) -> FlareResponse:
+    """`response` as Flare's, its body buffer moved, not copied: a caller
+    hands the response over (`^`) or pays the copy itself (`.copy()`)."""
+    var body = response.body^
+    response.body = List[UInt8]()  # `response`'s fields are read below.
+    var out = FlareResponse(status=response.status, body=body^)
     var nominated = List[String]()
     for value in response.headers.get_all("connection"):
         for token in value.split(","):
