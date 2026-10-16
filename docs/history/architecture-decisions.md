@@ -4687,7 +4687,7 @@ def me(user: Context[CurrentUser]) -> String:
 
 ### HTTP/1.1 Host decision (M3-073)
 
-Status: **decision and production** (M3-073, pull request #PR; `src/muntin` unchanged). The Flare reading, the RFC text and the tests' observations are in the pull request. It changes what the Flare adapter answers for one class of requests, so it reopens M2 under [M2-016](#m2-closure-m2-016), as [M3-039](#request-target-and-method-bytes-decision-m3-039) did.
+Status: **decision and production** (M3-073, pull request #130; `src/muntin` unchanged). The Flare reading, the RFC text and the tests' observations are in the pull request. It changes what the Flare adapter answers for one class of requests, so it reopens M2 under [M2-016](#m2-closure-m2-016), as [M3-039](#request-target-and-method-bytes-decision-m3-039) did.
 
 **Question and what settles it.** RFC 9112 section 3.2: "A server MUST respond with a 400 (Bad Request) status code to any HTTP/1.1 request message that lacks a Host header field". Flare v0.12.0 refuses a second `Host` but admits an HTTP/1.1 request with none (`compat/flare/headers/flare_header_probe.mojo`, "2. HTTP/1.1 request without Host accepted"), and the adapter did not look, so `App.handle` answered it; no document listed the gap. Should the adapter answer it 400, and what of HTTP/1.0 and h2c, or should the gap be recorded with a revisit condition? Settled by the RFCs' requirements per protocol, what Flare v0.12.0 hands the adapter for each (read in its source: the HTTP/1 parser's version, `take_request`'s `:authority`, the `Upgrade: h2c` path), and loopback requests through the changed adapter.
 
