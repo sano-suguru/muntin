@@ -3,17 +3,21 @@
 # unnoticed (M3-070; the rule is docs/ARCHITECTURE.md, "Flare policy").
 # Fails if a Flare import in the adapter outside flare_internals.mojo names a
 # `_`-prefixed module or name, or if flare_internals.mojo imports from Flare,
-# or reads a `_`-prefixed member or keyword, beyond the lists below. A change
-# that adds one updates the list here, so the reliance shows in the diff.
+# or reads a `_`-prefixed member or keyword, beyond the lists below, or if
+# the two modules pass 2,500 lines together. A change that adds a name
+# updates the list here, so the reliance shows in the diff.
 # A ratchet on names, not a check of behavior: a non-public Flare member read
 # outside flare_internals.mojo (`x._field`) looks like Muntin's own
 # `self._field`, and a behavior the code relies on has no name to list.
 # The adapter's tests may import Flare internals; flare_internals.mojo's
 # docstring lists the ones they use.
 set -euo pipefail
+if [[ $# -gt 0 ]]; then
+    dir="$(cd "$1" && pwd)"
+fi
 cd "$(dirname "$0")/.."
 
-dir=${1:-adapters/flare}
+dir=${dir:-adapters/flare}
 internals=$dir/flare_internals.mojo
 status=0
 
@@ -53,7 +57,8 @@ code() {
 }
 
 # Each name imported from a `flare` module (not `flare_internals`), one
-# `module name` per line, aliases dropped; parenthesized lists included.
+# `module name` per line, aliases dropped; parenthesized lists included. A
+# plain `import flare.x` is `flare.x *`.
 flare_imports() {
     code "$1" | awk '
         function emit(module, names,    n, parts, i, name) {
@@ -68,6 +73,18 @@ flare_imports() {
         open {
             buffer = buffer "," $0
             if ($0 ~ /\)/) { emit(module, buffer); open = 0 }
+            next
+        }
+        /^[[:space:]]*import[[:space:]]+flare\./ {
+            rest = $0
+            sub(/^[[:space:]]*import[[:space:]]+/, "", rest)
+            n = split(rest, parts, ",")
+            for (i = 1; i <= n; i++) {
+                path = parts[i]
+                sub(/ as .*/, "", path)
+                gsub(/[[:space:]]/, "", path)
+                if (path != "") print path " *"
+            }
             next
         }
         /^[[:space:]]*from[[:space:]]+flare(\.|[[:space:]])/ {
@@ -101,6 +118,14 @@ extra_members="$(code "$internals" | grep -vE '^[[:space:]]*(from|import)[[:spac
 if [[ -n "$extra_members" ]]; then
     printf '%s\n' "$extra_members"
     echo "error: $internals reads a non-public Flare member beyond the list in $0; a new reliance follows docs/ARCHITECTURE.md, \"Flare policy\", and adds itself to the list" >&2
+    status=1
+fi
+
+# The adapter's size (M3-070): past this, a decision weighs the growth first.
+max_lines=2500
+lines=$(cat "$dir/muntin_flare.mojo" "$internals" | wc -l | tr -d ' ')
+if ((lines > max_lines)); then
+    echo "error: muntin_flare.mojo and flare_internals.mojo have $lines lines together, over $max_lines; growth past it waits for a decision (docs/ARCHITECTURE.md, \"Flare policy\")" >&2
     status=1
 fi
 
