@@ -341,14 +341,45 @@ def h1_new_call(port, path, timeout, note):
         sock.close()
 
 
+def ask_worker(conn):
+    """Asks `/worker` on `conn` and returns the worker number; raises unless
+    the answer is 200 with a number and keeps the connection open (no
+    `Connection: close`)."""
+    conn.sock.sendall(h1_request("/worker", False))
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = conn.sock.recv(4096)
+        if not chunk:
+            raise ConnectionError("closed")
+        data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    lines = head.split(b"\r\n")
+    length = None
+    for line in lines[1:]:
+        name, _, value = line.partition(b":")
+        name, value = name.strip().lower(), value.strip().lower()
+        if name == b"content-length":
+            length = int(value)
+        elif name == b"connection" and b"close" in value.split(b","):
+            raise ValueError("/worker answered with Connection: close")
+    if length is None:
+        raise ValueError("/worker answered without Content-Length")
+    while len(body) < length:
+        chunk = conn.sock.recv(4096)
+        if not chunk:
+            raise ConnectionError("closed")
+        body += chunk
+    if not lines[0].startswith(b"HTTP/1.1 200 ") or len(body) != length or not body.isdigit():
+        raise ValueError(f"/worker answered {lines[0]!r} {body!r}")
+    return body
+
+
 def spread_conn(port):
-    """One kept-open HTTP/1.1 connection whose `/worker` answered 200 with a
-    worker number; raises otherwise."""
+    """One HTTP/1.1 connection whose `/worker` answered as `ask_worker`
+    requires; raises otherwise."""
     conn = H1(port, ask_worker=False)
     try:
-        status, conn.worker = conn.call("/worker")
-        if status != 200 or not conn.worker.isdigit():
-            raise ValueError(f"/worker answered {status} {conn.worker!r}")
+        conn.worker = ask_worker(conn)
     except BaseException:
         conn.sock.close()
         raise
@@ -357,11 +388,14 @@ def spread_conn(port):
 
 def spread(port):
     """Opens `SPREAD` keep-alive HTTP/1.1 connections one after another, each
-    asking `/worker` before the next is opened and all kept open, then
-    `SPREAD` more from `SPREAD` threads released together by a barrier; prints,
-    for each, how many of each landed on each worker, busiest first, and how
-    many of the `SPREAD` attempts failed. Any failure makes the counts no
-    measurement: it prints the failures and returns 1."""
+    asking `/worker` before the next is opened, then `SPREAD` more from
+    `SPREAD` threads released together by a barrier. Once all are open it
+    asks `/worker` again on every one, so a connection counts only if it was
+    still open, is reused, and names the same worker: the counts are of
+    connections held open at once. Prints, for each phase, how many landed on
+    each worker, busiest first, and how many of the `SPREAD` counted. Any
+    failure makes the counts no measurement: it prints the failures and
+    returns 1."""
     kept, failed = [], []
     for _ in range(SPREAD):
         try:
@@ -389,14 +423,28 @@ def spread(port):
     for t in threads:
         t.join()
 
+    def still_open(phase, conns):
+        held = []
+        for conn in conns:
+            try:
+                again = ask_worker(conn)
+                if again != conn.worker:
+                    raise ValueError(f"worker {conn.worker!r} became {again!r}")
+                held.append(conn)
+            except Exception as e:
+                failed.append(f"{phase}, asked again: {e!r}")
+        return held
+
+    held_kept, held_together = still_open("sequential", kept), still_open("concurrent", together)
+
     def order(conns):
         counts = {}
         for conn in conns:
             counts[conn.worker] = counts.get(conn.worker, 0) + 1
         return "/".join(str(n) for n in sorted(counts.values(), reverse=True))
 
-    print(f"spread sequential={order(kept)} ({len(kept)} of {SPREAD} answered) "
-          f"concurrent={order(together)} ({len(together)} of {SPREAD} answered)", flush=True)
+    print(f"spread sequential={order(held_kept)} ({len(held_kept)} of {SPREAD} held open) "
+          f"concurrent={order(held_together)} ({len(held_together)} of {SPREAD} held open)", flush=True)
     for conn in kept + together:
         conn.sock.close()
     for f in failed:

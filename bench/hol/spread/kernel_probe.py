@@ -7,9 +7,12 @@ v0.12.0 never reaches (its EPOLLRDHUP makes the kernel refuse the flag, and
 it falls back to a plain registration). rotate: the same, but a
 worker re-registers the listener (DEL then ADD) after each accept batch.
 reuseport: one SO_REUSEPORT listener per worker. Client opens K connections
-one after another, each kept open after its accept is seen. A held worker
-stands for one running a handler: the client opens nothing until that worker
-has said it is out of its poll and will not poll again while held.
+one after another, each kept open after its accept is seen; counts are per
+worker, busiest first, every worker listed. A worker that fails to register
+or fails later, or a connection no worker accepted once the hold ends, ends
+the probe with an error (exit 1). A held worker stands for one running a
+handler: the client opens nothing until that worker has said it is out of
+its poll and will not poll again while held.
 """
 import errno, os, select, socket, sys, threading, time
 from collections import Counter
@@ -17,32 +20,38 @@ from collections import Counter
 EPOLLEXCLUSIVE = getattr(select, "EPOLLEXCLUSIVE", 1 << 28)
 
 
-def worker(idx, lfd_sock, mode, owner, stop, held, parked):
-    ep = select.epoll()
-    flags = select.EPOLLIN | EPOLLEXCLUSIVE
-    ep.register(lfd_sock.fileno(), flags)
-    conns = []
-    while not stop.is_set():
-        if held.get(idx):
-            parked.set()
-            time.sleep(0.005)
-            continue
-        for fd, ev in ep.poll(0.05):
-            n = 0
-            while True:
-                try:
-                    c, _ = lfd_sock.accept()
-                except BlockingIOError:
-                    break
-                conns.append(c)
-                owner[c.getpeername()[1]] = idx
-                n += 1
-            if mode == "rotate" and n:
-                ep.unregister(lfd_sock.fileno())
-                ep.register(lfd_sock.fileno(), flags)
-    ep.close()
-    for c in conns:
-        c.close()
+def worker(idx, lfd_sock, mode, owner, stop, held, parked, ready, errors):
+    """Runs one worker; any exception, its registration's included, goes to
+    `errors` for `run` to fail on."""
+    try:
+        ep = select.epoll()
+        flags = select.EPOLLIN | EPOLLEXCLUSIVE
+        ep.register(lfd_sock.fileno(), flags)
+        ready.release()
+        conns = []
+        while not stop.is_set():
+            if held.get(idx):
+                parked.set()
+                time.sleep(0.005)
+                continue
+            for fd, ev in ep.poll(0.05):
+                n = 0
+                while True:
+                    try:
+                        c, _ = lfd_sock.accept()
+                    except BlockingIOError:
+                        break
+                    conns.append(c)
+                    owner[c.getpeername()[1]] = idx
+                    n += 1
+                if mode == "rotate" and n:
+                    ep.unregister(lfd_sock.fileno())
+                    ep.register(lfd_sock.fileno(), flags)
+        ep.close()
+        for c in conns:
+            c.close()
+    except BaseException as e:
+        errors.append(f"worker {idx}: {e!r}")
 
 
 def run(mode, workers, k, held_worker=None):
@@ -50,6 +59,7 @@ def run(mode, workers, k, held_worker=None):
     owner = {}
     held = {}
     parked = threading.Event()
+    ready, errors = threading.Semaphore(0), []
     listeners = []
     if mode == "reuseport":
         port = 0
@@ -69,12 +79,15 @@ def run(mode, workers, k, held_worker=None):
         port = s.getsockname()[1]
         listeners = [s] * workers
     threads = [
-        threading.Thread(target=worker, args=(i, listeners[i], mode, owner, stop, held, parked), daemon=True)
+        threading.Thread(target=worker, args=(i, listeners[i], mode, owner, stop, held, parked, ready, errors), daemon=True)
         for i in range(workers)
     ]
     for t in threads:
         t.start()
-    time.sleep(0.1)
+    for _ in range(workers):
+        if not ready.acquire(timeout=2) or errors:
+            raise RuntimeError(f"{mode}: a worker did not start: {errors}")
+    time.sleep(0.05)
     if held_worker is not None:
         held[held_worker] = True
         if not parked.wait(1):
@@ -91,16 +104,23 @@ def run(mode, workers, k, held_worker=None):
     if held_worker is not None and any(owner.get(lp) == held_worker for _, lp in clients):
         raise RuntimeError(f"held worker {held_worker} accepted a connection")
     held.clear()
-    time.sleep(0.1)
-    counts = Counter(owner.get(lp, -1) for _, lp in clients)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not all(lp in owner for _, lp in clients):
+        time.sleep(0.005)
     stop.set()
     for t in threads:
-        t.join()
+        t.join(2)
     for c, _ in clients:
         c.close()
     for s in set(listeners):
         s.close()
-    return sorted(counts.values(), reverse=True), waiting
+    if errors or any(t.is_alive() for t in threads):
+        raise RuntimeError(f"{mode}: a worker failed: {errors or 'did not stop'}")
+    missing = sum(1 for _, lp in clients if lp not in owner)
+    if missing:
+        raise RuntimeError(f"{mode}: {missing} of {k} connections never accepted")
+    counts = Counter(owner[lp] for _, lp in clients)
+    return sorted((counts.get(i, 0) for i in range(workers)), reverse=True), waiting
 
 
 if __name__ == "__main__":
