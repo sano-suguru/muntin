@@ -3713,6 +3713,7 @@ def _connections_wait_over_the_cap(cap: Optional[Int]) raises:
             monotonic_now_ms() - freed_at,
             "ms after a slot freed",
         )
+        _ = second^  # open until here: only `first`'s close freed a slot
     finally:
         _stop(child.pid)
 
@@ -3767,6 +3768,7 @@ def test_h2c_a_connection_counts_once_whatever_its_streams() raises:
         assert_equal(
             frame.value().header.type.value, FrameType.SETTINGS().value
         )
+        _ = h1^  # open until here: only the h2c close freed a slot
     finally:
         _stop(child.pid)
 
@@ -3838,7 +3840,8 @@ def test_workers_split_the_cap() raises:
     """`max_connections=3` over two workers: three kept-open connections are
     answered, no worker answers more than two of them (shares 2 and 1), a
     fourth gets no answer while they stay open, and once one closes it is
-    answered."""
+    answered. When the first two land on one worker, which is usual, the
+    third is the full worker's hand-off to the other (printed)."""
     var child = _fork_workers[thread_app](
         Server.bind(
             "127.0.0.1",
@@ -3865,8 +3868,14 @@ def test_workers_split_the_cap() raises:
             "",
             "a connection over the cap was answered",
         )
+        print(
+            "observed: the first two on one worker, so the third was handed",
+            "to the other:",
+            threads[0] == threads[1],
+        )
         _ = held.pop(0)
         assert_true(_content(_one_response(fourth)) != "")
+        _ = held^  # open until here: only the first close freed a slot
     finally:
         _stop(child.pid)
 
