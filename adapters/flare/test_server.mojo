@@ -56,6 +56,15 @@ sees it keeps its window; a process a handler starts does not keep the port;
 a listener copy that cannot be parked stays open and the copies after it
 are parked (TLS on workers is in `adapters/flare/test_tls.mojo`).
 
+Request header field limit (M3-067, decided in
+docs/history/architecture-decisions.md "Request header conversion decision
+(M3-066)"): `Server.bind`'s keyword-only `max_header_fields` is checked (1 to
+65,535) after the idle timeout and before anything is bound, and `serve(app)`
+and every worker answer a request with more fields 431 (the round trips over
+HTTP/1.1 and h2c with the default are in
+`adapters/flare/test_localhost_roundtrip.mojo`, over TLS in
+`adapters/flare/test_tls.mojo`).
+
 Idle timeout (M3-047, decided in docs/history/architecture-decisions.md
 "Server idle timeout decision (M3-047)"): the head-of-line blocking cases run
 again on a `Server` bound with a long `idle_timeout_ms`, where the waiting
@@ -3772,6 +3781,177 @@ def test_docs_workers_example() raises:
     finally:
         if not reaped:
             _stop(child.pid)
+
+
+# ── Request header field limit (M3-067) ────────────────────────────────────
+
+
+comptime DEFAULT_FIELDS = 100
+comptime LARGEST_FIELDS = 65_535
+
+
+def _bind_fields_error(host: String, port: Int, fields: Int) -> String:
+    """The text `Server.bind(host, port, max_header_fields=fields)` raises,
+    or what it bound."""
+    try:
+        var server = Server.bind(host, port, max_header_fields=fields)
+        return "bound port " + String(server.port())
+    except e:
+        return String(e)
+
+
+def test_bind_raises_for_a_field_limit_out_of_range() raises:
+    """0, negative values and values above 65,535 raise before anything is
+    bound: on a port a child serves the raise is the range, not
+    `AddressInUse`, and on a host name it is the range, not the host. It is
+    checked after the idle timeout. 1 and the largest value bind, and the
+    bound `Server` holds the value; with none given it holds 100."""
+    var app = borrowed_app()
+    var child = _serve_in_child(app, 0)
+    try:
+        for fields in [Int.MIN, -1, 0, LARGEST_FIELDS + 1, Int.MAX]:
+            var error = _bind_fields_error("127.0.0.1", child.port, fields)
+            print("observed: max_header_fields", fields, "->", error)
+            assert_equal(
+                error, "max_header_fields out of range: " + String(fields)
+            )
+        assert_equal(
+            _bind_fields_error("localhost", 0, 0),
+            "max_header_fields out of range: 0",
+        )
+    finally:
+        _stop(child.pid)
+    var error: String
+    try:
+        var server = Server.bind(
+            "127.0.0.1", 0, idle_timeout_ms=0, max_header_fields=0
+        )
+        error = "bound port " + String(server.port())
+    except e:
+        error = String(e)
+    assert_equal(error, "idle_timeout_ms out of range: 0")
+    for fields in [1, LARGEST_FIELDS]:
+        var server = Server.bind("127.0.0.1", 0, max_header_fields=fields)
+        assert_true(server.port() > 0)
+        assert_equal(server._max_header_fields, fields)
+    assert_equal(Server.bind("127.0.0.1", 0)._max_header_fields, DEFAULT_FIELDS)
+
+
+def _with_fields(count: Int) -> String:
+    """`GET /hello` with `Host`, `count` fields named `X-F0`, `X-F1`, ...
+    and `Connection: close`: `count` + 2 fields as Flare hands them over."""
+    var lines = String()
+    for i in range(count):
+        lines += String("X-F", i, ": v\r\n")
+    return String(
+        "GET /hello HTTP/1.1\r\nHost: muntin\r\n",
+        lines,
+        "Connection: close\r\n\r\n",
+    )
+
+
+def _answers_by_field_count(port: Int, limit: Int) raises:
+    """At `limit` fields `App.handle` answers; past it the adapter's 431,
+    and the server goes on serving."""
+    var at = _exchange(port, _with_fields(limit - 2))
+    assert_equal(_status_line(at), "HTTP/1.1 200 OK")
+    assert_equal(_content(at), "hello")
+    var over = _exchange(port, _with_fields(limit - 1))
+    assert_equal(
+        _status_line(over), "HTTP/1.1 431 Request Header Fields Too Large"
+    )
+    assert_equal(_content(over), "Request Header Fields Too Large")
+    assert_equal(_content(_exchange(port, _with_fields(0))), "hello")
+
+
+def test_serve_keeps_the_servers_field_limit() raises:
+    """`serve(app)` answers by the limit the `Server` was bound with, 3
+    here, not the default."""
+    var single = _fork_stoppable(
+        Server.bind("127.0.0.1", 0, max_header_fields=3), borrowed_app()
+    )
+    try:
+        _answers_by_field_count(single.port, 3)
+    finally:
+        _stop(single.pid)
+
+
+def limit_app() -> App:
+    """`who` and `held`, for the workers' field limit test."""
+    var app = App()
+    app.get["/who"](who, State(BuiltOn(current_thread_id())))
+    app.get["/held/{started}/{release}"](held)
+    return app^
+
+
+def _kept_open(target: String, extra: Int) -> String:
+    """`GET target` with `Host` and `extra` fields named `X-F0`, `X-F1`,
+    ...: `extra` + 1 fields, the connection kept open."""
+    var lines = String()
+    for i in range(extra):
+        lines += String("X-F", i, ": v\r\n")
+    return String(
+        "GET ", target, " HTTP/1.1\r\nHost: muntin\r\n", lines, "\r\n"
+    )
+
+
+def _served_by(raw: String) raises -> String:
+    """The thread that answered `who`, checked to be the one that built its
+    `App`."""
+    assert_equal(_status_line(raw), "HTTP/1.1 200 OK")
+    var parts = _content(raw).split(" ")
+    assert_equal(len(parts), 2, raw)
+    assert_equal(parts[0], parts[1], "answered off its App's thread")
+    return String(parts[1])
+
+
+def _refused_on(mut stream: TcpStream) raises:
+    """Sends 4 fields on `stream`, which must be answered 431."""
+    stream.write_all(_kept_open("/who", 3).as_bytes())
+    var raw = _one_response(stream)
+    assert_equal(
+        _status_line(raw), "HTTP/1.1 431 Request Header Fields Too Large"
+    )
+    assert_equal(_content(raw), "Request Header Fields Too Large")
+
+
+def test_every_worker_keeps_the_servers_field_limit() raises:
+    """With `WORKERS` workers bound with `max_header_fields=3`, each worker
+    answers by it: while one runs a held request, a connection opened
+    meanwhile is the other's (M3-049's contract); on each worker's own
+    kept-open connection 3 fields reach that worker's `App` and 4 are the
+    adapter's 431. The two answers come from two threads."""
+    var pipes = _held_pipes()
+    var child = _fork_workers[limit_app](
+        Server.bind(
+            "127.0.0.1",
+            0,
+            shutdown_grace_ms=SHORT_GRACE_MS,
+            idle_timeout_ms=PATIENT_IDLE_MS,
+            max_header_fields=3,
+        ),
+        WORKERS,
+    )
+    _close(pipes[1])
+    _close(pipes[2])
+    var held = pipes[0].copy()
+    try:
+        var first = _send(child.port, _kept_open(held.path, 2))
+        assert_equal(_read_byte(held.started), 1, "the handler never started")
+        var other = _send(child.port, _kept_open("/who", 2))
+        var free = _served_by(_one_response(other))
+        _refused_on(other)
+        _write_byte(held.release)
+        assert_equal(_content(_one_response(first)), "released after the stop")
+        first.write_all(_kept_open("/who", 2).as_bytes())
+        var busy = _served_by(_one_response(first))
+        _refused_on(first)
+        print("observed: field limit 3 on workers", busy, "and", free)
+        assert_true(busy != free, "one worker answered both connections")
+    finally:
+        _stop(child.pid)
+        _close(held.started)
+        _close(held.release)
 
 
 def main() raises:

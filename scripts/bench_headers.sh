@@ -91,7 +91,13 @@ for round in $(seq 1 "$rounds"); do
             sleep 0.1
         done
         echo "# loopback: $server round=$round"
-        python3 -I bench/headers/load.py "$port" "$seconds" |
+        # Muntin's servers keep Server.bind's field limit, 100 (M3-066);
+        # their answers past it must be 431.
+        limit=100
+        if [[ $server == flare_server ]]; then
+            limit=0
+        fi
+        python3 -I bench/headers/load.py "$port" "$seconds" "$limit" |
             awk -v s="$server" -v r="round=$round" 'BEGIN { OFS = "\t" } { print s, r, $0 }' |
             tee -a "$out/loopback.log"
         if [[ -r /proc/$pid/status ]]; then

@@ -1,12 +1,14 @@
-"""HTTP/1.1 client for scripts/bench_headers.sh: PORT SECONDS, or `--cases`
-to list the cases a run prints (`CASES`).
+"""HTTP/1.1 client for scripts/bench_headers.sh: PORT SECONDS [LIMIT], or
+`--cases` to list the cases a run prints (`CASES`). LIMIT is the server's
+request header field limit (M3-066), or 0 (the default) for none.
 
 For each header shape, against the server on 127.0.0.1:PORT:
 - `single`: one request at a time on a new connection, 200 times for
-  `browser12`, `distinct100` and `distinct256` and 5 times otherwise; the
+  `browser12`, `distinct100`, `distinct101` and `distinct256` and 5 times
+  otherwise; the
   median and minimum in ms;
-- `rate` (`browser12`, `distinct100` and `distinct256`, within a field
-  limit of 100 or 256): a request due every 1/RATE s whatever the
+- `rate` (`browser12`, `distinct100`, `distinct101` and `distinct256`,
+  around a field limit of 100 or 256): a request due every 1/RATE s whatever the
   answers, each on a new connection of its own, for SECONDS; latency
   counted from when it was due, its percentiles in ms and, as `start`, how
   late each request's thread began (see `open`). The same arrivals for
@@ -26,10 +28,11 @@ For each header shape, against the server on 127.0.0.1:PORT:
   per second, the bare requests' latency percentiles in ms and, as
   `start`, how late each request's thread began (Python's thread start
   and scheduling, part of the latency but not the server's).
-`browser12`, `distinct100` and `distinct256` ask `GET /read`, whose
-handler looks up 10 names and walks every field (bench/headers/
-muntin_server.mojo); the others ask `GET /`.
-Every answer must be `HTTP/1.1 200` with a well-formed head, and each
+`browser12`, `distinct100`, `distinct101` and `distinct256` ask
+`GET /read`, whose handler looks up 10 names and walks every field
+(bench/headers/muntin_server.mojo); the others ask `GET /`.
+Every answer must be `HTTP/1.1 200` with a well-formed head, or `431` for a
+shape with more fields than LIMIT (a bare request's 2 never exceeds it), and each
 request, its connects, sends and receives together (a resend included),
 must end within TIMEOUT_S of its start. Anything else, an unexpected exception on any thread
 included, stops the run with exit status 1 after printing each failure
@@ -74,17 +77,22 @@ BROWSER = [
 SHAPES = {
     "browser12": "".join(f"{k}: {v}\r\n" for k, v in BROWSER),
     "distinct100": "".join(f"x-h{i:04}: v\r\n" for i in range(99)),
+    "distinct101": "".join(f"x-h{i:04}: v\r\n" for i in range(100)),
     "distinct256": "".join(f"x-h{i:04}: v\r\n" for i in range(255)),
     "same4000": "a:\r\n" * 4000,
     "distinct2600": "".join(f"{n}:\r\n" for n in TWO[:2600]),
 }
 
 
+FIELDS = {name: 1 + lines.count("\r\n") for name, lines in SHAPES.items()}
+"""Each shape's field count, `Host` included."""
+
+
 class Failed(Exception):
-    """A request that did not get its 200."""
+    """A request that did not get the status it expects."""
 
 
-BOUNDED = ("browser12", "distinct100", "distinct256")
+BOUNDED = ("browser12", "distinct100", "distinct101", "distinct256")
 HEAVY = ("same4000", "distinct2600")
 CASES = (
     [(s, "single") for s in SHAPES]
@@ -101,6 +109,11 @@ def request(fields, path="/"):
 
 def shaped(name):
     return request(SHAPES[name], "/read" if name in BOUNDED else "/")
+
+
+def expected(name):
+    """The status a request of shape `name` must get."""
+    return "431" if 0 < limit < FIELDS[name] else "200"
 
 
 BARE = request("")
@@ -170,10 +183,10 @@ def close(conn):
         conn[0] = None
 
 
-def call(conn, data):
-    """One answer on `conn` ([socket, buffer]), reconnecting when Flare has
-    closed the keep-alive connection; returns how many times the request
-    was sent again."""
+def call(conn, data, want="200"):
+    """One answer on `conn` ([socket, buffer]), which must have the status
+    `want`, reconnecting when Flare has closed the keep-alive connection;
+    returns how many times the request was sent again."""
     resent = 0
     deadline = time.monotonic() + TIMEOUT_S
     while True:
@@ -195,8 +208,8 @@ def call(conn, data):
             continue
         except OSError as e:
             raise Failed(f"socket error: {e}")
-        if status != "200":
-            raise Failed(f"status {status}")
+        if status != want:
+            raise Failed(f"status {status}, expected {want}")
         return resent
 
 
@@ -236,7 +249,7 @@ def single(name):
         conn = [None, b""]
         try:
             start = time.perf_counter()
-            resent += call(conn, data)
+            resent += call(conn, data, expected(name))
             times.append((time.perf_counter() - start) * 1000)
         finally:
             close(conn)
@@ -244,12 +257,12 @@ def single(name):
     print(f"{name}\tsingle\tbytes={len(data)}\tmedian_ms={times[len(times) // 2]:.3f}\tmin_ms={times[0]:.3f}\tresent={resent}")
 
 
-def heavy_senders(data, stop, answered, resent, failures):
+def heavy_senders(data, want, stop, answered, resent, failures):
     def heavy(j):
         conn = [None, b""]
         try:
             while time.perf_counter() < stop and not failures:
-                resent[j] += call(conn, data)
+                resent[j] += call(conn, data, want)
                 answered[j] += 1
         finally:
             close(conn)
@@ -275,7 +288,7 @@ def load(name, failures):
         finally:
             close(conn)
 
-    run_threads(heavy_senders(data, stop, answered, resent, failures) + [bare], failures)
+    run_threads(heavy_senders(data, expected(name), stop, answered, resent, failures) + [bare], failures)
     if failures:
         return
     if not latency:
@@ -284,10 +297,11 @@ def load(name, failures):
     print(f"{name}\tload\theavy_per_s={sum(answered) / seconds:.1f}\t{percentiles('bare', latency)}\tresent={sum(resent)}")
 
 
-def arrivals(data, interval, resent, latency, lag, failures):
-    """A sender of `data` due every `interval` s from now for SECONDS, each
-    on a new connection and thread, with `latency` counted from when it was
-    due and `lag` how late its thread began; and the number due."""
+def arrivals(data, want, interval, resent, latency, lag, failures):
+    """A sender of `data`, answered `want`, due every `interval` s from now
+    for SECONDS, each on a new connection and thread, with `latency` counted
+    from when it was due and `lag` how late its thread began; and the number
+    due."""
     begin = time.perf_counter()
     due = [begin + k * interval for k in range(int(seconds / interval))]
 
@@ -296,7 +310,7 @@ def arrivals(data, interval, resent, latency, lag, failures):
         conn = [None, b""]
         try:
             # list.append is atomic; `+=` on a shared cell is not.
-            resent.append(call(conn, data))
+            resent.append(call(conn, data, want))
             latency.append((time.perf_counter() - t) * 1000)
         finally:
             close(conn)
@@ -324,8 +338,8 @@ def open_loop(name, failures):
     bare_resent = []
     latency = []
     lag = []
-    bare, due = arrivals(BARE, INTERVAL_S, bare_resent, latency, lag, failures)
-    run_threads(heavy_senders(data, stop, answered, resent, failures) + [bare], failures)
+    bare, due = arrivals(BARE, "200", INTERVAL_S, bare_resent, latency, lag, failures)
+    run_threads(heavy_senders(data, expected(name), stop, answered, resent, failures) + [bare], failures)
     if failures:
         return
     if len(latency) != due:
@@ -338,7 +352,7 @@ def rate(name, failures):
     resent = []
     latency = []
     lag = []
-    send, due = arrivals(shaped(name), 1 / RATE, resent, latency, lag, failures)
+    send, due = arrivals(shaped(name), expected(name), 1 / RATE, resent, latency, lag, failures)
     run_threads([send], failures)
     if failures:
         return
@@ -353,6 +367,7 @@ if sys.argv[1:] == ["--cases"]:
         print(f"{shape}\t{kind}")
     raise SystemExit(0)
 port, seconds = int(sys.argv[1]), float(sys.argv[2])
+limit = int(sys.argv[3]) if len(sys.argv) > 3 else 0
 RUN = {"single": lambda shape, _: single(shape), "rate": rate, "load": load, "open": open_loop}
 failures = []
 try:

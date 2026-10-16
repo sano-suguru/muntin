@@ -1,6 +1,7 @@
 """Socket-free contract tests for the Flare adapter (M1-002; headers M3-005;
 `HEAD` M3-027; 405 M3-031; request and response body bytes M3-040, which
-replaced M3-038; request target and method bytes M3-039; `Host` M3-073).
+replaced M3-038; request target and method bytes M3-039; `Host` M3-073; the
+request header field limit M3-067).
 
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). Every
 dispatch goes through `MuntinHandler.serve`, a Flare handler entry point that
@@ -604,6 +605,83 @@ def test_unrepresentable_request_headers_answer_400() raises:
         [(String("x-obs"), String(unsafe_from_utf8=Span(bad)))]
     )
     assert_equal(invalid.status, 400)
+
+
+def every_field(req: Request) -> Response:
+    """Every request field, in order, as `_fields` writes them."""
+    return Response.text(_fields(req.headers))
+
+
+def _with_fields(
+    method: String, count: Int, name: String = ""
+) raises -> FlareRequest:
+    """`method /fields` with `Host` and `count - 1` more fields, `count` in
+    all: `X-F0: v0`, `X-F1: v1`, ... or, with `name`, that one name each
+    time."""
+    var req = FlareRequest(method, "/fields")
+    req.headers.append("Host", "test")
+    for i in range(count - 1):
+        req.headers.append(name if name else String("X-F", i), String("v", i))
+    return req^
+
+
+def _fields_text(count: Int, name: String = "") -> String:
+    """`_fields` of `_with_fields(_, count, name)`'s fields."""
+    var out = String("Host=test;")
+    for i in range(count - 1):
+        out += String(name if name else String("X-F", i), "=v", i, ";")
+    return out^
+
+
+def fields_app() -> App:
+    var app = body_app()
+    app.get["/fields"](every_field)
+    return app^
+
+
+def test_more_fields_than_the_limit_answer_431_before_app_handle() raises:
+    # M3-067: the limit counts the fields Flare holds, `Host` included. At
+    # it every field is converted and reaches the handler; past it the
+    # answer is the adapter's 431 and neither the middleware nor a handler
+    # runs: no `X-Seen`. Repeats of one name count as fields.
+    var handler = MuntinHandler(fields_app())
+    for name in [String(""), String("X-Same")]:
+        var at = handler.serve(_with_fields("GET", 100, name))
+        assert_equal(at.status, 200, name)
+        assert_equal(at.text(), _fields_text(100, name), name)
+        assert_equal(_wire(at), "X-Seen: 1\r\n", name)
+        var over = handler.serve(_with_fields("GET", 101, name))
+        assert_equal(over.status, 431, name)
+        assert_equal(over.text(), "Request Header Fields Too Large", name)
+        assert_equal(_wire(over), "", name)
+    # On any path, and under the `HEAD` rule (M3-027).
+    var missing = _with_fields("GET", 101)
+    missing.url = "/nowhere"
+    assert_equal(handler.serve(missing).status, 431)
+    var head = handler.serve(_with_fields("HEAD", 101))
+    assert_equal(head.status, 431)
+    assert_equal(len(head.body), 0)
+    assert_equal(_wire(head), "Content-Length: 31\r\n")
+    # The `Host` rule comes first (M3-073): without `Host`, 400.
+    var hostless = FlareRequest("GET", "/fields")
+    for i in range(101):
+        hostless.headers.append(String("X-F", i), "v")
+    assert_equal(handler.serve(hostless).status, 400)
+
+
+def test_a_raised_field_limit_converts_every_field() raises:
+    # With the limit raised to 4,001, `Host` and 4,000 fields of distinct
+    # names, about as many as Flare v0.12.0 admits over HTTP/1.1, reach the
+    # handler exactly; one more is 431. The lowest limit, 1, admits `Host`
+    # alone.
+    var raised = MuntinHandler(fields_app(), max_header_fields=4001)
+    var at = raised.serve(_with_fields("GET", 4001))
+    assert_equal(at.status, 200)
+    assert_equal(at.text(), _fields_text(4001))
+    assert_equal(raised.serve(_with_fields("GET", 4002)).status, 431)
+    var lowest = MuntinHandler(fields_app(), max_header_fields=1)
+    assert_equal(lowest.serve(_with_fields("GET", 1)).text(), "Host=test;")
+    assert_equal(lowest.serve(_with_fields("GET", 2)).status, 431)
 
 
 def test_response_headers_follow_the_outbound_rule() raises:

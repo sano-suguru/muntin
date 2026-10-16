@@ -204,13 +204,18 @@ def _h1_post(port: Int, body_len: Int) raises -> String:
 
 
 def _h2_headers(
-    sid: Int, method: String, path: String, end_stream: Bool
+    sid: Int, method: String, path: String, end_stream: Bool, extra: Int = 0
 ) -> List[UInt8]:
+    """A HEADERS frame with the pseudo-fields and `extra` fields named
+    `x-f0`, `x-f1`, ...: Flare hands the adapter `extra` + 1 fields
+    (`:authority` as `Host`)."""
     var hdrs = List[HpackHeader]()
     hdrs.append(HpackHeader(":method", method))
     hdrs.append(HpackHeader(":scheme", "https"))
     hdrs.append(HpackHeader(":path", path))
     hdrs.append(HpackHeader(":authority", "127.0.0.1"))
+    for i in range(extra):
+        hdrs.append(HpackHeader(String("x-f", i), "v"))
     var flags = FrameFlags.END_HEADERS()
     if end_stream:
         flags |= FrameFlags.END_STREAM()
@@ -847,7 +852,7 @@ def test_bind_checks_the_settings_and_the_host_before_the_tls_files() raises:
     )
 
 
-# ── The three settings over TLS ────────────────────────────────────────────
+# ── The settings over TLS ──────────────────────────────────────────────────
 
 
 def _send_held(port: Int, held_path: String) raises -> TlsStream:
@@ -982,6 +987,71 @@ def test_body_limit_over_https() raises:
         assert_equal(answers[0].status, "")
         assert_equal(answers[1].status, "200")
         assert_equal(answers[1].body, "hello")
+    finally:
+        _stop(child.pid)
+
+
+def _h1_fields(port: Int, method: String, extra: Int) raises -> String:
+    """`method /hello` over HTTP/1.1 inside TLS with `Host`, `extra` fields
+    named `X-F0`, `X-F1`, ... and `Connection: close`: `extra` + 2 fields.
+    The whole answer."""
+    var stream = _connect(port, "http/1.1")
+    var lines = String()
+    for i in range(extra):
+        lines += String("X-F", i, ": v\r\n")
+    stream.write_all(
+        String(
+            method,
+            " /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n",
+            lines,
+            "Connection: close\r\n\r\n",
+        ).as_bytes()
+    )
+    return _read_all(stream)[0]
+
+
+def test_field_limit_over_https() raises:
+    """`max_header_fields` (4 here) bounds the fields inside TLS, as in
+    cleartext (M3-067): at it the `App` answers, past it the adapter's 431,
+    over HTTP/1.1 and HTTP/2, and `HEAD` gets the 431's status and length
+    with no content; the connection's next stream is answered."""
+    var app = https_app()
+    var child = _serve(
+        Server.bind("127.0.0.1", 0, max_header_fields=4, tls=_tls()), app
+    )
+    try:
+        var raw = _h1_fields(child.port, "GET", 2)
+        assert_true(raw.startswith("HTTP/1.1 200"), raw)
+        assert_true(raw.endswith("\r\n\r\nhello"), raw)
+        raw = _h1_fields(child.port, "GET", 3)
+        assert_true(
+            raw.startswith("HTTP/1.1 431 Request Header Fields Too Large\r\n"),
+            raw,
+        )
+        assert_true(
+            raw.endswith("\r\n\r\nRequest Header Fields Too Large"), raw
+        )
+        var head = _h1_fields(child.port, "HEAD", 3)
+        assert_true(head.startswith("HTTP/1.1 431"), head)
+        assert_true("Content-Length: 31\r\n" in head, head)
+        assert_true(head.endswith("\r\n\r\n"), head)
+
+        var stream = _connect(child.port, "h2")
+        var frames = _h2_headers(1, "GET", "/hello", True, 4)
+        frames.extend(Span(_h2_headers(3, "GET", "/hello", True, 3)))
+        var answers = _h2_exchange(stream, frames^)
+        assert_equal(answers[0].status, "431")
+        assert_equal(answers[0].body, "Request Header Fields Too Large")
+        assert_equal(answers[1].status, "200")
+        assert_equal(answers[1].body, "hello")
+        var h2 = _connect(child.port, "h2")
+        frames = _h2_headers(1, "HEAD", "/hello", True, 4)
+        frames.extend(Span(_h2_headers(3, "GET", "/hello", True, 3)))
+        answers = _h2_exchange(h2, frames^)
+        assert_equal(answers[0].status, "431")
+        assert_equal(answers[0].content_length, "31")
+        assert_equal(answers[0].data_frames, 0)
+        assert_equal(answers[1].status, "200")
     finally:
         _stop(child.pid)
 
