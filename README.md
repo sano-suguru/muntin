@@ -2,7 +2,7 @@
 
 Muntin is a typed application layer for building web services in Mojo. Your handlers depend on Muntin, not on Flare or another networking runtime.
 
-Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over HTTP or HTTPS, with an IP-literal host. On SIGTERM or SIGINT it stops taking connections and waits a grace window for the open ones; it cannot cancel a handler, so one still running after the window ends with the whole process. It is not production-ready.
+Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over HTTP or HTTPS, with an IP-literal host. On SIGTERM or SIGINT it stops taking connections and serves the open ones for a grace window; it does not cancel or notify running handlers, and if the server has not stopped one second after the window, it ends the whole process without cleanup. It is not production-ready.
 
 ```mojo
 from muntin import App
@@ -75,7 +75,7 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON and binary bodies), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
-- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)`, on one thread or on several workers with one `App` each, from an IP-literal host, and on SIGTERM or SIGINT waits a grace window, then returns, or ends the process if a handler is still running (none is cancelled). Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
+- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)`, on one thread or on several workers with one `App` each, from an IP-literal host, and on SIGTERM or SIGINT serves the open connections for a grace window, then returns, or ends the process if it has not stopped one second later (no handler is cancelled or notified). Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
 - **Not yet:** see [`docs/SPEC.md`](docs/SPEC.md), "Remaining candidates".
 
 ## Try it
