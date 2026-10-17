@@ -1,8 +1,10 @@
-# Must not compile (M3-075): on Mojo 1.1.0 a generic overload cannot forward
-# to the overload of its parameter's type. Here `value[T](Optional[T])`
-# calls `self.value(x)` with `x: T`; the call resolves to the generic
-# `Optional` overload itself (by `Optional`'s implicit conversion from `T`),
-# not to `value(Int)` at instantiation, so `JsonWriter` declares each
+# Must not compile (M3-075; a toolchain pin: it imports nothing from Muntin
+# and fails the same way against the base's `src`): on Mojo 1.1.0 a generic
+# overload cannot forward to the overload of its parameter's type. Here
+# `value[T](Optional[T])` calls `self.value(x)` with `x: T`; the call
+# resolves to the generic `Optional` overload itself (by `Optional`'s
+# implicit conversion from `T`), not to `value(Int)` at instantiation, so
+# `JsonWriter` declares each
 # `Optional`/`List` combination as its own overload. Building alone is not
 # the signal: with `T: ImplicitlyCopyable` this builds and calls itself
 # forever. If it builds and prints `int`, the combinations can collapse into

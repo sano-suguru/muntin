@@ -1,5 +1,5 @@
 # The JSON examples of docs/reference/bodies.md and responses.md (M3-009;
-# `status=`, M3-029), compiled and run as written
+# `status=`, M3-029; `JsonWriter.field`, M3-075), compiled and run as written
 # there against production `muntin`. The successful JSON bodies go through
 # `TestClient.post(target, body, headers=headers^)` with the `Content-Type`
 # set, as the reference shows (M3-011), one of them also compared with
@@ -51,10 +51,8 @@ struct User(ToJson):
 
     def write_json(self, mut out: JsonWriter) raises:  # raise -> fixed 500, not the handler's error
         out.begin_object()
-        out.name("id")
-        out.int(self.id)
-        out.name("name")
-        out.string(self.name)
+        out.field("id", self.id)
+        out.field("name", self.name)
         out.end_object()
 
 
@@ -84,6 +82,44 @@ def create() raises -> Response:
     var r = Json(User(7, "Ada"), status=201).to_response()
     r.headers.set("Content-Type", "application/problem+json")   # a set after the conversion wins
     return r^
+# example: end
+# fmt: on
+
+
+# fmt: off
+# example: responses-json-writer
+@fieldwise_init
+struct Place(Copyable, ToJson):
+    var city: String
+    var zip: Int
+
+    def write_json(self, mut out: JsonWriter) raises:
+        out.begin_object()
+        out.field("city", self.city)
+        out.field("zip", self.zip)
+        out.end_object()
+
+
+@fieldwise_init
+struct Profile(ToJson):
+    var id: Int
+    var nickname: Optional[String]
+    var tags: List[String]
+    var home: Place
+    var past: List[Place]
+
+    def write_json(self, mut out: JsonWriter) raises:
+        out.begin_object()
+        out.field("id", self.id)              # Int, Float64, Bool or String
+        out.field("nickname", self.nickname)  # an Optional: empty is null, not left out
+        out.field("tags", self.tags)          # a List: an array
+        out.field("home", self.home)          # a ToJson type
+        out.field("past", self.past)          # a List (or Optional) of one
+        out.end_object()
+
+
+def profile(id: Int) -> Json[Profile]:
+    return Json(Profile(id, None, ["a"], Place("Tokyo", 100), [Place("Osaka", 5)]))
 # example: end
 # fmt: on
 
@@ -201,6 +237,28 @@ def test_json_result_status() raises:
     assert_equal(a.text(), '{"id":2,"name":"Bo"}')
     assert_equal(len(a.headers), 1)
     assert_equal(a.headers.get("content-type").value(), "application/json")
+
+
+def test_json_writer_members() raises:
+    # fmt: off
+    # example: responses-json-writer
+    var app = App()
+    app.get["/profiles/{id}"](profile)
+    # GET /profiles/7  -> 200, Content-Type: application/json,
+    #   {"id":7,"nickname":null,"tags":["a"],"home":{"city":"Tokyo","zip":100},
+    #    "past":[{"city":"Osaka","zip":5}]}
+    # example: end
+    # fmt: on
+    var r = TestClient(app).get("/profiles/7")
+    assert_equal(r.status, 200)
+    assert_equal(
+        r.text(),
+        '{"id":7,"nickname":null,"tags":["a"],'
+        + '"home":{"city":"Tokyo","zip":100},'
+        + '"past":[{"city":"Osaka","zip":5}]}',
+    )
+    assert_equal(len(r.headers), 1)
+    assert_equal(r.headers.get("content-type").value(), "application/json")
 
 
 def main() raises:
