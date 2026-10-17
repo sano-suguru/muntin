@@ -401,43 +401,6 @@ def test_test_client_before_and_after_an_app_move() raises:
     assert_false(users[].names[0] == "bob")
 
 
-# docs/reference/state.md's example, with `Directory` and `find_user` for its
-# `Users` and `get_user` (this module already defines those names).
-
-
-struct Directory(Movable):
-    var names: List[String]
-
-    def __init__(out self, var names: List[String]):
-        self.names = names^
-
-    def get(self, id: Int) raises NotFound -> String:
-        if id < 0 or id >= len(self.names):
-            raise NotFound(id)
-        return self.names[id]
-
-
-def load_names() -> List[String]:
-    var names = List[String]()
-    names.append("ada")
-    return names^
-
-
-def find_user(users: State[Directory], id: Int) raises NotFound -> User:
-    return User(id, users[].get(id))
-
-
-def test_dx_section_8_example() raises:
-    var users = State(Directory(load_names()))
-    var app = App()
-    app.get["/hello"](hello)
-    app.get["/users/{id}"](find_user, users)
-    var client = TestClient(app)
-    assert_equal(client.get("/hello").text(), "hello")
-    assert_equal(client.get("/users/0").text(), "0:ada")
-    assert_equal(client.get("/users/1").text(), "no user 1")
-
-
 # A state's type may not borrow (M3-074): the rule refuses an origin (`{}`) in
 # the type's name, so these types, whose parameters are owned types or values
 # (an `Int`, a struct value, a function value) and whose static text sits in a

@@ -24,6 +24,11 @@ from muntin import (
 from muntin.testing import TestClient
 
 
+# fmt: off
+# example: bodies-json
+from muntin import App, FromJson, Json, JsonValue, JsonWriter, ToJson
+
+
 @fieldwise_init
 struct CreateUser(FromJson):
     var name: String
@@ -31,9 +36,9 @@ struct CreateUser(FromJson):
     var nickname: Optional[String]
 
     @staticmethod
-    def from_json(value: JsonValue) raises -> Self:
+    def from_json(value: JsonValue) raises -> Self:   # raise -> 400, handler not called
         var nick = Optional[String]()
-        var n = value.get("nickname")
+        var n = value.get("nickname")                  # None when absent
         if n and not n.value().is_null():
             nick = n.value().string()
         return Self(value["name"].string(), value["age"].int(), nick^)
@@ -44,7 +49,7 @@ struct User(ToJson):
     var id: Int
     var name: String
 
-    def write_json(self, mut out: JsonWriter) raises:
+    def write_json(self, mut out: JsonWriter) raises:  # raise -> fixed 500, not the handler's error
         out.begin_object()
         out.name("id")
         out.int(self.id)
@@ -53,24 +58,34 @@ struct User(ToJson):
         out.end_object()
 
 
-def create_user(body: Json[CreateUser]) -> Json[User]:
+def create_user(body: Json[CreateUser]) -> Json[User]:    # borrow and read body.value
     return Json(User(1, body.value.name))
 
 
 def replace_user(id: Int, var body: Json[CreateUser]) -> Json[User]:
-    var c = body^.take()
+    var c = body^.take()                                  # own: the whole value, moved out
     return Json(User(id, c.name))
+# example: end
+# fmt: on
 
 
+# example: responses-json
 def register(var body: Json[CreateUser]) -> Json[User]:
     var c = body^.take()
     return Json(User(2, c.name), status=201)
 
 
+# example: end
+
+
+# fmt: off
+# example: responses-json-media-type
 def create() raises -> Response:
     var r = Json(User(7, "Ada"), status=201).to_response()
-    r.headers.set("Content-Type", "application/problem+json")
+    r.headers.set("Content-Type", "application/problem+json")   # a set after the conversion wins
     return r^
+# example: end
+# fmt: on
 
 
 def _post(
@@ -90,10 +105,20 @@ def _content_type(t: String) raises -> Headers:
 
 def test_dx_json_examples() raises:
     var app = App()
-    app.post["/users"](create_user)
-    app.post["/users/{id}"](replace_user)
+    # fmt: off
+    # example: bodies-json
+    app.post["/users"](create_user)          # body only
+    app.post["/users/{id}"](replace_user)    # route value, then body
+    # POST /users  Content-Type: application/json  {"name":"Ada","age":36}
+    #   -> 200, Content-Type: application/json, {"id":1,"name":"Ada"}
+    # Content-Type missing, text/plain, two fields, or application/problem+json
+    #   -> 415 "Unsupported Media Type" (before parsing and the handler)
+    # a body over 1 MiB -> 413 "Content Too Large" (after the 415 check, before parsing)
+    # application/json; charset=utf-8 -> accepted (parameters are not interpreted)
+    # malformed JSON, a missing member, a wrong kind -> 400 "Bad Request"
+    # example: end
+    # fmt: on
     app.get["/create"](create)
-    app.post["/accounts"](register)
     var client = TestClient(app)
     var headers = Headers()
     headers.add("Content-Type", "application/json")
@@ -158,6 +183,15 @@ def test_dx_json_examples() raises:
     assert_equal(
         c.headers.get("content-type").value(), "application/problem+json"
     )
+
+
+def test_json_result_status() raises:
+    # example: responses-json
+    var app = App()
+    app.post["/accounts"](register)
+    # POST /accounts  Content-Type: application/json  {"name":"Bo","age":1}
+    #   -> 201, Content-Type: application/json, {"id":2,"name":"Bo"}
+    # example: end
     var a = TestClient(app).post(
         "/accounts",
         '{"name":"Bo","age":1}',

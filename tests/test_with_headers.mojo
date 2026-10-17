@@ -34,21 +34,6 @@ from muntin.http import _Field
 # Application types.
 
 
-struct Note(FromBody, Movable):
-    """A move-only body: `take_body` must move it out, never copy it."""
-
-    var text: String
-
-    def __init__(out self, var text: String):
-        self.text = text^
-
-    @staticmethod
-    def from_body(body: String) raises -> Self:
-        if body == "bad":
-            raise Error("bad body")
-        return Self(body)
-
-
 @fieldwise_init
 struct Name(FromJson):
     var name: String
@@ -70,12 +55,6 @@ struct Named(ToJson):
         out.name("name")
         out.string(self.name)
         out.end_object()
-
-
-@fieldwise_init
-struct Unauthorized(ToErrorResponse):
-    def to_error_response(deinit self) -> Response:
-        return Response.text("Unauthorized", status=401)
 
 
 struct Prefix(Movable):
@@ -728,8 +707,64 @@ def test_raw_slot_adapter_function_on_production_app() raises:
     )
 
 
-# docs/reference/bodies.md, "Header fields with a body", as written there,
-# with its `CreateUser` and `User`.
+# docs/reference/bodies.md, "Header fields with a body": the text between the
+# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+# Its `Note` is also the body of every carrier route above: a move-only body,
+# which `take_body` must move out, never copy. `CreateUser` and `User` below
+# are the page's JSON example's.
+
+
+# fmt: off
+# example: bodies-with-headers
+from muntin import App, FromBody, Json, Response, State, ToErrorResponse, WithHeaders
+
+# CreateUser (FromJson) and User (ToJson): the JSON example above.
+
+
+@fieldwise_init
+struct Unauthorized(ToErrorResponse):
+    def to_error_response(deinit self) -> Response:
+        return Response.text("Unauthorized", status=401)
+
+
+struct Users(Movable):                    # application state: the one allowed token
+    var token: String
+
+    def __init__(out self, token: String):
+        self.token = token
+
+    def allows(self, token: String) -> Bool:
+        return token == self.token
+
+
+struct Note(FromBody, Movable):           # an application FromBody; move-only
+    var text: String
+
+    def __init__(out self, var text: String):
+        self.text = text^
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        if body == "bad":
+            raise Error("bad body")
+        return Self(body)
+
+
+def create_user(
+    users: State[Users], input: WithHeaders[Json[CreateUser]]
+) raises Unauthorized -> Json[User]:
+    var token = input.headers.get("authorization")    # Optional[String]
+    if not token or not users[].allows(token.value()):    # a read-only Users method
+        raise Unauthorized()                          # ToErrorResponse: 401
+    return Json(User(1, input.body.value.name))
+
+
+def update_note(id: Int, var input: WithHeaders[Note]) -> String:
+    var traces = input.headers.get_all("x-trace")     # every value, in order
+    var note = input^.take_body()                     # the body, moved out
+    return String(id, " ", note.text, " traces=", len(traces))
+# example: end
+# fmt: on
 
 
 @fieldwise_init
@@ -761,36 +796,20 @@ struct User(ToJson):
         out.end_object()
 
 
-struct Users(Movable):
-    var token: String
-
-    def __init__(out self, token: String):
-        self.token = token
-
-    def allows(self, token: String) -> Bool:
-        return token == self.token
-
-
-def create_user(
-    users: State[Users], input: WithHeaders[Json[CreateUser]]
-) raises Unauthorized -> Json[User]:
-    var token = input.headers.get("authorization")  # Optional[String]
-    if not token or not users[].allows(token.value()):
-        raise Unauthorized()  # ToErrorResponse: 401
-    return Json(User(1, input.body.value.name))
-
-
-def update_note(id: Int, var input: WithHeaders[Note]) -> String:
-    var traces = input.headers.get_all("x-trace")  # every value, in order
-    var note = input^.take_body()  # the body, moved out
-    return String(id, " ", note.text, " traces=", len(traces))
-
-
 def test_dx_typed_header_access_example() raises:
-    var users = State(Users("secret"))
     var app = App()
-    app.post["/users"](create_user, users)  # stateful, body only
-    app.post["/notes/{id}"](update_note)  # def(Int, B)
+    # fmt: off
+    # example: bodies-with-headers
+    var users = State(Users("secret"))
+    app.post["/users"](create_user, users)                # stateful, body only
+    app.post["/notes/{id}"](update_note)                  # route value, then body
+    # POST /users  Content-Type: application/json  Authorization: secret  {"name":"Ada","age":36}
+    #   -> 200, {"id":1,"name":"Ada"}
+    # Authorization missing or not "secret" -> 401 "Unauthorized" (the handler's error type)
+    # Content-Type missing -> 415, before the handler (the JSON rules above, unchanged)
+    # POST /notes/3  X-Trace: a  x-trace: b  "hi" -> 200 "3 hi traces=2"
+    # example: end
+    # fmt: on
     var client = TestClient(app)
     var body = String('{"name":"Ada","age":36}')
     var r = client.post(

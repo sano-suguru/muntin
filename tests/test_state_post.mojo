@@ -491,26 +491,5 @@ def test_request_headers_take_no_part() raises:
     assert_equal(_calls(users), 2)
 
 
-# docs/reference/state.md's `post` rule, `def(State[Users], Int, CreateUser)`:
-# state, route value, body.
-
-
-def update_user(
-    users: State[Users], id: Int, body: CreateUser
-) raises NotFound -> User:
-    return User(id, users[].get(id) + " as " + body.name)
-
-
-def test_dx_section_8_post_example() raises:
-    _reset()
-    var users = _users()
-    var app = App()
-    app.post["/users/{id}"](update_user, users)
-    var client = TestClient(app)
-    assert_equal(client.post("/users/1", "name=bo").text(), "1:bob as bo")
-    assert_equal(client.post("/users/9", "name=bo").text(), "no user 9")
-    assert_equal(client.post("/users/x", "name=bo").status, 400)
-
-
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

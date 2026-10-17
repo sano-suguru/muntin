@@ -120,10 +120,22 @@ struct Tiny(FromBytes):
         return Self(body.copy())
 
 
+# docs/reference/errors.md, "Reports of dropped errors", and middleware.md,
+# "Logging dropped errors": the text between the `# example:` lines is what
+# the pages show (scripts/check_doc_examples.py).
+
+
+# example: errors-report
+from muntin import App, Failure
+
+
 def find_order(id: Int) raises -> String:
     if id == 0:
         raise Error("database password is hunter2")
     return "order " + String(id)
+
+
+# example: end
 
 
 def deny() raises Denied -> String:
@@ -231,7 +243,10 @@ def raising_after(var request: Request, var next: Next) raises -> Response:
     return response^
 
 
-# docs/reference/middleware.md's logging middleware, as written.
+# example: middleware-logging
+from std.sys import stderr
+
+from muntin import App, Failure, Next, Request, Response
 
 
 def quoted(text: String) -> String:
@@ -280,6 +295,9 @@ def log_failures(var request: Request, var next: Next) raises -> Response:
             file=stderr,
         )
     return response^
+
+
+# example: end
 
 
 def logged(var request: Request, var next: Next) raises -> Response:
@@ -571,11 +589,40 @@ def test_server_side_body_conversion_failure_is_an_unreported_400() raises:
     assert_false(r.headers.get("X-Log"))
 
 
-def test_dx_logging_example() raises:
+def test_errors_report_example() raises:
+    # example: errors-report
     var app = App()
-    app.use(log_failures)
-    app.use(failing)
-    _routes(app)
+    app.get["/orders/{id}"](find_order)
+    # GET /orders/0 -> 500 "Internal Server Error", no fields; on that response
+    # (as App.handle returns it, or a middleware outside the route receives it):
+    #   response.failure().value().source  == Failure.HANDLER       ("handler")
+    #   response.failure().value().message == "database password is hunter2"
+    #   String(response.failure().value()) == "handler: database password is hunter2"
+    # GET /orders/1 -> 200 "order 1"; response.failure() is None
+    # example: end
+    var client = TestClient(app)
+    for r in [client.get("/orders/0"), app.handle(Request("GET", "/orders/0"))]:
+        _assert_fixed_500(r)
+        _assert_report(r, Failure.HANDLER, "database password is hunter2")
+        assert_equal(Failure.HANDLER, "handler")
+        assert_equal(
+            String(r.failure().value()),
+            "handler: database password is hunter2",
+        )
+    var r = client.get("/orders/1")
+    assert_equal(r.status, 200)
+    assert_equal(r.text(), "order 1")
+    assert_false(r.failure())
+
+
+def test_dx_logging_example() raises:
+    # example: middleware-logging
+    var app = App()
+    app.use(log_failures)  # first, so outside every other middleware
+    app.get["/orders/{id}"](find_order)  # find_order from errors.md
+    # GET /orders/0 with X-Request-Id: r-1 -> 500 "Internal Server Error"; standard error:
+    #   "GET" "/orders/0" client-id="r-1" handler: "database password is hunter2"
+    # example: end
     var client = TestClient(app)
     var id = Headers()
     id.add("X-Request-Id", "r-1")

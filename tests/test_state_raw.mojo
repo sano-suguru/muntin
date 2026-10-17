@@ -617,42 +617,5 @@ def test_existing_routes_are_unchanged_beside_stateful_raw() raises:
     assert_equal(_calls(keys), 3)
 
 
-# The docs/reference/state.md stateful raw webhook, verbatim but for the
-# handler's name.
-
-
-@fieldwise_init
-struct WebhookKeys(Movable):
-    var secret: String
-
-
-def dx_webhook(keys: State[WebhookKeys], req: Request) raises -> Response:
-    var signature = req.headers.get("x-signature")
-    if not signature or signature.value() != keys[].secret:
-        return Response.text("unsigned", status=401)
-    var resp = Response.text("ok")
-    resp.headers.add("X-Request-Id", "42")
-    return resp^
-
-
-def test_dx_section_8_stateful_raw_example() raises:
-    var keys = State(WebhookKeys("sha256=valid"))
-    var app = App()
-    app.post["/webhook"](dx_webhook, keys)
-    var h = Headers()
-    h.add("X-Signature", "sha256=valid")
-    var ok = app.handle(Request("POST", "/webhook", "", h^))
-    assert_equal(ok.status, 200)
-    assert_equal(ok.text(), "ok")
-    assert_equal(_header_list(ok.headers), "X-Request-Id=42;")
-    var unsigned = TestClient(app).post("/webhook", "")
-    assert_equal(unsigned.status, 401)
-    assert_equal(unsigned.text(), "unsigned")
-    var get = TestClient(app).get("/webhook")
-    assert_equal(get.status, 405)
-    assert_equal(get.text(), "Method Not Allowed")
-    assert_equal(_header_list(get.headers), "Allow=POST;")
-
-
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

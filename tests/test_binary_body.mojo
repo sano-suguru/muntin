@@ -113,7 +113,13 @@ def as_text(req: Request) raises -> Response:
     return Response.text("text " + req.text())
 
 
-# The docs/reference/raw.md "Binary bodies" example, verbatim.
+# docs/reference/raw.md, "Binary bodies": the text between the `# example:`
+# lines is what the page shows (scripts/check_doc_examples.py).
+
+
+# example: raw-binary
+from muntin import App, Request, Response
+from muntin.testing import TestClient
 
 
 def upload(req: Request) raises -> Response:
@@ -127,6 +133,9 @@ def upload(req: Request) raises -> Response:
 def note(req: Request) raises -> Response:
     # `text()` raises if the body is not UTF-8.
     return Response.text("note: " + req.text())
+
+
+# example: end
 
 
 # Typed text bodies.
@@ -211,11 +220,18 @@ def binary_app() -> App:
 
 
 def test_dx_binary_example() raises:
+    # fmt: off
+    # example: raw-binary
     var app = App()
     app.post["/upload"](upload)
     app.post["/note"](note)
     var png: List[UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
     var r = TestClient(app).post("/upload", png^)
+    # POST /upload  89 50 4E 47 0D 0A 1A 0A -> 200, the same 8 bytes, Content-Type: application/octet-stream
+    # POST /note    "hé"                    -> 200 "note: hé"
+    # POST /note    FF                      -> 500 "Internal Server Error"  (note's raise; it may catch it and answer 400)
+    # example: end
+    # fmt: on
     assert_equal(r.status, 200)
     _assert_same(
         r.body, _octets([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), "png"

@@ -10,12 +10,21 @@ from muntin.app import _RouteIndex, _conflict, _covers, _match, _overlaps
 from muntin.testing import TestClient
 
 
+# docs/reference/routing.md, "Route conflicts": the text between the
+# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+# The abort its comment names is tests/route_conflict_abort.
+
+
+# example: routing-conflicts
+def me() -> String:
+    return "me"
+
+
 def get_user(id: Int) -> String:
     return "user " + String(id)
 
 
-def me() -> String:
-    return "me"
+# example: end
 
 
 def name_of(name: String) -> String:
@@ -142,6 +151,25 @@ def test_accepted_registrations() raises:
     # segment where the earlier route has a placeholder.
     assert_equal(_refusal(app, "GET", "/users/{a}/comments/{b}"), "")
     assert_equal(_refusal(app, "GET", "/users/"), "")
+
+
+def test_routing_conflicts_example() raises:
+    # fmt: off
+    # example: routing-conflicts
+    var app = App()                       # its own App
+    app.get["/users/me"](me)              # the more specific route first
+    app.get["/users/{id}"](get_user)      # accepted: it covers /users/me, registered earlier
+    # GET /users/me -> 200 "me";  GET /users/7 -> 200 "user 7";  GET /users/x -> 400 "Bad Request"
+    # app.get["/users/me"](me) here instead, after /users/{id}, aborts:
+    # route conflict: GET /users/me is registered after GET /users/{id}, which matches every request it matches; register GET /users/me first
+    # example: end
+    # fmt: on
+    var client = TestClient(app)
+    assert_equal(client.get("/users/me").text(), "me")
+    assert_equal(client.get("/users/7").text(), "user 7")
+    var r = client.get("/users/x")
+    assert_equal(r.status, 400)
+    assert_equal(r.text(), "Bad Request")
 
 
 def test_first_match_is_the_most_specific() raises:
