@@ -2,6 +2,7 @@
 
 `Server` is the Flare adapter module's (`muntin_flare`), not Muntin core's: Muntin core has no `app.run()`. It builds only in the `flare` pixi environment with `-I src -I adapters/flare`, on Linux x86-64 and macOS arm64 (the systems whose `struct sigaction` layout it was verified on). It is a runnable server, not a production-ready deployment: read [the limits](#one-request-at-a-time) before relying on it. Flare v0.12.0; why: [M3-032](../history/decisions/m3-032-serving-entrypoint-decision.md). Each example below is its own program with its own `App`; the later ones use the first one's imports and `hello`, and the line after each names the program or test that runs it, or the nearest test, and what that test changes.
 
+<!-- example: examples/hello_server.mojo -->
 ```mojo
 from muntin import App
 from muntin_flare import Server
@@ -51,6 +52,7 @@ This is `examples/hello_server.mojo`, as written. `scripts/check_flare.sh` build
 
 `server.serve[make_app](workers=4)` serves with 4 threads, each with its own `App`, built by calling `make_app` on that thread ([M3-049](../history/decisions/m3-049-multi-worker-serving-decision.md)):
 
+<!-- example: adapters/flare/test_server.mojo#serving-workers workers_main=main -->
 ```mojo
 def make_app() -> App:
     var app = App()
@@ -63,7 +65,7 @@ def main() raises:
     server.serve[make_app](workers=4)
 ```
 
-Run by `adapters/flare/test_server.mojo` (`test_docs_workers_example`), with `make_app` as written but that module's `hello`, which answers `"hello"`; it binds port 0 with `shutdown_grace_ms=300`, checks one `GET /` and that SIGTERM ends `serve` with status 0.
+Built as written, with `main` named `workers_main`, in `adapters/flare/test_server.mojo`, which `scripts/check_flare.sh` builds; never run, since it binds port 8080. That module's `test_docs_workers_example` serves `make_app` as written but with that module's `hello`, which answers `"hello"`; it binds port 0 with `shutdown_grace_ms=300`, checks one `GET /` and that SIGTERM ends `serve` with status 0.
 
 - `make_app` is a plain `def() raises -> App` (or without `raises`); a closure is refused at compile time (`has 'def() raises thin -> App' type, but value has type 'def() raises capturing thin -> App'` for a compile-time closure, `cannot use a dynamic value in a parameter list` for one that captures at run time). It captures nothing and Mojo has no global variables, so **workers share no value**, `State` included ([state](state.md#rules)), unless `make_app` reaches shared memory through an unsafe pointer or a C call, which Muntin cannot check. Everything an `App` holds, the JSON parser's memory bound included, is held once per worker.
 - `workers` is 1 to 256, else `serve` raises `workers out of range: <value>` before serving; `FLARE_BUFRING_HANDLER=1` and a second `serve` in the process are refused as for `serve(app)`.
@@ -76,6 +78,7 @@ Run by `adapters/flare/test_server.mojo` (`test_docs_workers_example`), with `ma
 
 `max_body_bytes` bounds the request body the backend receives, over HTTP/1.1 and h2c ([M3-044](../history/decisions/m3-044-server-receive-body-limit-decision.md)):
 
+<!-- example: adapters/flare/test_server.mojo#serving-receive-limit receive_limit_main=main -->
 ```mojo
 def main() raises:
     var app = App()
@@ -84,7 +87,7 @@ def main() raises:
     server.serve(app)
 ```
 
-Run by `adapters/flare/test_server.mojo` (`test_docs_receive_limit_example`), on port 0 and with the handler named `welcome`; it checks that a 65,536-byte body is received (`App.handle`'s 405: no `POST` route on `/`) and that a head declaring 65,537 is Flare's 413 before any body is sent.
+Built as written, with `main` named `receive_limit_main`, in `adapters/flare/test_server.mojo`, and never run, as the workers example is. That module's `test_docs_receive_limit_example` runs a copy of it on port 0, with the handler named `welcome`; it checks that a 65,536-byte body is received (`App.handle`'s 405: no `POST` route on `/`) and that a head declaring 65,537 is Flare's 413 before any body is sent.
 
 - Default 10,485,760 (10 MiB), Muntin's value, equal to Flare v0.12.0's default, not read from Flare. 0 to 2^59 − 1 (0 accepts only empty bodies), else `max_body_bytes out of range: <value>`; past that Flare's chunk-size parsing is not safe (one chunk-size line can abort the serving process). There is no "unlimited" value.
 - A longer body is refused by Flare while it arrives, before the adapter: no middleware, routing, conversion or handler runs, on any route, raw routes and paths no route matches included, so the application cannot see, count or answer the refusal. Over HTTP/1.1 a request declaring more with `Content-Length` is refused as soon as its head arrives, without waiting for the body.
@@ -97,6 +100,7 @@ Run by `adapters/flare/test_server.mojo` (`test_docs_receive_limit_example`), on
 
 `idle_timeout_ms` is how long Flare keeps a connection open while nothing arrives on it ([M3-047](../history/decisions/m3-047-server-idle-timeout-decision.md)): before the first byte, between keep-alive requests, between h2c frames (a stalled h2c body included), and while an HTTP/1.1 request head is incomplete. Past it Flare closes the connection with no answer.
 
+<!-- example: adapters/flare/test_server.mojo#serving-idle-timeout idle_timeout_main=main -->
 ```mojo
 def main() raises:
     var app = App()
@@ -105,7 +109,7 @@ def main() raises:
     server.serve(app)
 ```
 
-Not run by a test. The nearest are `adapters/flare/test_server.mojo` (`test_server_config_sets_the_idle_timeout`), which binds port 0 with `idle_timeout_ms=4321` and checks that Flare's configuration holds it, and (`test_idle_timeout_closes_silent_partial_and_h2c_connections`), which serves with 1,000 and checks each close listed above but the keep-alive one.
+Built as written, with `main` named `idle_timeout_main`, in `adapters/flare/test_server.mojo`, and never run, as the workers example is. The nearest are that module's `test_server_config_sets_the_idle_timeout`, which binds port 0 with `idle_timeout_ms=4321` and checks that Flare's configuration holds it, and `test_idle_timeout_closes_silent_partial_and_h2c_connections`, which serves with 1,000 and checks each close listed above but the keep-alive one.
 
 - Default 500, Muntin's value, equal to Flare v0.12.0's default, not read from Flare. 1 to 86,400,000 (one day), else `idle_timeout_ms out of range: <value>`; the range catches a unit mistake and is not a resource bound (Cost, below). 0 is refused, since Flare would read it as no timer and hold a connection that sends nothing until its client closes it. A value shorter than a client's pause between connecting and sending, or between requests, closes that client's connection.
 - It does not bound (read in Flare's code; the HTTP/1.1 body case is tested) an HTTP/1.1 body that is arriving (Flare's 30 s body timer), a response being written (5 s), or a handler. It does not let another request run while a handler runs; it decides whether waiting requests are answered afterwards or dropped.
@@ -117,6 +121,7 @@ Not run by a test. The nearest are `adapters/flare/test_server.mojo` (`test_serv
 
 `max_header_fields` is the most header fields a request may carry ([M3-066](../history/decisions/m3-066-request-header-conversion-decision.md)). A request with more is answered `431 Request Header Fields Too Large` (that text as the body) by the adapter, before its fields are converted and before `App.handle`: no middleware, routing or handler runs, on any path, so the application cannot see, count or answer it; for `HEAD` the status and `Content-Length` go out without the body. Of the adapter's own answers, only the 400 for a request without `Host` comes first; Flare's own refusals (its 400s, a body over `max_body_bytes`) come before the adapter's.
 
+<!-- example: adapters/flare/test_server.mojo#serving-field-limit field_limit_main=main -->
 ```mojo
 def main() raises:
     var app = App()
@@ -125,7 +130,7 @@ def main() raises:
     server.serve(app)
 ```
 
-Not run by a test. The nearest is `adapters/flare/test_server.mojo` (`test_serve_keeps_the_servers_field_limit`), which binds port 0 with `max_header_fields=3` and checks that a request with 3 fields is answered by `App.handle` and one with 4 is 431.
+Built as written, with `main` named `field_limit_main`, in `adapters/flare/test_server.mojo`, and never run, as the workers example is. The nearest is that module's `test_serve_keeps_the_servers_field_limit`, which binds port 0 with `max_header_fields=3` and checks that a request with 3 fields is answered by `App.handle` and one with 4 is 431.
 
 - Default 100; 1 to 65,535, else `max_header_fields out of range: <value>`.
 - It counts the fields as Flare hands them over, `Host` included: over HTTP/1.1 every field line received (`Connection` too), and repeats of a name are separate fields; over h2c `:authority` counts as one `Host` field and every `cookie` field together as one. Every worker and a TLS `Server` apply it.
@@ -135,6 +140,7 @@ Not run by a test. The nearest is `adapters/flare/test_server.mojo` (`test_serve
 
 With `tls=Tls(cert_file=..., key_file=...)` the `Server` serves the same `App` over TLS instead of cleartext, every route, middleware, setting, worker and the stop unchanged ([M3-051](../history/decisions/m3-051-server-tls-decision.md)):
 
+<!-- example: examples/hello_https.mojo -->
 ```mojo
 from muntin import App
 from muntin_flare import Server, Tls

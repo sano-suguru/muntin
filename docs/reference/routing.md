@@ -40,6 +40,7 @@ Static path segments are not checked for target bytes: `/hello world` compiles a
 
 Two overlapping routes of one method register only when the more specific one comes first; a more general route first, the same path twice, or two routes neither of which is more specific (in either order) abort the registration ([M3-053](../history/decisions/m3-053-route-conflict-decision.md)):
 
+<!-- example: tests/test_route_conflicts.mojo#routing-conflicts -->
 ```mojo
 def me() -> String:
     return "me"
@@ -57,7 +58,7 @@ app.get["/users/{id}"](get_user)      # accepted: it covers /users/me, registere
 # route conflict: GET /users/me is registered after GET /users/{id}, which matches every request it matches; register GET /users/me first
 ```
 
-Run by `tests/test_route_conflicts.mojo` (`test_first_match_is_the_most_specific`), whose `_accepted` App registers these two routes in this order among other routes of other paths and methods. The abort is `tests/route_conflict_abort/parameter_route_first.mojo` (there `get_user` returns `String(id)`), which `scripts/check.sh` runs and requires to abort with that message.
+Run by `tests/test_route_conflicts.mojo` (`test_routing_conflicts_example`), as written; `test_first_match_is_the_most_specific` registers these two routes in this order among other routes of other paths and methods. The abort is `tests/route_conflict_abort/parameter_route_first.mojo` (there `get_user` returns `String(id)`), which `scripts/check.sh` runs and requires to abort with that message.
 
 - Two routes of one method overlap when some path matches both: the same number of segments, and at each position equal static text or a `{name}` facing a `{name}` or a non-empty segment (`/` and `/{name}` do not overlap). Placeholder names, the query part and the handler's kind take no part.
 - A registration that overlaps an earlier route of its method aborts the program at that call unless the earlier route is more specific (it matches only paths the new one matches, and not all of them). So the same path again (`... matches the same requests as ...`), a more general route first, and two routes neither of which covers the other (`... both match some requests and neither is more specific`) abort; the message names the method and both paths.
@@ -68,6 +69,7 @@ Run by `tests/test_route_conflicts.mojo` (`test_first_match_is_the_most_specific
 
 `app.put` and `app.patch` take exactly `app.post`'s shapes, `app.delete` exactly `app.get`'s:
 
+<!-- example: tests/test_methods.mojo#routing-methods -->
 ```mojo
 from muntin import App, FromJson, Headers, Json, JsonValue, Request, Response, State
 from muntin.testing import TestClient
@@ -146,6 +148,7 @@ Run by `tests/test_methods.mojo` (`test_dx_example`), which also defines the thr
 
 A `post`, `put` or `patch` handler whose parameters are only route values and at most one `Headers`, last, is bodyless: it takes `get`'s shapes and answers exactly as the same handler on `get` would.
 
+<!-- example: tests/test_bodyless.mojo#routing-bodyless -->
 ```mojo
 @fieldwise_init
 struct Db(Movable):
@@ -188,6 +191,7 @@ Run by `tests/test_bodyless.mojo` (`test_dx_example`), which also defines `Unaut
 
 A `get` route answers `HEAD`:
 
+<!-- example: tests/test_head.mojo#routing-head -->
 ```mojo
 from muntin import App, Request, Response
 from muntin.testing import TestClient
@@ -231,6 +235,7 @@ Run by `tests/test_head.mojo` (`test_dx_example`), which checks each `HEAD` answ
 
 A request whose path a route matches, when no route on that path has its method, is answered 405 with an `Allow` field:
 
+<!-- example: tests/test_method_not_allowed.mojo#routing-405 -->
 ```mojo
 var app = App()                          # its own App
 app.get["/users/me"](me)                 # def me() -> String

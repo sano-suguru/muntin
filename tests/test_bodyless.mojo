@@ -22,11 +22,6 @@ from muntin.testing import TestClient
 
 
 @fieldwise_init
-struct Db(Movable):
-    var name: String
-
-
-@fieldwise_init
 struct Created(ToResponse):
     var text: String
 
@@ -415,7 +410,10 @@ def _forward_patch[
     app.patch["/p/{id}"](h)
 
 
-# docs/reference/routing.md's bodyless example, as written.
+# docs/reference/routing.md's bodyless example: the text between the
+# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+# Its `Db` serves the other tests too; `Unauthorized`, which it uses without
+# defining, comes first.
 
 
 struct Unauthorized(ToErrorResponse):
@@ -424,6 +422,13 @@ struct Unauthorized(ToErrorResponse):
 
     def to_error_response(deinit self) -> Response:
         return Response.text("Unauthorized", status=401)
+
+
+# fmt: off
+# example: routing-bodyless
+@fieldwise_init
+struct Db(Movable):
+    var name: String
 
 
 def activate(id: Int) -> String:  # no body: the request's is not read
@@ -438,10 +443,14 @@ def logout(headers: Headers) raises Unauthorized -> String:
 
 def follow(db: State[Db], id: Int) -> String:
     return String(db[].name, " follows ", id)
+# example: end
+# fmt: on
 
 
 def test_dx_example() raises:
-    var app = App()
+    # fmt: off
+    # example: routing-bodyless
+    var app = App()                       # its own App
     app.post["/users/{id}/activate"](activate)
     app.post["/logout"](logout)
     app.put["/users/{id}/follow"](follow, State(Db("ada")))
@@ -451,6 +460,8 @@ def test_dx_example() raises:
     # POST /logout  (no Authorization)             -> 401 "Unauthorized"
     # PUT /users/7/follow                          -> 200 "ada follows 7"
     # GET /users/7/activate                        -> 405, Allow: POST
+    # example: end
+    # fmt: on
 
     var client = TestClient(app)
     var a = client.post("/users/7/activate", "")

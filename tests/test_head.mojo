@@ -336,7 +336,14 @@ def test_first_registration_wins_and_never_falls_through() raises:
     assert_equal(app.handle(Request("DELETE", "/b/2")).text(), "removed 2")
 
 
-# docs/reference/routing.md, "`HEAD`", as written there.
+# docs/reference/routing.md, "`HEAD`": the text between the `# example:`
+# lines is what the page shows (scripts/check_doc_examples.py).
+
+
+# fmt: off
+# example: routing-head
+from muntin import App, Request, Response
+from muntin.testing import TestClient
 
 
 def show_user(id: Int) -> String:
@@ -344,18 +351,33 @@ def show_user(id: Int) -> String:
 
 
 def report(req: Request) -> Response:  # raw: req.method is "GET" or "HEAD"
-    return Response.text("report")  # the GET body for both
+    return Response.text("report")     # the GET body for both
 
 
 def drop(id: Int) -> String:
     return String("dropped ", id)
+# example: end
+# fmt: on
 
 
 def test_dx_example() raises:
-    var app = App()  # its own App
+    # fmt: off
+    # example: routing-head
+    var app = App()                        # its own App
     app.get["/users/{id}"](show_user)
     app.get["/report"](report)
     app.delete["/cache/{id}"](drop)
+    # HEAD /users/7   -> 200 "user 7" from App.handle, as GET /users/7; through Flare: 200, Content-Length: 6, no content
+    # HEAD /users/abc -> 400 "Bad Request" (show_user not called); through Flare: 400, Content-Length: 11, no content
+    # HEAD /report    -> report receives req.method == "HEAD": 200 "report"; through Flare: Content-Length: 6, no content
+    # HEAD /cache/1   -> 405 "Method Not Allowed", Allow: DELETE; through Flare: Content-Length: 18, no content
+    # head /users/7, OPTIONS /users/7 -> 405 "Method Not Allowed", Allow: GET, HEAD
+    # HEAD /missing   -> 404 "Not Found"
+
+    var head = TestClient(app).head("/users/7")  # = app.handle(Request("HEAD", "/users/7"))
+    # head.status == 200, head.text() == "user 7": the in-memory response keeps the body
+    # example: end
+    # fmt: on
     _same_as_get(app, "/users/7", 200, "user 7")
     _same_as_get(app, "/users/abc", 400, "Bad Request")
     _same_as_get(app, "/report", 200, "report")
@@ -373,7 +395,6 @@ def test_dx_example() raises:
         assert_equal(row[0].headers.get_all("Allow")[0], row[1])
     assert_equal(app.handle(Request("DELETE", "/cache/1")).text(), "dropped 1")
 
-    var head = TestClient(app).head("/users/7")
     assert_equal(head.status, 200)
     assert_equal(head.text(), "user 7")
     var handled = app.handle(Request("HEAD", "/users/7"))
