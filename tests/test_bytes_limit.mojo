@@ -132,7 +132,13 @@ def _sent() raises -> Headers:
 comptime SENT_FIELDS = "X-Sig=<a>;x-sig=<b>;Empty=<>;Content-Type=<x/y>;"
 
 
-# The docs/reference/bodies.md "Body size limits" examples, verbatim.
+# docs/reference/bodies.md, "Body size limits": the text between the
+# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+
+
+# fmt: off
+# example: bodies-limit-avatar
+from muntin import App, FromBytes, WithHeaders
 
 
 struct Avatar(FromBytes):
@@ -152,8 +158,10 @@ struct Avatar(FromBytes):
 
 def set_avatar(id: Int, avatar: Avatar) -> String:
     return String(id, ": ", len(avatar.data), " bytes")
+# example: end
 
 
+# example: bodies-limit-blob
 struct Blob[limit: Int](FromBytes):
     comptime max_bytes = Self.limit  # one type, a limit per route
 
@@ -174,6 +182,8 @@ def put_blob(key: String, input: WithHeaders[Blob[1 << 20]]) -> String:
 
 def put_icon(key: String, input: WithHeaders[Blob[4096]]) -> String:
     return String(key, ": ", len(input.body.data), " byte icon")
+# example: end
+# fmt: on
 
 
 # Application types.
@@ -591,9 +601,22 @@ def _assert_413(r: Response, what: String) raises:
 
 def test_dx_examples() raises:
     var app = App()
+    # fmt: off
+    # example: bodies-limit-avatar
     app.put["/users/{id}/avatar"](set_avatar)
+    # PUT /users/7/avatar  65,536 bytes  -> 200 "7: 65536 bytes"
+    # PUT /users/7/avatar  65,537 bytes  -> 413 "Content Too Large"  (from_bytes and set_avatar not called)
+    # PUT /users/x/avatar  70,000 bytes  -> 400 "Bad Request"  (the route value answers first, whatever the length)
+    # PUT /users/7/avatar  empty         -> 400 "Bad Request"  (from_bytes raised)
+    # example: end
+    # example: bodies-limit-blob
     app.put["/blobs/{key}"](put_blob)
     app.put["/icons/{key}"](put_icon)
+    # PUT /blobs/a.png  Content-Type: image/png  1,048,576 bytes -> 200 "a.png: 1048576 bytes, image/png"
+    # PUT /blobs/a.png  1,048,577 bytes                          -> 413 "Content Too Large"
+    # PUT /icons/i  4,096 bytes -> 200 "i: 4096 byte icon";  4,097 bytes -> 413
+    # example: end
+    # fmt: on
     var client = TestClient(app)
     var at = client.put("/users/7/avatar", _filled(64 * 1024))
     assert_equal(at.status, 200)

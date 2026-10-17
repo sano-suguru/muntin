@@ -364,16 +364,28 @@ def test_test_client_equals_app_handle() raises:
     )
 
 
-# docs/reference/routing.md, "405 `Method Not Allowed`", as written there.
+# docs/reference/routing.md, "405 `Method Not Allowed`": the text between the
+# `# example:` lines is what the page shows (scripts/check_doc_examples.py),
+# with this module's handlers.
 
 
 def test_dx_example() raises:
-    var app = App()  # its own App
-    app.get["/users/me"](me)
-    app.delete["/users/{id}"](delete_user)
-    app.get["/users/{id}"](get_user)
-    app.put["/users/{id}"](update_user)
-    app.post["/hooks"](hook)
+    # fmt: off
+    # example: routing-405
+    var app = App()                          # its own App
+    app.get["/users/me"](me)                 # def me() -> String
+    app.delete["/users/{id}"](delete_user)   # def delete_user(id: Int) -> String
+    app.get["/users/{id}"](get_user)         # def get_user(id: Int) -> String
+    app.put["/users/{id}"](update_user)      # def update_user(id: Int, body: Note) -> String
+    app.post["/hooks"](hook)                 # raw: def hook(req: Request) -> Response
+    # POST /users/7, OPTIONS /users/7, FOO /users/7 -> 405 "Method Not Allowed", Allow: DELETE, GET, HEAD, PUT
+    # POST /users/me  -> 405, Allow: GET, HEAD, DELETE, PUT  (/users/me and /users/{id} both match the path)
+    # POST /users/abc -> 405, Allow: DELETE, GET, HEAD, PUT  (nothing is decoded or converted to decide it)
+    # PUT /users/me   -> 400 "Bad Request"  (PUT selects /users/{id}; "me" is no Int)
+    # GET /hooks, HEAD /hooks -> 405, Allow: POST; through Flare, HEAD /hooks: Content-Length: 18, no content
+    # POST /users/7/x, POST /missing -> 404 "Not Found"
+    # example: end
+    # fmt: on
     for method in ["POST", "OPTIONS", "FOO"]:
         _expect_405(app, method, "/users/7", "DELETE, GET, HEAD, PUT")
     _expect_405(app, "POST", "/users/me", "GET, HEAD, DELETE, PUT")

@@ -20,6 +20,16 @@ from muntin import (
 )
 
 
+# docs/reference/route-values.md, "Application route values": the text
+# between the `# example:` lines is what the page shows
+# (scripts/check_doc_examples.py).
+
+
+# fmt: off
+# example: route-values-application
+from muntin import App, FromRouteValue
+
+
 struct UserId(FromRouteValue, Movable):
     var value: Int
 
@@ -62,6 +72,13 @@ def make_app() raises -> App:
     app.get["/users/{id}"](get_user)
     app.get["/users/{id}/posts?{order}"](list_posts)
     return app^
+# GET /users/u42                  -> 200 "user 42"
+# GET /users/%7542                -> 200 "user 42"   (decoded before from_route_value)
+# GET /users/42                   -> 400 "Bad Request"  (from_route_value raised; get_user not called)
+# GET /users/u42/posts?order=new  -> 200 "posts of user 42, newest first"
+# GET /users/u42/posts?order=top, /users/u42/posts -> 400 "Bad Request"
+# example: end
+# fmt: on
 
 
 struct Text(FromRouteValue, Movable):

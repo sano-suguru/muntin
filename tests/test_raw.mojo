@@ -142,11 +142,21 @@ def verify_unmapped(req: Request) raises Unmapped -> Response:
     raise Unmapped("secret")
 
 
-def webhook(req: Request) -> Response:
-    """The docs/reference/raw.md example, verbatim."""
+# docs/reference/raw.md's first example: the text between the `# example:`
+# lines is what the page shows (scripts/check_doc_examples.py).
+
+
+# fmt: off
+# example: raw-webhook
+from muntin import App, Request, Response
+
+
+def webhook(req: Request) -> Response:       # `var req: Request` also works
     if Span(req.body) != "signed".as_bytes():  # application code decides
         return Response.text("unsigned", status=401)
     return Response.text("ok")
+# example: end
+# fmt: on
 
 
 def raw_first(req: Request) -> Response:
@@ -258,8 +268,16 @@ comptime ADVERSARIAL = [
 
 
 def test_dx_section_9_example() raises:
+    # fmt: off
+    # example: raw-webhook
     var app = App()
-    app.post["/webhook"](webhook)
+    app.post["/webhook"](webhook)                # same syntax as typed handlers; app.get too
+    # POST /webhook          "signed"  -> 200 "ok"
+    # POST /webhook?id=abc   "forged"  -> 401 "unsigned"   (no 400 from Muntin: nothing is extracted)
+    # GET /webhook                    -> 405 "Method Not Allowed", Allow: POST  (webhook not called)
+    # POST /webhook/x                 -> 404 "Not Found"  (webhook not called)
+    # example: end
+    # fmt: on
     var client = TestClient(app)
     var ok = client.post("/webhook", "signed")
     assert_equal(ok.status, 200)

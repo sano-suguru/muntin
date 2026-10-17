@@ -99,7 +99,23 @@ def _json() raises -> Headers:
     return _h("Content-Type", "application/json")
 
 
-# docs/reference/route-values.md, "Two route values", as written there.
+# docs/reference/route-values.md, "Two route values": the text between the
+# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+
+
+# fmt: off
+# example: route-values-two
+from muntin import (
+    App,
+    FromJson,
+    Headers,
+    Json,
+    JsonValue,
+    JsonWriter,
+    Response,
+    ToErrorResponse,
+    ToJson,
+)
 
 
 @fieldwise_init
@@ -156,6 +172,8 @@ def remove_post(
     if not headers.get("authorization"):
         raise Unauthorized()
     return String("removed post ", pid, " of user ", uid)
+# example: end
+# fmt: on
 
 
 def post_of_swapped(pid: Int, uid: Int) -> String:  # names in the other order
@@ -163,13 +181,26 @@ def post_of_swapped(pid: Int, uid: Int) -> String:  # names in the other order
 
 
 def _dx_app() -> App:
-    """The reference's registrations, as written there, on its own `App`."""
-    var app = App()
+    """The reference's registrations, on its own `App`."""
+    # fmt: off
+    # example: route-values-two
+    var app = App()                       # its own App
     app.get["/users/{uid}/posts/{pid}"](post_of)
     app.get["/users/{id}?{fields}"](user_fields)
     app.get["/search?{q}&{limit}"](search)
     app.patch["/users/{uid}/posts/{pid}"](edit_post)
     app.delete["/users/{uid}/posts/{pid}"](remove_post)
+    # GET /users/1/posts/2            -> 200 "post 2 of user 1"
+    # GET /users/1?fields=name+email  -> 200 "user 1: name email"
+    # GET /search?limit=5&q=mojo      -> 200 "5 results for mojo"   (the literal's order, not the request's)
+    # GET /users/1/posts/x, /search?q=mojo, /search?q=a&q=b&limit=5 -> 400 "Bad Request"  (handler not called)
+    # PATCH /users/1/posts/2  Content-Type: application/json  {"title":"Hi"}
+    #   -> 200, Content-Type: application/json, {"uid":1,"pid":2,"title":"Hi"}
+    # PATCH /users/1/posts/x  (no Content-Type)   -> 400 "Bad Request"  (the value answers before the body's 415)
+    # DELETE /users/1/posts/2  Authorization: t1  -> 200 "removed post 2 of user 1"
+    # DELETE /users/1/posts/2  (no Authorization) -> 401 "Unauthorized"
+    # example: end
+    # fmt: on
     return app^
 
 

@@ -13,6 +13,7 @@ Each example below is its own `App` (named `app`, created with `var app = App()`
 
 ## Text bodies (`FromBody`)
 
+<!-- example: tests/test_reference_examples.mojo#bodies-text-body -->
 ```mojo
 from muntin import App, FromBody
 
@@ -49,6 +50,7 @@ Run by `tests/test_reference_examples.mojo` (`test_bodies_text_body`), as writte
 
 ### A route value, then the body
 
+<!-- example: tests/test_reference_examples.mojo#bodies-route-value-then-body -->
 ```mojo
 from muntin import App, FromBody
 
@@ -81,7 +83,7 @@ app.post["/users?{id}"](update_user)      # or from a query item
 # POST /users/1/x                 -> 404 "Not Found"    (nothing converted)
 ```
 
-Run by `tests/test_int_body.mojo` (`int_body_app()`, with `test_path_value_then_body`, `test_query_value_then_body`, `test_bad_route_value_is_400_before_body_conversion`, `test_bad_body_is_400_without_the_handler` and `test_method_mismatch_is_405_and_unmatched_path_404_without_extraction`), whose `UpdateUser` and `update_user` also count their calls in environment variables. It sends `/users/042` with `name=Bob` (`user 42 Bob`) and the query form as `id=42` and `id=010`, not `id=042`. Its app also registers `GET /users/{id}` and `/notes`, `/people`, `/moves` and `/acks` routes, so its 405 check sends `PUT`, `PATCH` and `DELETE /users/1` and expects `Allow: GET, HEAD, POST`; with the example's two routes alone the answer is `Allow: POST`.
+Run by `tests/test_reference_examples.mojo` (`test_bodies_route_value_then_body`), as written; it sends each 400 target with the bodies `name=Ada`, `Ada` and `""`, and `PUT /users/1` with `name=Ada`. That `from_body` and `update_user` are not called is checked by `tests/test_int_body.mojo` (`int_body_app()`, with `test_path_value_then_body`, `test_query_value_then_body`, `test_bad_route_value_is_400_before_body_conversion`, `test_bad_body_is_400_without_the_handler` and `test_method_mismatch_is_405_and_unmatched_path_404_without_extraction`), whose `UpdateUser` and `update_user` also count their calls in environment variables. Its app also registers `GET /users/{id}` and `/notes`, `/people`, `/moves` and `/acks` routes, so its 405 check sends `PUT`, `PATCH` and `DELETE /users/1` and expects `Allow: GET, HEAD, POST`; with the example's two routes alone the answer is `Allow: POST`.
 
 The route values convert first; an invalid one is 400 and the body is not converted.
 
@@ -97,6 +99,7 @@ The route values convert first; an invalid one is 400 and the body is not conver
 
 The application declares `FromJson`/`ToJson` on its own types and wraps them in `Json[T]`, which is a body and a [result](responses.md#json-results); registration is unchanged:
 
+<!-- example: tests/test_json_dx.mojo#bodies-json -->
 ```mojo
 from muntin import App, FromJson, Json, JsonValue, JsonWriter, ToJson
 
@@ -150,7 +153,7 @@ app.post["/users/{id}"](replace_user)    # route value, then body
 # malformed JSON, a missing member, a wrong kind -> 400 "Bad Request"
 ```
 
-Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), with these types and handlers as written; its app also registers `GET /create` and `POST /accounts` (the examples of [responses](responses.md#json-results)), and it also posts `{"name":"Bo","age":1,"nickname":null}` to `/users/4` (`{"id":4,"name":"Bo"}`). It does not check that 415 is answered before 413.
+Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), with these types and handlers as written; its app also registers `GET /create` (the media-type example of [responses](responses.md#json-results)), and it also posts `{"name":"Bo","age":1,"nickname":null}` to `/users/4` (`{"id":4,"name":"Bo"}`). It does not check that 415 is answered before 413.
 
 - `Content-Type`: exactly one field whose media type (before any `;`, trimmed) is `application/json`, ASCII case-insensitively; parameters are ignored. Missing, repeated, other and `+json` types are 415.
 - Size: at most 1,048,576 bytes; one more is 413 (fixed). `Json[T].from_body` also raises above it in a raw handler.
@@ -165,6 +168,7 @@ Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), with these types and
 
 A handler that needs header fields takes `WithHeaders[B]` where it would take the body `B`:
 
+<!-- example: tests/test_with_headers.mojo#bodies-with-headers -->
 ```mojo
 from muntin import App, FromBody, Json, Response, State, ToErrorResponse, WithHeaders
 
@@ -237,6 +241,7 @@ Run by `tests/test_with_headers.mojo` (`test_dx_typed_header_access_example`), w
 
 A body that is not text is a `FromBytes` type, which receives the body's bytes, whatever they are:
 
+<!-- example: tests/test_bytes_body.mojo#bodies-bytes -->
 ```mojo
 from muntin import App, FromBytes
 
@@ -274,6 +279,7 @@ Run by `tests/test_bytes_body.mojo` (`test_dx_example`), with `Image` and `uploa
 - Every shape that takes a `FromBody` takes a `FromBytes`. There is no `Content-Type` rule.
 - With header fields, wrap it: `WithHeaders[B]` around a `FromBytes` follows the carrier's rules above.
 
+<!-- example: tests/test_bytes_headers_body.mojo#bodies-bytes-with-headers -->
 ```mojo
 from muntin import App, FromBytes, Response, ToErrorResponse, WithHeaders
 
@@ -326,6 +332,7 @@ Run by `tests/test_bytes_headers_body.mojo` (`test_dx_example`), with `Upload`, 
 
 Every `FromBytes` type declares the longest body it accepts, in bytes; a longer body is 413 `Content Too Large` before `from_bytes`, bare or carried:
 
+<!-- example: tests/test_bytes_limit.mojo#bodies-limit-avatar -->
 ```mojo
 from muntin import App, FromBytes, WithHeaders
 
@@ -360,6 +367,7 @@ Run by `tests/test_bytes_limit.mojo` (`test_dx_examples`), with `Avatar` and `se
 
 A different limit per route is a type parameter; a family of types can share a default through a trait refining `FromBytes` (`trait SmallUpload(FromBytes): comptime max_bytes: Int = 16`):
 
+<!-- example: tests/test_bytes_limit.mojo#bodies-limit-blob -->
 ```mojo
 struct Blob[limit: Int](FromBytes):
     comptime max_bytes = Self.limit  # one type, a limit per route

@@ -97,7 +97,13 @@ def _prefixed(prefix: String, body: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-# The docs/reference/bodies.md "Binary bodies" example, verbatim.
+# docs/reference/bodies.md, "Binary bodies": the text between the
+# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+
+
+# fmt: off
+# example: bodies-bytes
+from muntin import App, FromBytes
 
 
 struct Image(FromBytes):
@@ -118,6 +124,8 @@ struct Image(FromBytes):
 
 def upload(image: Image) -> String:  # `var image: Image` also works
     return String(len(image.data), " bytes")
+# example: end
+# fmt: on
 
 
 # Application types.
@@ -329,7 +337,14 @@ def _send(
 
 def test_dx_example() raises:
     var app = App()
+    # fmt: off
+    # example: bodies-bytes
     app.post["/upload"](upload)
+    # POST /upload  89 50 4E 47 0D 0A 1A 0A 00 FF 80 -> 200 "11 bytes"  (from_bytes received the 11 bytes)
+    # POST /upload  "GIF89a"                         -> 400 "Bad Request"  (from_bytes raised; upload not called)
+    # GET /upload                                    -> 405 "Method Not Allowed", Allow: POST  (from_bytes not called)
+    # example: end
+    # fmt: on
     var client = TestClient(app)
     var png = _png()
     png.extend(Span(_octets([0x00, 0xFF, 0x80])))
