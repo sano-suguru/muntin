@@ -2,6 +2,7 @@
 
 Middleware is a function ([M3-034](../history/architecture-decisions.md#middleware-decision-m3-034)). Each example below is its own `App`; the line after it names the test that runs it and what that test adds or changes.
 
+<!-- example: tests/test_middleware.mojo#middleware-tracing tracing_example=main -->
 ```mojo
 from muntin import App, Next, Request, Response
 
@@ -25,7 +26,7 @@ def main() raises:
 # POST /hello   -> 405 "Method Not Allowed"; Allow: GET, HEAD; X-Trace: 1
 ```
 
-Run by `tests/test_middleware.mojo` (`test_the_dx_example_as_written`), with `tracing` and `hello` as written; it builds the `App` in the test function instead of `main` and sends `POST /hello` with an empty body.
+Run by `tests/test_middleware.mojo` (`test_the_dx_example_as_written`), with `main` named `tracing_example`: the test calls it, then registers the same routes on an `App` of its own to send the requests, `POST /hello` with an empty body.
 
 - `app.use(f)` takes `def(var request: Request, var next: Next) raises -> Response`; one that borrows the request or does not raise converts too. The type is public as `Middleware`. A middleware may change the request, answer without running the rest, or run the rest with `next^.run(request^)` and change or replace the response.
 - `next^.run(request^)` consumes `next`, so the rest runs at most once: a second use, or one in a loop, does not compile (`use of uninitialized value 'next'`); `Next` has no plain call and no copy. A `Next` moved into a container and taken twice aborts the process at the second `take()`. A `Next` cannot outlive the call that received it. Code that names `_`-prefixed members or applies unsafe pointer operations or `rebind_var` to a `Next` is outside these guarantees.
@@ -43,6 +44,7 @@ Run by `tests/test_middleware.mojo` (`test_the_dx_example_as_written`), with `tr
 
 A middleware registered first receives every response the others and the routes make, with its report:
 
+<!-- example: tests/test_failure.mojo#middleware-logging -->
 ```mojo
 from std.sys import stderr
 
@@ -104,7 +106,7 @@ app.get["/orders/{id}"](find_order)  # find_order from errors.md
 #   "GET" "/orders/0" client-id="r-1" handler: "database password is hunter2"
 ```
 
-`find_order` is the handler of [errors](errors.md#reports-of-dropped-errors). Run by `tests/test_failure.mojo` (`test_dx_logging_example`), with `quoted`, `failure_line` and `log_failures` as written; it also registers a `failing` middleware after `log_failures` and every route of the test's `_routes`, and checks only the 500, its `Failure.HANDLER` report and `GET /orders/1`: the standard-error line is not asserted. That line is checked in `test_outermost_logging_middleware`, through a twin `logged` that writes it into an `X-Log` field instead, for the target `/orders/0?q=1`.
+`find_order` is the handler of [errors](errors.md#reports-of-dropped-errors). Run by `tests/test_failure.mojo` (`test_dx_logging_example`), as written; it checks only the 500, its `Failure.HANDLER` report and `GET /orders/1`: the standard-error line is not asserted. That line is checked in `test_outermost_logging_middleware`, through a twin `logged` that writes it into an `X-Log` field instead, for the target `/orders/0?q=1`.
 
 - Register it first: a middleware outside it that raises makes a report it never sees.
 - A request ID a client sends is client input: it correlates log lines and is not trusted. Muntin has no request ID, timing, metrics or tracing.

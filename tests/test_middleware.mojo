@@ -25,10 +25,6 @@ struct Counter(Movable):
         self.n = ArcPointer(0)
 
 
-def hello() -> String:
-    return "hello"
-
-
 def get_user(id: Int) -> String:
     return "user " + String(id)
 
@@ -141,10 +137,36 @@ def _field(r: Response, name: String) -> String:
 # Middleware.
 
 
+# docs/reference/middleware.md's first example, with `main` named
+# `tracing_example`: the text between the `# example:` lines is what the page
+# shows (scripts/check_doc_examples.py). Its `hello` and `tracing` serve the
+# other tests too.
+
+
+# fmt: off
+# example: middleware-tracing
+from muntin import App, Next, Request, Response
+
+
 def tracing(var request: Request, var next: Next) raises -> Response:
     var response = next^.run(request^)
     response.headers.add("X-Trace", "1")
     return response^
+
+
+def hello() -> String:
+    return "hello"
+
+
+def tracing_example() raises:
+    var app = App()
+    app.use(tracing)
+    app.get["/hello"](hello)
+# GET /hello    -> 200 "hello"; X-Trace: 1
+# GET /missing  -> 404 "Not Found"; X-Trace: 1
+# POST /hello   -> 405 "Method Not Allowed"; Allow: GET, HEAD; X-Trace: 1
+# example: end
+# fmt: on
 
 
 def passthrough(var request: Request, var next: Next) raises -> Response:
@@ -270,7 +292,8 @@ def borrowed_body_at[
 
 
 def test_the_dx_example_as_written() raises:
-    # docs/reference/middleware.md.
+    # The example's `main` runs; its registrations are repeated here.
+    tracing_example()
     var app = App()
     app.use(tracing)
     app.get["/hello"](hello)

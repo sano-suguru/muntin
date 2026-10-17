@@ -2,6 +2,7 @@
 
 A handler receives long-lived application data as `State[S]`, passed as the registration's second argument. There are no globals: Mojo 1.1.0 has no module-level variables and handlers cannot capture. Each example below is its own `App`; the line after it names the test that runs it and what that test adds or changes.
 
+<!-- example: tests/test_state_examples.mojo#state state_example=main -->
 ```mojo
 from muntin import App, State
 
@@ -43,7 +44,7 @@ def main():
 # GET /users/x  -> 400 "Bad Request"   (get_user not called)
 ```
 
-Run by `tests/test_state.mojo` (`test_dx_section_8_example`), which names `Users` `Directory` and `get_user` `find_user` (the module already defines those names), registers in the test function instead of `main`, and defines the two types the example takes from other pages: `NotFound`, the `ToErrorResponse` type of [errors](errors.md#application-error-responses-toerrorresponse), and `User`, a [`ToResponse`](responses.md#toresponse) type holding `id` and `name` whose `to_response` is `Response.text(String(self.id) + ":" + self.name)` (the responses page's `UserText` is the same type with a space instead of `:`). The test checks the texts of `/hello`, `/users/0` and `/users/1`, not their statuses; `/users/x` is checked (400) by `test_test_client_before_and_after_an_app_move` in the same file, with that module's `Users`.
+Run by `tests/test_state_examples.mojo` (`test_state`), with `main` named `state_example`: the test calls it, then registers the same routes on an `App` of its own to send the requests. That module defines the two types the example takes from other pages: `NotFound`, the `ToErrorResponse` type of [errors](errors.md#application-error-responses-toerrorresponse), and `User`, a [`ToResponse`](responses.md#toresponse) type holding `id` and `name` whose `to_response` is `Response.text(String(self.id) + ":" + self.name)` (the responses page's `UserText` is the same type with a space instead of `:`).
 
 ## Rules
 
@@ -58,6 +59,7 @@ State goes first so the body stays last. Access is `state[]` because a struct ca
 
 ## `post`, `put` and `patch`
 
+<!-- example: tests/test_state_examples.mojo#state-post post_example=main -->
 ```mojo
 def update_user(users: State[Users], id: Int, body: CreateUser) raises NotFound -> User:
     return User(id, users[].get(id) + " as " + body.name)
@@ -75,10 +77,11 @@ def main():
 # POST /users/x "name=bo" -> 400 "Bad Request"   (from_body and update_user not called)
 ```
 
-The imports, `Users`, `User` and `NotFound` are the first example's; `CreateUser` is the `name=` text body of [bodies](bodies.md#text-bodies-frombody). Run by `tests/test_state_post.mojo` (`test_dx_section_8_post_example`), which builds the state with `_users()` (the same two names) and registers in the test function. Its `Users` also counts handler calls in a `calls` field, its `CreateUser` counts `from_body` calls, and its `User` answers status 201, so `/users/1` is 201 `"1:bob as bo"`. It checks the texts of `/users/1` and `/users/9` and the 400 of `/users/x`; that neither `from_body` nor the handler runs for an invalid route value is checked by `test_bad_route_value_is_400_before_the_body` in the same file.
+The imports, `Users`, `User` and `NotFound` are the first example's; `CreateUser` is the `name=` text body of [bodies](bodies.md#text-bodies-frombody). Run by `tests/test_state_examples.mojo` (`test_state_post`), with `main` named `post_example`, as the first example is. That neither `from_body` nor the handler runs for an invalid route value is checked by `tests/test_state_post.mojo` (`test_bad_route_value_is_400_before_the_body`).
 
 ## Raw handlers
 
+<!-- example: tests/test_state_examples.mojo#state-raw raw_example=main -->
 ```mojo
 from muntin import App, Request, Response, State
 
@@ -106,7 +109,7 @@ def main():
 # GET /webhook                              -> 405 "Method Not Allowed", Allow: POST  (webhook not called)
 ```
 
-Run by `tests/test_state_raw.mojo` (`test_dx_section_8_stateful_raw_example`), which names the handler `dx_webhook` and registers in the test function; it sends the signed request through `app.handle` and the others through `TestClient`.
+Run by `tests/test_state_examples.mojo` (`test_state_raw`), with `main` named `raw_example`, as the first example is; it sends the unsigned request through `app.handle` and the others through `TestClient`.
 
 A typed function value is spelled `def(State[S], var Request) thin raises Never -> Response`.
 

@@ -2,6 +2,7 @@
 
 Every handler shape may be non-raising, `raises` or `raises T` for an application type `T`; registration does not change. Mojo infers the error type. Each example below is its own `App`; the line after it names the test that runs it and what that test adds or changes.
 
+<!-- example: tests/test_reference_examples.mojo#errors-fixed-500 get_user_or_500=get_user -->
 ```mojo
 def get_user(id: Int) raises -> UserText:    # or raises T, an application error type that does not opt in
     if id == 0:
@@ -27,6 +28,7 @@ app.get["/users/{id}"](get_user)              # unchanged registration
 
 An error type opts in by declaring `ToErrorResponse`:
 
+<!-- example: tests/test_reference_examples.mojo#errors-to-error-response get_user_or_404=get_user -->
 ```mojo
 from muntin import App, Response, ToErrorResponse
 
@@ -63,6 +65,7 @@ app.get["/users/{id}"](get_user)
 
 When Muntin answers the fixed 500, the `Response` carries a report of what it dropped, which [middleware](middleware.md#logging-dropped-errors) reads; the client receives exactly the same 500 ([M3-058](../history/architecture-decisions.md#dropped-error-report-decision-m3-058), [M3-059](../history/architecture-decisions.md#dropped-error-report-amendment-m3-059)).
 
+<!-- example: tests/test_failure.mojo#errors-report -->
 ```mojo
 from muntin import App, Failure
 
@@ -83,7 +86,7 @@ app.get["/orders/{id}"](find_order)
 # GET /orders/1 -> 200 "order 1"; response.failure() is None
 ```
 
-Run by `tests/test_failure.mojo` (`test_handler_error_text`), with this `find_order`; it registers it through `_routes` with fourteen other routes and reads the report on `TestClient`'s response. `GET /orders/1` is checked in `test_dx_logging_example` (its text) and `test_outermost_logging_middleware` (no report reaches the logging middleware); a middleware reading this report is in [middleware](middleware.md#logging-dropped-errors).
+Run by `tests/test_failure.mojo` (`test_errors_report_example`), as written; it reads the report on `TestClient`'s response and on `App.handle`'s. `test_handler_error_text` registers this `find_order` through `_routes` with fourteen other routes, and `test_outermost_logging_middleware` checks that for `GET /orders/1` no report reaches the logging middleware; a middleware reading this report is in [middleware](middleware.md#logging-dropped-errors).
 
 - `Response.failure() -> Optional[Failure]` returns a copy. `Failure.source` is the step that dropped the error:
   - `Failure.HANDLER` (`"handler"`): a handler raised and its declared type does not opt in;

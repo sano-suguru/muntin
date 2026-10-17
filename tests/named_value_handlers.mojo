@@ -28,10 +28,16 @@ struct Note(FromBody, Movable):
         return Self(body)
 
 
-# docs/reference/route-values.md, "Named route values", as written there.
+# docs/reference/route-values.md, "Named route values": the text between the
+# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
 
 
-def post_of(uid: Int, pid: Int) -> String:
+# fmt: off
+# example: route-values-named
+from muntin import App, Param
+
+
+def post_of(uid: Int, pid: Int) -> String:              # bare: bound by position, not checked
     return String("post ", pid, " of user ", uid)
 
 
@@ -44,6 +50,10 @@ def make_app() -> App:
     app.get["/users/{uid}/posts/{pid}"](post_of)
     app.get["/checked/{uid}/posts/{pid}"](checked_post_of)
     return app^
+# GET /users/1/posts/2, /checked/1/posts/2 -> 200 "post 2 of user 1"
+# GET /checked/1/posts/x                   -> 400 "Bad Request"
+# example: end
+# fmt: on
 
 
 def with_body(

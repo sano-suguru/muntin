@@ -19,6 +19,7 @@ Each example below is its own `App`; the line after it names the test that runs 
 - A typed `post`, `put` or `patch` handler with a body reads them through `WithHeaders[B]` ([bodies](bodies.md#header-fields-with-a-body-withheadersb)).
 - A typed `get` or `delete` handler, or a bodyless `post`, `put` or `patch` handler, takes `Headers` as its last parameter:
 
+<!-- example: tests/test_get_headers.mojo#headers-get -->
 ```mojo
 from muntin import App, Headers, Response, State, ToErrorResponse
 

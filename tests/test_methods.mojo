@@ -602,7 +602,9 @@ def test_test_client_methods_equal_app_handle() raises:
     assert_equal(dels.delete("/draw").text(), "DELETE|/draw||")
 
 
-# docs/reference/routing.md, "Methods", as written there.
+# docs/reference/routing.md, "Methods": the text between the `# example:`
+# lines is what the page shows (scripts/check_doc_examples.py). The three
+# types it uses without defining come first.
 
 
 struct UserForm(FromBody):
@@ -638,6 +640,14 @@ struct Unauthorized(ToErrorResponse):
         return Response.text("Unauthorized", status=401)
 
 
+# fmt: off
+# example: routing-methods
+from muntin import App, FromJson, Headers, Json, JsonValue, Request, Response, State
+from muntin.testing import TestClient
+
+# UserForm, User and Unauthorized: not defined here (see the line after the example).
+
+
 @fieldwise_init
 struct Rename(FromJson):
     var name: String
@@ -652,34 +662,59 @@ struct Directory(Movable):
     var domain: String
 
 
-def replace_user(id: Int, body: UserForm) -> String:  # `post`'s shapes
+def replace_user(id: Int, body: UserForm) -> String:  # `post`'s shapes; UserForm a FromBody
     return String("replaced ", id, " ", body.name)
 
 
 def rename_user(
     users: State[Directory], id: Int, body: Json[Rename]
-) -> Json[User]:
+) -> Json[User]:                                          # User a ToJson
     return Json(User(id, body.value.name + "@" + users[].domain))
 
 
 def remove_user(id: Int, headers: Headers) raises Unauthorized -> String:
-    if not headers.get("authorization"):  # `get`'s shapes
+    if not headers.get("authorization"):  # `get`'s shapes; Unauthorized a ToErrorResponse
         raise Unauthorized()
     return String("removed ", id)
 
 
 def purge(req: Request) raises -> Response:  # raw: reads a DELETE body as text
     return Response.text("purged " + req.path + " [" + req.text() + "]")
+# example: end
+# fmt: on
 
 
 def test_dx_example() raises:
+    # fmt: off
+    # example: routing-methods
     var app = App()
     app.put["/users/{id}"](replace_user)
     app.patch["/users/{id}"](rename_user, State(Directory("example.com")))
     app.delete["/users/{id}"](remove_user)
     app.delete["/cache"](purge)
+    # PUT /users/7  "name=Ada"                  -> 200 "replaced 7 Ada"
+    # PUT /users/7  "Ada" or ""                 -> 400 "Bad Request"  (from_body raised; replace_user not called)
+    # PATCH /users/7  Content-Type: application/json  {"name":"bo"}
+    #   -> 200, Content-Type: application/json, {"id":7,"name":"bo@example.com"}
+    # PATCH /users/7  (no Content-Type)         -> 415 "Unsupported Media Type"
+    # DELETE /users/7  Authorization: t1        -> 200 "removed 7"
+    # DELETE /users/7  (no Authorization)       -> 401 "Unauthorized"
+    # DELETE /users/abc                         -> 400 "Bad Request"  (remove_user not called)
+    # DELETE /cache  "all"                      -> 200 "purged /cache [all]"
+    # POST /users/7, HEAD /users/7 (no get route here), OPTIONS /users/7, delete /users/7
+    #   -> 405 "Method Not Allowed", Allow: PUT, PATCH, DELETE
+    # GET /cache                                -> 405 "Method Not Allowed", Allow: DELETE
 
     var client = TestClient(app)
+    _ = client.put("/users/7", "name=Ada")
+    var h = Headers()
+    h.add("Content-Type", "application/json")
+    _ = client.patch("/users/7", '{"name":"bo"}', headers=h^)
+    _ = client.delete("/users/7")                       # 401: no field sent
+    _ = app.handle(Request("DELETE", "/cache", "all"))  # a DELETE body: build the Request
+    # example: end
+    # fmt: on
+
     var r = client.put("/users/7", "name=Ada")
     assert_equal(r.status, 200)
     assert_equal(r.text(), "replaced 7 Ada")
@@ -688,9 +723,9 @@ def test_dx_example() raises:
         assert_equal(bad.status, 400)
         assert_equal(bad.text(), "Bad Request")
 
-    var h = Headers()
-    h.add("Content-Type", "application/json")
-    var renamed = client.patch("/users/7", '{"name":"bo"}', headers=h^)
+    var json = Headers()
+    json.add("Content-Type", "application/json")
+    var renamed = client.patch("/users/7", '{"name":"bo"}', headers=json^)
     assert_equal(renamed.status, 200)
     assert_equal(renamed.text(), '{"id":7,"name":"bo@example.com"}')
     assert_equal(

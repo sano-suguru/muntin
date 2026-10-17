@@ -4,6 +4,7 @@ A route value is a handler parameter filled from a `{name}` path segment or a `{
 
 ## `Int` values
 
+<!-- example: tests/test_app.mojo#route-values-int -->
 ```mojo
 def hello() -> String:
     return "hello"
@@ -28,6 +29,7 @@ Run by `tests/test_app.mojo`: `users_app` registers these routes, the next examp
 
 ## Query values
 
+<!-- example: tests/test_app.mojo#route-values-query -->
 ```mojo
 def list_items(limit: Int) -> String:
     return "items " + String(limit)
@@ -50,6 +52,7 @@ Registered on the `Int` example's `App` (`/hello` is its route). Run by `tests/t
 
 ## `String` values and decoding
 
+<!-- example: tests/test_string_route_values.mojo#route-values-string -->
 ```mojo
 def profile(name: String) -> String:
     return "profile " + name
@@ -94,6 +97,7 @@ Run by `tests/test_string_route_values.mojo` (`test_dx_examples`, on `_dx_app`),
 
 A handler takes up to two bare route values, on every method:
 
+<!-- example: tests/test_route_values.mojo#route-values-two -->
 ```mojo
 from muntin import (
     App,
@@ -194,6 +198,7 @@ Run by `tests/test_route_values.mojo` (`test_dx_examples`, on `_dx_app`), which 
 
 **`Param` checks the name written in its type annotation, not the handler's variable name.** Binding stays by position.
 
+<!-- example: tests/named_value_handlers.mojo#route-values-named -->
 ```mojo
 from muntin import App, Param
 
@@ -219,6 +224,7 @@ Run by `tests/test_named_values.mojo` (`test_dx_example`), which imports `post_o
 
 Intentionally does not compile:
 
+<!-- example: none: compile errors with elided bodies; the fixtures named below pin each message -->
 ```mojo
 def wrong(pid: Param["pid", Int], uid: Param["uid", Int]) -> String: ...
 app.get["/users/{uid}/posts/{pid}"](wrong)
@@ -243,6 +249,7 @@ Checked by `tests/named_values_api_fail/get_swapped_names.mojo` and `get_mixed_v
 
 An `Optional[Int]` or `Optional[String]` parameter is a query value that may be absent; the handler supplies any default:
 
+<!-- example: tests/test_optional_values.mojo#route-values-optional -->
 ```mojo
 from muntin import App, Headers
 
@@ -292,6 +299,7 @@ Run by `tests/test_optional_values.mojo` (`test_dx_examples`, on `_dx_app`), whi
 
 An application type conforming to `FromRouteValue` is a route value; it decides how the text reads:
 
+<!-- example: tests/app_route_value_handlers.mojo#route-values-application -->
 ```mojo
 from muntin import App, FromRouteValue
 
@@ -357,6 +365,7 @@ Run by `tests/test_app_route_values.mojo` (`test_dx_example`), which imports `Us
 
 A struct conforming to `RouteValues` is one parameter carrying every route value of its route, one field per placeholder, each named after the placeholder it binds. It is how a handler takes three or more values:
 
+<!-- example: tests/test_route_records.mojo#route-values-records -->
 ```mojo
 from muntin import App, FromJson, Json, JsonValue, JsonWriter, RouteValues, State, ToJson
 
@@ -431,10 +440,11 @@ def make_dx_app() -> App:
 # PATCH /organizations/4/projects/5/tasks/6  (no Content-Type) -> 415 "Unsupported Media Type"
 ```
 
-Run by `tests/test_route_records.mojo` (`test_dx_example`), which declares the types in another order, sends the body `not json` with the 400 and 415 requests, checks only their statuses, and also checks that `PATCH .../tasks/0` is the fixed 500 (`update_task` raised) and that `App.handle` answers a `PATCH` alike.
+Run by `tests/test_route_records.mojo` (`test_dx_example`), which sends the body `not json` with the 400 and 415 requests, checks only their statuses, and also checks that `PATCH .../tasks/0` is the fixed 500 (`update_task` raised) and that `App.handle` answers a `PATCH` alike.
 
 Intentionally does not compile:
 
+<!-- example: none: compile errors with elided bodies; the fixtures named below pin each message -->
 ```mojo
 @fieldwise_init
 struct Swapped(RouteValues):

@@ -8,6 +8,7 @@ A typed handler returns `String`, `StaticString` (a string literal included) or 
 
 ## `ToResponse`
 
+<!-- example: tests/test_reference_examples.mojo#responses-to-response -->
 ```mojo
 from muntin import App, Response, ToResponse
 
@@ -48,6 +49,7 @@ Run by `tests/test_reference_examples.mojo` (`test_responses_to_response`), as w
 
 A handler returns `Json[T]` with `T: ToJson` ([bodies](bodies.md#json-jsont) for `FromJson`/`ToJson`). The response is status 200 with exactly one field, `Content-Type: application/json`. `Json(value, status=201)` chooses another status. `CreateUser` (`FromJson`, with an optional `nickname`) and `User` (`ToJson`, written as `{"id":...,"name":...}`) are the types of [bodies](bodies.md#json-jsont), not the `UserText` above:
 
+<!-- example: tests/test_json_dx.mojo#responses-json -->
 ```mojo
 def register(var body: Json[CreateUser]) -> Json[User]:
     var c = body^.take()
@@ -60,11 +62,12 @@ app.post["/accounts"](register)
 #   -> 201, Content-Type: application/json, {"id":2,"name":"Bo"}
 ```
 
-Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), as written, with the types of [bodies](bodies.md#json-jsont); its app also registers the `create_user` and `replace_user` of bodies and the `create` below at `GET /create`.
+Run by `tests/test_json_dx.mojo` (`test_json_result_status`), as written, with the types of [bodies](bodies.md#json-jsont).
 
 - `status` is keyword-only (`Json(value, 201)` does not compile) and not validated.
 - Another media type is an edit of the converted response:
 
+<!-- example: tests/test_json_dx.mojo#responses-json-media-type -->
 ```mojo
 def create() raises -> Response:
     var r = Json(User(7, "Ada"), status=201).to_response()

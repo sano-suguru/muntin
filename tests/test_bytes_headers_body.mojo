@@ -124,8 +124,14 @@ def _sent() raises -> Headers:
 comptime SENT_FIELDS = "X-Sig=<a>;x-sig=<b>;Empty=<>;Content-Type=<x/y>;"
 
 
-# The docs/reference/bodies.md `WithHeaders` around a `FromBytes` example,
-# verbatim.
+# docs/reference/bodies.md, `WithHeaders` around a `FromBytes`: the text
+# between the `# example:` lines is what the page shows
+# (scripts/check_doc_examples.py).
+
+
+# fmt: off
+# example: bodies-bytes-with-headers
+from muntin import App, FromBytes, Response, ToErrorResponse, WithHeaders
 
 
 struct Upload(FromBytes):
@@ -157,6 +163,8 @@ def put_object(
         raise Unauthorized()  # Muntin gives the field no meaning
     var kind = input.headers.get("content-type").or_else("unknown")
     return String(key, ": ", len(input.body.data), " bytes, ", kind)
+# example: end
+# fmt: on
 
 
 # Application types.
@@ -471,7 +479,17 @@ def _expected(shape: _Shape, fields: String, body: List[UInt8]) -> List[UInt8]:
 
 def test_dx_example() raises:
     var app = App()
+    # fmt: off
+    # example: bodies-bytes-with-headers
     app.put["/objects/{key}"](put_object)
+    # PUT /objects/logo.png  X-Signature: s1  Content-Type: image/png  89 50 00 FF 80
+    #   -> 200 "logo.png: 5 bytes, image/png"   (from_bytes received the 5 bytes)
+    # the same without X-Signature  -> 401 "missing signature"  (the handler's error type)
+    # X-Signature: s1, empty body   -> 400 "Bad Request"  (from_bytes raised; put_object not called)
+    # no X-Signature, empty body    -> 400 "Bad Request"  (from_bytes runs before put_object reads the field)
+    # GET /objects/a                -> 405 "Method Not Allowed", Allow: PUT
+    # example: end
+    # fmt: on
     var client = TestClient(app)
     var bytes = _octets([0x89, 0x50, 0x00, 0xFF, 0x80])
     var ok = client.put(

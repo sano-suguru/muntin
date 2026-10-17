@@ -4,6 +4,7 @@ Muntin is a typed application layer for building web services in Mojo. Your hand
 
 Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over HTTP or HTTPS, with an IP-literal host. On SIGTERM or SIGINT it stops taking connections and serves the open ones for a grace window; it does not cancel or notify running handlers, and if the server has not stopped one second after the window, it ends the whole process without cleanup. It is not production-ready.
 
+<!-- example: tests/test_guide.mojo#first-application first_application=main -->
 ```mojo
 from muntin import App
 from muntin.testing import TestClient
@@ -31,9 +32,11 @@ GET /users      -> 404 "Not Found"
 
 A route that does not fit its handler does not compile:
 
+<!-- example: tests/compile_fail/param_route_no_arg_handler.mojo#readme -->
 ```mojo
 def hello() -> String:
     return "hello"
+
 
 app.get["/users/{id}"](hello)
 # compile error: route declares a path parameter but the handler takes none

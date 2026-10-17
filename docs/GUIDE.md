@@ -2,12 +2,13 @@
 
 How to write a Muntin application today, on Mojo 1.1.0 (8189361e). Each section shows the common case and links to the [reference](#reference) for every rule, status and error message. Setup is in the [README](../README.md#try-it).
 
-The examples build on each other: `User` and `CreateUser` come from "Request bodies", `NotFound` from "Results and errors". `tests/test_guide.mojo` registers every example as written, each on its own `App` with only the routes its comments rely on, and checks those answers; the serving example is `examples/hello_server.mojo`, which CI builds.
+The examples build on each other: `User` and `CreateUser` come from "Request bodies", `NotFound` from "Results and errors". `tests/test_guide.mojo` registers every example as written (each example is that file's text, which `scripts/check_doc_examples.py` compares), each on its own `App` with only the routes its comments rely on, and checks those answers; the serving example is `examples/hello_server.mojo`, which CI builds.
 
 Muntin is pre-alpha: the API still changes, and the Flare adapter's `Server` is not production-ready. Read [Before you deploy](#before-you-deploy) first.
 
 ## A first application
 
+<!-- example: tests/test_guide.mojo#first-application first_application=main -->
 ```mojo
 from muntin import App
 from muntin.testing import TestClient
@@ -33,6 +34,7 @@ def main() raises:
 
 Handlers take route values by position: path placeholders left to right, then query placeholders.
 
+<!-- example: tests/test_guide.mojo#routes -->
 ```mojo
 def list_items(limit: Optional[Int]) -> String:
     return "items " + String(limit.or_else(20))
@@ -60,6 +62,7 @@ Reference: [routing](reference/routing.md), [route values](reference/route-value
 
 A `post`, `put` or `patch` handler takes one body, last. For JSON, wrap an application type in `Json[T]`:
 
+<!-- example: tests/test_guide.mojo#request-bodies -->
 ```mojo
 from muntin import App, FromJson, Json, JsonValue, JsonWriter, ToJson
 
@@ -116,6 +119,7 @@ A handler returns `String` or `StaticString` (a 200 text response with no fields
 
 **Anything a handler raises is a fixed 500 `Internal Server Error`, and the error's text is never sent**, unless the handler's declared error type conforms to `ToErrorResponse`:
 
+<!-- example: tests/test_guide.mojo#results-and-errors -->
 ```mojo
 from muntin import App, Json, Response, ToErrorResponse
 
@@ -151,6 +155,7 @@ Reference: [responses](reference/responses.md), [errors](reference/errors.md).
 
 A `get` or `delete` handler (or a bodyless one) takes `Headers` as its last parameter:
 
+<!-- example: tests/test_guide.mojo#header-fields -->
 ```mojo
 from muntin import Headers
 
@@ -179,6 +184,7 @@ app.get["/me"](me)
 
 Long-lived data reaches a handler only as `State[S]`, passed at registration; there are no globals:
 
+<!-- example: tests/test_guide.mojo#application-state -->
 ```mojo
 from muntin import State
 
@@ -216,6 +222,7 @@ Reference: [state](reference/state.md).
 
 Middleware is a function that may answer, or run the rest with `next^.run(request^)` and change the response:
 
+<!-- example: tests/test_guide.mojo#middleware -->
 ```mojo
 from muntin import App, Next, Request, Response
 
@@ -241,6 +248,7 @@ Reference: [middleware](reference/middleware.md).
 
 When a typed shape does not fit, a raw handler takes the whole `Request` and returns a `Response`; Muntin extracts nothing and answers no 400:
 
+<!-- example: tests/test_guide.mojo#raw-handlers -->
 ```mojo
 def webhook(req: Request) -> Response:       # `var req: Request` also works
     if Span(req.body) != "signed".as_bytes():  # application code decides
@@ -259,6 +267,7 @@ Bodies are bytes (`List[UInt8]`) both ways; `req.text()` raises when they are no
 
 `TestClient` drives an `App` in memory through `App.handle`, the same entry a network backend calls:
 
+<!-- example: tests/test_guide.mojo#testing -->
 ```mojo
 app.post["/users"](create_user)  # the JSON handler above
 var client = TestClient(app)
@@ -274,6 +283,7 @@ The client sends exactly the fields given in `headers=` and nothing else. Refere
 
 The Flare adapter's `Server` serves an `App` over HTTP/1.1 and h2c, or HTTPS with `tls=Tls(cert_file=..., key_file=...)`:
 
+<!-- example: examples/hello_server.mojo -->
 ```mojo
 from muntin import App
 from muntin_flare import Server

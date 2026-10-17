@@ -2,6 +2,7 @@
 
 A raw handler takes the whole `Request` and returns a `Response`, for what typed shapes do not cover: webhooks, custom content types, unusual authentication, protocol integrations. Each example below is its own `App`; the line after it names the test that runs it and what that test adds or changes.
 
+<!-- example: tests/test_raw.mojo#raw-webhook -->
 ```mojo
 from muntin import App, Request, Response
 
@@ -24,6 +25,7 @@ Run by `tests/test_raw.mojo` (`test_dx_section_9_example`), with `webhook` as wr
 
 With header fields:
 
+<!-- example: tests/test_headers.mojo#raw-headers -->
 ```mojo
 from muntin import App, Headers, Request, Response
 
@@ -43,7 +45,7 @@ app.post["/webhook"](webhook)
 # POST /webhook  (no X-Signature)           -> 401 "unsigned"
 ```
 
-Run by `tests/test_headers.mojo` (`test_dx_section_9_headers_example`), which names the handler `dx_webhook` and sends both requests through `app.handle` (`Headers` builds the signed request's field).
+Run by `tests/test_headers.mojo` (`test_dx_section_9_headers_example`), as written; it sends both requests through `app.handle` (`Headers` builds the signed request's field).
 
 - Same registration on all five methods; with [state](state.md#raw-handlers), `def(State[S], Request) -> Response`.
 - The handler declares `req: Request` or `var req: Request` (an owned copy it may change or move `req.body` out of), and returns `Response` only. It may be non-raising, `raises` or `raises T`, under the [error model](errors.md).
@@ -57,6 +59,7 @@ Run by `tests/test_headers.mojo` (`test_dx_section_9_headers_example`), which na
 
 A body is bytes, `List[UInt8]`, both ways:
 
+<!-- example: tests/test_binary_body.mojo#raw-binary -->
 ```mojo
 from muntin import App, Request, Response
 from muntin.testing import TestClient
