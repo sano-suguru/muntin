@@ -37,7 +37,20 @@ from muntin import (
 from muntin.testing import TestClient
 
 
-# docs/reference/route-values.md, "Route-value records".
+# docs/reference/route-values.md, "Route-value records": the text between the
+# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+
+
+# fmt: off
+# example: route-values-records
+from muntin import App, FromJson, Json, JsonValue, JsonWriter, RouteValues, State, ToJson
+
+
+@fieldwise_init
+struct TaskAt(RouteValues):
+    var org_id: Int
+    var project_id: Int
+    var task_id: Int
 
 
 @fieldwise_init
@@ -74,13 +87,6 @@ struct Db(Movable):
     var title: String
 
 
-@fieldwise_init
-struct TaskAt(RouteValues):
-    var org_id: Int
-    var project_id: Int
-    var task_id: Int
-
-
 def get_task(at: TaskAt) -> Json[Task]:
     return Json(Task(at.org_id, at.project_id, at.task_id, "first"))
 
@@ -91,12 +97,7 @@ def update_task(
     if at.task_id == 0:
         raise Error("no task 0")
     return Json(
-        Task(
-            at.org_id,
-            at.project_id,
-            at.task_id,
-            body.value.title + " in " + db[].title,
-        )
+        Task(at.org_id, at.project_id, at.task_id, body.value.title + " in " + db[].title)
     )
 
 
@@ -108,6 +109,13 @@ def make_dx_app() -> App:
     app.get[TASK](get_task)
     app.patch[TASK](update_task, State(Db("db")))
     return app^
+# GET /organizations/1/projects/2/tasks/3 -> 200 {"org_id":1,"project_id":2,"task_id":3,"title":"first"}
+# PATCH /organizations/4/projects/5/tasks/6  Content-Type: application/json  {"title":"renamed"}
+#   -> 200 {"org_id":4,"project_id":5,"task_id":6,"title":"renamed in db"}
+# PATCH /organizations/4/projects/x/tasks/6  (no Content-Type) -> 400 "Bad Request"  (before the body's 415)
+# PATCH /organizations/4/projects/5/tasks/6  (no Content-Type) -> 415 "Unsupported Media Type"
+# example: end
+# fmt: on
 
 
 def _json_headers() raises -> Headers:

@@ -105,7 +105,10 @@ def _show(v: Optional[String]) -> String:
     return "[" + v.value() + "]" if v else "None"
 
 
-# docs/reference/route-values.md, "Optional query values", as written there.
+# docs/reference/route-values.md, "Optional query values": the text between
+# the `# example:` lines is what the page shows
+# (scripts/check_doc_examples.py). `CreateUser` is the `name=` text body of
+# docs/reference/bodies.md.
 
 
 struct CreateUser(FromBody):
@@ -121,6 +124,11 @@ struct CreateUser(FromBody):
         return Self(String(body[byte=5:]))
 
 
+# fmt: off
+# example: route-values-optional
+from muntin import App, Headers
+
+
 def list_items(limit: Optional[Int]) -> String:
     return "items " + String(limit.or_else(20))
 
@@ -133,17 +141,32 @@ def posts(uid: Int, limit: Optional[Int], headers: Headers) -> String:
     return String("user ", uid, ": ", limit.or_else(20), " posts")
 
 
-def tag_user(tag: Optional[String], body: CreateUser) -> String:
+def tag_user(tag: Optional[String], body: CreateUser) -> String:   # CreateUser: see below
     return "created " + body.name + " tagged " + tag.or_else("none")
+# example: end
+# fmt: on
 
 
 def _dx_app() -> App:
-    """The reference's registrations, as written there, on its own `App`."""
-    var app = App()
+    """The reference's registrations, on its own `App`."""
+    # fmt: off
+    # example: route-values-optional
+    var app = App()                       # its own App
     app.get["/items?{limit}"](list_items)
     app.get["/search?{q}&{sort}"](search)
     app.get["/users/{uid}/posts?{limit}"](posts)
     app.post["/users?{tag}"](tag_user)
+    # GET /items, /items?limit=, /items?limit    -> 200 "items 20"   (limit is None)
+    # GET /items?limit=5, /items?limit=%35       -> 200 "items 5"
+    # GET /items?limit=x, /items?limit=1&limit=2 -> 400 "Bad Request" (list_items not called)
+    # GET /search?q=mojo                         -> 200 "results for mojo by relevance"
+    # GET /search?sort=date&q=mojo               -> 200 "results for mojo by date"
+    # GET /search?sort=date                      -> 400 "Bad Request"  (q is required)
+    # GET /users/1/posts, /users/1/posts?limit=5 -> 200 "user 1: 20 posts", "user 1: 5 posts"
+    # POST /users  "name=Ada"                    -> 200 "created Ada tagged none"
+    # POST /users?tag=a+b  "name=Ada"            -> 200 "created Ada tagged a b"
+    # example: end
+    # fmt: on
     return app^
 
 

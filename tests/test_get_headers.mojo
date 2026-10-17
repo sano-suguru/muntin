@@ -23,12 +23,6 @@ from muntin.testing import TestClient
 from muntin.http import _Field
 
 
-@fieldwise_init
-struct Unauthorized(ToErrorResponse):
-    def to_error_response(deinit self) -> Response:
-        return Response.text("Unauthorized", status=401)
-
-
 struct Prefix(Movable):
     var text: String
 
@@ -125,10 +119,24 @@ def update(id: Int, input: WithHeaders[Note]) -> String:
     return String(id, " ", input.body.text, " ", _dump(input.headers))
 
 
-# docs/reference/headers.md, typed header access on `get`, as written there.
+# docs/reference/headers.md, typed header access on `get`: the text between
+# the `# example:` lines is what the page shows
+# (scripts/check_doc_examples.py). Its `Unauthorized` serves the other tests
+# too.
 
 
-struct Users(Movable):
+# fmt: off
+# example: headers-get
+from muntin import App, Headers, Response, State, ToErrorResponse
+
+
+@fieldwise_init
+struct Unauthorized(ToErrorResponse):
+    def to_error_response(deinit self) -> Response:
+        return Response.text("Unauthorized", status=401)
+
+
+struct Users(Movable):                    # the application's token list, shared as State
     var tokens: List[String]
 
     def __init__(out self, var tokens: List[String]):
@@ -160,6 +168,8 @@ def private_note(
     if not token or not users[].allows(token.value()):
         raise Unauthorized()
     return String("private ", id)
+# example: end
+# fmt: on
 
 
 # Generic forwarding (M3-015 edge 4) reaching the `Headers` kind.
@@ -327,6 +337,8 @@ def test_generic_and_typed_forwarding() raises:
 
 
 def test_dx_example() raises:
+    # fmt: off
+    # example: headers-get
     var tokens = List[String]()
     tokens.append("t1")
     var users = State(Users(tokens^))
@@ -334,6 +346,14 @@ def test_dx_example() raises:
     app.get["/me"](me)
     app.get["/notes/{id}"](note)
     app.get["/private/{id}"](private_note, users)
+    # GET /me  Authorization: t1             -> 200 "me t1"
+    # GET /me  (no Authorization)            -> 401 "Unauthorized" (the handler's error type)
+    # GET /notes/3  X-Trace: a  x-trace: b   -> 200 "3 traces=2"
+    # GET /notes/x                           -> 400 "Bad Request"  (note not called)
+    # GET /private/3  Authorization: t1       -> 200 "private 3"
+    # GET /private/3  Authorization: t2, or none -> 401 "Unauthorized"
+    # example: end
+    # fmt: on
     var client = TestClient(app)
     var ok = client.get("/me", headers=_h("Authorization", "t1"))
     assert_equal(ok.status, 200)

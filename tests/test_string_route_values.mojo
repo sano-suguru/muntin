@@ -98,15 +98,21 @@ def _json() raises -> Headers:
     return _h("Content-Type", "application/json")
 
 
-# docs/reference/route-values.md, `String` values, as written there.
+# docs/reference/route-values.md, `String` values: the text between the
+# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+# `list_items` is the page's query example's.
 
 
+# example: route-values-string
 def profile(name: String) -> String:
     return "profile " + name
 
 
 def search(q: String) -> String:
     return "results for " + q
+
+
+# example: end
 
 
 def list_items(limit: Int) -> String:
@@ -236,11 +242,23 @@ def _app() -> App:
 
 
 def _dx_app() -> App:
-    """The reference's registrations, as written there, on its own `App`."""
-    var app = App()
+    """The reference's registrations, on its own `App`."""
+    # fmt: off
+    # example: route-values-string
+    var app = App()                       # its own App: on the one above, /users/{name} after /users/{id} aborts
     app.get["/users/{name}"](profile)
+    # GET /users/alice        -> 200 "profile alice"
+    # GET /users/J%C3%B6rg    -> 200 "profile Jörg"
+    # GET /users/a+b          -> 200 "profile a+b"     (`+` is literal in a path)
+    # GET /users/%zz, /users/%FF -> 400 "Bad Request"  (bad escape; not UTF-8)
     app.get["/search?{q}"](search)
-    app.get["/items?{limit}"](list_items)
+    # GET /search?q=mojo+lang -> 200 "results for mojo lang"
+    # GET /search?q=a%2Bb     -> 200 "results for a+b"
+    # GET /search, /search?q=, /search?q=1&q=2 -> 400 "Bad Request"
+    app.get["/items?{limit}"](list_items)  # list_items as above
+    # GET /items?limit=%31%30 -> 200 "items 10"
+    # example: end
+    # fmt: on
     return app^
 
 

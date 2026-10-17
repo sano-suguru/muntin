@@ -4,16 +4,24 @@ from muntin import App, Request, Response
 from muntin.testing import TestClient
 
 
+# docs/reference/route-values.md's `Int` and query examples are the text
+# between the `# example:` lines (scripts/check_doc_examples.py).
+
+
+# example: route-values-int
 def hello() -> String:
     return "hello"
 
 
-def goodbye() -> String:
-    return "goodbye"
-
-
 def get_user(id: Int) -> String:
     return String(id)
+
+
+# example: end
+
+
+def goodbye() -> String:
+    return "goodbye"
 
 
 def user_posts(id: Int) -> String:
@@ -28,16 +36,36 @@ def named(name: String) -> String:
     return "named " + name
 
 
+# example: route-values-query
 def list_items(limit: Int) -> String:
     return "items " + String(limit)
 
 
+# example: end
+
+
 def users_app() -> App:
+    # fmt: off
+    # example: route-values-int
     var app = App()
-    app.get["/hello"](hello)
-    app.get["/users/{id}"](get_user)
+    app.get["/hello"](hello)              # () -> String and (Int) -> String share one App
+    app.get["/users/{id}"](get_user)      # same registration syntax
+    # GET /users/42  -> 200 "42"   (get_user received Int(42))
+    # GET /users/abc -> 400 "Bad Request"   (get_user not called)
+    # GET /users     -> 404 "Not Found"
+    # example: end
+    # fmt: on
     app.get["/users/{id}/posts"](user_posts)
-    app.get["/items?{limit}"](list_items)
+    # fmt: off
+    # example: route-values-query
+    app.get["/items?{limit}"](list_items)    # the literal names the query key
+    # GET /items?limit=10          -> 200 "items 10"
+    # GET /items?limit=010         -> 200 "items 10"  (list_items received Int(10))
+    # GET /items?other=z&limit=10  -> 200 "items 10"  (other keys are ignored)
+    # GET /items, /items?limit=abc, /items?limit=1&limit=2 -> 400 "Bad Request" (list_items not called)
+    # GET /hello?x=1               -> 200 "hello"     (no-query routes ignore the query)
+    # example: end
+    # fmt: on
     return app^
 
 

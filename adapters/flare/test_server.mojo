@@ -3759,11 +3759,59 @@ def _write_byte_of(fd: Int, byte: String) raises:
     out.write_bytes(byte.as_bytes())
 
 
+# docs/reference/serving.md's examples that bind port 8080: the text between
+# the `# example:` lines is what the page shows (scripts/check_doc_examples.py),
+# each `main` renamed, with this module's `hello`. They are built, never
+# called: each would serve on port 8080 until stopped. `make_app` is also
+# the one `test_docs_workers_example` serves on port 0.
+
+
+# example: serving-workers
 def make_app() -> App:
-    """`docs/reference/serving.md`'s workers example, as written."""
     var app = App()
     app.get["/"](hello)
     return app^
+
+
+def workers_main() raises:
+    var server = Server.bind("127.0.0.1", 8080)
+    server.serve[make_app](workers=4)
+
+
+# example: end
+
+
+# example: serving-receive-limit
+def receive_limit_main() raises:
+    var app = App()
+    app.get["/"](hello)
+    var server = Server.bind("127.0.0.1", 8080, max_body_bytes=64 * 1024)
+    server.serve(app)
+
+
+# example: end
+
+
+# example: serving-idle-timeout
+def idle_timeout_main() raises:
+    var app = App()
+    app.get["/"](hello)
+    var server = Server.bind("127.0.0.1", 8080, idle_timeout_ms=30_000)
+    server.serve(app)
+
+
+# example: end
+
+
+# example: serving-field-limit
+def field_limit_main() raises:
+    var app = App()
+    app.get["/"](hello)
+    var server = Server.bind("127.0.0.1", 8080, max_header_fields=50)
+    server.serve(app)
+
+
+# example: end
 
 
 def test_docs_workers_example() raises:

@@ -114,7 +114,7 @@ def test_request_and_response_defaults_add_nothing() raises:
 # Raw handlers through App.handle.
 
 
-def webhook(req: Request) raises -> Response:
+def hook(req: Request) raises -> Response:
     var sig = req.headers.get("x-signature")
     if not sig:
         return Response.text("unsigned", status=401)
@@ -170,7 +170,7 @@ def create() -> Created:
 
 def test_raw_handler_reads_and_writes_headers() raises:
     var app = App()
-    app.post["/hook"](webhook)
+    app.post["/hook"](hook)
     var h = Headers()
     h.add("X-SIGNATURE", "sha256=abc")
     h.add("X-A", "1")
@@ -238,21 +238,35 @@ def test_invalid_header_is_a_handler_error() raises:
     assert_equal(len(got.headers), 0)
 
 
-# docs/reference/raw.md's headers example, registered as `dx_webhook`.
+# docs/reference/raw.md's headers example: the text between the `# example:`
+# lines is what the page shows (scripts/check_doc_examples.py).
 
 
-def dx_webhook(req: Request) raises -> Response:
-    var signature = req.headers.get("x-signature")  # Optional[String]
+# fmt: off
+# example: raw-headers
+from muntin import App, Headers, Request, Response
+
+
+def webhook(req: Request) raises -> Response:
+    var signature = req.headers.get("x-signature")      # Optional[String]
     if not signature or signature.value() != "sha256=valid":
         return Response.text("unsigned", status=401)
     var resp = Response.text("ok")
-    resp.headers.add("X-Request-Id", "42")  # raises if invalid
+    resp.headers.add("X-Request-Id", "42")               # raises if invalid
     return resp^
+# example: end
+# fmt: on
 
 
 def test_dx_section_9_headers_example() raises:
+    # fmt: off
+    # example: raw-headers
     var app = App()
-    app.post["/webhook"](dx_webhook)
+    app.post["/webhook"](webhook)
+    # POST /webhook  X-Signature: sha256=valid  -> 200 "ok", X-Request-Id: 42
+    # POST /webhook  (no X-Signature)           -> 401 "unsigned"
+    # example: end
+    # fmt: on
     var h = Headers()
     h.add("X-Signature", "sha256=valid")
     var ok = app.handle(Request("POST", "/webhook", "", h^))
