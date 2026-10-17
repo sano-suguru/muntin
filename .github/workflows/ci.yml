@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   # Pull requests that change only docs/** and *.md files skip verify and
-  # flare; ci-ok still reports.
+  # flare; docs and ci-ok still run.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -31,6 +31,14 @@ jobs:
           else
             echo "code=false" >>"$GITHUB_OUTPUT"
           fi
+
+  # The documents' checks need only Python, so every pull request runs
+  # them, those that change only documents included.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./scripts/check_docs.sh
 
   verify:
     needs: changes
@@ -116,18 +124,20 @@ jobs:
   # anything above fails or is cancelled: a skipped required check counts as
   # passing.
   ci-ok:
-    needs: [changes, verify, flare]
+    needs: [changes, docs, verify, flare]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - env:
           CHANGES: ${{ needs.changes.result }}
+          DOCS: ${{ needs.docs.result }}
           CODE: ${{ needs.changes.outputs.code }}
           VERIFY: ${{ needs.verify.result }}
           FLARE: ${{ needs.flare.result }}
         run: |
-          echo "changes=$CHANGES code=$CODE verify=$VERIFY flare=$FLARE"
+          echo "changes=$CHANGES docs=$DOCS code=$CODE verify=$VERIFY flare=$FLARE"
           test "$CHANGES" = success
+          test "$DOCS" = success
           if [ "$CODE" = true ]; then want=success; else want=skipped; fi
           test "$VERIFY" = "$want"
           test "$FLARE" = "$want"
