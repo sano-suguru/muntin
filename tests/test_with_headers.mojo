@@ -3,7 +3,7 @@
 # route value then body, stateless and stateful, `String` and `ToResponse`
 # results), through `App.handle` and `TestClient` (`headers=`), composed with
 # `State` and `Json[T]`; the routes that take no carrier unchanged; and
-# docs/DX.md section 4's typed header access example as written there. Decision:
+# docs/reference/bodies.md's `WithHeaders` example as written there. Decision:
 # docs/history/architecture-decisions.md, "Typed header access decision
 # (M3-012)". Must-not-compile counterparts: tests/with_headers_api_fail.
 
@@ -728,8 +728,8 @@ def test_raw_slot_adapter_function_on_production_app() raises:
     )
 
 
-# docs/DX.md section 4, "Typed header access", as written there, with
-# section 4's `CreateUser` and `User`.
+# docs/reference/bodies.md, "Header fields with a body", as written there,
+# with its `CreateUser` and `User`.
 
 
 @fieldwise_init

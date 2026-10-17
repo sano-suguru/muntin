@@ -5,7 +5,7 @@ it saw, an application's work on its request fields. `Server.bind`'s
 default field limit (100, M3-066), so a request with more fields is
 answered 431 before its conversion. One worker; a 60 s
 idle timeout, so a request that waits behind another is measured as a wait
-rather than dropped (docs/DX.md section 1)."""
+rather than dropped (docs/reference/serving.md)."""
 
 from std.sys import argv
 

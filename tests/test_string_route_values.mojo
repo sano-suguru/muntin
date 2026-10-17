@@ -1,13 +1,14 @@
 # Route-value decoding and `String` route values (M3-019): a route value is
 # percent-decoded once at capture, then converted; `String` is a route-value
 # kind beside `Int`. Through `App.handle` and `TestClient`: path and query
-# decoding, the closed invalid set (400), the `Int` decoding the M2 reopen
-# adds, one decoding and not two, raw handlers undecoded, and a `String` value
+# decoding, the closed invalid set (400), the `Int` decoding the M2 reopen adds,
+# one decoding and not two, raw handlers undecoded, and a `String` value
 # composed with `Headers`, `State`, a body, `Json[T]`, `WithHeaders[B]`, both
-# result policies and generic forwarding; and docs/DX.md's `String` route
-# value examples, as written. Decision: docs/history/architecture-decisions.md,
-# "Route-value decoding and String route values decision (M3-018)".
-# Must-not-compile counterparts: tests/string_route_api_fail.
+# result policies and generic forwarding; and the `String` route value examples
+# of docs/reference/route-values.md, as written. Decision:
+# docs/history/architecture-decisions.md, "Route-value decoding and String route
+# values decision (M3-018)". Must-not-compile counterparts:
+# tests/string_route_api_fail.
 
 from std.testing import assert_equal, TestSuite
 
@@ -97,7 +98,7 @@ def _json() raises -> Headers:
     return _h("Content-Type", "application/json")
 
 
-# docs/DX.md, `String` route values, as written there.
+# docs/reference/route-values.md, `String` values, as written there.
 
 
 def profile(name: String) -> String:
@@ -235,7 +236,7 @@ def _app() -> App:
 
 
 def _dx_app() -> App:
-    """docs/DX.md's registrations, as written there, on its own `App`."""
+    """The reference's registrations, as written there, on its own `App`."""
     var app = App()
     app.get["/users/{name}"](profile)
     app.get["/search?{q}"](search)

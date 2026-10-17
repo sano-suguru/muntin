@@ -1,7 +1,7 @@
 # Application route-value types (M3-055): a type conforming to
 # `FromRouteValue` is a route value wherever a `String` is, converted from
 # the decoded, non-empty text before the handler, a raise being 400.
-# Through `App.handle` and `TestClient`: docs/DX.md's example as written,
+# Through `App.handle` and `TestClient`: the reference's example as written,
 # decoding, the empty value, conversion before the body, a move-only and an
 # owned value, a `Param`, two values with a `String`, an `Int` or each
 # other, `Headers`, `State`, and every method, bodyless included. The types

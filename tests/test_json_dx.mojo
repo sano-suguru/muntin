@@ -1,7 +1,8 @@
-# DX section 4 and 5's JSON examples (M3-009; section 5's `status=`, M3-029), compiled and run as written
+# The JSON examples of docs/reference/bodies.md and responses.md (M3-009;
+# `status=`, M3-029), compiled and run as written
 # there against production `muntin`. The successful JSON bodies go through
 # `TestClient.post(target, body, headers=headers^)` with the `Content-Type`
-# set, as DX section 4 shows (M3-011), one of them also compared with
+# set, as the reference shows (M3-011), one of them also compared with
 # `App.handle(Request(...))`; `TestClient.post` without the field is 415. The
 # rejected bodies go through `App.handle(Request(..., headers^))`. The
 # result-only route goes through `TestClient`.

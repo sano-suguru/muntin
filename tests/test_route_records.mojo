@@ -1,7 +1,7 @@
 # Route-value records (M3-062): a `RouteValues` struct is one request slot
 # carrying every route value of its route, one field per placeholder, built
-# field by field without its `__init__`. Through `TestClient` and
-# `App.handle`: docs/DX.md's example as written, path and query fields, an
+# field by field without its `__init__`. Through `TestClient` and `App.handle`:
+# docs/reference/route-values.md's example as written, path and query fields, an
 # `Optional` absent and present, a generic record, fields of mixed sizes, a
 # backquoted `{org-id}` field, each 400, the construction's ownership, an
 # `__init__` that is never called, `Headers` or a body after a record, the
@@ -37,7 +37,7 @@ from muntin import (
 from muntin.testing import TestClient
 
 
-# docs/DX.md's example.
+# docs/reference/route-values.md, "Route-value records".
 
 
 @fieldwise_init

@@ -4,7 +4,7 @@
 # same handler on `get` answers the same target; the request's body is not
 # read. Body shapes keep `post`'s rules (every other test). Decision:
 # docs/history/architecture-decisions.md, "Bodyless typed post, put and patch
-# handlers decision (M3-048)". DX's example runs as written in
+# handlers decision (M3-048)". The reference's example runs as written in
 # `test_dx_example`. Must-not-compile cases: tests/bodyless_api_fail.
 
 from std.testing import assert_equal, assert_true, TestSuite
@@ -415,7 +415,7 @@ def _forward_patch[
     app.patch["/p/{id}"](h)
 
 
-# DX section 3's example, as written.
+# docs/reference/routing.md's bodyless example, as written.
 
 
 struct Unauthorized(ToErrorResponse):

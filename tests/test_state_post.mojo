@@ -491,8 +491,8 @@ def test_request_headers_take_no_part() raises:
     assert_equal(_calls(users), 2)
 
 
-# DX section 8's `post` rule, `def(State[Users], Int, CreateUser)`: state,
-# route value, body.
+# docs/reference/state.md's `post` rule, `def(State[Users], Int, CreateUser)`:
+# state, route value, body.
 
 
 def update_user(

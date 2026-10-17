@@ -124,7 +124,7 @@ def _sent() raises -> Headers:
 comptime SENT_FIELDS = "X-Sig=<a>;x-sig=<b>;Empty=<>;Content-Type=<x/y>;"
 
 
-# The docs/DX.md section 4 "Typed binary bodies with header fields" example,
+# The docs/reference/bodies.md `WithHeaders` around a `FromBytes` example,
 # verbatim.
 
 

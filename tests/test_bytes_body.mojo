@@ -97,7 +97,7 @@ def _prefixed(prefix: String, body: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-# The docs/DX.md section 4 "Typed binary bodies" example, verbatim.
+# The docs/reference/bodies.md "Binary bodies" example, verbatim.
 
 
 struct Image(FromBytes):

@@ -39,7 +39,7 @@ app.get["/users/{id}"](hello)
 # compile error: route declares a path parameter but the handler takes none
 ```
 
-Muntin rejects route and handler shape mismatches at compile time. At runtime, typed inputs that do not convert are rejected before your handler runs. Handler errors become 500 responses that do not leak their text, unless their declared type opts in to its own response. Exact rules and messages: [`docs/DX.md`](docs/DX.md).
+Muntin rejects route and handler shape mismatches at compile time. At runtime, typed inputs that do not convert are rejected before your handler runs. Handler errors become 500 responses that do not leak their text, unless their declared type opts in to its own response. How to use it: [`docs/GUIDE.md`](docs/GUIDE.md); exact rules and messages: [`docs/reference/`](docs/reference/).
 
 ## Why Muntin
 
@@ -75,7 +75,7 @@ CI enforces the transport boundary, unsafe-code confinement and the documented c
 ## Status
 
 - **Today:** typed routing, typed request bodies and results (including JSON and binary bodies), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
-- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)`, on one thread or on several workers with one `App` each, from an IP-literal host, and on SIGTERM or SIGINT serves the open connections for a grace window, then returns, or ends the process if it has not stopped one second later (no handler is cancelled or notified). Its settings and limits: [`docs/DX.md`](docs/DX.md) section 1.
+- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)`, on one thread or on several workers with one `App` each, from an IP-literal host, and on SIGTERM or SIGINT serves the open connections for a grace window, then returns, or ends the process if it has not stopped one second later (no handler is cancelled or notified). Its settings and limits: [`docs/reference/serving.md`](docs/reference/serving.md).
 - **Not yet:** see [`docs/SPEC.md`](docs/SPEC.md), "Remaining candidates".
 
 ## Try it
@@ -112,7 +112,7 @@ pixi run -e flare mojo run -I src -I adapters/flare examples/hello_https.mojo
 curl --cacert cert.pem https://127.0.0.1:8443/   # Hello, Mojo! (in another terminal)
 ```
 
-In production, use a certificate from your certificate authority; a wrong file stops `Server.bind` with an error naming it ([`docs/DX.md`](docs/DX.md) section 1, "HTTPS").
+In production, use a certificate from your certificate authority; a wrong file stops `Server.bind` with an error naming it ([`docs/reference/serving.md`](docs/reference/serving.md#https)).
 
 ### From your own project
 
@@ -160,10 +160,11 @@ pixi run mojo run -I ../muntin/src -I ../muntin/adapters/flare app.mojo
 
 ## Documentation
 
-- [`docs/DX.md`](docs/DX.md): how to write Muntin applications: API, examples, semantics.
+- [`docs/GUIDE.md`](docs/GUIDE.md): how to write Muntin applications, feature by feature.
+- [`docs/reference/`](docs/reference/): the API by topic: accepted shapes, statuses, diagnostics, examples.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): how Muntin works now: boundaries, invariants, current limits.
 - [`docs/history/architecture-decisions.md`](docs/history/architecture-decisions.md): why: one record per design decision.
-- [`docs/SPEC.md`](docs/SPEC.md): product scope and roadmap.
+- [`docs/SPEC.md`](docs/SPEC.md): product scope, shipped capabilities and the next candidates; future work is in GitHub issues.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): verification commands, CI, and which document owns what.
 - [`docs/REFERENCES.md`](docs/REFERENCES.md): upstream sources and the Flare pin.
 

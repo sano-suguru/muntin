@@ -113,7 +113,7 @@ def as_text(req: Request) raises -> Response:
     return Response.text("text " + req.text())
 
 
-# The docs/DX.md section 9 "Binary bodies" example, verbatim.
+# The docs/reference/raw.md "Binary bodies" example, verbatim.
 
 
 def upload(req: Request) raises -> Response:

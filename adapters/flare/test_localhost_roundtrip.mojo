@@ -157,7 +157,7 @@ trailing `=` included; each status and body equals `TestClient`'s. The
 adapter is unchanged.
 
 M3-027 sends `HEAD` to `headers_app()`, which gains the raw `GET /report`
-(the same body and fields for `GET` and `HEAD`, as DX's raw rule asks), and
+(the same body and fields for `GET` and `HEAD`, as the raw rule asks), and
 the raw `GET /nm` (304) and `GET /rc` (205), each answering with a 3-byte
 body. Over h2c (the raw client takes the method), a typed route, the raw
 `/report`, a route-value 400 and the adapter's own 400 (a field named
@@ -187,7 +187,7 @@ is unchanged.
 
 M3-040 (which replaced M3-038's case) serves `bodies_app()` (middleware
 adding `X-Seen: 1`, a raw `POST /bytes` answering the hex of the body bytes
-it received, the raw byte echo `POST /echo-raw`, the DX example
+it received, the raw byte echo `POST /echo-raw`, the reference's example
 `POST /upload`, the typed `POST /echo`, the JSON `POST /greet`, the binary
 `GET /blob` and `GET /hello`) and sends request bodies with raw clients over
 HTTP/1.1 (`h1_exchange`, `Content-Length` or chunked) and h2c
@@ -201,7 +201,7 @@ and `HEAD` are `App.handle`'s, through the middleware; the JSON route parses
 a sent U+FFFD and answers a `0xFF` 400; a binary `GET` answer and its `HEAD`
 length go out exactly; and the same `Server` answers afterwards.
 
-M3-062 adds docs/DX.md's route-value record routes to `bodies_app()`:
+M3-062 adds the reference's route-value record routes to `bodies_app()`:
 `GET` and the stateful `PATCH` on
 `/organizations/{org_id}/projects/{project_id}/tasks/{task_id}`, whose
 handlers take one `TaskAt` record (and, for the `PATCH`, a `Json` body).
@@ -646,7 +646,7 @@ def purge(req: Request) -> Response:
 
 
 def report(req: Request) raises -> Response:
-    """A raw `get` handler that follows DX's raw rule: the `GET` body and
+    """A raw `get` handler that follows the raw rule: the `GET` body and
     fields for `HEAD` too."""
     var resp = Response.text("report")
     resp.headers.add("X-Report", "1")
@@ -2273,7 +2273,7 @@ def body_echo(req: Request) -> Response:
 
 
 def upload(req: Request) raises -> Response:
-    """The docs/DX.md section 9 "Binary bodies" handler, as written there."""
+    """The docs/reference/raw.md "Binary bodies" handler, as written there."""
     var r = Response(200, req.body.copy())
     r.headers.add("Content-Type", "application/octet-stream")
     return r^
@@ -2866,9 +2866,9 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
         assert_equal(String(from_utf8=Span(b1[2])), "Bad Request")
         var b2 = h2_exchange(child.port, "POST", "/greet", json, bad_json, True)
         assert_equal(_h2_fields(b2[0]), ":status=400;x-seen=1;")
-        # DX's route-value record (M3-062): one `TaskAt` carrying three
-        # values on `GET` and, before a JSON body, on the stateful `PATCH`;
-        # a bad field is 400 before the body's 415, as in memory.
+        # The reference's route-value record (M3-062): one `TaskAt` carrying
+        # three values on `GET` and, before a JSON body, on the stateful
+        # `PATCH`; a bad field is 400 before the body's 415, as in memory.
         var nothing = List[Tuple[String, String]]()
         var edit = List('{"name":"renamed"}'.as_bytes())
         var records: List[Tuple[String, String, Bool, Int, String]] = [
@@ -2933,7 +2933,7 @@ def test_request_and_response_body_bytes_over_http1_and_h2c() raises:
             assert_equal(w2[0][0].value, String(r[3]), at)
             assert_true("x-seen=1;" in _h2_fields(w2[0]), at)
             assert_equal(String(from_utf8=Span(w2[1])), r[4], at)
-        # The DX example: a PNG signature back byte for byte, with the
+        # The reference's example: a PNG signature back byte for byte, with the
         # handler's own Content-Type, on both protocols.
         var sig = _octets([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
         var u1 = h1_exchange(child.port, "POST", "/upload", octets, sig)
@@ -4557,7 +4557,7 @@ def _field_list(
 ) -> List[Tuple[String, String]]:
     """1 to `most` fields. For HTTP/2 names are lowercase (its rule) and values
     may hold UTF-8 beyond ASCII (Flare answers such a byte over HTTP/1.1
-    400 itself, DX.md section 9)."""
+    400 itself, docs/reference/headers.md)."""
     var known: List[String] = [
         "Authorization",
         "Cookie",

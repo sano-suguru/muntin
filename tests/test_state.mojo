@@ -401,8 +401,8 @@ def test_test_client_before_and_after_an_app_move() raises:
     assert_false(users[].names[0] == "bob")
 
 
-# DX section 8's example, with `Directory` and `find_user` for its `Users`
-# and `get_user` (this module already defines those names).
+# docs/reference/state.md's example, with `Directory` and `find_user` for its
+# `Users` and `get_user` (this module already defines those names).
 
 
 struct Directory(Movable):

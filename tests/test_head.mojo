@@ -3,7 +3,7 @@
 # the `GET` route's steps: a typed handler gets the `GET`'s arguments, so the
 # answer equals the `GET`'s (status, body and header fields), the body kept
 # (keeping it off the wire is the backend's); a raw `get` handler sees
-# `req.method == "HEAD"`, and one that follows DX's raw rule answers as for
+# `req.method == "HEAD"`, and one that follows the raw rule answers as for
 # the `GET`. Every other request keeps its answer, except that on a path
 # only routes of other methods match, `HEAD` is 405 with `Allow` like any
 # method (M3-031), and on a path no route matches 404.
@@ -129,7 +129,7 @@ def counted_fields(calls: State[Calls], id: Int, headers: Headers) -> String:
     return String("counted ", id, " ", len(headers))
 
 
-# Raw handlers follow DX's raw rule: the `GET` answer for `HEAD` too. The
+# Raw handlers follow the raw rule: the `GET` answer for `HEAD` too. The
 # stateful one records the method it received in its state.
 
 
@@ -336,7 +336,7 @@ def test_first_registration_wins_and_never_falls_through() raises:
     assert_equal(app.handle(Request("DELETE", "/b/2")).text(), "removed 2")
 
 
-# docs/DX.md, "`HEAD`" in "Proven vs. target status", as written there.
+# docs/reference/routing.md, "`HEAD`", as written there.
 
 
 def show_user(id: Int) -> String:

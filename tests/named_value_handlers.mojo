@@ -28,7 +28,7 @@ struct Note(FromBody, Movable):
         return Self(body)
 
 
-# docs/DX.md, "Named route values", as written there.
+# docs/reference/route-values.md, "Named route values", as written there.
 
 
 def post_of(uid: Int, pid: Int) -> String:

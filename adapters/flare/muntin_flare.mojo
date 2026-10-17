@@ -115,13 +115,13 @@ chunk-size scanner can overflow; `max_body_bytes out of range: <value>`
 otherwise), and writes it into both of Flare's fields, `max_body_size`
 (HTTP/1.1) and `h2.max_body_size` (HTTP/2, which the first does not reach);
 every other field keeps Flare's default. Flare refuses a longer body itself,
-before the adapter, with its own answers (docs/DX.md section 1: over
+before the adapter, with its own answers (docs/reference/serving.md: over
 HTTP/1.1 413 or 400 and a closed connection, also counting a chunked body's
 framing; over h2c a reset stream). It is not
 `FromBytes.max_bytes` or `Json[T]`'s cap, which `App.handle` checks on a
 body already received. `Server.serve` refuses to start when the environment
 selects Flare's opt-in `FLARE_BUFRING_HANDLER=1` loop, which is not
-supported (docs/DX.md section 1).
+supported (docs/reference/serving.md).
 
 Idle timeout (M3-047, decided in docs/history/architecture-decisions.md
 "Server idle timeout decision (M3-047)"): `Server.bind`'s keyword-only
@@ -186,7 +186,7 @@ raises, the watcher is joined and both dispositions are put back. The
 dispositions are process-wide, so `_StopWatch` first claims the process's
 one serving cell (`_get_global`) and another `serve` meanwhile raises
 `Server.serve is already serving in this process`; every `sigaction`
-result is checked. What clients see: docs/DX.md section 1.
+result is checked. What clients see: docs/reference/serving.md.
 """
 
 from std.atomic import Atomic, Ordering
@@ -521,7 +521,7 @@ comptime _BUFRING_UNSUPPORTED = (
 )
 """What `Server.serve` raises, before serving, when the environment sets
 `FLARE_BUFRING_HANDLER=1`, which selects Flare's unsupported buffer-ring loop
-(M3-044; why: docs/DX.md section 1)."""
+(M3-044; why: docs/reference/serving.md)."""
 
 
 comptime _DEFAULT_SHUTDOWN_GRACE_MS = 5000
@@ -704,7 +704,7 @@ def _send_here(sig: Int):
     on that thread past the release and is acted on, once unblocked, by the
     disposition current then (a later `serve`'s stop handler included):
     `serve` is supported only on a thread that blocks neither SIGTERM nor
-    SIGINT (docs/DX.md section 1; M3-045)."""
+    SIGINT (docs/reference/serving.md; M3-045)."""
     _ = external_call["raise", c_int](c_int(sig))
 
 
@@ -1655,17 +1655,17 @@ struct Server(Movable):
         any pipelined bytes buffered together exceed `max_body_bytes` plus
         8192. `shutdown_grace_ms` (0 to 86,400,000; 5000 when not given) is
         how long `serve` keeps serving the open connections after SIGTERM
-        or SIGINT (M3-045; docs/DX.md section 1). `idle_timeout_ms` (1 to
+        or SIGINT (M3-045; docs/reference/serving.md). `idle_timeout_ms` (1 to
         86,400,000; 500 when not given) is how long Flare keeps a
         connection open, over HTTP/1.1 and h2c, while nothing arrives on it
-        (M3-047; docs/DX.md section 1). `max_header_fields` (1 to 65,535;
+        (M3-047; docs/reference/serving.md). `max_header_fields` (1 to 65,535;
         100 when not given) is the most request header fields, as Flare
         hands them over, a request may carry: one with more is answered 431
-        before it is converted (M3-066; docs/DX.md section 1). With `tls`,
+        before it is converted (M3-066; docs/reference/serving.md). With `tls`,
         it serves HTTPS instead, HTTP/1.1 and HTTP/2 chosen in the TLS
-        handshake (ALPN), with the same settings (M3-051; docs/DX.md
-        section 1); the files are read and checked here, after the host is
-        parsed.
+        handshake (ALPN), with the same settings (M3-051;
+        docs/reference/serving.md); the files are read and checked here,
+        after the host is parsed.
         Raises for a port, limits, grace or idle timeout out of range, a TLS
         file that cannot be read or loaded (naming it), a host that is not
         an IP literal, an address in use or any other OS error."""
@@ -1703,7 +1703,7 @@ struct Server(Movable):
         another `serve` runs in the same process (M3-045).
 
         SIGTERM and SIGINT stop it gracefully while it serves (M3-045;
-        docs/DX.md section 1): new connections are refused at once, the
+        docs/reference/serving.md): new connections are refused at once, the
         open ones are served for `shutdown_grace_ms`, then Flare closes
         what is left and this returns. A second stop signal ends the
         process by the default action (if resetting the dispositions to
@@ -1756,7 +1756,7 @@ struct Server(Movable):
         _stage: def(Int) thin -> None = _no_stage,
     ) raises:
         """Serves with `workers` threads (1 to 256), each with its own `App`
-        built by `make` on that thread (M3-049; docs/DX.md section 1). It
+        built by `make` on that thread (M3-049; docs/reference/serving.md). It
         does not return while serving. `make` is a `thin` function: it can
         capture nothing, and Mojo 1.1.0 has no module-level `var`, so two
         workers share no value of their `App`s, `State` values included,

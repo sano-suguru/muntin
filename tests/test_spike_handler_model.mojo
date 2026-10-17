@@ -12,7 +12,7 @@
 # is a runtime value stored as function pointer + per-type trampoline.
 # Fallback: CompileTimeApp, `app.get["/users/{id}", get_user]()`.
 # Approaches that do not compile (closures, rebind) and all diagnostics are
-# recorded in docs/DX.md ("Handler model").
+# recorded in docs/history/architecture-decisions.md.
 
 from std.sys.info import size_of
 from std.testing import assert_equal, TestSuite
@@ -90,7 +90,7 @@ def _dispatch(routes: List[_Dispatch], request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
-# Prototype A: handler passed as a runtime value (docs/DX.md syntax).
+# Prototype A: handler passed as a runtime value (the documented syntax).
 #
 # A thin function value is erased to its address bits and restored by a
 # trampoline instantiated for the same type F. Erase and restore are paired

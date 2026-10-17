@@ -15,8 +15,8 @@ from state_spike import State, StateApp
 
 
 struct Users(Movable):
-    """A move-only in-memory repository: the `users.get(id)` of DX
-    sections 2 and 8. Every call to a handler is counted in `calls`, which
+    """A move-only in-memory repository: the conceptual
+    `users.get(id)`. Every call to a handler is counted in `calls`, which
     the application keeps mutable on purpose (its own `ArcPointer[Int]`
     field, not Muntin's): the counter is the oracle for "handler not
     called", and shows where mutability lives when a value must change."""

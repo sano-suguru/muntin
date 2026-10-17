@@ -132,7 +132,7 @@ def _sent() raises -> Headers:
 comptime SENT_FIELDS = "X-Sig=<a>;x-sig=<b>;Empty=<>;Content-Type=<x/y>;"
 
 
-# The docs/DX.md section 4 "Body size limits" examples, verbatim.
+# The docs/reference/bodies.md "Body size limits" examples, verbatim.
 
 
 struct Avatar(FromBytes):

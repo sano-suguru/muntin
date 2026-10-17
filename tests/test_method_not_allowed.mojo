@@ -4,8 +4,8 @@
 # routes' methods once, in first-registration order, `HEAD` right after
 # `GET`; otherwise 404 as before. Every method is answered alike. The `App`
 # and the requests are the measured premise's, as written, except that
-# `report` records the method in `RAW_METHOD` instead of echoing it, as DX's
-# raw `HEAD` rule asks. Decision:
+# `report` records the method in `RAW_METHOD` instead of echoing it, as the
+# raw `HEAD` rule asks (docs/reference/routing.md). Decision:
 # docs/history/architecture-decisions.md, "Method not allowed decision
 # (M3-030)".
 
@@ -89,7 +89,8 @@ def search(q: String) -> String:
 
 
 def report(req: Request) -> Response:
-    """Raw: the same body for `GET` and `HEAD` (DX), the method recorded."""
+    """Raw: the same body for `GET` and `HEAD` (the raw rule), the method
+    recorded."""
     _bump(HANDLER_CALLS)
     _ = setenv(RAW_METHOD, req.method)
     return Response.text("report")
@@ -363,8 +364,7 @@ def test_test_client_equals_app_handle() raises:
     )
 
 
-# docs/DX.md, "405 `Method Not Allowed`" in "Proven vs. target status", as
-# written there.
+# docs/reference/routing.md, "405 `Method Not Allowed`", as written there.
 
 
 def test_dx_example() raises:

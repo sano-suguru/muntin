@@ -31,8 +31,9 @@
 - var pid: PathInt["pid"]
 + var uid: PathInt["uid"]
 
-# The same, with the values declared without Param (docs/DX.md recommends
-# Param for two values; bare values bind by position).
+# The same, with the values declared without Param
+# (docs/reference/route-values.md recommends Param for two values; bare values
+# bind by position).
 == swapped-bare-values muntin GET /users/1/posts/7
 - def get_post(uid: Param["uid", Int], pid: Param["pid", Int]) -> String:
 + def get_post(pid: Int, uid: Int) -> String:

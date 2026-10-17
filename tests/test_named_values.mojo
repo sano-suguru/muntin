@@ -1,16 +1,15 @@
-# Named route values (M3-050), an opt-in check: a `Param[name, T]` route
-# value has the kind, decoding and 400s of its `T`, its name is compared with
-# the placeholder at its position at registration, and of two values both or
-# neither are `Param`s. Through `App.handle` and `TestClient`: docs/DX.md's
-# example as written, two `Param`s on every method (stateless and stateful,
-# with a body, `Headers`, query values and bodyless), a lone named value,
-# `Param` itself, and the known gap that a variable's own name is not
-# compared. Bare values are unchanged (tests/test_route_values.mojo). The
-# handlers are in tests/named_value_handlers.mojo, so this module can
-# discover its tests.
-# Decision: docs/history/architecture-decisions.md, "Named route values
-# decision (M3-050)". Must-not-compile counterparts:
-# tests/named_values_api_fail.
+# Named route values (M3-050), an opt-in check: a `Param[name, T]` route value
+# has the kind, decoding and 400s of its `T`, its name is compared with the
+# placeholder at its position at registration, and of two values both or neither
+# are `Param`s. Through `App.handle` and `TestClient`: the
+# docs/reference/route-values.md example as written, two `Param`s on every
+# method (stateless and stateful, with a body, `Headers`, query values and
+# bodyless), a lone named value, `Param` itself, and the known gap that a
+# variable's own name is not compared. Bare values are unchanged
+# (tests/test_route_values.mojo). The handlers are in
+# tests/named_value_handlers.mojo, so this module can discover its tests.
+# Decision: docs/history/architecture-decisions.md, "Named route values decision
+# (M3-050)". Must-not-compile counterparts: tests/named_values_api_fail.
 
 from std.testing import assert_equal, TestSuite
 
