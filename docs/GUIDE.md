@@ -18,10 +18,14 @@ def get_user(id: Int) -> String:
     return "user " + String(id)
 
 
-def main() raises:
+def make_app() -> App:
     var app = App()
     app.get["/users/{id}"](get_user)
+    return app^
 
+
+def main() raises:
+    var app = make_app()
     var client = TestClient(app)        # in memory, no socket
     print(client.get("/users/42").text())   # user 42
 ```

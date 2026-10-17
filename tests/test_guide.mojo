@@ -39,10 +39,14 @@ def get_user(id: Int) -> String:
     return "user " + String(id)
 
 
-def first_application() raises:
+def make_app() -> App:
     var app = App()
     app.get["/users/{id}"](get_user)
+    return app^
 
+
+def first_application() raises:
+    var app = make_app()
     var client = TestClient(app)        # in memory, no socket
     print(client.get("/users/42").text())   # user 42
 # example: end
@@ -221,8 +225,7 @@ def _json() raises -> Headers:
 
 def test_first_application() raises:
     first_application()
-    var app = App()
-    app.get["/users/{id}"](get_user)
+    var app = make_app()
     var client = TestClient(app)
     var r = client.get("/users/42")
     assert_equal(r.status, 200)

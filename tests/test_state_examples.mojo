@@ -1,9 +1,9 @@
 # docs/reference/state.md's three examples, each on its own `App`, with the
 # answers their comments state. The text between `# example: <id>` and
 # `# example: end` is what the page shows (scripts/check_doc_examples.py
-# compares them), each `main` renamed; `# fmt: off` keeps its layout. Each
-# example's `main` runs as written; the tests register its routes again to
-# send requests. The types the page takes from other pages come first.
+# compares them), each `make_app` renamed; `# fmt: off` keeps its layout.
+# Each test sends its requests to the `App` its example's `make_app` returns.
+# The types the page takes from other pages come first.
 
 from std.testing import assert_equal, TestSuite
 
@@ -83,11 +83,12 @@ def get_user(users: State[Users], id: Int) raises NotFound -> User:
     return User(id, users[].get(id))       # read-only access to the shared value
 
 
-def state_example():
+def state_app() -> App:
     var users = State(Users(load_names()))   # the application builds the value once
     var app = App()                          # App stays non-generic
     app.get["/hello"](hello)                 # stateless handlers: unchanged
     app.get["/users/{id}"](get_user, users)  # the state is the registration's second argument
+    return app^
 # GET /hello    -> 200 "hello"
 # GET /users/0  -> get_user(users, 0) -> User(0, "ada").to_response() -> 200 "0:ada"
 # GET /users/1  -> NotFound(1).to_error_response() -> 404 "no user 1"
@@ -100,13 +101,14 @@ def update_user(users: State[Users], id: Int, body: CreateUser) raises NotFound 
     return User(id, users[].get(id) + " as " + body.name)
 
 
-def post_example():
+def post_app() -> App:
     var names = List[String]()
     names.append("ada")
     names.append("bob")
     var users = State(Users(names^))
     var app = App()
     app.post["/users/{id}"](update_user, users)  # state, route value, body
+    return app^
 # POST /users/1 "name=bo" -> update_user(users, 1, CreateUser("bo")) -> User(1, "bob as bo")
 # POST /users/9 "name=bo" -> NotFound(9).to_error_response() -> 404 "no user 9"
 # POST /users/x "name=bo" -> 400 "Bad Request"   (from_body and update_user not called)
@@ -131,10 +133,11 @@ def webhook(keys: State[WebhookKeys], req: Request) raises -> Response:
     return resp^
 
 
-def raw_example():
+def raw_app() -> App:
     var keys = State(WebhookKeys("sha256=valid"))
     var app = App()
     app.post["/webhook"](webhook, keys)          # app.get too
+    return app^
 # POST /webhook  X-Signature: sha256=valid  -> 200 "ok", X-Request-Id: 42
 # POST /webhook  (no X-Signature)           -> 401 "unsigned"
 # GET /webhook                              -> 405 "Method Not Allowed", Allow: POST  (webhook not called)
@@ -143,11 +146,7 @@ def raw_example():
 
 
 def test_state() raises:
-    state_example()
-    var users = State(Users(load_names()))
-    var app = App()
-    app.get["/hello"](hello)
-    app.get["/users/{id}"](get_user, users)
+    var app = state_app()
     var client = TestClient(app)
     var r = client.get("/hello")
     assert_equal(r.status, 200)
@@ -164,11 +163,7 @@ def test_state() raises:
 
 
 def test_state_post() raises:
-    post_example()
-    var names: List[String] = ["ada", "bob"]
-    var users = State(Users(names^))
-    var app = App()
-    app.post["/users/{id}"](update_user, users)
+    var app = post_app()
     var client = TestClient(app)
     var r = client.post("/users/1", "name=bo")
     assert_equal(r.status, 200)
@@ -182,10 +177,7 @@ def test_state_post() raises:
 
 
 def test_state_raw() raises:
-    raw_example()
-    var keys = State(WebhookKeys("sha256=valid"))
-    var app = App()
-    app.post["/webhook"](webhook, keys)
+    var app = raw_app()
     var client = TestClient(app)
     var signed = Headers()
     signed.add("X-Signature", "sha256=valid")

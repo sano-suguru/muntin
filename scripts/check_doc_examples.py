@@ -16,8 +16,11 @@ preceded, on the line just above it, by one of:
     <!-- example: none: REASON -->
         no file holds the block; REASON says why.
 
-Every region in a .mojo file under tests/, examples/ and adapters/ must be
-shown by some block, and a file's regions must not nest. Exits nonzero on
+A block whose info string names mojo but is fenced any other way (indented,
+four backticks, tildes, more after "mojo"), and a fenced block of any kind
+without its closing fence, are errors, so no example can leave the check by
+its fence. Every region in a .mojo file under tests/, examples/ and adapters/
+must be shown by some block, and a file's regions must not nest. Exits nonzero on
 any mismatch, printing a diff from the file's text to the block's.
 Standard library only: python3 -I scripts/check_doc_examples.py [ROOT],
 where ROOT (the repository by default) is for scripts/test_check_doc_examples.py.
@@ -41,6 +44,10 @@ SOURCE_DIRS = ["tests", "examples", "adapters"]
 MARKER = re.compile(r"<!-- example: (.*) -->")
 REGION = re.compile(r"^\s*# example: (\S+)$")
 RENAME = re.compile(r"^(\w+)=(\w+)$")
+# An opening fence: three or more backticks (an info string without one) or
+# tildes, as CommonMark has it.
+FENCE = re.compile(r"\s*(`{3,}(?=[^`]*$)|~{3,})(.*)$")
+MOJO_INFO = re.compile(r"\W*mojo\b", re.IGNORECASE)
 
 
 def regions(path):
@@ -70,20 +77,43 @@ def regions(path):
 
 
 def blocks(doc):
-    """Yields (line number of the fence, marker text or None, block text)."""
+    """Yields (line number, marker text or None, block text) for each ```mojo
+    block, or (line number, "", error) for a Mojo block fenced any other way.
+
+    Every fenced block is followed to its closing fence (the same character,
+    at least as many, nothing else on the line), so a ```mojo line inside
+    another block is that block's text when that block's fence is longer. A
+    block with no closing fence before the end or before the next opening
+    fence is an error: it would hide the blocks after it."""
     lines = (ROOT / doc).read_text().split("\n")
     i = 0
     while i < len(lines):
-        if re.match(r"\s*```\s*mojo\b", lines[i], re.IGNORECASE) and lines[i] != "```mojo":
+        m = FENCE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        fence, info = m.group(1), m.group(2)
+        close = re.compile(r"\s*" + re.escape(fence[0]) + "{%d,}\\s*$" % len(fence))
+        j = i + 1
+        while j < len(lines) and not close.match(lines[j]):
+            # An opening fence no shorter than this one, with an info string,
+            # is the next block: nested text uses a longer outer fence.
+            inner = FENCE.match(lines[j])
+            if inner and inner.group(2).strip() and close.match(inner.group(1)):
+                break
+            j += 1
+        if j == len(lines) or not close.match(lines[j]):
+            yield i + 1, "", "this fenced block has no closing fence"
+            return
+        if lines[i] == "```mojo":
+            if lines[j] != "```":
+                yield j + 1, "", "a Mojo block's closing fence must be exactly ```"
+            else:
+                m = MARKER.fullmatch(lines[i - 1]) if i > 0 else None
+                yield i + 1, m.group(1) if m else None, "\n".join(lines[i + 1 : j])
+        elif MOJO_INFO.match(info):
             yield i + 1, "", "a Mojo block's fence must be exactly ```mojo"
-        elif lines[i] == "```mojo":
-            j = i + 1
-            while j < len(lines) and lines[j] != "```":
-                j += 1
-            m = MARKER.fullmatch(lines[i - 1]) if i > 0 else None
-            yield i + 1, m.group(1) if m else None, "\n".join(lines[i + 1 : j])
-            i = j
-        i += 1
+        i = j + 1
 
 
 def main():

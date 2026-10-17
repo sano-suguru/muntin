@@ -2,7 +2,7 @@
 
 Middleware is a function ([M3-034](../history/architecture-decisions.md#middleware-decision-m3-034)). Each example below is its own `App`; the line after it names the test that runs it and what that test adds or changes.
 
-<!-- example: tests/test_middleware.mojo#middleware-tracing tracing_example=main -->
+<!-- example: tests/test_middleware.mojo#middleware-tracing tracing_app=make_app -->
 ```mojo
 from muntin import App, Next, Request, Response
 
@@ -17,16 +17,17 @@ def hello() -> String:
     return "hello"
 
 
-def main() raises:
+def make_app() -> App:
     var app = App()
     app.use(tracing)
     app.get["/hello"](hello)
+    return app^
 # GET /hello    -> 200 "hello"; X-Trace: 1
 # GET /missing  -> 404 "Not Found"; X-Trace: 1
 # POST /hello   -> 405 "Method Not Allowed"; Allow: GET, HEAD; X-Trace: 1
 ```
 
-Run by `tests/test_middleware.mojo` (`test_the_dx_example_as_written`), with `main` named `tracing_example`: the test calls it, then registers the same routes on an `App` of its own to send the requests, `POST /hello` with an empty body.
+Run by `tests/test_middleware.mojo` (`test_the_dx_example_as_written`), with `make_app` named `tracing_app`: the test sends the requests to the `App` it returns, `POST /hello` with an empty body.
 
 - `app.use(f)` takes `def(var request: Request, var next: Next) raises -> Response`; one that borrows the request or does not raise converts too. The type is public as `Middleware`. A middleware may change the request, answer without running the rest, or run the rest with `next^.run(request^)` and change or replace the response.
 - `next^.run(request^)` consumes `next`, so the rest runs at most once: a second use, or one in a loop, does not compile (`use of uninitialized value 'next'`); `Next` has no plain call and no copy. A `Next` moved into a container and taken twice aborts the process at the second `take()`. A `Next` cannot outlive the call that received it. Code that names `_`-prefixed members or applies unsafe pointer operations or `rebind_var` to a `Next` is outside these guarantees.

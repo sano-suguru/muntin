@@ -137,8 +137,8 @@ def _field(r: Response, name: String) -> String:
 # Middleware.
 
 
-# docs/reference/middleware.md's first example, with `main` named
-# `tracing_example`: the text between the `# example:` lines is what the page
+# docs/reference/middleware.md's first example, with `make_app` named
+# `tracing_app`: the text between the `# example:` lines is what the page
 # shows (scripts/check_doc_examples.py). Its `hello` and `tracing` serve the
 # other tests too.
 
@@ -158,10 +158,11 @@ def hello() -> String:
     return "hello"
 
 
-def tracing_example() raises:
+def tracing_app() -> App:
     var app = App()
     app.use(tracing)
     app.get["/hello"](hello)
+    return app^
 # GET /hello    -> 200 "hello"; X-Trace: 1
 # GET /missing  -> 404 "Not Found"; X-Trace: 1
 # POST /hello   -> 405 "Method Not Allowed"; Allow: GET, HEAD; X-Trace: 1
@@ -292,11 +293,7 @@ def borrowed_body_at[
 
 
 def test_the_dx_example_as_written() raises:
-    # The example's `main` runs; its registrations are repeated here.
-    tracing_example()
-    var app = App()
-    app.use(tracing)
-    app.get["/hello"](hello)
+    var app = tracing_app()
     var client = TestClient(app)
     var r = client.get("/hello")
     assert_equal(r.status, 200)

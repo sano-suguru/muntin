@@ -144,10 +144,14 @@ def hello() -> String:
     return "hello"
 
 
-def client_example() raises:
+def client_app() -> App:
     var app = App()
     app.get["/hello"](hello)          # compile-time route literal, runtime handler value
+    return app^
 
+
+def client_example() raises:
+    var app = client_app()
     var client = TestClient(app)      # borrows the app; no socket
     var response = client.get("/hello")
     print(response.status, response.text())            # 200 hello
@@ -176,10 +180,15 @@ def echo(req: Request) -> Response:                 # answers with every field i
     return Response.text(out)
 
 
-def header_fields_example() raises:                                   # building Headers raises
+def echo_app() -> App:
     var app = App()
     app.get["/echo"](echo)
     app.post["/echo"](echo)
+    return app^
+
+
+def header_fields_example() raises:                                   # building Headers raises
+    var app = echo_app()
     var client = TestClient(app)
     var headers = Headers()
     headers.add("X-Request-Id", "42")
@@ -326,10 +335,10 @@ def test_bodies_route_value_then_body() raises:
 
 
 def test_testing_client() raises:
-    # The example runs as written; the asserts send its requests again.
+    # The example runs as written; the asserts send its requests again, to
+    # the `App` its `make_app` returns.
     client_example()
-    var app = App()
-    app.get["/hello"](hello)
+    var app = client_app()
     var r = TestClient(app).get("/hello")
     assert_equal(r.status, 200)
     assert_equal(r.text(), "hello")
@@ -342,11 +351,10 @@ def test_testing_client() raises:
 
 
 def test_testing_header_fields() raises:
-    # The example runs as written; the asserts send its requests again.
+    # The example runs as written; the asserts send its requests again, to
+    # the `App` its `make_app` returns.
     header_fields_example()
-    var app = App()
-    app.get["/echo"](echo)
-    app.post["/echo"](echo)
+    var app = echo_app()
     var client = TestClient(app)
     var headers = Headers()
     headers.add("X-Request-Id", "42")

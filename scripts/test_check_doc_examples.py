@@ -95,6 +95,30 @@ CASES = [
         "docs/GUIDE.md": "# Guide\n\n```mojo\nx\n```\n"}),
     ("fail", "a Mojo fence not written ```mojo", {
         "docs/GUIDE.md": "# Guide\n\n- item:\n  ```mojo\n  x\n  ```\n"}),
+    ("fail", "a drifted example fenced with four backticks", {
+        "docs/GUIDE.md": "# Guide\n\n<!-- example: tests/test_x.mojo#hello -->\n````mojo\n"
+        + EXAMPLE.replace("200", "201") + "\n````\n"}),
+    ("fail", "a drifted example fenced with tildes", {
+        "docs/GUIDE.md": "# Guide\n\n<!-- example: tests/test_x.mojo#hello -->\n~~~mojo\n"
+        + EXAMPLE.replace("200", "201") + "\n~~~\n"}),
+    ("fail", "a block without a marker fenced with four backticks", {
+        "docs/GUIDE.md": "# Guide\n\n````mojo\nx\n````\n"}),
+    ("fail", "a block without a marker fenced with tildes", {
+        "docs/GUIDE.md": "# Guide\n\n~~~mojo\nx\n~~~\n"}),
+    ("fail", "a whole-file example fenced with four backticks", {
+        "docs/reference/page.md": PAGE.format(example=EXAMPLE).replace(
+            "```mojo\ndef main():\n    pass\n```",
+            "````mojo\ndef main():\n    return\n````")}),
+    ("fail", "a block without its closing fence", {
+        "docs/reference/page.md": PAGE.format(example=EXAMPLE).removesuffix("```\n")}),
+    ("fail", "an unclosed block hiding a drifted one after it", {
+        "docs/reference/page.md": PAGE.format(example=EXAMPLE).removesuffix("```\n")
+        + "\n<!-- example: examples/whole.mojo -->\n```mojo\ndef main():\n    return\n```\n"}),
+    ("fail", "a Mojo block closed by four backticks", {
+        "docs/reference/page.md": PAGE.format(example=EXAMPLE).replace(
+            "    pass\n```", "    pass\n````")}),
+    ("pass", "a ```mojo line inside another block is text", {
+        "docs/GUIDE.md": "# Guide\n\n````markdown\n```mojo\nx\n```\n````\n"}),
     ("fail", "a marker naming a missing region", {
         "docs/reference/page.md": PAGE.format(example=EXAMPLE).replace("#hello", "#bye")}),
     ("fail", "a marker naming a missing file", {
