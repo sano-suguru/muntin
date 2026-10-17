@@ -1,0 +1,181 @@
+diff --git a/flare/http/_unified_reactor_impl.mojo b/flare/http/_unified_reactor_impl.mojo
+index c6c4e962..fac6fc57 100644
+--- a/flare/http/_unified_reactor_impl.mojo
++++ b/flare/http/_unified_reactor_impl.mojo
+@@ -56,6 +56,7 @@ kernel wakes one worker per accept event.
+ """
+ 
+ from std.builtin.debug_assert import debug_assert
++from std.sys import CompilationTarget, stderr
+ from std.collections import Dict, Optional
+ from std.ffi import c_int, get_errno
+ from std.memory import Pointer
+@@ -1099,12 +1100,46 @@ def _run_unified_loop_for_fd[
+     var conns = Dict[Int, Int]()
+     var timers = Dict[Int, UInt64]()
+ 
+-    comptime if is_shared:
++    # In the shared variant on Linux the listener is added with
++    # EPOLLEXCLUSIVE and, after each accept batch, removed and added again
++    # (``rotate``): Linux offers a new connection to the first waiting
++    # worker in the listener's wait queue (its implementation, not
++    # epoll_ctl(2)'s contract), and an add puts this worker at the tail,
++    # so the next connection wakes another idle worker. A kernel without
++    # the flag (EINVAL) keeps v0.12.0's plain registration and no rotation,
++    # and says so on standard error.
++    var rotate = False
++    comptime if is_shared and CompilationTarget.is_linux():
++        var err = reactor.add_exclusive(c_int(listener_fd), LISTENER_TOKEN)
++        if err == 0:
++            rotate = True
++        elif err == 22:  # EINVAL
++            print(
++                "flare: EPOLLEXCLUSIVE refused (EINVAL): this worker's"
++                " listener is registered plainly and not rotated",
++                file=stderr,
++            )
++            reactor.register(
++                c_int(listener_fd), LISTENER_TOKEN, INTEREST_READ
++            )
++        else:
++            raise Error(
++                "epoll_ctl ADD (EPOLLEXCLUSIVE) of the listener failed: errno "
++                + String(err)
++            )
++    elif is_shared:
+         reactor.register_exclusive(
+             c_int(listener_fd), LISTENER_TOKEN, INTEREST_READ
+         )
+     else:
+         reactor.register(c_int(listener_fd), LISTENER_TOKEN, INTEREST_READ)
++    # When an add after a batch fails with ENOMEM or ENOSPC, the worker
++    # keeps serving its open connections and tries again on every
++    # iteration (polling at most 10 ms meanwhile); after 1000 ms from that
++    # failure without success, or on any other errno, it ends as on a
++    # failed poll. Each failure, recovery and end says why on standard
++    # error, with its errno.
++    var unlisted_since_ms = UInt64(0)
+ 
+     var listener_fds = Dict[Int, Bool]()
+     for i in range(len(extra_fds)):
+@@ -1120,9 +1155,34 @@ def _run_unified_loop_for_fd[
+     var stopping_addr = Int(Pointer[Bool, _](to=stopping))
+     while not load_stop_flag(stopping_addr):
+         store_worker_stat(stats_addr, WORKER_STAT_INFLIGHT, len(conns))
++        if unlisted_since_ms != 0:
++            var err = reactor.add_exclusive(c_int(listener_fd), LISTENER_TOKEN)
++            var retried_ms = UInt64(_monotonic_ms()) - unlisted_since_ms
++            if err == 0:
++                print(
++                    "flare: the listener was added again after "
++                    + String(retried_ms)
++                    + " ms",
++                    file=stderr,
++                )
++                unlisted_since_ms = 0
++            elif (err != 12 and err != 28) or retried_ms > 1000:
++                print(
++                    "flare: adding the listener again failed (errno "
++                    + String(err)
++                    + ") after "
++                    + String(retried_ms)
++                    + " ms of retries; this worker stops",
++                    file=stderr,
++                )
++                exit_status = WORKER_STATUS_CRASHED
++                break
+         events.clear()
++        var timeout_ms = _poll_timeout_ms(wheel)
++        if unlisted_since_ms != 0 and timeout_ms > 10:
++            timeout_ms = 10
+         try:
+-            _ = reactor.poll(_poll_timeout_ms(wheel), events)
++            _ = reactor.poll(timeout_ms, events)
+         except:
+             exit_status = WORKER_STATUS_CRASHED
+             break
+@@ -1130,6 +1190,7 @@ def _run_unified_loop_for_fd[
+         var now_ms = UInt64(_monotonic_ms())
+         _advance_timer_wheel_unified(now_ms, wheel, conns, timers, reactor)
+ 
++        var listener_lost = False
+         for i in range(len(events)):
+             var evt = events[i]
+             if evt.is_wakeup():
+@@ -1145,6 +1206,30 @@ def _run_unified_loop_for_fd[
+                     config.max_connections,
+                     tls_ctx_addr,
+                 )
++                if rotate:
++                    reactor.unregister(c_int(listener_fd))
++                    var err = reactor.add_exclusive(
++                        c_int(listener_fd), LISTENER_TOKEN
++                    )
++                    if err == 12 or err == 28:  # ENOMEM, ENOSPC
++                        # Timed from this failure, not from now_ms: a
++                        # handler earlier in this batch may have run since.
++                        var failed_ms = UInt64(_monotonic_ms())
++                        unlisted_since_ms = failed_ms if failed_ms != 0 else 1
++                        print(
++                            "flare: adding the listener again failed (errno "
++                            + String(err)
++                            + "); this worker retries for up to 1000 ms",
++                            file=stderr,
++                        )
++                    elif err != 0:
++                        print(
++                            "flare: adding the listener again failed (errno "
++                            + String(err)
++                            + "); this worker stops",
++                            file=stderr,
++                        )
++                        listener_lost = True
+                 continue
+             var fd = Int(evt.token)
+             if len(listener_fds) > 0 and fd in listener_fds:
+@@ -1176,6 +1261,9 @@ def _run_unified_loop_for_fd[
+                 timers,
+                 ws_hooks.copy(),
+             )
++        if listener_lost:
++            exit_status = WORKER_STATUS_CRASHED
++            break
+ 
+     store_worker_stat(stats_addr, WORKER_STAT_STATUS, exit_status)
+     # Publish what was actually still in flight when the loop stopped,
+diff --git a/flare/runtime/reactor.mojo b/flare/runtime/reactor.mojo
+index 541e3657..b793205e 100644
+--- a/flare/runtime/reactor.mojo
++++ b/flare/runtime/reactor.mojo
+@@ -397,6 +397,31 @@ struct Reactor(Movable):
+             # No EPOLLEXCLUSIVE on macOS; fall through to plain register.
+             self._register_raw(fd, token, interest)
+ 
++    def add_exclusive(mut self, fd: c_int, token: UInt64) -> Int:
++        """Add ``fd`` for reading with ``EPOLLIN | EPOLLEXCLUSIVE``, with no
++        fallback: 0 once added, else ``epoll_ctl``'s errno and ``fd`` is
++        not registered (Linux only).
++
++        ``register_exclusive`` falls back to a plain registration on any
++        failure and does not say so; the unified shared loop, which
++        removes and adds its listener after each accept batch, must know
++        which mode each add took (``EINVAL``: a kernel without the flag;
++        ``ENOMEM``, ``ENOSPC``: a transient or limit failure).
++        """
++        if fd in self._registered:
++            return 17  # EEXIST
++        comptime if CompilationTarget.is_linux():
++            var ev = stack_allocation[EPOLL_EVENT_SIZE, UInt8]()
++            for i in range(EPOLL_EVENT_SIZE):
++                ev.unsafe_offset(i).unsafe_write(UInt8(0))
++            _epoll_event_set(ev, EPOLLIN | EPOLLEXCLUSIVE, token)
++            if _epoll_ctl(self._fd, EPOLL_CTL_ADD, fd, ev) < c_int(0):
++                return Int(get_errno().value)
++            self._registered[fd] = token
++            return 0
++        else:
++            return 22  # EINVAL: no exclusive wake-up outside Linux
++
+     def modify(mut self, fd: c_int, interest: Int) raises -> None:
+         """Change the interest bits for an already-registered fd.
+ 

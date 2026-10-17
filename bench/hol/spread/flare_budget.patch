@@ -1,0 +1,40 @@
+diff --git a/flare/http/_unified_reactor_impl.mojo b/flare/http/_unified_reactor_impl.mojo
+index c6c4e962..58c82a55 100644
+--- a/flare/http/_unified_reactor_impl.mojo
++++ b/flare/http/_unified_reactor_impl.mojo
+@@ -59,6 +59,7 @@ from std.builtin.debug_assert import debug_assert
+ from std.collections import Dict, Optional
+ from std.ffi import c_int, get_errno
+ from std.memory import Pointer
++from std.sys.defines import get_defined_int
+ 
+ from flare.http.cancel import CancelReason
+ from flare.http.handler import Handler
+@@ -685,10 +686,19 @@ def _accept_loop_unified_fd(
+     ``max_connections`` (0 = unlimited) caps the per-worker live table
+     and the errno decides the stop/skip action -- same admission
+     contract as the HTTP/1.1 ``_accept_loop_fd`` (D8).
++
++    ``-D FLARE_ACCEPT_BUDGET=<n>`` (measurement only) stops after ``n``
++    accepted connections per call; the listener stays readable, so the
++    next poll reports it again. 0, the default, accepts until ``EAGAIN``.
+     """
++    comptime budget = get_defined_int["FLARE_ACCEPT_BUDGET", 0]()
++    var accepted = 0
+     while True:
+         if max_connections > 0 and len(conns) >= max_connections:
+             break
++        comptime if budget > 0:
++            if accepted >= budget:
++                break
+         var stream: TcpStream
+         try:
+             stream = accept_fd(c_int(listener_fd))
+@@ -696,6 +706,7 @@ def _accept_loop_unified_fd(
+             if _accept_errno_is_retry(Int(get_errno().value)):
+                 continue
+             break
++        accepted += 1
+         try:
+             stream._socket.set_nonblocking(True)
+         except:
