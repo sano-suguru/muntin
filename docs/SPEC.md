@@ -89,7 +89,7 @@ In priority order: the first entry is the next item unless the user asks for ano
 
 1. **`Host` value validation** ([#138](https://github.com/sano-suguru/muntin/issues/138)). Solves: the adapter passes any `Host` value Flare admits, so a malformed one reaches `App.handle`, against RFC 9112's 400 ([M3-073](history/architecture-decisions.md#request-host-decision-m3-073) checks presence only). Start: now; a decision item first.
 2. **Comparison with Flare alone** ([#139](https://github.com/sano-suguru/muntin/issues/139)). Solves: shows, with the same applications written both ways, whether Muntin meets its long-term success criterion (below) and what its layer costs. Start: after the item above; a decision item whose pull request first states the question and what would settle it.
-3. **Linear request header conversion** ([#140](https://github.com/sano-suguru/muntin/issues/140)). Solves: the adapter's field check is quadratic in the number of fields, which keeps `max_header_fields` low ([M3-066](history/architecture-decisions.md#request-header-conversion-decision-m3-066)). Start: when Flare ships an ordered field accessor on `HeaderMap` (pull request #119 drafts it), then a pin change.
+3. **Linear request header conversion** ([#140](https://github.com/sano-suguru/muntin/issues/140)). Solves: the adapter's field check is quadratic in the number of fields, which keeps `max_header_fields` low ([M3-066](history/architecture-decisions.md#request-header-conversion-decision-m3-066)). Start: when Flare ships an ordered field accessor on `HeaderMap` (pull request #119 drafts it), then a pin change ([deferral](history/deferrals.md#linear-request-header-conversion)).
 
 Later, unordered, each with its issue:
 
@@ -107,8 +107,8 @@ Later, unordered, each with its issue:
 - structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
 - observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
 - streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
-- serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155));
-- a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156));
+- serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
+- a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
 - handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
 - performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
 

@@ -2,6 +2,8 @@
 
 How to write a Muntin application today, on Mojo 1.1.0 (8189361e). Each section shows the common case and links to the [reference](#reference) for every rule, status and error message. Setup is in the [README](../README.md#try-it).
 
+The examples build on each other: `User` and `CreateUser` come from "Request bodies", `NotFound` from "Results and errors". `tests/test_guide.mojo` runs every example as written, each on its own `App`, and checks the answers its comments state; the serving example is `examples/hello_server.mojo`.
+
 Muntin is pre-alpha: the API still changes, and the Flare adapter's `Server` is not production-ready. Read [Before you deploy](#before-you-deploy) first.
 
 ## A first application
@@ -115,7 +117,7 @@ A handler returns `String` (a 200 text response with no fields), `Json[T]`, or a
 **Anything a handler raises is a fixed 500 `Internal Server Error`, and the error's text is never sent**, unless the handler's declared error type conforms to `ToErrorResponse`:
 
 ```mojo
-from muntin import App, Response, ToErrorResponse
+from muntin import App, Json, Response, ToErrorResponse
 
 
 @fieldwise_init
@@ -126,14 +128,19 @@ struct NotFound(Movable, ToErrorResponse):     # the opt-in, in the type's own d
         return Response.text("no user " + String(self.id), status=404)
 
 
-def get_user(id: Int) raises NotFound -> User:
-    ...
+def find_user(id: Int) raises NotFound -> Json[User]:
+    if id == 0:
+        raise NotFound(id)
+    return Json(User(id, "Ada"))
 
 
-app.get["/users/{id}"](get_user)
+app.get["/users/{id}"](find_user)
+# GET /users/1   -> 200 {"id":1,"name":"Ada"}
 # GET /users/0   -> 404 "no user 0"
-# GET /users/abc -> 400 "Bad Request"        (get_user not called)
+# GET /users/abc -> 400 "Bad Request"        (find_user not called)
 ```
+
+`User` conforms only to `ToJson`, so the handler returns it as `Json[User]`; returning a bare `User` needs `User` to conform to `ToResponse` ([responses](reference/responses.md)).
 
 - Bare `raises` never maps by message: it is always the fixed 500.
 - The fixed 500 carries a report of the dropped error (`response.failure()`) for middleware to log. **Its message is not safe log text**: it may hold secrets and client input.
@@ -145,14 +152,25 @@ Reference: [responses](reference/responses.md), [errors](reference/errors.md).
 A `get` or `delete` handler (or a bodyless one) takes `Headers` as its last parameter:
 
 ```mojo
+from muntin import Headers
+
+
+@fieldwise_init
+struct Unauthorized(ToErrorResponse):
+    def to_error_response(deinit self) -> Response:
+        return Response.text("Unauthorized", status=401)
+
+
 def me(headers: Headers) raises Unauthorized -> String:
     var token = headers.get("authorization")  # Optional[String]
     if not token:
-        raise Unauthorized()  # ToErrorResponse: 401
+        raise Unauthorized()
     return "me " + token.value()
 
 
 app.get["/me"](me)
+# GET /me  Authorization: t1  -> 200 "me t1"
+# GET /me                     -> 401 "Unauthorized"
 ```
 
 `get` returns the first value matched case-insensitively, `get_all` every value in order. Reference: [headers](reference/headers.md).
@@ -162,12 +180,30 @@ app.get["/me"](me)
 Long-lived data reaches a handler only as `State[S]`, passed at registration; there are no globals:
 
 ```mojo
-def get_user(users: State[Users], id: Int) raises NotFound -> User:
-    return User(id, users[].get(id))       # read-only access to the shared value
+from muntin import State
 
 
-var users = State(Users(load_names()))   # the application builds the value once
-app.get["/users/{id}"](get_user, users)  # the state is the registration's second argument
+struct Users(Movable):
+    var names: List[String]
+
+    def __init__(out self, var names: List[String]):
+        self.names = names^
+
+    def get(self, id: Int) raises NotFound -> String:
+        if id < 0 or id >= len(self.names):
+            raise NotFound(id)
+        return self.names[id]
+
+
+def show_user(users: State[Users], id: Int) raises NotFound -> Json[User]:
+    return Json(User(id, users[].get(id)))  # read-only access to the shared value
+
+
+var names: List[String] = ["ada", "bo"]
+var users = State(Users(names^))          # the application builds the value once
+app.get["/users/{id}"](show_user, users)  # the state is the registration's second argument
+# GET /users/1 -> 200 {"id":1,"name":"bo"}
+# GET /users/5 -> 404 "no user 5"
 ```
 
 - `State` is a shared, read-only handle; a request copies nothing. A value that must change keeps that mutability in its own fields.
@@ -191,6 +227,7 @@ def tracing(var request: Request, var next: Next) raises -> Response:
 
 
 app.use(tracing)
+# GET /users/1, GET /missing -> each answer with X-Trace: 1 added, the 404 included
 ```
 
 - It runs on every request `App.handle` receives, 404 and 405 included, in registration order, outermost first.
@@ -211,6 +248,8 @@ def webhook(req: Request) -> Response:       # `var req: Request` also works
 
 
 app.post["/webhook"](webhook)
+# POST /webhook  "signed"  -> 200 "ok"
+# POST /webhook  "forged"  -> 401 "unsigned"
 ```
 
 Bodies are bytes (`List[UInt8]`) both ways; `req.text()` raises when they are not UTF-8. Reference: [raw handlers](reference/raw.md).

@@ -12,7 +12,7 @@ Where an item's contract is written depends on its kind, and nowhere else:
 
 | Item | Its contract | Written when |
 |---|---|---|
-| decision (a design question, settled with evidence suited to it: existing records and pull requests where they suffice, spikes and fixtures under `tests/` where compiler or runtime behavior must be measured; `src/muntin` unchanged) | its pull request first: the question and what would settle it. Then, if it chooses to build, its new record in `docs/history/architecture-decisions.md` with the choice and one "Next production slice"; if it sets a standing constraint, its record (below); if it defers, its candidate's issue (below) | the question and settling condition before any measurement; the choice and next action after the evidence |
+| decision (a design question, settled with evidence suited to it: existing records and pull requests where they suffice, spikes and fixtures under `tests/` where compiler or runtime behavior must be measured; `src/muntin` unchanged) | its pull request first: the question and what would settle it. Then, if it chooses to build, its new record in `docs/history/architecture-decisions.md` with the choice and one "Next production slice"; if it sets a standing constraint, its record (below); if it defers, its entry in `docs/history/deferrals.md` (below) | the question and settling condition before any measurement; the choice and next action after the evidence |
 | production (implements a decided slice) | the decision record's "Next production slice", as written | already, by the decision item |
 | production that cannot follow its slice as written | an amendment record: the delta to the slice, why, and the invariant or compatibility boundary it affects | before the change merges; a new design question is a new decision item, not an amendment |
 | fix, behavior-preserving refactor, tooling or docs with no design question | the pull request | with the pull request |
@@ -21,7 +21,7 @@ A decision record has five parts, in this order: the question and what would set
 
 A standing constraint, a decision whose choice is a rule that later items must follow (a budget, a policy) rather than something to build, gets a record with the same five parts; its "Next production slice" says none, names the document that owns the rule, and the pull request writes the rule there.
 
-A decision whose choice is to build nothing now (an explicit deferral of a candidate, no "Next production slice") gets no record: its contract is a comment on its candidate's GitHub issue: the choice, why, the revisit condition and its pull request. A test or fixture it adds to pin today's behavior names that pull request in its opening comment, and so does its revisit index row.
+A decision whose choice is to build nothing now (an explicit deferral of a candidate, no "Next production slice") gets no record: its contract is a short entry in `docs/history/deferrals.md`: the choice, why, the revisit condition and its pull request. Its revisit condition binds later items, so it is versioned with the code; the candidate's GitHub issue holds the discussion and links the entry. A test or fixture it adds to pin today's behavior names that pull request in its opening comment, and so does its revisit index row.
 
 A product item, decision or production, gets a milestone ID (`M3-017`) where it is first named: a decision record's title or its "Next production slice". A process or tooling decision gets none unless `docs/SPEC.md` tracks it as milestone work. `docs/SPEC.md` refers to it; nothing else tracks it.
 
@@ -72,13 +72,14 @@ An item's pull request updates, in the same diff, only what its kind of change n
 
 | Change | Updates |
 |---|---|
-| public API or user-visible behavior | the reference page that owns it, with a runnable example and the test that runs it; the guide only when the common case changes |
+| public API or user-visible behavior | the reference page that owns it, with a runnable example that names the test running it and says what it leaves out (`...`, names defined on another page); the guide only when the common case changes, with `tests/test_guide.mojo` |
 | structure, ownership or a safety boundary | `docs/ARCHITECTURE.md` and the invariant's comment beside the code; a revisit index row when it pins fixtures (the paths and a link to the record, or to the pull request for a deferral) |
 | a long-term choice | a short decision record (section 2) |
 | a capability's status, the product scope or the candidates' order | `docs/SPEC.md`: one table row per capability, naming it and linking its decision, never restating its semantics |
 | an ordinary bug fix | only the existing text the fix makes wrong |
 | a measurement | the pull request |
-| a future idea | a GitHub issue, not a document |
+| a deferral (a decision to build nothing now) | its entry in `docs/history/deferrals.md`, linked from the candidate's issue |
+| a future idea or its discussion | a GitHub issue, not a document |
 
 There is no separate handoff file: a fact that is easy to miss about the current code goes in `docs/ARCHITECTURE.md` or in a comment beside the code, once. A typo, script or test-speed fix usually touches no document. The item is complete when the pull request merges; `main` requires CI to pass first, so nothing is recorded after CI. Test counts, mutation lists, review findings and CI runs go in the pull request description; a new decision or amendment record names its pull request.
 
@@ -92,10 +93,10 @@ Each fact has one owner; other documents link to it instead of restating it. The
 | `docs/GUIDE.md` | an application author starting out | the common case of each feature, short, with links to the reference; the most serious limits, briefly | every rule, status and diagnostic; history |
 | `docs/reference/` | an application author looking up one rule | the current API: accepted shapes, statuses, diagnostics, runnable examples, one page per topic | why, alternatives, progress, plans |
 | `docs/ARCHITECTURE.md` | a contributor changing Muntin | how it works now: invariants, request handling, storage, the backend seam, current limits, the revisit index | user tutorials, completed plans, the history of a choice |
-| `docs/history/architecture-decisions.md` | someone asking why, or what to build next | one short record per decision or amendment; the next production item's contract | measurements and review logs (the pull request) |
+| `docs/history/architecture-decisions.md` | someone asking why, or what to build next | one short record per decision or amendment; the next production item's contract; in `deferrals.md`, the contract of each deferral | measurements and review logs (the pull request) |
 | `docs/SPEC.md` | someone choosing the next item | product scope, milestones, shipped capabilities, the top remaining candidates in order | candidate details (the issue), semantics (the reference) |
 | `docs/DEVELOPMENT.md` | a contributor finishing an item | how to verify, CI, what to update, this table | product or API facts |
-| GitHub issues | anyone planning | each remaining candidate or future design target, its details and deferrals | anything already shipped |
+| GitHub issues | anyone planning | each remaining candidate or future design target, its details and discussion | anything already shipped; a constraint later items must follow (a revisit condition), which needs a versioned record |
 | pull requests | the reviewer, and later an auditor | evidence: measurements, compiler output, test counts, review findings | rules later items must follow |
 | code comments | whoever edits that code | the invariant the code must keep, beside it | narratives, plans |
 

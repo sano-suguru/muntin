@@ -4,7 +4,7 @@
 Build Muntin: a small, Mojo-native, typed web application framework whose public API is owned by this repository and whose networking backends are replaceable.
 
 ## Where to look
-- `docs/GUIDE.md` and `docs/reference/`: the current user-facing API and its semantics; reference examples are run by tests.
+- `docs/GUIDE.md` and `docs/reference/`: the current user-facing API and its semantics. Each example says which test runs it and what it leaves out (`...`, or names defined on another page).
 - `docs/ARCHITECTURE.md`: how Muntin works now, its invariants and the revisit index.
 - `docs/history/architecture-decisions.md`: why, per decision; the contract of the next production item (its "Next production slice").
 - `docs/SPEC.md`: product scope and shipped capabilities; "Remaining candidates" is in priority order, and its first entry is the next item unless the user asks for another. Candidate details and future design targets are GitHub issues.
@@ -15,7 +15,7 @@ Before writing, place each fact by its reader (details and why: `docs/DEVELOPMEN
 - how Muntin works and what must stay true: `docs/ARCHITECTURE.md`, and the invariant beside the code;
 - why a long-term choice was made: a decision record of 1–3 KB;
 - measurements, compiler output, review findings: the pull request;
-- future ideas and deferred candidates: a GitHub issue, never a document.
+- future ideas and their discussion: a GitHub issue, never a document; a constraint later items must follow, such as a deferral's revisit condition, stays in a versioned record under `docs/history/`.
 
 If these disagree, do not silently pick one. Preserve established architecture and safety invariants, identify the inconsistency, and fix the owning document in the same verified change.
 
