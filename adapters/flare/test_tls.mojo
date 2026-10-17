@@ -347,8 +347,9 @@ def test_known_flare_deviation_alpn_with_no_common_protocol_is_served() raises:
     server does not serve is answered over HTTP/1.1 with no protocol
     selected; RFC 7301 section 3.2 requires a `no_application_protocol`
     alert instead. When Flare refuses the handshake, this test fails: change
-    it to expect the refusal and drop the deviation from docs/DX.md section
-    1, "HTTPS", and the M3-051 record; do not restore the old behaviour."""
+    it to expect the refusal and drop the deviation from
+    docs/reference/serving.md, "HTTPS", and the M3-051 record; do not restore
+    the old behaviour."""
     var app = https_app()
     var child = _serve(Server.bind("127.0.0.1", 0, tls=_tls()), app)
     try:

@@ -1,10 +1,10 @@
 # Typed `get` header access (M3-017): a `Headers` request slot on `get`, last,
 # through `App.handle` and `TestClient` (`headers=`); composed with an `Int`
 # route value, `State`, both result policies, raises and generic forwarding;
-# routes without a `Headers` slot unchanged; and docs/DX.md section 9's typed
-# `get` example, as written. Decision: docs/history/architecture-decisions.md,
-# "Typed get header access decision (M3-016)". Must-not-compile counterparts:
-# tests/get_headers_api_fail.
+# routes without a `Headers` slot unchanged; and docs/reference/headers.md's
+# typed `get` example, as written. Decision:
+# docs/history/architecture-decisions.md, "Typed get header access decision
+# (M3-016)". Must-not-compile counterparts: tests/get_headers_api_fail.
 
 from std.testing import assert_equal, TestSuite
 
@@ -125,7 +125,7 @@ def update(id: Int, input: WithHeaders[Note]) -> String:
     return String(id, " ", input.body.text, " ", _dump(input.headers))
 
 
-# docs/DX.md section 9, typed header access on `get`, as written there.
+# docs/reference/headers.md, typed header access on `get`, as written there.
 
 
 struct Users(Movable):

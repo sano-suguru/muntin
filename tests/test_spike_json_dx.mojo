@@ -1,8 +1,8 @@
-# DX section 4 and 5's JSON examples (M3-008 decision), compiled and run as
-# written there, against the spike's `Json`/`FromJson`/`ToJson`
-# (tests/json_spike.mojo) instead of `muntin` until the M3-009 slice.
-# The request Content-Type step is not in production, so the 415 lines of the
-# example are measured on the spike's adapter mirror in
+# The JSON examples of docs/reference/bodies.md and responses.md (M3-008
+# decision), compiled and run as written there, against the spike's
+# `Json`/`FromJson`/`ToJson` (tests/json_spike.mojo) instead of `muntin` until
+# the M3-009 slice. The request Content-Type step is not in production, so the
+# 415 lines of the example are measured on the spike's adapter mirror in
 # tests/test_spike_json.mojo.
 
 from std.collections import Optional

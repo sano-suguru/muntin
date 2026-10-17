@@ -74,7 +74,7 @@ def run_worker_loop[
     raise, so a reactor that fails to start would read as one that returned
     and its error would be lost (`serve` reports it today). No test fails if
     the `ENOTSOCK` exit stops holding; what a break would do:
-    docs/ARCHITECTURE.md, "Other current limits and operational risks"."""
+    docs/ARCHITECTURE.md, "Flare adapter"."""
     run_unified_reactor_loop_shared(
         listener_fd,
         config,
@@ -123,8 +123,8 @@ def tls_context_addr(server: HttpServer) -> Int:
     nor destroyed. Relied on: OpenSSL's `SSL_CTX` is shared read-only by
     every thread that makes a connection from it, as Flare's own
     multi-worker `serve` shares it; no test starts handshakes on several
-    workers at once (docs/ARCHITECTURE.md, "Other current limits and
-    operational risks"). Public alternative: none; `HttpFrontend` takes the
+    workers at once (docs/ARCHITECTURE.md, "Flare
+    adapter"). Public alternative: none; `HttpFrontend` takes the
     address, but only this private method gives it."""
     return server._tls_ctx_addr()
 

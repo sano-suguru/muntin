@@ -6,9 +6,9 @@
 # `TestClient.post(target, body)` sends no fields, so its answer on a JSON-body
 # route is pinned as 415, and routes that only return `Json[T]` go through
 # `TestClient`. `TestClient`'s `headers=` (M3-011):
-# tests/test_testclient_headers.mojo. DX sections 4 and 5:
-# tests/test_json_dx.mojo. Must-not-compile cases: tests/json_api_fail. A
-# chosen result status, `Json(value, status=)`: M3-029.
+# tests/test_testclient_headers.mojo. The reference's JSON examples:
+# tests/test_json_dx.mojo. Must-not-compile cases: tests/json_api_fail. A chosen
+# result status, `Json(value, status=)`: M3-029.
 
 from std.collections import Optional
 from std.memory import bitcast
@@ -421,14 +421,16 @@ def unvalidated_address(id: Int) -> Json[Address]:
 
 
 def status_set_after_failure() raises -> Response:
-    # DX section 5: an edit after `to_response()` applies to the fixed 500.
+    # docs/reference/responses.md: an edit after `to_response()` applies to
+    # the fixed 500.
     var r = Json(Measurement(Float64(0) / Float64(0))).to_response()
     r.status = 201
     return r^
 
 
 def media_type_after_failure() raises -> Response:
-    # DX section 5's media-type example, with a value that fails to write.
+    # docs/reference/responses.md's media-type example, with a value that
+    # fails to write.
     var r = Json(Measurement(Float64(0) / Float64(0)), status=201).to_response()
     r.headers.set("Content-Type", "application/problem+json")
     return r^
@@ -1131,7 +1133,8 @@ def test_serialization_failure_ignores_the_chosen_status() raises:
         client.get("/measure-created/0"), 500, "Internal Server Error"
     )
     _assert_fixed(client.get("/refusing-created"), 500, "Internal Server Error")
-    # A status set after the conversion overwrites the 500 (DX section 5).
+    # A status set after the conversion overwrites the 500
+    # (docs/reference/responses.md).
     _assert_fixed(
         client.get("/status-after-failure"), 201, "Internal Server Error"
     )

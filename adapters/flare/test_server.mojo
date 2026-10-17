@@ -14,9 +14,10 @@ closes.
 The receive body limit (M3-044, decided in docs/history/architecture-decisions.md
 "Server receive body limit decision (M3-044)"): `Server.bind`'s keyword-only
 `max_body_bytes` is checked (0 to 2^59 - 1) before anything is bound, and
-`_server_config` writes it into both of Flare's fields; the `docs/DX.md`
-section 1 example runs as written but on port 0. What a client sees on each
-transport is in `adapters/flare/test_localhost_roundtrip.mojo`.
+`_server_config` writes it into both of Flare's fields; the
+`docs/reference/serving.md` example runs as written but on port 0. What a
+client sees on each transport is in
+`adapters/flare/test_localhost_roundtrip.mojo`.
 
 `Server.serve` refuses to start, on every system, when the environment sets
 `FLARE_BUFRING_HANDLER` to `1`, which would select Flare's buffer-ring loop
@@ -480,9 +481,9 @@ def welcome() -> String:
 
 
 def test_docs_receive_limit_example() raises:
-    """The `docs/DX.md` section 1 receive limit example as written, on port 0
-    instead of 8080: 64 KiB is received, a head declaring one byte more is
-    Flare's 413 before any body is sent."""
+    """The `docs/reference/serving.md` receive limit example as written, on
+    port 0 instead of 8080: 64 KiB is received, a head declaring one byte
+    more is Flare's 413 before any body is sent."""
     var app = App()
     app.get["/"](welcome)
     var server = Server.bind("127.0.0.1", 0, max_body_bytes=64 * 1024)
@@ -1216,7 +1217,9 @@ def test_h2c_request_in_flight_finishes() raises:
         assert_equal(statuses[1], "200")
         assert_equal(bodies[1], "hello")
         # Flare v0.12.0 closes an h2c connection with no GOAWAY.
-        assert_false(goaway, "Flare now sends GOAWAY: revisit docs/DX.md")
+        assert_false(
+            goaway, "Flare now sends GOAWAY: revisit docs/reference/serving.md"
+        )
         var ended = _reap_within(child.pid, GRACE_MS + STOP_BOUND_MS)
         reaped = ended[0] >= 0
         assert_equal(_exit_code(ended[0]), 0)
@@ -3757,14 +3760,14 @@ def _write_byte_of(fd: Int, byte: String) raises:
 
 
 def make_app() -> App:
-    """`docs/DX.md` section 1's workers example, as written."""
+    """`docs/reference/serving.md`'s workers example, as written."""
     var app = App()
     app.get["/"](hello)
     return app^
 
 
 def test_docs_workers_example() raises:
-    """`docs/DX.md` section 1's `server.serve[make_app](workers=4)` serves,
+    """`docs/reference/serving.md`'s `server.serve[make_app](workers=4)` serves,
     on port 0, and stops on SIGTERM with status 0."""
     var child = _fork_workers[make_app](
         Server.bind("127.0.0.1", 0, shutdown_grace_ms=SHORT_GRACE_MS), 4

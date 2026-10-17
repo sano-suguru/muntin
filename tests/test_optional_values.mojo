@@ -1,17 +1,17 @@
 # Optional query values (M3-025): an `Optional[Int]` or `Optional[String]`
-# parameter is a route value that binds a query placeholder only; it is
-# `None` when the key is absent, has an empty value or has no `=`, and a
-# present value keeps every rule of a required one. Through `App.handle` and
-# `TestClient`: absent, empty and present values, escapes and `+`, each 400
-# of a present value (bad escape, not UTF-8, not an `Int`, a repeated key)
-# without calling the handler or `from_body`, an optional value beside a
-# required one in both query orders and after a path value, `Headers` after
-# it on `get` and `delete`, a body after it on `post`, `put` and `patch`
-# (`Json[T]` and `WithHeaders[B]` included), the stateful forms, a defaulted
-# `Int` parameter that stays required, first registration wins, a typed
-# function value and generic forwarding, and docs/DX.md's example as
-# written. Decision: docs/history/architecture-decisions.md, "Optional query
-# values decision (M3-024)". Must-not-compile counterparts:
+# parameter is a route value that binds a query placeholder only; it is `None`
+# when the key is absent, has an empty value or has no `=`, and a present value
+# keeps every rule of a required one. Through `App.handle` and `TestClient`:
+# absent, empty and present values, escapes and `+`, each 400 of a present value
+# (bad escape, not UTF-8, not an `Int`, a repeated key) without calling the
+# handler or `from_body`, an optional value beside a required one in both query
+# orders and after a path value, `Headers` after it on `get` and `delete`, a
+# body after it on `post`, `put` and `patch` (`Json[T]` and `WithHeaders[B]`
+# included), the stateful forms, a defaulted `Int` parameter that stays
+# required, first registration wins, a typed function value and generic
+# forwarding, and the docs/reference/route-values.md example as written.
+# Decision: docs/history/architecture-decisions.md, "Optional query values
+# decision (M3-024)". Must-not-compile counterparts:
 # tests/optional_values_api_fail.
 
 from std.os import getenv, setenv, unsetenv
@@ -105,7 +105,7 @@ def _show(v: Optional[String]) -> String:
     return "[" + v.value() + "]" if v else "None"
 
 
-# docs/DX.md, "Optional query values", as written there.
+# docs/reference/route-values.md, "Optional query values", as written there.
 
 
 struct CreateUser(FromBody):
@@ -138,7 +138,7 @@ def tag_user(tag: Optional[String], body: CreateUser) -> String:
 
 
 def _dx_app() -> App:
-    """docs/DX.md's registrations, as written there, on its own `App`."""
+    """The reference's registrations, as written there, on its own `App`."""
     var app = App()
     app.get["/items?{limit}"](list_items)
     app.get["/search?{q}&{sort}"](search)

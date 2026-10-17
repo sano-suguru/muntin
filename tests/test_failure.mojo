@@ -4,8 +4,8 @@
 # status, body and fields are unchanged. Contract:
 # docs/history/architecture-decisions.md, "Dropped error report decision
 # (M3-058)", "Next production slice", and "Dropped error report amendment
-# (M3-059)", whose two limits are pinned here too; semantics: docs/DX.md
-# sections 6 and 7.
+# (M3-059)", whose two limits are pinned here too; semantics:
+# docs/reference/errors.md and docs/reference/middleware.md.
 # Not reachable here, so not tested: a raise out of a route's `invoke`, which
 # no adapter makes, and a failed `Allow` write.
 
@@ -231,7 +231,7 @@ def raising_after(var request: Request, var next: Next) raises -> Response:
     return response^
 
 
-# docs/DX.md section 7's logging middleware, as written.
+# docs/reference/middleware.md's logging middleware, as written.
 
 
 def quoted(text: String) -> String:
@@ -531,7 +531,7 @@ def test_outermost_logging_middleware() raises:
 
 
 def test_logger_misses_a_report_an_inner_middleware_replaces() raises:
-    """A limit docs/DX.md section 6 states: the logger reads only the report
+    """A limit docs/reference/errors.md states: the logger reads only the report
     on the response it receives."""
     var app = App()
     app.use(logged)
@@ -546,7 +546,7 @@ def test_logger_misses_a_report_an_inner_middleware_replaces() raises:
 
 def test_logger_reads_only_the_last_of_two_failures() raises:
     """The handler fails, then a middleware raises: only the middleware's
-    report reaches the logger (docs/DX.md section 6)."""
+    report reaches the logger (docs/reference/errors.md)."""
     var app = App()
     app.use(logged)
     app.use(raising_after)
@@ -560,8 +560,8 @@ def test_logger_reads_only_the_last_of_two_failures() raises:
 
 
 def test_server_side_body_conversion_failure_is_an_unreported_400() raises:
-    """A limit docs/DX.md section 6 states: Muntin cannot tell a conversion's
-    own failure from bad input."""
+    """A limit docs/reference/errors.md states: Muntin cannot tell a
+    conversion's own failure from bad input."""
     var app = App()
     app.use(logged)
     _routes(app)

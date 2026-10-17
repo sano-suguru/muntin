@@ -1,17 +1,17 @@
 # Two route values (M3-023): a typed handler takes at most two route values,
 # bound by position in the literal's order (path placeholders left to right,
-# then query placeholders left to right), on every registration method.
-# Through `App.handle` and `TestClient`: two path values, a path and a query
-# value, two query values in either request order, every `Int`/`String` mix,
-# duplicate path names, binding by position whatever the parameter names, one
-# decoding per value and each value's own 400 before the handler and the body,
-# `Headers` after two values on `get` and `delete`, a body after two values on
-# `post`, `put` and `patch` (`Json[T]` and `WithHeaders[B]` included), the
-# stateful forms, raw handlers, first registration wins, a typed function
-# value and generic forwarding to the slot-arity-3 overloads, and docs/DX.md's
-# example as written. Decision: docs/history/architecture-decisions.md,
-# "Several route values decision (M3-022)". Must-not-compile counterparts:
-# tests/route_values_api_fail.
+# then query placeholders left to right), on every registration method. Through
+# `App.handle` and `TestClient`: two path values, a path and a query value, two
+# query values in either request order, every `Int`/`String` mix, duplicate path
+# names, binding by position whatever the parameter names, one decoding per
+# value and each value's own 400 before the handler and the body, `Headers`
+# after two values on `get` and `delete`, a body after two values on `post`,
+# `put` and `patch` (`Json[T]` and `WithHeaders[B]` included), the stateful
+# forms, raw handlers, first registration wins, a typed function value and
+# generic forwarding to the slot-arity-3 overloads, and the
+# docs/reference/route-values.md example as written. Decision:
+# docs/history/architecture-decisions.md, "Several route values decision
+# (M3-022)". Must-not-compile counterparts: tests/route_values_api_fail.
 
 from std.os import getenv, setenv, unsetenv
 from std.testing import assert_equal, TestSuite
@@ -99,7 +99,7 @@ def _json() raises -> Headers:
     return _h("Content-Type", "application/json")
 
 
-# docs/DX.md, "Two route values", as written there.
+# docs/reference/route-values.md, "Two route values", as written there.
 
 
 @fieldwise_init
@@ -163,7 +163,7 @@ def post_of_swapped(pid: Int, uid: Int) -> String:  # names in the other order
 
 
 def _dx_app() -> App:
-    """docs/DX.md's registrations, as written there, on its own `App`."""
+    """The reference's registrations, as written there, on its own `App`."""
     var app = App()
     app.get["/users/{uid}/posts/{pid}"](post_of)
     app.get["/users/{id}?{fields}"](user_fields)
@@ -394,8 +394,8 @@ def test_dx_examples() raises:
 
 
 def test_swapped_names_bind_by_position() raises:
-    # DX's caveat: a handler that declares two values of one type in the
-    # other order compiles and receives each other's values.
+    # The reference's caveat: a handler that declares two values of one type in
+    # the other order compiles and receives each other's values.
     var app = App()
     app.get["/users/{uid}/posts/{pid}"](post_of_swapped)
     _expect(app, "/users/1/posts/2", 200, "post 1 of user 2")

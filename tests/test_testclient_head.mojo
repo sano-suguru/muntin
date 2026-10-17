@@ -6,8 +6,8 @@
 # network backend's (adapters/flare). Every answer here is compared with
 # `App.handle` for the same request. Contract:
 # docs/history/architecture-decisions.md, "TestClient HEAD decision
-# (M3-036)", "Next production slice"; semantics: docs/DX.md, "`HEAD`" in
-# "Proven vs. target status", and section 10. Must-not-build evidence:
+# (M3-036)", "Next production slice"; semantics: docs/reference/routing.md,
+# "`HEAD`", and docs/reference/testing.md. Must-not-build evidence:
 # tests/methods_api_fail/testclient_head_*.
 
 from std.memory import ArcPointer
@@ -98,7 +98,7 @@ def report(req: Request) raises -> Response:
 
 
 def differs(var req: Request) -> Response:
-    """Raw, breaking DX's raw rule: another body for `HEAD`."""
+    """Raw, breaking the raw rule: another body for `HEAD`."""
     if req.method == "HEAD":
         return Response.text("head body")
     return Response.text("get body")

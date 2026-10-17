@@ -1,9 +1,9 @@
-# M3-035: middleware functions (`App.use`, `Next`) on production `App`,
-# through `TestClient`. Contract: docs/history/architecture-decisions.md,
-# "Middleware decision (M3-034)", "Next production slice"; semantics:
-# docs/DX.md section 7. Must-not-build evidence: tests/middleware_api_fail.
-# M3-064: the owning `App.handle` ("Request context decision (M3-063)",
-# "Next production slice"), the last tests.
+# M3-035: middleware functions (`App.use`, `Next`) on production `App`, through
+# `TestClient`. Contract: docs/history/architecture-decisions.md, "Middleware
+# decision (M3-034)", "Next production slice"; semantics:
+# docs/reference/middleware.md. Must-not-build evidence:
+# tests/middleware_api_fail. M3-064: the owning `App.handle` ("Request context
+# decision (M3-063)", "Next production slice"), the last tests.
 
 from std.memory import ArcPointer
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
@@ -270,7 +270,7 @@ def borrowed_body_at[
 
 
 def test_the_dx_example_as_written() raises:
-    # docs/DX.md section 7.
+    # docs/reference/middleware.md.
     var app = App()
     app.use(tracing)
     app.get["/hello"](hello)

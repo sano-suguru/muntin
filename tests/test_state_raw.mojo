@@ -617,7 +617,7 @@ def test_existing_routes_are_unchanged_beside_stateful_raw() raises:
     assert_equal(_calls(keys), 3)
 
 
-# The docs/DX.md section 8 stateful raw webhook, verbatim but for the
+# The docs/reference/state.md stateful raw webhook, verbatim but for the
 # handler's name.
 
 

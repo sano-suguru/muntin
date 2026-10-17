@@ -1,13 +1,13 @@
 # `put`, `patch` and `delete` in production (M3-021): `put` and `patch` take
 # exactly `post`'s shapes and `delete` exactly `get`'s, with the same rules,
-# results and errors; method matching stays byte for byte (except `HEAD`,
-# which `get` routes answer since M3-027: tests/test_head.mojo), a method with
-# no route on a matching path is 405 with `Allow` (M3-031:
+# results and errors; method matching stays byte for byte (except `HEAD`, which
+# `get` routes answer since M3-027: tests/test_head.mojo), a method with no
+# route on a matching path is 405 with `Allow` (M3-031:
 # tests/test_method_not_allowed.mojo), and `TestClient.put`, `.patch` and
 # `.delete` equal `App.handle` for the same request. Decision:
-# docs/history/architecture-decisions.md, "HTTP methods decision (M3-020)".
-# DX's example runs as written in `test_dx_example`. Must-not-compile cases:
-# tests/methods_api_fail.
+# docs/history/architecture-decisions.md, "HTTP methods decision (M3-020)". The
+# reference's example runs as written in `test_dx_example`. Must-not-compile
+# cases: tests/methods_api_fail.
 
 from std.testing import assert_equal, TestSuite
 
@@ -602,7 +602,7 @@ def test_test_client_methods_equal_app_handle() raises:
     assert_equal(dels.delete("/draw").text(), "DELETE|/draw||")
 
 
-# DX "Proven vs. target status", "PUT, PATCH and DELETE", as written there.
+# docs/reference/routing.md, "Methods", as written there.
 
 
 struct UserForm(FromBody):

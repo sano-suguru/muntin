@@ -3,7 +3,7 @@
 # it declares them, and Muntin never names them. The `Param` handler is
 # here too, because a module that discovers its tests crashes beside one
 # (tests/named_values_api_fail/discover_tests_crash.mojo). `make_app` is
-# docs/DX.md's example as written. Decision:
+# docs/reference/route-values.md's example as written. Decision:
 # docs/history/architecture-decisions.md, "Application route-value types
 # decision (M3-054)".
 

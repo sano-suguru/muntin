@@ -238,7 +238,7 @@ def test_invalid_header_is_a_handler_error() raises:
     assert_equal(len(got.headers), 0)
 
 
-# DX section 9's headers example, registered as `dx_webhook`.
+# docs/reference/raw.md's headers example, registered as `dx_webhook`.
 
 
 def dx_webhook(req: Request) raises -> Response:

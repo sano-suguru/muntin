@@ -1,10 +1,10 @@
 # Must not compile: an explicitly typed function value with a borrowed parameter
-# (`def(Int) thin raises Never -> String`, the `raises Never` spelling DX
-# section 6 documents for typed values, shown there for `def()`) does not
-# convert to a generic slot, owned (`def(var A)`, here) or borrowed (`def(A)`,
-# measured the same), although a plain `def` with that signature does and a
-# value spelled `def(var Int) ...` does (tests/test_registration.mojo). This is
-# the migration cost of the selected design
+# (`def(Int) thin raises Never -> String`, the `raises Never` spelling
+# docs/reference/routing.md documents for typed values, shown there for `def()`)
+# does not convert to a generic slot, owned (`def(var A)`, here) or borrowed
+# (`def(A)`, measured the same), although a plain `def` with that signature does
+# and a value spelled `def(var Int) ...` does (tests/test_registration.mojo).
+# This is the migration cost of the selected design
 # (docs/history/architecture-decisions.md, "Registration structure decision
 # (M3-014)"): such values and helper parameters must spell a borrowed `Int`
 # route value with `var` (a leading `State[S]` is not a slot and keeps its

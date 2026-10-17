@@ -1,6 +1,6 @@
 # Authoritative references
 
-Upstream sources behind assumptions that may change. Re-check them when toolchain or dependency behavior matters to a decision; examples in `docs/DX.md` hold only once they compile on the pinned toolchain.
+Upstream sources behind assumptions that may change. Re-check them when toolchain or dependency behavior matters to a decision; examples in `docs/reference/` hold only once they compile on the pinned toolchain.
 
 ## Mojo
 
