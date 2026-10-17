@@ -1,0 +1,97 @@
+commit 29550b6a9cef0657e6daa6353e8ef6edb6c90376
+Author: ehsanmok <ehsanmok@users.noreply.github.com>
+Date:   Fri Oct 16 03:18:32 2026 +0000
+
+    fix(runtime): register shared listeners with EPOLLEXCLUSIVE without EPOLLRDHUP
+    
+    `Reactor.register_exclusive` combined `_interest_to_epoll(interest)` with
+    EPOLLEXCLUSIVE. For read interest that mask is EPOLLIN | EPOLLRDHUP, and
+    epoll_ctl(2) does not allow EPOLLRDHUP together with EPOLLEXCLUSIVE, so the
+    call always failed with EINVAL. The kernel-<4.5 fallback then registered the
+    listener plainly, and shared-listener workers all woke for every connection
+    instead of using exclusive wakeups.
+    
+    The exclusive registration now clears EPOLLRDHUP, which a listener never
+    needs. The fallback stays for kernels that really lack the flag, and its
+    comment says that reaching it on a modern kernel is a bug.
+    
+    Exclusive wakeups go to one waiting worker per event rather than balancing
+    connections, so with the fix a lightly loaded server can keep landing new
+    connections on one worker (the reporter measured this). That is documented on
+    `register_exclusive` and in the `HttpServer.serve` note on
+    FLARE_REUSEPORT_WORKERS=0; rebalancing the listener is left as a follow-up.
+    
+    New tests in test_reactor read the mask back from /proc/self/fdinfo/<epfd>:
+    register_exclusive must store EPOLLEXCLUSIVE and EPOLLIN without EPOLLRDHUP
+    (it stored a plain registration before), and a plain register keeps
+    EPOLLRDHUP so EVENT_HUP still works. Every shared-listener loop goes through
+    this one method, so none needed a change. tests/_agg regenerated.
+    
+    Fixes #36
+    
+    Co-authored-by: Cursor <cursoragent@cursor.com>
+
+diff --git a/flare/http/server.mojo b/flare/http/server.mojo
+index 2b38f76b..1ea4376b 100644
+--- a/flare/http/server.mojo
++++ b/flare/http/server.mojo
+@@ -681,7 +681,10 @@ struct HttpServer(Movable):
+           ``EPOLLEXCLUSIVE`` (Linux >= 4.5), which trades
+           7-22 % req/s (handler vs static fast path) for a
+           uniformly tighter p99.99 σ under sustained load; see
+-          ``docs/benchmark.md``.
++          ``docs/benchmark.md``. The exclusive wakeup goes to one
++          waiting worker per event, so connections are not spread
++          evenly: a lightly loaded server may keep landing them on the
++          same worker (see ``Reactor.register_exclusive``).
+ 
+         For Router / middleware / stateful-struct handlers, use the
+         Handler-typed overload ``serve[H: Handler & Copyable]``.
+diff --git a/flare/runtime/reactor.mojo b/flare/runtime/reactor.mojo
+index 79f909eb..541e3657 100644
+--- a/flare/runtime/reactor.mojo
++++ b/flare/runtime/reactor.mojo
+@@ -334,6 +334,13 @@ struct Reactor(Movable):
+         so the practical behaviour is similar minus the kernel-level
+         fairness guarantee.
+ 
++        Registration uses ``EPOLLIN | EPOLLEXCLUSIVE`` and deliberately
++        omits the ``EPOLLRDHUP`` that ``register`` adds for read interest:
++        ``epoll_ctl(2)`` rejects that combination with ``EINVAL``. Wakeups
++        are exclusive, not balanced: the kernel wakes one waiting worker
++        per event, so a lightly loaded server may keep landing new
++        connections on the same worker.
++
+         ``EPOLLEXCLUSIVE`` is only valid on the initial ``EPOLL_CTL_ADD``
+         — modifying an existing registration to add it is rejected by
+         the kernel. The shared-listener path therefore registers once
+@@ -362,15 +369,23 @@ struct Reactor(Movable):
+             var ev = stack_allocation[EPOLL_EVENT_SIZE, UInt8]()
+             for i in range(EPOLL_EVENT_SIZE):
+                 ev.unsafe_offset(i).unsafe_write(UInt8(0))
+-            var bits = _interest_to_epoll(interest) | EPOLLEXCLUSIVE
++            # epoll_ctl(2): EPOLLEXCLUSIVE may only be combined with EPOLLIN,
++            # EPOLLOUT, EPOLLWAKEUP and EPOLLET. _interest_to_epoll adds
++            # EPOLLRDHUP for read interest, which makes the kernel answer
++            # EINVAL, so strip it. A listener never needs RDHUP.
++            var bits = (
++                _interest_to_epoll(interest) & ~EPOLLRDHUP
++            ) | EPOLLEXCLUSIVE
+             _epoll_event_set(ev, bits, token)
+             var rc = _epoll_ctl(self._fd, EPOLL_CTL_ADD, fd, ev)
+             if rc < c_int(0):
+-                # Some older kernels (<4.5) don't support EPOLLEXCLUSIVE
+-                # and return EINVAL. Fall back to a plain register so
+-                # the multi-worker scheduler still works (with
+-                # thundering-herd accepts) instead of crashing on a
+-                # registration error. Newer kernels accept it.
++                # Kernels before 4.5 don't know EPOLLEXCLUSIVE and return
++                # EINVAL. Fall back to a plain register so the multi-worker
++                # scheduler still works (with thundering-herd accepts)
++                # instead of crashing on a registration error. Any kernel
++                # that supports the flag accepts the mask built above, so
++                # reaching this on a modern kernel is a bug (it was, while
++                # the mask still carried EPOLLRDHUP).
+                 var ev2 = stack_allocation[EPOLL_EVENT_SIZE, UInt8]()
+                 for i in range(EPOLL_EVENT_SIZE):
+                     ev2.unsafe_offset(i).unsafe_write(UInt8(0))
