@@ -79,7 +79,62 @@ Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), as written, register
 
 - If `write_json` raises (NaN and infinity included) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`, whatever status was chosen, carrying a `Failure.RESPONSE` report ([errors](errors.md#reports-of-dropped-errors)); the handler's `ToErrorResponse` is not called. **An edit after `to_response()` applies to that 500 too**: a status set there (`r.status = 201`) would turn the failure into a success with the body `Internal Server Error`, so choose the status with `status=` ([why](../history/decisions/m3-028-json-response-status-decision.md)).
 - The writer prints a `Float64` with `String(Float64)`, which does not always read back to the same double (Mojo 1.1.0).
-- A top-level list is not a result: `List[User]` conforms to neither trait; return an application type that does.
+- A top-level list is not a result: `List[User]` conforms to neither trait; return an application type that does, whose `write_json` writes the array (`out.value(self.users)`, below).
+
+### Writing a `ToJson` type
+
+`write_json` writes one JSON value through the `JsonWriter`. `out.field(name, value)` writes one object member, and the value's type chooses how it is written:
+
+<!-- example: tests/test_json_dx.mojo#responses-json-writer -->
+```mojo
+@fieldwise_init
+struct Place(Copyable, ToJson):
+    var city: String
+    var zip: Int
+
+    def write_json(self, mut out: JsonWriter) raises:
+        out.begin_object()
+        out.field("city", self.city)
+        out.field("zip", self.zip)
+        out.end_object()
+
+
+@fieldwise_init
+struct Profile(ToJson):
+    var id: Int
+    var nickname: Optional[String]
+    var tags: List[String]
+    var home: Place
+    var past: List[Place]
+
+    def write_json(self, mut out: JsonWriter) raises:
+        out.begin_object()
+        out.field("id", self.id)              # Int, Float64, Bool or String
+        out.field("nickname", self.nickname)  # an Optional: empty is null, not left out
+        out.field("tags", self.tags)          # a List: an array
+        out.field("home", self.home)          # a ToJson type
+        out.field("past", self.past)          # a List (or Optional) of one
+        out.end_object()
+
+
+def profile(id: Int) -> Json[Profile]:
+    return Json(Profile(id, None, ["a"], Place("Tokyo", 100), [Place("Osaka", 5)]))
+
+
+var app = App()
+app.get["/profiles/{id}"](profile)
+# GET /profiles/7  -> 200, Content-Type: application/json,
+#   {"id":7,"nickname":null,"tags":["a"],"home":{"city":"Tokyo","zip":100},
+#    "past":[{"city":"Osaka","zip":5}]}
+```
+
+Run by `tests/test_json_dx.mojo` (`test_json_writer_members`), as written. Every kind, full and empty, against the explicit calls below: `tests/test_json_fields.mojo`.
+
+- `field(name, value)` is `name(name)` then `value(value)`. `value(value)` takes an `Int`, `Float64`, `Bool` or `String` (a string literal too), a `ToJson` type (written by its own `write_json`), and an `Optional` or a `List` of one of those. An empty `Optional` is written as `null`: the member is there, never left out. A `List` is an array; its `ToJson` elements may be move-only.
+- One level only: `Optional[List[Int]]`, `List[List[Int]]` and `List[Optional[Int]]` do not compile (`no matching method in call to 'field'`); write them with `begin_array`, a loop and `end_array`.
+- Other types fail where `field` is called, `no matching method in call to 'field'`: a struct that is not `ToJson`, or another width such as `Int64` or `Float32`. Convert first (`Int(n)`, `Float64(x)`).
+- A numeric list literal is ambiguous: `out.field("ids", [1, 2])`, `[1.5]` and `[]` are `ambiguous call to 'field'`, since the literal converts to `Int`, `Float64`, `List[Int]` and `List[Float64]`. Pass a typed value (`var ids: List[Int] = [1, 2]`). A literal string list (`["a"]`) is fine.
+- The explicit calls stay and mix with `field`: `begin_object`, `end_object`, `begin_array`, `end_array`, `name`, `null`, `int`, `float`, `bool`, `string` and `value`. The writer adds the separators. It raises, so the answer is the fixed 500 above, on a member or name outside an object, a value without a name inside one, a name repeated in one object (found at `end_object`), an unmatched close, a second top-level value, NaN or infinity, and a document left unfinished.
 
 ## `Response`
 
