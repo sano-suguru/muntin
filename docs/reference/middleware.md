@@ -1,6 +1,6 @@
 # Middleware
 
-Middleware is a function ([M3-034](../history/architecture-decisions.md#middleware-decision-m3-034)):
+Middleware is a function ([M3-034](../history/architecture-decisions.md#middleware-decision-m3-034)). Each example below is its own `App`; the line after it names the test that runs it and what that test adds or changes.
 
 ```mojo
 from muntin import App, Next, Request, Response
@@ -25,16 +25,18 @@ def main() raises:
 # POST /hello   -> 405 "Method Not Allowed"; Allow: GET, HEAD; X-Trace: 1
 ```
 
+Run by `tests/test_middleware.mojo` (`test_the_dx_example_as_written`), with `tracing` and `hello` as written; it builds the `App` in the test function instead of `main` and sends `POST /hello` with an empty body.
+
 - `app.use(f)` takes `def(var request: Request, var next: Next) raises -> Response`; one that borrows the request or does not raise converts too. The type is public as `Middleware`. A middleware may change the request, answer without running the rest, or run the rest with `next^.run(request^)` and change or replace the response.
 - `next^.run(request^)` consumes `next`, so the rest runs at most once: a second use, or one in a loop, does not compile (`use of uninitialized value 'next'`); `Next` has no plain call and no copy. A `Next` moved into a container and taken twice aborts the process at the second `take()`. A `Next` cannot outlive the call that received it. Code that names `_`-prefixed members or applies unsafe pointer operations or `rebind_var` to a `Next` is outside these guarantees.
 - Scope and order: every request `App.handle` receives (404, 405, 400s, a handler's 500 and `HEAD` included), in registration order, outermost first, wherever `use` sits among the routes: `a` then `b` see the request as `a`, `b` and the response as `b`, `a`.
 - `HEAD` arrives as `HEAD`; the backend drops the content of whatever comes out and declares its length, so a middleware must answer `HEAD` with the body it would give `GET` ([routing](routing.md#head)).
-- Requests a backend refuses before `App.handle` never reach middleware: through Flare, its own 400s, a body over `max_body_bytes`, the adapter's 400s (a method, target or field it cannot represent, a missing `Host`) and 431. Every body within `max_body_bytes` reaches it, bytes that are not UTF-8 included, so a middleware that reads `request.text()` handles its raise.
+- Requests a backend refuses before `App.handle` never reach middleware: through Flare, its own 400s, a body over `max_body_bytes`, the adapter's 400s (a method, target or field it cannot represent, a missing `Host`) and 431. A body within `max_body_bytes` is never refused before `App.handle` for its bytes ([M3-040](../history/architecture-decisions.md#binary-request-and-response-bodies-decision-m3-040)): a request that reaches `App.handle` reaches middleware with its body's bytes, ones that are not UTF-8 included, so a middleware that reads `request.text()` handles its raise. Such a request can still be refused for the reasons above, and over HTTP/1.1 Flare counts its head, chunk framing and pipelined bytes against the limit plus 8 KiB ([serving](serving.md#receive-body-limit)).
 - A middleware that does not touch a response passes it through unchanged. One that builds or changes a 405 owns its `Allow`.
 - Errors: a raise out of a middleware is the fixed 500 at that middleware's call, with no error text on the wire; the middleware outside it receives that 500 from `next`, carrying a `Failure.MIDDLEWARE` report ([errors](errors.md#reports-of-dropped-errors)), and continues. A raise before `next^.run` leaves the rest uncalled.
 - Configuration is compile-time only, through the function's parameters: `app.use(tagged["v1"])` for `def tagged[value: StaticString](var request: Request, var next: Next) raises -> Response`. A closure that captures a runtime value does not convert (`cannot be converted from ... to 'Middleware'`).
 - Not supported: runtime-configured middleware (a value read at start-up), request-scoped typed context, per-route or per-group middleware, middleware error types, async.
-- **A field middleware writes is not a way to hand a handler an authenticated identity**: request fields are client input.
+- **A field middleware writes is not a way to hand a handler an authenticated identity**: middleware can allow or deny a request, but request header fields are client input (a client can send the same name itself), so an application must not use such a field as an identity.
 - Cost: an `App` with no middleware dispatches as before. With middleware, each is one call, one `Next` and one level of nested calls. A request handed over (`app.handle(request^)`, as `TestClient` and the Flare adapter do) reaches the first middleware without a copy; a named request lent to `App.handle` is copied once, body included ([testing](testing.md#the-backend-seam)).
 
 ## Logging dropped errors
@@ -101,6 +103,8 @@ app.get["/orders/{id}"](find_order)  # find_order from errors.md
 # GET /orders/0 with X-Request-Id: r-1 -> 500 "Internal Server Error"; standard error:
 #   "GET" "/orders/0" client-id="r-1" handler: "database password is hunter2"
 ```
+
+`find_order` is the handler of [errors](errors.md#reports-of-dropped-errors). Run by `tests/test_failure.mojo` (`test_dx_logging_example`), with `quoted`, `failure_line` and `log_failures` as written; it also registers a `failing` middleware after `log_failures` and every route of the test's `_routes`, and checks only the 500, its `Failure.HANDLER` report and `GET /orders/1`: the standard-error line is not asserted. That line is checked in `test_outermost_logging_middleware`, through a twin `logged` that writes it into an `X-Log` field instead, for the target `/orders/0?q=1`.
 
 - Register it first: a middleware outside it that raises makes a report it never sees.
 - A request ID a client sends is client input: it correlates log lines and is not trusted. Muntin has no request ID, timing, metrics or tracing.

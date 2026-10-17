@@ -1,6 +1,6 @@
 # Routing and registration
 
-Everything here is Muntin's own answer: what `App.handle` returns when no middleware changes it ([middleware](middleware.md) may answer instead or change any answer, 404 and 405 included). Mojo 1.1.0 (8189361e).
+Everything here is Muntin's own answer: what `App.handle` returns when no middleware changes it ([middleware](middleware.md) may answer instead or change any answer, 404 and 405 included). Mojo 1.1.0 (8189361e). Each example below is its own `App`; the line after it names the test that runs it and what that test adds or changes.
 
 ## Registering a route
 
@@ -38,18 +38,30 @@ Static path segments are not checked for target bytes: `/hello world` compiles a
 
 ## Route conflicts
 
-Overlapping routes of one method are registered most specific first, or registration aborts ([M3-053](../history/architecture-decisions.md#route-conflict-decision-m3-053)):
+Two overlapping routes of one method register only when the more specific one comes first; a more general route first, the same path twice, or two routes neither of which is more specific (in either order) abort the registration ([M3-053](../history/architecture-decisions.md#route-conflict-decision-m3-053)):
 
 ```mojo
+def me() -> String:
+    return "me"
+
+
+def get_user(id: Int) -> String:
+    return "user " + String(id)
+
+
+var app = App()                       # its own App
 app.get["/users/me"](me)              # the more specific route first
 app.get["/users/{id}"](get_user)      # accepted: it covers /users/me, registered earlier
+# GET /users/me -> 200 "me";  GET /users/7 -> 200 "user 7";  GET /users/x -> 400 "Bad Request"
 # app.get["/users/me"](me) here instead, after /users/{id}, aborts:
 # route conflict: GET /users/me is registered after GET /users/{id}, which matches every request it matches; register GET /users/me first
 ```
 
+Run by `tests/test_route_conflicts.mojo` (`test_first_match_is_the_most_specific`), whose `_accepted` App registers these two routes in this order among other routes of other paths and methods. The abort is `tests/route_conflict_abort/parameter_route_first.mojo` (there `get_user` returns `String(id)`), which `scripts/check.sh` runs and requires to abort with that message.
+
 - Two routes of one method overlap when some path matches both: the same number of segments, and at each position equal static text or a `{name}` facing a `{name}` or a non-empty segment (`/` and `/{name}` do not overlap). Placeholder names, the query part and the handler's kind take no part.
 - A registration that overlaps an earlier route of its method aborts the program at that call unless the earlier route is more specific (it matches only paths the new one matches, and not all of them). So the same path again (`... matches the same requests as ...`), a more general route first, and two routes neither of which covers the other (`... both match some requests and neither is more specific`) abort; the message names the method and both paths.
-- The first matching route is therefore always the most specific one, whatever order modules register in.
+- So the first route that matches a request is always the most specific one: registering routes from several modules in another order either answers every request the same way or aborts at registration.
 - The check runs when the registration runs, not at compile time. An application that registers every route before serving stops before answering anything; registering after `handle` is allowed, and a conflict found then aborts after the requests already answered.
 
 ## Methods
@@ -58,6 +70,9 @@ app.get["/users/{id}"](get_user)      # accepted: it covers /users/me, registere
 
 ```mojo
 from muntin import App, FromJson, Headers, Json, JsonValue, Request, Response, State
+from muntin.testing import TestClient
+
+# UserForm, User and Unauthorized: not defined here (see the line after the example).
 
 
 @fieldwise_init
@@ -121,6 +136,8 @@ _ = client.delete("/users/7")                       # 401: no field sent
 _ = app.handle(Request("DELETE", "/cache", "all"))  # a DELETE body: build the Request
 ```
 
+Run by `tests/test_methods.mojo` (`test_dx_example`), which also defines the three types the example uses without defining: `UserForm`, the `name=` text body of [bodies](bodies.md#text-bodies-frombody) (`CreateUser` there, renamed); `User`, the `ToJson` type of [bodies](bodies.md#json-jsont) that writes `{"id":…,"name":…}`; and `Unauthorized`, the 401 `ToErrorResponse` of [headers](headers.md#reading-fields-in-a-handler). It checks every commented answer, sending `POST`, `HEAD` and `OPTIONS /users/7` through `App.handle` with the body `name=Ada`.
+
 - Everything said about `post`'s shapes holds for `put` and `patch`, and about `get`'s for `delete`: route values, decoding and 400s, body steps, results and errors, in the same order. Diagnostics name the method (`a patch handler takes one request body, as its last parameter`).
 - A typed `delete` handler takes no body (`constraint failed: a delete handler takes no request body`), and a body sent to it is not read. A raw `delete` handler receives the whole request, `req.body` included.
 - Through Flare, a method with a lowercase letter (`delete`, `Get`) is answered 400 by Flare's HTTP/1.1 parser before `App.handle`; an unknown uppercase method (`FOO`) reaches `App.handle`.
@@ -130,6 +147,11 @@ _ = app.handle(Request("DELETE", "/cache", "all"))  # a DELETE body: build the R
 A `post`, `put` or `patch` handler whose parameters are only route values and at most one `Headers`, last, is bodyless: it takes `get`'s shapes and answers exactly as the same handler on `get` would.
 
 ```mojo
+@fieldwise_init
+struct Db(Movable):
+    var name: String
+
+
 def activate(id: Int) -> String:  # no body: the request's is not read
     return String("activated ", id)
 
@@ -144,6 +166,7 @@ def follow(db: State[Db], id: Int) -> String:
     return String(db[].name, " follows ", id)
 
 
+var app = App()                       # its own App
 app.post["/users/{id}/activate"](activate)
 app.post["/logout"](logout)
 app.put["/users/{id}/follow"](follow, State(Db("ada")))
@@ -154,6 +177,8 @@ app.put["/users/{id}/follow"](follow, State(Db("ada")))
 # PUT /users/7/follow                          -> 200 "ada follows 7"
 # GET /users/7/activate                        -> 405, Allow: POST
 ```
+
+Run by `tests/test_bodyless.mojo` (`test_dx_example`), which also defines `Unauthorized`, the 401 `ToErrorResponse` of [headers](headers.md#reading-fields-in-a-handler) (with its own empty `__init__` instead of `@fieldwise_init`). It sends `activate` the bodies `""` and `"anything"`.
 
 - The body is not read: any body, bytes that are not UTF-8 and a JSON `Content-Type` change nothing, and Muntin chooses no status for it. A backend may still refuse a request before `App.handle` (through Flare, a body over the `Server`'s `max_body_bytes`). A handler that must refuse a body takes a body type that refuses it, or is raw.
 - A shape with a body is not bodyless: a last parameter whose type has no Muntin kind is still `the handler's last parameter is the request body; its type must conform to FromBody or FromBytes`.
@@ -195,8 +220,10 @@ var head = TestClient(app).head("/users/7")  # = app.handle(Request("HEAD", "/us
 # head.status == 200, head.text() == "user 7": the in-memory response keeps the body
 ```
 
+Run by `tests/test_head.mojo` (`test_dx_example`), which checks each `HEAD` answer of `App.handle` against the `GET` answer and `TestClient.head`'s against `App.handle`'s. The "through Flare" parts are not checked on this `App`: `adapters/flare/test_localhost_roundtrip.mojo` (`test_headers_over_h2c_follow_the_same_rules`) checks the same rule on its own routes (a typed `/hello`, a raw `/report` with length 6, a route-value 400 with 11, a 405 on `/form` with 18), over HTTP/1.1 and cleartext HTTP/2.
+
 - `HEAD` is answered by the first `GET` route whose path matches, with every step of `GET`. A typed handler cannot tell `HEAD` from `GET`. A raw `get` handler receives `req.method == "HEAD"` and must return the body it would give `GET`: the backend declares that body's length, so a shorter body sends a wrong `Content-Length`, which Muntin cannot check. Middleware is under the same rule. Only the exact token `HEAD` maps.
-- `App.handle` keeps the body. A network backend sends the status and fields with no content and a `Content-Length` equal to the body's byte length, or none for 1xx, 204, 205 and 304. The Flare adapter applies this to every answer it sends for `HEAD`, its own 400, 431 and 500 included; over HTTP/1.1 Flare itself frames a 205 or 304 with `Content-Length: 0`. A handler's own `Content-Length` is dropped for every method. Why: [M3-026](../history/architecture-decisions.md#head-decision-m3-026).
+- `App.handle` keeps the body. A network backend sends the status and fields with no content and a `Content-Length` equal to the body's byte length, or none for 1xx, 204, 205 and 304. The Flare adapter applies this to every answer it sends for `HEAD`, its own 400, 431 and 500 included. For a `HEAD` 205 or 304, whose body the adapter has removed, Flare itself still writes `Content-Length: 0` over HTTP/1.1. The Flare adapter drops a handler's own `Content-Length`, as it does for every method; `App.handle` keeps it. Why: [M3-026](../history/architecture-decisions.md#head-decision-m3-026).
 - `TestClient.head` returns `App.handle`'s answer unchanged, body included ([testing](testing.md)).
 - Cost: every `HEAD` computes and converts the whole `GET` body.
 
@@ -218,6 +245,8 @@ app.post["/hooks"](hook)                 # raw: def hook(req: Request) -> Respon
 # GET /hooks, HEAD /hooks -> 405, Allow: POST; through Flare, HEAD /hooks: Content-Length: 18, no content
 # POST /users/7/x, POST /missing -> 404 "Not Found"
 ```
+
+Run by `tests/test_method_not_allowed.mojo` (`test_dx_example`), which defines the handlers with the signatures in the comments (each also counts its calls) and `Note`, a `FromBody` that takes any text. The "through Flare" part is not checked on this `App`: `adapters/flare/test_localhost_roundtrip.mojo` (`test_headers_over_h2c_follow_the_same_rules`) checks a `HEAD` 405 with `Allow: POST` and `Content-Length: 18` on its own route `/form`.
 
 - The answer is `Response.text("Method Not Allowed", status=405)` with one `Allow` field and no `Content-Type`. Nothing is decoded or converted and no handler runs.
 - `Allow` lists the methods of the routes whose path matches, each once, in the order their first such route was registered, `HEAD` right after `GET`, joined by `, `. A method in `Allow` selects a route, which may still answer 400.

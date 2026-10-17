@@ -1,6 +1,6 @@
 # Application state
 
-A handler receives long-lived application data as `State[S]`, passed as the registration's second argument. There are no globals: Mojo 1.1.0 has no module-level variables and handlers cannot capture.
+A handler receives long-lived application data as `State[S]`, passed as the registration's second argument. There are no globals: Mojo 1.1.0 has no module-level variables and handlers cannot capture. Each example below is its own `App`; the line after it names the test that runs it and what that test adds or changes.
 
 ```mojo
 from muntin import App, State
@@ -9,8 +9,23 @@ from muntin import App, State
 struct Users(Movable):
     var names: List[String]
 
+    def __init__(out self, var names: List[String]):
+        self.names = names^
+
     def get(self, id: Int) raises NotFound -> String:
-        ...
+        if id < 0 or id >= len(self.names):
+            raise NotFound(id)
+        return self.names[id]
+
+
+def load_names() -> List[String]:
+    var names = List[String]()
+    names.append("ada")
+    return names^
+
+
+def hello() -> String:
+    return "hello"
 
 
 def get_user(users: State[Users], id: Int) raises NotFound -> User:
@@ -22,10 +37,13 @@ def main():
     var app = App()                          # App stays non-generic
     app.get["/hello"](hello)                 # stateless handlers: unchanged
     app.get["/users/{id}"](get_user, users)  # the state is the registration's second argument
-# GET /users/0  -> get_user(users, 0) -> User(0, "ada").to_response()
-# GET /users/9  -> NotFound(9).to_error_response()   (an error type as in errors.md)
-# GET /users/x  -> 400 "Bad Request"                 (get_user not called)
+# GET /hello    -> 200 "hello"
+# GET /users/0  -> get_user(users, 0) -> User(0, "ada").to_response() -> 200 "0:ada"
+# GET /users/1  -> NotFound(1).to_error_response() -> 404 "no user 1"
+# GET /users/x  -> 400 "Bad Request"   (get_user not called)
 ```
+
+Run by `tests/test_state.mojo` (`test_dx_section_8_example`), which names `Users` `Directory` and `get_user` `find_user` (the module already defines those names), registers in the test function instead of `main`, and defines the two types the example takes from other pages: `NotFound`, the `ToErrorResponse` type of [errors](errors.md#application-error-responses-toerrorresponse), and `User`, a [`ToResponse`](responses.md#toresponse) type holding `id` and `name` whose `to_response` is `Response.text(String(self.id) + ":" + self.name)` (the responses page's `UserText` is the same type with a space instead of `:`). The test checks the texts of `/hello`, `/users/0` and `/users/1`, not their statuses; `/users/x` is checked (400) by `test_test_client_before_and_after_an_app_move` in the same file, with that module's `Users`.
 
 ## Rules
 
@@ -45,15 +63,26 @@ def update_user(users: State[Users], id: Int, body: CreateUser) raises NotFound 
     return User(id, users[].get(id) + " as " + body.name)
 
 
-app.post["/users/{id}"](update_user, users)  # state, route value, body
+def main():
+    var names = List[String]()
+    names.append("ada")
+    names.append("bob")
+    var users = State(Users(names^))
+    var app = App()
+    app.post["/users/{id}"](update_user, users)  # state, route value, body
 # POST /users/1 "name=bo" -> update_user(users, 1, CreateUser("bo")) -> User(1, "bob as bo")
-# POST /users/9 "name=bo" -> NotFound(9).to_error_response()
+# POST /users/9 "name=bo" -> NotFound(9).to_error_response() -> 404 "no user 9"
 # POST /users/x "name=bo" -> 400 "Bad Request"   (from_body and update_user not called)
 ```
+
+The imports, `Users`, `User` and `NotFound` are the first example's; `CreateUser` is the `name=` text body of [bodies](bodies.md#text-bodies-frombody). Run by `tests/test_state_post.mojo` (`test_dx_section_8_post_example`), which builds the state with `_users()` (the same two names) and registers in the test function. Its `Users` also counts handler calls in a `calls` field, its `CreateUser` counts `from_body` calls, and its `User` answers status 201, so `/users/1` is 201 `"1:bob as bo"`. It checks the texts of `/users/1` and `/users/9` and the 400 of `/users/x`; that neither `from_body` nor the handler runs for an invalid route value is checked by `test_bad_route_value_is_400_before_the_body` in the same file.
 
 ## Raw handlers
 
 ```mojo
+from muntin import App, Request, Response, State
+
+
 @fieldwise_init
 struct WebhookKeys(Movable):
     var secret: String
@@ -68,11 +97,16 @@ def webhook(keys: State[WebhookKeys], req: Request) raises -> Response:
     return resp^
 
 
-var keys = State(WebhookKeys("sha256=valid"))
-app.post["/webhook"](webhook, keys)          # app.get too
+def main():
+    var keys = State(WebhookKeys("sha256=valid"))
+    var app = App()
+    app.post["/webhook"](webhook, keys)          # app.get too
 # POST /webhook  X-Signature: sha256=valid  -> 200 "ok", X-Request-Id: 42
 # POST /webhook  (no X-Signature)           -> 401 "unsigned"
+# GET /webhook                              -> 405 "Method Not Allowed", Allow: POST  (webhook not called)
 ```
+
+Run by `tests/test_state_raw.mojo` (`test_dx_section_8_stateful_raw_example`), which names the handler `dx_webhook` and registers in the test function; it sends the signed request through `app.handle` and the others through `TestClient`.
 
 A typed function value is spelled `def(State[S], var Request) thin raises Never -> Response`.
 

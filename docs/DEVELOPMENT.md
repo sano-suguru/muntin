@@ -72,7 +72,7 @@ An item's pull request updates, in the same diff, only what its kind of change n
 
 | Change | Updates |
 |---|---|
-| public API or user-visible behavior | the reference page that owns it, with a runnable example that names the test running it and says what it leaves out (`...`, names defined on another page); the guide only when the common case changes, with `tests/test_guide.mojo` |
+| public API or user-visible behavior | the reference page that owns it, with a runnable example that names the test running it (`tests/test_reference_examples.mojo` when no feature test runs it as written) and says what it leaves out (`...`, names defined on another page) and what that test changes; the guide only when the common case changes, with `tests/test_guide.mojo` |
 | structure, ownership or a safety boundary | `docs/ARCHITECTURE.md`, or the invariant's comment beside the code with `docs/ARCHITECTURE.md` naming it and linking there (one wording, one owner); a revisit index row when it pins fixtures (the paths and a link to the record, or to the pull request for a deferral) |
 | a long-term choice | a short decision record (section 2) |
 | a capability's status, the product scope or the candidates' order | `docs/SPEC.md`: one table row per capability, naming it and linking its decision, never restating its semantics |

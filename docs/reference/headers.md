@@ -1,5 +1,7 @@
 # Headers
 
+Each example below is its own `App`; the line after it names the test that runs it and what that test adds or changes.
+
 ## `Headers`
 
 `muntin.Headers` is header fields in order.
@@ -27,6 +29,19 @@ struct Unauthorized(ToErrorResponse):
         return Response.text("Unauthorized", status=401)
 
 
+struct Users(Movable):                    # the application's token list, shared as State
+    var tokens: List[String]
+
+    def __init__(out self, var tokens: List[String]):
+        self.tokens = tokens^
+
+    def allows(self, token: String) -> Bool:
+        for t in self.tokens:
+            if t == token:
+                return True
+        return False
+
+
 def me(headers: Headers) raises Unauthorized -> String:
     var token = headers.get("authorization")  # Optional[String]
     if not token:
@@ -43,11 +58,15 @@ def private_note(
     users: State[Users], id: Int, headers: Headers
 ) raises Unauthorized -> String:  # State first, as always
     var token = headers.get("authorization")
-    if not token or not users[].allows(token.value()):    # a read-only Users method
+    if not token or not users[].allows(token.value()):
         raise Unauthorized()
     return String("private ", id)
 
 
+var tokens = List[String]()
+tokens.append("t1")
+var users = State(Users(tokens^))
+var app = App()
 app.get["/me"](me)
 app.get["/notes/{id}"](note)
 app.get["/private/{id}"](private_note, users)
@@ -55,8 +74,11 @@ app.get["/private/{id}"](private_note, users)
 # GET /me  (no Authorization)            -> 401 "Unauthorized" (the handler's error type)
 # GET /notes/3  X-Trace: a  x-trace: b   -> 200 "3 traces=2"
 # GET /notes/x                           -> 400 "Bad Request"  (note not called)
-# GET /private/3  Authorization: <allowed token> -> 200 "private 3"; otherwise 401
+# GET /private/3  Authorization: t1       -> 200 "private 3"
+# GET /private/3  Authorization: t2, or none -> 401 "Unauthorized"
 ```
+
+Run by `tests/test_get_headers.mojo` (`test_dx_example`), as written; it builds the `App` in the test function and also checks that `GET /private/x` is 400.
 
 - The parameter is a fresh value rebuilt for the handler, borrowed or owned (`var headers`); changing it changes no `Request`. `mut headers` matches no overload.
 - **Muntin gives the fields no meaning**: a missing field is `None`, and the handler answers through its error type. There is no new 400, 413 or 415.
@@ -71,4 +93,4 @@ app.get["/private/{id}"](private_note, users)
 - A request with more fields than the `Server`'s `max_header_fields` is answered 431 ([serving](serving.md#request-header-field-limit)).
 - Over HTTP/2 a request's fields arrive in order as sent, names lowercase; Flare hands `:authority` over as a first `Host` field (dropping a `host` field) and joins the `cookie` fields with `; ` into one last `cookie` field.
 - On the way out, fields the backend owns or that are connection-specific (`Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`, `TE`, `Trailer`) and any field a `Connection` value names are not written to the wire; they stay in the in-memory `Response`. Over HTTP/2 names go out lowercase. A field that fails the re-check is the adapter's 500.
-- **A field middleware writes is not an authenticated identity**: request fields are client input (a client can send the same name), so an application must not hand an identity to a handler in a field.
+- Whether a handler may trust a field a middleware wrote: [middleware](middleware.md#middleware).
