@@ -170,7 +170,7 @@ pixi run mojo run -I ../muntin/src -I ../muntin/adapters/flare app.mojo
 - [`docs/GUIDE.md`](docs/GUIDE.md): how to write Muntin applications, feature by feature.
 - [`docs/reference/`](docs/reference/): the API by topic: accepted shapes, statuses, diagnostics, examples.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): how Muntin works now: boundaries, invariants, current limits.
-- [`docs/history/architecture-decisions.md`](docs/history/architecture-decisions.md): why: one record per design decision.
+- [`docs/history/architecture-decisions.md`](docs/history/architecture-decisions.md): why: one record per design decision, each marked current, superseded or withdrawn.
 - [`docs/SPEC.md`](docs/SPEC.md): product scope, shipped capabilities and the next candidates; future work is in GitHub issues.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): verification commands, CI, and which document owns what.
 - [`docs/REFERENCES.md`](docs/REFERENCES.md): upstream sources and the Flare pin.

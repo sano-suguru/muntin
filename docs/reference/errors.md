@@ -63,7 +63,7 @@ app.get["/users/{id}"](get_user)
 
 ## Reports of dropped errors
 
-When Muntin answers the fixed 500, the `Response` carries a report of what it dropped, which [middleware](middleware.md#logging-dropped-errors) reads; the client receives exactly the same 500 ([M3-058](../history/architecture-decisions.md#dropped-error-report-decision-m3-058), [M3-059](../history/architecture-decisions.md#dropped-error-report-amendment-m3-059)).
+When Muntin answers the fixed 500, the `Response` carries a report of what it dropped, which [middleware](middleware.md#logging-dropped-errors) reads; the client receives exactly the same 500 ([M3-058](../history/decisions/m3-058-dropped-error-report-decision.md), [M3-059](../history/decisions/m3-059-dropped-error-report-amendment.md)).
 
 <!-- example: tests/test_failure.mojo#errors-report -->
 ```mojo

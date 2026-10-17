@@ -1,6 +1,6 @@
 # Serving (`muntin_flare.Server`)
 
-`Server` is the Flare adapter module's (`muntin_flare`), not Muntin core's: Muntin core has no `app.run()`. It builds only in the `flare` pixi environment with `-I src -I adapters/flare`, on Linux x86-64 and macOS arm64 (the systems whose `struct sigaction` layout it was verified on). It is a runnable server, not a production-ready deployment: read [the limits](#one-request-at-a-time) before relying on it. Flare v0.12.0; why: [M3-032](../history/architecture-decisions.md#serving-entrypoint-decision-m3-032). Each example below is its own program with its own `App`; the later ones use the first one's imports and `hello`, and the line after each names the program or test that runs it, or the nearest test, and what that test changes.
+`Server` is the Flare adapter module's (`muntin_flare`), not Muntin core's: Muntin core has no `app.run()`. It builds only in the `flare` pixi environment with `-I src -I adapters/flare`, on Linux x86-64 and macOS arm64 (the systems whose `struct sigaction` layout it was verified on). It is a runnable server, not a production-ready deployment: read [the limits](#one-request-at-a-time) before relying on it. Flare v0.12.0; why: [M3-032](../history/decisions/m3-032-serving-entrypoint-decision.md). Each example below is its own program with its own `App`; the later ones use the first one's imports and `hello`, and the line after each names the program or test that runs it, or the nearest test, and what that test changes.
 
 <!-- example: examples/hello_server.mojo -->
 ```mojo
@@ -44,13 +44,13 @@ This is `examples/hello_server.mojo`, as written. `scripts/check_flare.sh` build
 
 ## One request at a time
 
-**With `serve(app)`, while one handler runs, no other request of the process is answered**, on any connection, and no other stream of an h2c connection; new connections wait in the system's queue ([M3-046](../history/architecture-decisions.md#head-of-line-blocking-decision-m3-046)). This is Flare v0.12.0's single reactor, and Flare's own server behaves the same. With [workers](#workers) it holds per worker.
+**With `serve(app)`, while one handler runs, no other request of the process is answered**, on any connection, and no other stream of an h2c connection; new connections wait in the system's queue ([M3-046](../history/decisions/m3-046-head-of-line-blocking-decision.md)). This is Flare v0.12.0's single reactor, and Flare's own server behaves the same. With [workers](#workers) it holds per worker.
 
 **A long handler can lose requests, not only delay them.** On Flare v0.12.0, because of the order in which its loop handles idle timers, open HTTP/1.1 keep-alive and h2c connections that waited while the handler ran can be closed once it returns, with the requests that arrived on them unread and unanswered (reset, when measured on Linux and macOS), and the handler's own keep-alive connection can be closed right after its answer. That happens when a connection's idle time before the handler plus the handler's run time exceeds `idle_timeout_ms` (500 ms unless set). It is reproduced with a 1 s handler and the default; the general rule is read in Flare's code, not tested. Connections opened during the handler are answered afterwards. Keep handlers short, or set `idle_timeout_ms` above the longest handler run plus the idle time clients leave before a request, so that waiting requests are answered after the handler instead of dropped (tested with a 1 s handler and 60,000; they are still not answered while it runs). Several processes behind a load balancer help requests sent to another process, and workers (below) keep new connections moving within one process; neither helps requests on a held connection or another stream of the same h2c connection.
 
 ## Workers
 
-`server.serve[make_app](workers=4)` serves with 4 threads, each with its own `App`, built by calling `make_app` on that thread ([M3-049](../history/architecture-decisions.md#multi-worker-serving-decision-m3-049)):
+`server.serve[make_app](workers=4)` serves with 4 threads, each with its own `App`, built by calling `make_app` on that thread ([M3-049](../history/decisions/m3-049-multi-worker-serving-decision.md)):
 
 <!-- example: adapters/flare/test_server.mojo#serving-workers workers_main=main -->
 ```mojo
@@ -69,14 +69,14 @@ Built as written, with `main` named `workers_main`, in `adapters/flare/test_serv
 
 - `make_app` is a plain `def() raises -> App` (or without `raises`); a closure is refused at compile time. **Workers share no value**, `State` included, unless `make_app` reaches shared memory through an unsafe pointer or a C call, which Muntin cannot check. Everything an `App` holds is held once per worker.
 - `workers` is 1 to 256, else `serve` raises `workers out of range: <value>` before serving; `FLARE_BUFRING_HANDLER=1` and a second `serve` in the process are refused as for `serve(app)`.
-- What improves: while one worker's handler runs, a connection opened meanwhile is accepted and answered by another worker (tested over HTTP/1.1 and h2c with 2 workers and a 1 s handler). While one worker is free, a new connection is usually answered at once, but one accepted by a worker that then starts another connection's handler waits behind it, which can happen when connections arrive together (measured on Linux, not tested). What does not improve: a connection stays on the worker that accepted it, so requests on a held worker's open connections, every other stream of the same h2c connection among them, still wait and can still be dropped. While every worker runs a handler, no new connection is answered until one returns. Workers are the capacity for blocking handlers ([M3-071](../history/architecture-decisions.md#handler-execution-model-decision-m3-071)): Muntin cannot end a running handler, so a handler that waits on a service should bound that wait itself, and `workers` should exceed the number of such handlers expected at once.
-- Connections are not balanced: whichever worker accepts first takes a connection, so connections opened one after another tend to land on one worker (measured on Linux, not guaranteed). A client that keeps a few connections open (a pool, a load balancer, an h2c client) can have most of them on the worker a slow handler holds ([M3-068](../history/architecture-decisions.md#worker-connection-spread-decision-m3-068)).
+- What improves: while one worker's handler runs, a connection opened meanwhile is accepted and answered by another worker (tested over HTTP/1.1 and h2c with 2 workers and a 1 s handler). While one worker is free, a new connection is usually answered at once, but one accepted by a worker that then starts another connection's handler waits behind it, which can happen when connections arrive together (measured on Linux, not tested). What does not improve: a connection stays on the worker that accepted it, so requests on a held worker's open connections, every other stream of the same h2c connection among them, still wait and can still be dropped. While every worker runs a handler, no new connection is answered until one returns. Workers are the capacity for blocking handlers ([M3-071](../history/decisions/m3-071-handler-execution-model-decision.md)): Muntin cannot end a running handler, so a handler that waits on a service should bound that wait itself, and `workers` should exceed the number of such handlers expected at once.
+- Connections are not balanced: whichever worker accepts first takes a connection, so connections opened one after another tend to land on one worker (measured on Linux, not guaranteed). A client that keeps a few connections open (a pool, a load balancer, an h2c client) can have most of them on the worker a slow handler holds ([M3-068](../history/decisions/m3-068-worker-connection-spread-decision.md)).
 - **Workers are not isolated from each other's failures**: if `make_app` raises on a worker, or a worker's reactor raises or returns, before a stop signal, every worker stops at once, with no grace window, and `serve` raises (`serve: a worker's make raised: <error>`, `serve: a worker's reactor raised: <error>`, `serve: a worker's reactor returned before a stop signal`). Once a stop signal was delivered, the stop goes on and `serve` returns; a worker's error during it is printed to standard error. A worker that has not stopped (its `App` destroyed) 1 s after that stop began (a `make_app`, handler or `App` destructor that does not return) ends the process with status 1. Run `serve` under a supervisor that restarts it.
-- With `tls`, every worker serves HTTPS with the one certificate and key; a TLS handshake runs on the worker that accepted the connection, so a held handler also holds the handshakes of its worker's connections ([M3-060](../history/architecture-decisions.md#tls-with-workers-decision-m3-060)). Every worker uses one OpenSSL context at once, which relies on Flare not modifying it after `bind` (not tested under concurrent handshakes); one worker avoids that.
+- With `tls`, every worker serves HTTPS with the one certificate and key; a TLS handshake runs on the worker that accepted the connection, so a held handler also holds the handshakes of its worker's connections ([M3-060](../history/decisions/m3-060-tls-with-workers-decision.md)). Every worker uses one OpenSSL context at once, which relies on Flare not modifying it after `bind` (not tested under concurrent handshakes); one worker avoids that.
 
 ## Receive body limit
 
-`max_body_bytes` bounds the request body the backend receives, over HTTP/1.1 and h2c ([M3-044](../history/architecture-decisions.md#server-receive-body-limit-decision-m3-044)):
+`max_body_bytes` bounds the request body the backend receives, over HTTP/1.1 and h2c ([M3-044](../history/decisions/m3-044-server-receive-body-limit-decision.md)):
 
 <!-- example: adapters/flare/test_server.mojo#serving-receive-limit receive_limit_main=main -->
 ```mojo
@@ -98,7 +98,7 @@ Built as written, with `main` named `receive_limit_main`, in `adapters/flare/tes
 
 ## Idle timeout
 
-`idle_timeout_ms` is how long Flare keeps a connection open while nothing arrives on it ([M3-047](../history/architecture-decisions.md#server-idle-timeout-decision-m3-047)): before the first byte, between keep-alive requests, between h2c frames (a stalled h2c body included), and while an HTTP/1.1 request head is incomplete. Past it Flare closes the connection with no answer.
+`idle_timeout_ms` is how long Flare keeps a connection open while nothing arrives on it ([M3-047](../history/decisions/m3-047-server-idle-timeout-decision.md)): before the first byte, between keep-alive requests, between h2c frames (a stalled h2c body included), and while an HTTP/1.1 request head is incomplete. Past it Flare closes the connection with no answer.
 
 <!-- example: adapters/flare/test_server.mojo#serving-idle-timeout idle_timeout_main=main -->
 ```mojo
@@ -117,7 +117,7 @@ Built as written, with `main` named `idle_timeout_main`, in `adapters/flare/test
 
 ## Request header field limit
 
-`max_header_fields` is the most header fields a request may carry ([M3-066](../history/architecture-decisions.md#request-header-conversion-decision-m3-066)). A request with more is answered `431 Request Header Fields Too Large` by the adapter, before `App.handle` and middleware, on any path; for `HEAD` without the body. Of the adapter's own answers, only the 400 for a request without `Host` comes first; Flare's own refusals (its 400s, a body over `max_body_bytes`) come before the adapter's.
+`max_header_fields` is the most header fields a request may carry ([M3-066](../history/decisions/m3-066-request-header-conversion-decision.md)). A request with more is answered `431 Request Header Fields Too Large` by the adapter, before `App.handle` and middleware, on any path; for `HEAD` without the body. Of the adapter's own answers, only the 400 for a request without `Host` comes first; Flare's own refusals (its 400s, a body over `max_body_bytes`) come before the adapter's.
 
 <!-- example: adapters/flare/test_server.mojo#serving-field-limit field_limit_main=main -->
 ```mojo
@@ -136,7 +136,7 @@ Built as written, with `main` named `field_limit_main`, in `adapters/flare/test_
 
 ## HTTPS
 
-With `tls=Tls(cert_file=..., key_file=...)` the `Server` serves the same `App` over TLS instead of cleartext, every route, middleware, setting, worker and the stop unchanged ([M3-051](../history/architecture-decisions.md#server-tls-decision-m3-051)):
+With `tls=Tls(cert_file=..., key_file=...)` the `Server` serves the same `App` over TLS instead of cleartext, every route, middleware, setting, worker and the stop unchanged ([M3-051](../history/decisions/m3-051-server-tls-decision.md)):
 
 <!-- example: examples/hello_https.mojo -->
 ```mojo
@@ -172,7 +172,7 @@ This is `examples/hello_https.mojo`, as written. `scripts/check_flare.sh` builds
 
 ## Stopping
 
-While `serve` (or `serve[make]`) runs, SIGTERM and SIGINT ask it to stop ([M3-045](../history/architecture-decisions.md#graceful-shutdown-decision-m3-045)). **Graceful means a bounded wait, not a cancellation**: Muntin cannot notify or cancel a running handler.
+While `serve` (or `serve[make]`) runs, SIGTERM and SIGINT ask it to stop ([M3-045](../history/decisions/m3-045-graceful-shutdown-decision.md)). **Graceful means a bounded wait, not a cancellation**: Muntin cannot notify or cancel a running handler.
 
 1. New connections are refused at once (when measured, the listener closed within about 50 ms on Linux and 200 ms on the macOS CI runner; the tests allow one second). A connection the system had already queued but Flare had not yet accepted is closed without an answer.
 2. The open connections are served for `shutdown_grace_ms` (default 5,000; 0 to 86,400,000). The whole window is always waited, even with nothing in flight.

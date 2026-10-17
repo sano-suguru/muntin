@@ -6,7 +6,7 @@ Build Muntin: a small, Mojo-native, typed web application framework whose public
 ## Where to look
 - `docs/GUIDE.md` and `docs/reference/`: the current user-facing API and its semantics. Each example says which test runs it and what it leaves out (`...`, or names defined on another page).
 - `docs/ARCHITECTURE.md`: how Muntin works now, its invariants and the revisit index.
-- `docs/history/architecture-decisions.md`: why, per decision; the contract of the next production item (its "Next production slice").
+- `docs/history/architecture-decisions.md`: the list of decision records (`docs/history/decisions/`, one file each) and each one's state; a record says why, per decision, and holds the contract of the next production item (its "Next production slice").
 - `docs/SPEC.md`: product scope and shipped capabilities; "Remaining candidates" is in priority order, and its first entry is the next item unless the user asks for another. Candidate details and future design targets are GitHub issues.
 - `docs/DEVELOPMENT.md`: verification commands, CI, and which document owns which fact.
 
