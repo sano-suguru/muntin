@@ -117,6 +117,19 @@ CASES = [
     ("fail", "a Mojo block closed by four backticks", {
         "docs/reference/page.md": PAGE.format(example=EXAMPLE).replace(
             "    pass\n```", "    pass\n````")}),
+    ("fail", "a drifted example with its marker inside a quote", {
+        "docs/GUIDE.md": "# Guide\n\n" + "\n".join(
+            "> " + line for line in (
+                "<!-- example: tests/test_x.mojo#hello -->\n```mojo\n"
+                + EXAMPLE.replace("200", "201") + "\n```").split("\n")) + "\n"}),
+    ("fail", "an example without a marker inside a quote", {
+        "docs/GUIDE.md": "# Guide\n\n> ```mojo\n> x\n> ```\n"}),
+    ("fail", "an example inside a list item", {
+        "docs/GUIDE.md": "# Guide\n\n- ```mojo\n  x\n  ```\n"}),
+    ("fail", "a marker with no ```mojo block after it", {
+        "docs/GUIDE.md": "# Guide\n\n<!-- example: tests/test_x.mojo#hello -->\n\nText.\n"}),
+    ("fail", "Mojo code in an HTML block", {
+        "docs/GUIDE.md": '# Guide\n\n<pre><code class="language-mojo">x\n</code></pre>\n'}),
     ("pass", "a ```mojo line inside another block is text", {
         "docs/GUIDE.md": "# Guide\n\n````markdown\n```mojo\nx\n```\n````\n"}),
     ("fail", "a marker naming a missing region", {

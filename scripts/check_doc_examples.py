@@ -16,12 +16,14 @@ preceded, on the line just above it, by one of:
     <!-- example: none: REASON -->
         no file holds the block; REASON says why.
 
-A block whose info string names mojo but is fenced any other way (indented,
-four backticks, tildes, more after "mojo"), and a fenced block of any kind
-without its closing fence, are errors, so no example can leave the check by
-its fence. Every region in a .mojo file under tests/, examples/ and adapters/
-must be shown by some block, and a file's regions must not nest. Exits nonzero on
-any mismatch, printing a diff from the file's text to the block's.
+No example may leave the check unseen. These are errors: a Mojo block fenced
+any other way (indented, after a block quote's or list item's markers, with
+four backticks or tildes, with more after "mojo"); Mojo code in HTML
+(language-mojo); a fenced block of any kind without its closing fence; and a
+marker line anywhere but just above a ```mojo block. Every region in a .mojo
+file under tests/, examples/ and adapters/ must be shown by some block, and a
+file's regions must not nest. Exits nonzero on any mismatch, printing a diff
+from the file's text to the block's.
 Standard library only: python3 -I scripts/check_doc_examples.py [ROOT],
 where ROOT (the repository by default) is for scripts/test_check_doc_examples.py.
 """
@@ -44,10 +46,15 @@ SOURCE_DIRS = ["tests", "examples", "adapters"]
 MARKER = re.compile(r"<!-- example: (.*) -->")
 REGION = re.compile(r"^\s*# example: (\S+)$")
 RENAME = re.compile(r"^(\w+)=(\w+)$")
+# What may come before a fence on its line: indentation and the markers of
+# block quotes and list items, so a fence inside one is still seen.
+CONTAINER = r"(?:[ \t>]|[-*+][ \t]|\d{1,9}[.)][ \t])*"
 # An opening fence: three or more backticks (an info string without one) or
 # tildes, as CommonMark has it.
-FENCE = re.compile(r"\s*(`{3,}(?=[^`]*$)|~{3,})(.*)$")
+FENCE = re.compile(CONTAINER + r"(`{3,}(?=[^`]*$)|~{3,})(.*)$")
 MOJO_INFO = re.compile(r"\W*mojo\b", re.IGNORECASE)
+# Mojo code shown some other way: a fence in the middle of a line, or HTML.
+MOJO_ELSEWHERE = re.compile(r"(`{3,}|~{3,})\s*mojo\b|language-mojo", re.IGNORECASE)
 
 
 def regions(path):
@@ -84,8 +91,12 @@ def blocks(doc):
     at least as many, nothing else on the line), so a ```mojo line inside
     another block is that block's text when that block's fence is longer. A
     block with no closing fence before the end or before the next opening
-    fence is an error: it would hide the blocks after it."""
+    fence is an error: it would hide the blocks after it. A fence after the
+    markers of a block quote or list item is seen too, and a Mojo one is an
+    error, as is a marker line anywhere but just above a ```mojo block."""
     lines = (ROOT / doc).read_text().split("\n")
+    fenced = set()  # the lines of fenced blocks, fences included
+    used = set()  # the marker lines of ```mojo blocks
     i = 0
     while i < len(lines):
         m = FENCE.match(lines[i])
@@ -93,7 +104,7 @@ def blocks(doc):
             i += 1
             continue
         fence, info = m.group(1), m.group(2)
-        close = re.compile(r"\s*" + re.escape(fence[0]) + "{%d,}\\s*$" % len(fence))
+        close = re.compile(CONTAINER + re.escape(fence[0]) + "{%d,}\\s*$" % len(fence))
         j = i + 1
         while j < len(lines) and not close.match(lines[j]):
             # An opening fence no shorter than this one, with an info string,
@@ -105,15 +116,26 @@ def blocks(doc):
         if j == len(lines) or not close.match(lines[j]):
             yield i + 1, "", "this fenced block has no closing fence"
             return
+        fenced.update(range(i, j + 1))
         if lines[i] == "```mojo":
             if lines[j] != "```":
                 yield j + 1, "", "a Mojo block's closing fence must be exactly ```"
             else:
                 m = MARKER.fullmatch(lines[i - 1]) if i > 0 else None
+                if m:
+                    used.add(i - 1)
                 yield i + 1, m.group(1) if m else None, "\n".join(lines[i + 1 : j])
         elif MOJO_INFO.match(info):
-            yield i + 1, "", "a Mojo block's fence must be exactly ```mojo"
+            yield i + 1, "", "a Mojo block's fence must be exactly ```mojo, at the start of a line outside quotes and lists"
         i = j + 1
+    # Every marker is a line of its own just above a ```mojo line; any other
+    # is a marker whose example the check cannot see.
+    for n, line in enumerate(lines):
+        if n not in fenced and MOJO_ELSEWHERE.search(line):
+            yield n + 1, "", "Mojo code outside a ```mojo block"
+        if "<!-- example:" in line and n not in used:
+            where = "inside a fenced block" if n in fenced else "not on the line just above a ```mojo block"
+            yield n + 1, "", f"an example marker {where}"
 
 
 def main():
