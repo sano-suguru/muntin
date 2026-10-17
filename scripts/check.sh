@@ -52,6 +52,9 @@ step "architecture boundary"
 step "unsafe confinement"
 ./scripts/check_unsafe.sh
 
+step "documents"
+./scripts/check_docs.sh
+
 step "benchmark response checks"
 python3 -I bench/hol/test_hol_client.py
 
