@@ -687,9 +687,153 @@ struct JsonWriter(Movable):
         self._before_value()
         _escape_into(self._out, value)
 
+    # `value` and `field` are chosen by the value's type: Int, Float64, Bool,
+    # String, a `ToJson` type, and an `Optional` (empty: null) or a `List`
+    # (an array) of one of those. Each combination is its own overload: on
+    # Mojo 1.1.0 a generic `value[T]` cannot forward to the overload of its
+    # `T` (it resolves to the `Optional` one by implicit conversion), and an
+    # unsupported type then fails where it is called, `no matching method`.
+
+    def value(mut self, value: Int) raises:
+        self.int(value)
+
+    def value(mut self, value: Float64) raises:
+        """A finite number; raises on NaN or infinity."""
+        self.float(value)
+
+    def value(mut self, value: Bool) raises:
+        self.bool(value)
+
+    def value(mut self, value: String) raises:
+        self.string(value)
+
     def value[T: ToJson](mut self, value: T) raises:
         """A nested application value, written by its own `write_json`."""
         value.write_json(self)
+
+    def value(mut self, value: Optional[Int]) raises:
+        if value:
+            self.int(value.value())
+        else:
+            self.null()
+
+    def value(mut self, value: Optional[Float64]) raises:
+        if value:
+            self.float(value.value())
+        else:
+            self.null()
+
+    def value(mut self, value: Optional[Bool]) raises:
+        if value:
+            self.bool(value.value())
+        else:
+            self.null()
+
+    def value(mut self, value: Optional[String]) raises:
+        if value:
+            self.string(value.value())
+        else:
+            self.null()
+
+    def value[T: ToJson](mut self, value: Optional[T]) raises:
+        """The value, or null when empty."""
+        if value:
+            value.value().write_json(self)
+        else:
+            self.null()
+
+    def value(mut self, value: List[Int]) raises:
+        self.begin_array()
+        for v in value:
+            self.int(v)
+        self.end_array()
+
+    def value(mut self, value: List[Float64]) raises:
+        self.begin_array()
+        for v in value:
+            self.float(v)
+        self.end_array()
+
+    def value(mut self, value: List[Bool]) raises:
+        self.begin_array()
+        for v in value:
+            self.bool(v)
+        self.end_array()
+
+    def value(mut self, value: List[String]) raises:
+        self.begin_array()
+        for v in value:
+            self.string(v)
+        self.end_array()
+
+    def value[T: ToJson](mut self, value: List[T]) raises:
+        """An array of the elements. Indexed, not iterated: `List` iteration
+        requires `Copyable` elements, so a move-only `T` works."""
+        self.begin_array()
+        for i in range(len(value)):
+            value[i].write_json(self)
+        self.end_array()
+
+    def field(mut self, name: String, value: Int) raises:
+        """One object member: `name(name)`, then `value(value)`."""
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: Float64) raises:
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: Bool) raises:
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: String) raises:
+        self.name(name)
+        self.value(value)
+
+    def field[T: ToJson](mut self, name: String, value: T) raises:
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: Optional[Int]) raises:
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: Optional[Float64]) raises:
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: Optional[Bool]) raises:
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: Optional[String]) raises:
+        self.name(name)
+        self.value(value)
+
+    def field[T: ToJson](mut self, name: String, value: Optional[T]) raises:
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: List[Int]) raises:
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: List[Float64]) raises:
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: List[Bool]) raises:
+        self.name(name)
+        self.value(value)
+
+    def field(mut self, name: String, value: List[String]) raises:
+        self.name(name)
+        self.value(value)
+
+    def field[T: ToJson](mut self, name: String, value: List[T]) raises:
+        self.name(name)
+        self.value(value)
 
     def _finish(deinit self) raises -> String:
         """The text; raises if the document is empty or unfinished."""

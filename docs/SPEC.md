@@ -49,6 +49,7 @@ What each capability does for an application: the [guide](GUIDE.md) and the [ref
 | request and response headers (`Headers`) | [M3-002](history/architecture-decisions.md#headers-decision-m3-002) | shipped |
 | JSON bodies and results (`Json[T]`) | [M3-008](history/architecture-decisions.md#json-codec-decision-m3-008) | shipped |
 | a chosen status for a JSON result (`Json(value, status=201)`) | [M3-028](history/architecture-decisions.md#json-response-status-decision-m3-028) | shipped |
+| one-call JSON object members, chosen by the value's type (`out.field("id", self.id)`, `Optional` and `List` included) | [M3-075](history/architecture-decisions.md#json-writer-members-decision-m3-075) | shipped |
 | request header fields from `TestClient` (`headers=`) | [M3-010](history/architecture-decisions.md#testclient-request-headers-decision-m3-010) | shipped |
 | request header fields in typed `post` handlers (`WithHeaders[B]`) | [M3-012](history/architecture-decisions.md#typed-header-access-decision-m3-012) | shipped |
 | registration on generic-arity slots (one overload per request-slot arity) | [M3-014](history/architecture-decisions.md#registration-structure-decision-m3-014) | shipped |
