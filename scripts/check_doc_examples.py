@@ -74,7 +74,9 @@ def blocks(doc):
     lines = (ROOT / doc).read_text().split("\n")
     i = 0
     while i < len(lines):
-        if lines[i] == "```mojo":
+        if re.match(r"\s*```\s*mojo\b", lines[i], re.IGNORECASE) and lines[i] != "```mojo":
+            yield i + 1, "", "a Mojo block's fence must be exactly ```mojo"
+        elif lines[i] == "```mojo":
             j = i + 1
             while j < len(lines) and lines[j] != "```":
                 j += 1
@@ -98,6 +100,9 @@ def main():
     for doc in DOCS:
         for line, marker, text in blocks(doc):
             where = f"{doc}:{line}"
+            if marker == "":
+                errors.append(f"{where}: {text}")
+                continue
             if marker is None:
                 errors.append(f"{where}: no '<!-- example: ... -->' line above the block")
                 continue

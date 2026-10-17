@@ -87,7 +87,7 @@ def main() raises:
     server.serve(app)
 ```
 
-Built as written, with `main` named `receive_limit_main`, in `adapters/flare/test_server.mojo`, and never run, as the workers example is. That module's `test_docs_receive_limit_example` runs it on port 0 and with the handler named `welcome`; it checks that a 65,536-byte body is received (`App.handle`'s 405: no `POST` route on `/`) and that a head declaring 65,537 is Flare's 413 before any body is sent.
+Built as written, with `main` named `receive_limit_main`, in `adapters/flare/test_server.mojo`, and never run, as the workers example is. That module's `test_docs_receive_limit_example` runs a copy of it on port 0, with the handler named `welcome`; it checks that a 65,536-byte body is received (`App.handle`'s 405: no `POST` route on `/`) and that a head declaring 65,537 is Flare's 413 before any body is sent.
 
 - Default 10,485,760 (10 MiB); 0 to 2^59 − 1 (0 accepts only empty bodies). There is no "unlimited" value.
 - A longer body is refused by Flare while it arrives, before the adapter: no middleware, routing or handler runs, on any route, so the application cannot see or answer the refusal. Over HTTP/1.1 a request declaring more with `Content-Length` is refused as soon as its head arrives, without waiting for the body.

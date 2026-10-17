@@ -93,6 +93,8 @@ CASES = [
     ("fail", "a whole file differs", {"examples/whole.mojo": "def main():\n    return\n"}),
     ("fail", "a block without a marker", {
         "docs/GUIDE.md": "# Guide\n\n```mojo\nx\n```\n"}),
+    ("fail", "a Mojo fence not written ```mojo", {
+        "docs/GUIDE.md": "# Guide\n\n- item:\n  ```mojo\n  x\n  ```\n"}),
     ("fail", "a marker naming a missing region", {
         "docs/reference/page.md": PAGE.format(example=EXAMPLE).replace("#hello", "#bye")}),
     ("fail", "a marker naming a missing file", {

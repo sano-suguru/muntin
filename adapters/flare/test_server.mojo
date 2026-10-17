@@ -3776,6 +3776,8 @@ def make_app() -> App:
 def workers_main() raises:
     var server = Server.bind("127.0.0.1", 8080)
     server.serve[make_app](workers=4)
+
+
 # example: end
 
 
@@ -3785,6 +3787,8 @@ def receive_limit_main() raises:
     app.get["/"](hello)
     var server = Server.bind("127.0.0.1", 8080, max_body_bytes=64 * 1024)
     server.serve(app)
+
+
 # example: end
 
 
@@ -3794,6 +3798,8 @@ def idle_timeout_main() raises:
     app.get["/"](hello)
     var server = Server.bind("127.0.0.1", 8080, idle_timeout_ms=30_000)
     server.serve(app)
+
+
 # example: end
 
 
@@ -3803,6 +3809,8 @@ def field_limit_main() raises:
     app.get["/"](hello)
     var server = Server.bind("127.0.0.1", 8080, max_header_fields=50)
     server.serve(app)
+
+
 # example: end
 
 

@@ -193,14 +193,17 @@ def test_state_raw() raises:
     assert_equal(r.status, 200)
     assert_equal(r.text(), "ok")
     assert_equal(len(r.headers), 1)
-    assert_equal(r.headers.get("x-request-id").value(), "42")
+    assert_equal(r.headers.name(0), "X-Request-Id")
+    assert_equal(r.headers.value(0), "42")
     r = app.handle(Request("POST", "/webhook"))
     assert_equal(r.status, 401)
     assert_equal(r.text(), "unsigned")
     r = client.get("/webhook")
     assert_equal(r.status, 405)
     assert_equal(r.text(), "Method Not Allowed")
-    assert_equal(r.headers.get("allow").value(), "POST")
+    assert_equal(len(r.headers), 1)
+    assert_equal(r.headers.name(0), "Allow")
+    assert_equal(r.headers.value(0), "POST")
 
 
 def main() raises:
