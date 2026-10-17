@@ -3,8 +3,10 @@
 > **Current.** Now described in [M2 completion contract](../m2-completion-contract.md#m2-completion-contract) and [M2 completion contract, "When M2 reopens"](../m2-completion-contract.md#when-m2-reopens).
 > Changed in part since:
 > - [M3-014](m3-014-registration-structure-decision.md): the registration overloads were changed under its reopen rule (the contract lists this as an amendment by M3-015).
+> - [M3-018](m3-018-route-value-decoding-and-string-route-values-decision.md): contract reopened: route values are percent-decoded once at capture, so an `Int` value such as `%31%30` is 10, not 400.
 > - [M3-026](m3-026-head-decision.md): contract reopened: HEAD answered by get routes.
 > - [M3-030](m3-030-method-not-allowed-decision.md): contract reopened: 405 with Allow instead of 404.
+> - [M3-038](m3-038-request-body-bytes-decision.md): contract reopened: a request body that is not UTF-8 refused by the adapter (replaced by M3-040).
 > - [M3-039](m3-039-request-target-and-method-bytes-decision.md): contract reopened: a non-UTF-8 method or target is the adapter's 400.
 > - [M3-040](m3-040-binary-request-and-response-bodies-decision.md): contract reopened: Request.body and Response.body are bytes.
 > - [M3-053](m3-053-route-conflict-decision.md): contract reopened: conflicting registrations abort (evidence quoted from docs/history/m2-completion-contract.md).

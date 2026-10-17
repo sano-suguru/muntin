@@ -1,6 +1,6 @@
 # Head-of-line blocking decision (M3-046)
 
-> **Current.** Now described in [serving reference, "One request at a time"](../../reference/serving.md#one-request-at-a-time), [serving reference, "Workers"](../../reference/serving.md#workers) and [ARCHITECTURE, "Backend seam"](../../ARCHITECTURE.md#backend-seam).
+> **Current.** Now described in [serving reference, "One request at a time"](../../reference/serving.md#one-request-at-a-time), [serving reference, "Workers"](../../reference/serving.md#workers) and [ARCHITECTURE, "Revisit index"](../../ARCHITECTURE.md#revisit-index).
 > Changed in part since:
 > - [M3-047](m3-047-server-idle-timeout-decision.md): made idle_timeout_ms an application setting, so the drops pinned here can be turned into waits (the guidance changed).
 > - [M3-049](m3-049-multi-worker-serving-decision.md): added `serve[make](workers=n)`, one App per worker, replacing this record's explicit deferral of more serving threads.

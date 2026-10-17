@@ -7,6 +7,8 @@
 > - [M3-038](m3-038-request-body-bytes-decision.md): the lossy UTF-8 body decoding was ended (non-UTF-8 body refused with 400; that refusal later replaced by M3-040).
 > - [M3-039](m3-039-request-target-and-method-bytes-decision.md): method and target are copied as strict UTF-8; otherwise the adapter's 400.
 > - [M3-040](m3-040-binary-request-and-response-bodies-decision.md): body bytes now pass unchanged both ways as List[UInt8].
+> - [M3-066](m3-066-request-header-conversion-decision.md): a request with more than `max_header_fields` fields is answered 431 before the conversion.
+> - [M3-073](m3-073-request-host-decision.md): an HTTP/1.1 or HTTP/2 request without `Host` is the adapter's 400, before the conversion.
 
 ```text
 flare.http.Request -> to_muntin_request -> muntin.Request

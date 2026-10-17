@@ -3,7 +3,7 @@
 > **Current.** Now described in [serving reference, "Workers"](../../reference/serving.md#workers) and [ARCHITECTURE, "Flare adapter"](../../ARCHITECTURE.md#flare-adapter).
 > Changed in part since:
 > - [M3-060](m3-060-tls-with-workers-decision.md): reversed the refusal of a TLS Server on workers.
-> - [M3-068](m3-068-worker-connection-spread-decision.md): narrowed what the workers guarantee: only a connection opened while a worker is already in a handler is promised another worker.
+> - [M3-068](m3-068-worker-connection-spread-decision.md): split what the workers guarantee: a connection opened while one worker is already running a handler is answered by another idle worker (a tested contract); one opened just before a worker starts a slow handler is not a contract.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision and production** (M3-049; `src/muntin` unchanged). It revisits [M3-046](m3-046-head-of-line-blocking-decision.md), which kept one reactor thread because running `App.handle` on several threads could make a `State` value with unsynchronized interior mutability a data race, and Muntin cannot require at compile time that a value is safe to share. Measurements, mutations and the probes behind the facts below are in the pull request.

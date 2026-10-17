@@ -2,7 +2,7 @@
 
 > **Current.** Now described in [errors reference, "Reports of dropped errors"](../../reference/errors.md#reports-of-dropped-errors), [middleware reference, "Logging dropped errors"](../../reference/middleware.md#logging-dropped-errors) and [ARCHITECTURE, "Request handling"](../../ARCHITECTURE.md#request-handling).
 > Changed in part since:
-> - [M3-059](m3-059-dropped-error-report-amendment.md): Response._failure became a List[Failure]; two premises (what the outermost logger sees, what a 400 means) corrected.
+> - [M3-059](m3-059-dropped-error-report-amendment.md): `Response._failure` became a `List[Failure]`; two premises (what the outermost logger sees, what a 400 means) corrected; the logging example writes every byte outside printable ASCII as `\xNN`, since `repr` lets C1 controls through.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision** (M3-058, pull request #107, which holds the probes, the scratch production run and the reviews; `src/muntin` unchanged). It answers the revisit condition on an observability or logging hook in [M2-010](m2-010-application-error-decision.md) and [M2-012](m2-012-error-response-decision.md), not M2-012's on a fallible conversion. It adds to `Response` and changes no existing answer or member, so it amends M2 rather than reopening it.
