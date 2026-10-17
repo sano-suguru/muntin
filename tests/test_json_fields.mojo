@@ -3,7 +3,8 @@
 # an `Optional` (empty: null) or a `List` (an array) of one of those. Decision:
 # docs/history/architecture-decisions.md, "JSON writer members decision
 # (M3-075)". The writer's structure rules and escapes: tests/test_json.mojo.
-# Must-not-compile cases: tests/json_api_fail/field_*.mojo.
+# Must-not-compile cases: tests/json_api_fail/field_*.mojo and
+# tests/json_api_fail/generic_writer_forwarding.mojo.
 
 from std.collections import Optional
 from std.testing import assert_equal, assert_true, TestSuite
@@ -228,7 +229,7 @@ struct Literals(ToJson):
         out.field("b", True)
         out.field("s", "x")
         out.field("l", ["a"])
-        var e: List[Int] = [1, 2]  # `[1, 2]` itself: List[Int] or List[Float64]
+        var e: List[Int] = [1, 2]  # `[1, 2]` itself is ambiguous
         out.field("e", e)
         out.end_object()
 

@@ -3,8 +3,10 @@
 # calls `self.value(x)` with `x: T`; the call resolves to the generic
 # `Optional` overload itself (by `Optional`'s implicit conversion from `T`),
 # not to `value(Int)` at instantiation, so `JsonWriter` declares each
-# `Optional`/`List` combination as its own overload. If this compiles and
-# dispatches by `T`, the combinations can collapse into generic overloads.
+# `Optional`/`List` combination as its own overload. Building alone is not
+# the signal: with `T: ImplicitlyCopyable` this builds and calls itself
+# forever. If it builds and prints `int`, the combinations can collapse into
+# generic overloads.
 # Expected diagnostic (checked by scripts/check.sh): value of type 'T' cannot be implicitly copied, it does not conform to 'ImplicitlyCopyable'
 struct Writer:
     var out: String

@@ -1,6 +1,7 @@
-# Must not compile (M3-075): an integer list literal passed to `field`
-# converts to both `List[Int]` and `List[Float64]`. A typed field or
-# `var ids: List[Int] = [1, 2]` chooses one.
+# Must not compile (M3-075): a numeric list literal passed to `field` or
+# `value` (`[1, 2]` here; `[1.5]` and `[]` too) is ambiguous between the
+# `Int`, `Float64`, `List[Int]` and `List[Float64]` overloads. A typed field
+# or `var ids: List[Int] = [1, 2]` chooses one.
 # Expected diagnostic (checked by scripts/check.sh): ambiguous call to 'field'
 from muntin import Json, JsonWriter, ToJson
 
