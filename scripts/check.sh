@@ -52,6 +52,9 @@ step "architecture boundary"
 step "unsafe confinement"
 ./scripts/check_unsafe.sh
 
+step "benchmark response checks"
+python3 -I bench/hol/test_hol_client.py
+
 step "build package"
 mkdir -p build
 "${MOJO[@]}" precompile --Werror src/muntin -o build/muntin.mojoc
