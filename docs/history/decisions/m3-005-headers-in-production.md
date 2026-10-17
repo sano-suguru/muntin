@@ -1,0 +1,20 @@
+# Headers in production (M3-005)
+
+> **Current.** Now described in [headers reference](../../reference/headers.md), [headers reference, "Through the Flare adapter"](../../reference/headers.md#through-the-flare-adapter) and [raw reference](../../reference/raw.md#raw-handlers-and-binary-bodies).
+> Changed in part since:
+> - [M3-015 production](m3-015-registration-on-generic-arity-slots-in-production.md): `_call_raw` was replaced by the arity adapters (the rebuild lives on in `_raw_request`).
+> - [M3-040](m3-040-binary-request-and-response-bodies-decision.md): `App.handle` no longer passes four strings (body included) before a raw route's fields.
+> Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
+
+Status: **production**, exactly the M3-002 slice. Decision, semantics and Flare measurements: "Headers decision (M3-002)" above.
+- `src/muntin/http.mojo`: `Headers` (one list of `_Field` pairs; validation helpers `_valid_name`, `_valid_value` and ASCII `_same_name` are private) and the `headers` fields of `Request` (defaulted `var headers` initializer argument) and `Response`. `muntin` exports `Headers`.
+- `src/muntin/app.mojo`: `App.handle` appends each field's name and value after a raw route's four strings, and `_call_raw` rebuilds `Headers` with `add` (failure: the fixed 500). Typed routes, `_Call`, `_Erased`, `_Route`, the storage module, the unsafe surface, `App.handle`'s signature and `TestClient` are unchanged.
+- `adapters/flare/muntin_flare.mojo`: `to_muntin_headers` rebuilds and verifies inbound fields (400 on failure, in `MuntinHandler.serve`); `to_flare_response` applies the outbound rule and re-checks each field (500 on failure).
+- Unchanged behavior: every existing test, fixture and expected text. The 90 production fixtures' diagnostics are identical to `main`'s. For a request whose fields Muntin can represent, a response that sets no field keeps its previous wire headers, since `Response.text` adds none (`GET /hello` over loopback still carries only Flare's three fields).
+- Changed behavior: a request Flare accepts but Muntin cannot represent (such as a forged `x-user:admin` over h2c) was routed with its fields discarded and is now answered 400 before `App.handle`.
+- Evidence:
+  - `tests/test_headers.mojo` (13): the spike's semantics on production `Headers`; raw handlers reading and writing fields through `App.handle`; every field kept through the raw transport; typed routes and `String` results setting none; a typed `ToResponse` result setting `Location`; an invalid field as the fixed 500; DX section 9's headers example.
+  - `tests/headers_api_fail` (5): `tests/headers_fail`'s invariants on production types.
+  - `adapters/flare/test_muntin_flare.mojo` (+5, 13 in all): inbound fields rebuilt in order; a forged `x-user:admin` (alone and beside a real field) and a control byte answered 400; the outbound rule; an internal-name write answered 500; no fields added to a response without any.
+  - `adapters/flare/test_localhost_roundtrip.mojo` (+2): over HTTP/1.1, `X-Signature` and repeated `X-A`/`x-a` reach a raw handler; `X-Request-Id`, two `Set-Cookie` and an empty value come back; `Transfer-Encoding`, `Keep-Alive`, `Upgrade` and the `Connection`-named `X-Hop` are omitted on the wire but kept in memory; an injection attempt is 500 on both. Over cleartext HTTP/2 the same route answers its fields in order (lowercase) without the omitted ones, and a forged `x-user:admin` name is answered 400.
+  - Mutations (planted, reverted; 15), each red: in `Headers`, names lowercased, dedupe on `add`, first-match `set`, case-sensitive names, an empty value treated as absent, the whitespace rule removed; in `app.mojo`, no header strings for raw routes, `_call_raw` dropping fields; a default header on `Request`, a default `Content-Type` on `Response`; in the adapter, inbound verification removed, an inbound `add` failure skipped, `Connection`-named fields kept, `Upgrade` kept, the outbound re-check removed.

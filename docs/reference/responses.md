@@ -74,7 +74,7 @@ def create() raises -> Response:
 
 Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), as written, registered at `GET /create`: 201, `{"id":7,"name":"Ada"}`, `Content-Type: application/problem+json`. `User` is the `ToJson` type of [bodies](bodies.md#json-jsont).
 
-- If `write_json` raises (NaN and infinity included) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`, whatever status was chosen, carrying a `Failure.RESPONSE` report ([errors](errors.md#reports-of-dropped-errors)); the handler's `ToErrorResponse` is not called. **An edit after `to_response()` applies to that 500 too**: a status set there (`r.status = 201`) would turn the failure into a success with the body `Internal Server Error`, so choose the status with `status=` ([why](../history/architecture-decisions.md#json-response-status-decision-m3-028)).
+- If `write_json` raises (NaN and infinity included) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`, whatever status was chosen, carrying a `Failure.RESPONSE` report ([errors](errors.md#reports-of-dropped-errors)); the handler's `ToErrorResponse` is not called. **An edit after `to_response()` applies to that 500 too**: a status set there (`r.status = 201`) would turn the failure into a success with the body `Internal Server Error`, so choose the status with `status=` ([why](../history/decisions/m3-028-json-response-status-decision.md)).
 - The writer prints a `Float64` with `String(Float64)`, which does not always read back to the same double (Mojo 1.1.0).
 - A top-level list is not a result: `List[User]` conforms to neither trait; return an application type that does.
 
