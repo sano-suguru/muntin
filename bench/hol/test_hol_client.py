@@ -432,6 +432,17 @@ class H2cStreams(unittest.TestCase):
         outcome, errors, late = self.settled([0.6, frame(1, 0x4, 3, b"\x88")[8:]])
         self.assertEqual((outcome, errors), ("timeout", []))
         self.assertTrue(late, late)
+        # #133 fourth review: a frame after the server closed the stream is a
+        # connection error, whether or not the stream had timed out.
+        rest = frame(1, 0x4, 3, b"\x88")[8:]
+        for name, after in (
+            ("DATA after END_STREAM", [frame(0, 0x1, 3, b"ok"), frame(0, 0x0, 3, b"X")]),
+            ("DATA after RST_STREAM", [frame(3, 0, 3, b"\x00\x00\x00\x02"), frame(0, 0x1, 3, b"ok")]),
+        ):
+            with self.subTest(case=name):
+                outcome, errors, late = self.settled([0.6, rest] + after)
+                self.assertEqual(outcome, "timeout")
+                self.assertTrue(errors, (errors, late))
         # A whole answer after the timeout leaves the timeout as it was.
         self.assertEqual(self.settled([0.6, frame(1, 0x4, 3, b"\x88")[8:], frame(0, 0x1, 3, b"ok")]), ("timeout", [], []))
 
@@ -532,6 +543,10 @@ class Runs(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.assertEqual(self.run_main(h1_server(lambda p: [h1_response(OK[p])]), mode), 0)
         self.assertEqual(self.run_main(h2_server(ok_frames), "h2c-same"), 0)
+        # Whole, but after the probes timed out (1.35 s into the run): lost, not malformed.
+        late = lambda s, p: ok_frames(s, p) if p == "/worker" else [1.6] + ok_frames(s, p) if s == 3 else []
+        with self.subTest(case="a whole answer after its timeout", mode="h2c-same"):
+            self.assertEqual(self.run_main(h2_server(late), "h2c-same"), 0)
 
     def test_malformed_answers_exit_1(self):
         broken = {
@@ -556,6 +571,11 @@ class Runs(unittest.TestCase):
             # the end-of-run wait (each probe times out 1.35 s into the run).
             "stalled 8 bytes into HEADERS, then closed": lambda s, p: (
                 ok_frames(s, p) if p == "/worker" else [frame(1, 0x4, s, b"\x88")[:8], 1.6, "close"] if s == 3 else []),
+            "stalled 8 bytes into HEADERS, then a whole answer and DATA after END_STREAM": lambda s, p: (
+                ok_frames(s, p) if p == "/worker" else [
+                    frame(1, 0x4, s, b"\x88")[:8], 1.6, frame(1, 0x4, s, b"\x88")[8:], frame(0, 0x1, s, b"ok"),
+                    frame(0, 0x0, s, b"X")]
+                if s == 3 else []),
             "stalled 8 bytes into HEADERS, then another body": lambda s, p: (
                 ok_frames(s, p) if p == "/worker" else [
                     frame(1, 0x4, s, b"\x88")[:8], 1.6, frame(1, 0x4, s, b"\x88")[8:], frame(0, 0x1, s, b"no")]

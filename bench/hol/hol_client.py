@@ -493,7 +493,7 @@ class H2c:
         self.lock = threading.Lock()
         self.next_id = 1
         self.waiting = {}  # stream id -> Stream
-        self.ended = {}  # stream id -> whether frames may still come for it
+        self.ended = {}  # stream id, no longer open -> whether frames may still come for it (`finish`)
         self.dead = None
         self.errors = []
         self.late = []  # malformed verdicts on streams `call` had already given up on
@@ -632,8 +632,9 @@ class H2c:
             self.inside = 0  # what the reader stopped on is in `errors`, or was between frames
 
     def stream(self, sid, what):
-        """The open Stream `sid`, or None for one this client gave up on;
-        Malformed for a stream never opened or already ended."""
+        """The open Stream `sid`, or None for one whose frames may still come
+        (its write failed, or it ended malformed before the server closed
+        it); Malformed for a stream never opened or that the server closed."""
         with self.lock:
             if sid in self.waiting:
                 return self.waiting[sid]
@@ -655,39 +656,39 @@ class H2c:
                 for name, value in fields:
                     h2_field(name, value)
             except Malformed as e:
-                self.finish(sid, f"malformed: {e}")
+                self.finish(sid, f"malformed: {e}", end)
             else:
-                self.finish(sid, self.outcome(stream))
+                self.finish(sid, self.outcome(stream), end)
             return
         try:
             status, length = h2_response_head(fields)
         except Malformed as e:
-            self.finish(sid, f"malformed: {e}")
+            self.finish(sid, f"malformed: {e}", end)
             return
         if 100 <= status < 200:
             if status == 101 or end:
-                self.finish(sid, f"malformed: an interim {status} {'ending the stream' if end else ''}".strip())
+                self.finish(sid, f"malformed: an interim {status} {'ending the stream' if end else ''}".strip(), end)
             return
         stream.status, stream.length = status, length
         if end:
-            self.finish(sid, self.outcome(stream))
+            self.finish(sid, self.outcome(stream), True)
 
     def data(self, sid, end, payload):
         stream = self.stream(sid, "DATA")
         if stream is None:
             return
         if stream.status is None:
-            self.finish(sid, "malformed: DATA before HEADERS")
+            self.finish(sid, "malformed: DATA before HEADERS", end)
             return
         stream.body += payload
         if end:
-            self.finish(sid, self.outcome(stream))
+            self.finish(sid, self.outcome(stream), True)
 
     def reset(self, sid):
         with self.lock:
             stream = self.waiting.get(sid)
         if stream is not None:
-            self.finish(sid, self.cut(stream, "reset"))
+            self.finish(sid, self.cut(stream, "reset"), True)
 
     def goaway(self, last):
         """Ends the streams the server will not process, and refuses new
@@ -696,7 +697,7 @@ class H2c:
             self.dead = "goaway"
             later = [(sid, stream) for sid, stream in self.waiting.items() if sid > last]
         for sid, stream in later:
-            self.finish(sid, self.cut(stream, "goaway"))
+            self.finish(sid, self.cut(stream, "goaway"), True)
 
     @staticmethod
     def cut(stream, reason):
@@ -725,14 +726,17 @@ class H2c:
         elif is_malformed(outcome):
             self.late.append(f"{stream.path} after its {stream.outcome}: {outcome.removeprefix('malformed: ')}")
 
-    def finish(self, sid, outcome):
-        """Ends stream `sid` with `outcome`; frames may still come for a
-        stream ended malformed or given up."""
+    def finish(self, sid, outcome, closed):
+        """Ends stream `sid` with `outcome`. `closed`: the server closed it
+        (END_STREAM, RST_STREAM, or a GOAWAY that leaves it out), so any
+        later frame on it is a connection error, whether or not `call` gave
+        up on it; otherwise (a malformed response cut off before its end)
+        frames may still come for it."""
         with self.lock:
             stream = self.waiting.pop(sid, None)
             if stream is None:
                 return
-            self.ended[sid] = stream.event.is_set() or is_malformed(outcome)
+            self.ended[sid] = not closed
             self.decide(stream, outcome)
 
     def fail_all(self, reason, every=False):
