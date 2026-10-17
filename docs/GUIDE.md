@@ -2,7 +2,7 @@
 
 How to write a Muntin application today, on Mojo 1.1.0 (8189361e). Each section shows the common case and links to the [reference](#reference) for every rule, status and error message. Setup is in the [README](../README.md#try-it).
 
-The examples build on each other: `User` and `CreateUser` come from "Request bodies", `NotFound` from "Results and errors". `tests/test_guide.mojo` runs every example as written, each on its own `App`, and checks the answers its comments state; the serving example is `examples/hello_server.mojo`.
+The examples build on each other: `User` and `CreateUser` come from "Request bodies", `NotFound` from "Results and errors". `tests/test_guide.mojo` registers every example as written, each on its own `App` with only the routes its comments rely on, and checks those answers; the serving example is `examples/hello_server.mojo`, which CI builds.
 
 Muntin is pre-alpha: the API still changes, and the Flare adapter's `Server` is not production-ready. Read [Before you deploy](#before-you-deploy) first.
 
@@ -49,9 +49,9 @@ app.get["/search?{q}&{sort}"](search)
 # GET /search?sort=date        -> 400 "Bad Request"  (q is required)
 ```
 
-- A route value is an `Int`, a `String` (percent-decoded once), an `Optional` of either (query only; `None` when missing or empty), or an application type conforming to `FromRouteValue`.
+- A route value is an `Int`, a `String`, an `Optional` of either (query only; `None` when missing or empty), or an application type conforming to `FromRouteValue`. Every route value is percent-decoded once before it is converted.
 - A handler takes up to two bare values. **Two bare values of one type declared in the wrong order compile and receive each other's values**; declare them as `Param["uid", Int]` to have the names checked at compile time. Three or more values are one `RouteValues` record, whose field names are checked.
-- Overlapping routes of one method must be registered most specific first (`/users/me` before `/users/{id}`), or registration aborts.
+- Overlapping routes of one method must be registered most specific first (`/users/me` before `/users/{id}`). Registration aborts otherwise, and also for a repeated path or two overlapping routes where neither is more specific, in any order.
 - `app.post`, `app.put`, `app.patch` and `app.delete` register the other methods; a `get` route also answers `HEAD`; a path that only other methods match is 405 with `Allow`.
 
 Reference: [routing](reference/routing.md), [route values](reference/route-values.md).
@@ -104,15 +104,15 @@ app.post["/users"](create_user)
 ```
 
 - Fields are mapped by hand in `from_json` and `write_json`; there is no derived codec.
-- Other bodies: a `FromBody` type parses text itself; a `FromBytes` type receives the bytes and must declare `comptime max_bytes`, its size limit (a longer body is 413).
-- A handler that also needs header fields takes `WithHeaders[B]` instead of `B`. **Muntin gives header fields no meaning**: a missing field is `None`, and the handler decides the status.
-- A handler with only route values on `post`, `put` or `patch` is bodyless: the body is not read.
+- Other bodies: a `FromBody` type parses text itself, with no Muntin size limit (`Json[T]` keeps its 1 MiB one); a `FromBytes` type receives the bytes, and its `comptime max_bytes` is its size limit (a longer body is 413), required unless a refining trait gives a default.
+- A handler that also needs header fields takes `WithHeaders[B]` instead of `B`. **Muntin gives header fields no meaning**: a missing field is `None`, and the handler decides the status. Only a `Json[T]` body's `Content-Type` (415) is checked before the handler.
+- A handler with only route values, and at most one `Headers` last, on `post`, `put` or `patch` is bodyless: the body is not read.
 
 Reference: [bodies](reference/bodies.md).
 
 ## Results and errors
 
-A handler returns `String` (a 200 text response with no fields), `Json[T]`, or any type conforming to `ToResponse`, `Response` included. `Json(value, status=201)` chooses another status.
+A handler returns `String` or `StaticString` (a 200 text response with no fields), `Json[T]`, or any type conforming to `ToResponse`, `Response` included. `Json(value, status=201)` chooses another status.
 
 **Anything a handler raises is a fixed 500 `Internal Server Error`, and the error's text is never sent**, unless the handler's declared error type conforms to `ToErrorResponse`:
 
@@ -208,7 +208,7 @@ app.get["/users/{id}"](show_user, users)  # the state is the registration's seco
 
 - `State` is a shared, read-only handle; a request copies nothing. A value that must change keeps that mutability in its own fields.
 - The state's type must own its data: a type that may borrow (its name shows an origin) does not compile.
-- With workers, each worker has its own `App` and its own `State` values.
+- With the Flare adapter's workers, each worker has its own `App` and its own `State` values ([state](reference/state.md#rules)).
 
 Reference: [state](reference/state.md).
 
@@ -227,6 +227,7 @@ def tracing(var request: Request, var next: Next) raises -> Response:
 
 
 app.use(tracing)
+app.get["/users/{id}"](get_user)  # the first application's handler
 # GET /users/1, GET /missing -> each answer with X-Trace: 1 added, the 404 included
 ```
 
@@ -259,6 +260,7 @@ Bodies are bytes (`List[UInt8]`) both ways; `req.text()` raises when they are no
 `TestClient` drives an `App` in memory through `App.handle`, the same entry a network backend calls:
 
 ```mojo
+app.post["/users"](create_user)  # the JSON handler above
 var client = TestClient(app)
 var headers = Headers()
 headers.add("Content-Type", "application/json")
@@ -296,9 +298,9 @@ Reference: [serving](reference/serving.md).
 
 ## Before you deploy
 
-- **One request at a time per worker.** While a handler runs, its worker answers nothing else, and requests waiting on that worker's connections can be dropped when the handler outlasts `idle_timeout_ms`. Keep handlers short, bound waits on other services, and size `workers` above the number of handlers that may block at once.
+- **One request at a time per worker.** While a handler runs, its worker answers nothing else, and requests waiting on that worker's keep-alive and h2c connections can be closed unanswered once it returns, when a connection's idle time before the handler plus the handler's run time exceeds `idle_timeout_ms` (500 ms unless set). Keep handlers short, set `idle_timeout_ms` above the longest handler run plus your clients' idle time, and size `workers` above the number of handlers that may block at once ([serving](reference/serving.md#one-request-at-a-time)).
 - **A stop ends the process if a handler outlasts it.** SIGTERM or SIGINT refuses new connections and serves the open ones for `shutdown_grace_ms`; if the server has not stopped one second later, the whole process ends without cleanup. Make changes atomic and retries safe.
-- **Workers are not isolated.** One worker's failure stops every worker; run under a supervisor.
+- **Workers are not isolated.** If `make_app` raises on a worker, or a worker's reactor raises or returns, before a stop signal, every worker stops and `serve` raises; run under a supervisor ([workers](reference/serving.md#workers)).
 - **Limits are per `Server`.** `max_body_bytes` bounds one request body, not memory overall; nothing caps the number of idle connections.
 - **Client input stays untrusted.** Route values are decoded but not sanitized, header fields are client input, and dropped-error messages may hold secrets.
 

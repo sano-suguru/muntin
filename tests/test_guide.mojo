@@ -271,7 +271,7 @@ def test_raw_handlers() raises:
     var r = client.post("/webhook", "signed")
     assert_equal(r.status, 200)
     assert_equal(r.text(), "ok")
-    r = client.post("/webhook?id=abc", "forged")
+    r = client.post("/webhook", "forged")
     assert_equal(r.status, 401)
     assert_equal(r.text(), "unsigned")
 

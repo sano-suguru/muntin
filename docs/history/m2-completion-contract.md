@@ -1,6 +1,6 @@
 # M2 completion contract
 
-Moved here from `docs/SPEC.md` when the current documents were reduced; the text below is as it stood then. Current behavior is in `docs/GUIDE.md` and `docs/reference/`. M2 is closed ([M2-016](architecture-decisions.md#m2-closure-m2-016)).
+Moved here from `docs/SPEC.md` when the current documents were reduced; the text below is as it stood then, except that its pointers name the current documents. "When M2 reopens" is still the rule. Current behavior is in `docs/GUIDE.md` and `docs/reference/`. M2 is closed ([M2-016](architecture-decisions.md#m2-closure-m2-016)).
 
 On Mojo 1.1.0, through `TestClient` and, for the same `App`, a real loopback request through the Flare adapter, M2 guarantees:
 
@@ -32,8 +32,8 @@ Later items changed the contract. An amendment adds to it; a reopen changes what
 - M3-059 amended it (the fixed 500 carries a report of the dropped error, `Response.failure()`, which no backend sends): [Dropped error report decision (M3-058)](architecture-decisions.md#dropped-error-report-decision-m3-058);
 - M3-073 reopened it (an HTTP/1.1 or HTTP/2 request without `Host` is the adapter's 400): [Request Host decision (M3-073)](architecture-decisions.md#request-host-decision-m3-073).
 
-Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it, except one: the contract's opening sentence holds for `HEAD`'s answer but not for its content. The in-memory response to `HEAD` keeps the body, and keeping it off the wire, with the length, is each network backend's obligation ([HEAD decision (M3-026)](architecture-decisions.md#head-decision-m3-026)). What Muntin does not provide today is in `docs/ARCHITECTURE.md`, "Other current limits and operational risks"; when M2 reopens is in `docs/ARCHITECTURE.md`, "When M2 reopens".
+Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it, except one: the contract's opening sentence holds for `HEAD`'s answer but not for its content. The in-memory response to `HEAD` keeps the body, and keeping it off the wire, with the length, is each network backend's obligation ([HEAD decision (M3-026)](architecture-decisions.md#head-decision-m3-026)). What Muntin does not provide today is in [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#current-limits), "Current limits"; when M2 reopens is below.
 
 ## When M2 reopens
 
-M2 is closed (M2-016); its contract is above. Reopen it, rather than add an M3 item, when a toolchain upgrade changes what the contract rests on (overload resolution, parametric raises inference, `conforms_to` detection), when a design must change an M2 public signature or semantics instead of adding to them (the `Request(method, target, body)` initializer, the 400/404/500 boundary, a fallible `ToResponse`/`ToErrorResponse`), or when a statement DX labels proven stops passing its test. Exact conditions: [M2 closure (M2-016)](architecture-decisions.md#m2-closure-m2-016).
+M2 is closed (M2-016); its contract is above. Reopen it, rather than add an M3 item, when a toolchain upgrade changes what the contract rests on (overload resolution, parametric raises inference, `conforms_to` detection), when a design must change an M2 public signature or semantics instead of adding to them (the `Request(method, target, body)` initializer, the 400/404/500 boundary, a fallible `ToResponse`/`ToErrorResponse`), or when a statement DX labels proven stops passing its test (since DX was split, a statement of `docs/GUIDE.md` or `docs/reference/` that stops passing the test its example names). Exact conditions: [M2 closure (M2-016)](architecture-decisions.md#m2-closure-m2-016).

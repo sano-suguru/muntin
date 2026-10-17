@@ -30,11 +30,11 @@ A capability is shipped when the pull request implementing it merges into `main`
 
 ## Product boundaries
 
-Muntin does not implement these unless an accepted milestone explicitly requires it: a custom async runtime or executor, socket management, TLS, HTTP/2, HTTP/3, QUIC, WebSockets (all backend concerns); dependency injection, a database layer, authentication, a template engine, deployment tooling; performance optimization before a baseline exists. It is not a thin Flare re-export, a FastAPI syntax clone or a Rails/Django-scale full-stack framework. The Flare adapter never replaces Muntin's router, request/response model or middleware design with Flare's (`docs/ARCHITECTURE.md`, "Flare policy").
+Muntin does not implement these unless an accepted milestone explicitly requires it: a custom async runtime or executor, socket management, TLS, HTTP/2, HTTP/3, QUIC, WebSockets (all backend concerns); dependency injection, a database layer, authentication, a template engine, deployment tooling; performance optimization before a baseline exists. It should not initially become a thin Flare re-export, a FastAPI syntax clone or a Rails/Django-scale full-stack framework. The Flare adapter never replaces Muntin's router, request/response model or middleware design with Flare's (`docs/ARCHITECTURE.md`, "Flare policy").
 
 ## M2 completion contract
 
-M2's contract and the list of later items that amended or reopened it are kept, as history, in [`history/m2-completion-contract.md`](history/m2-completion-contract.md). What Muntin answers today is in the [reference](reference/).
+M2's contract, the list of later items that amended or reopened it, and when M2 reopens are in [`history/m2-completion-contract.md`](history/m2-completion-contract.md). What Muntin answers today is in the [reference](reference/).
 
 ## M3 — composition and production ergonomics
 
@@ -85,32 +85,32 @@ What each capability does for an application: the [guide](GUIDE.md) and the [ref
 
 ### Remaining candidates
 
-In priority order: the first entry is the next item unless the user asks for another. Each becomes its own item, a decision item first where it opens a design question. Details, design targets and revisit conditions live in each linked issue or decision record; an entry here is only what it solves and when to start.
+In priority order: the first entry is the next item unless the user asks for another. Each becomes its own item, a decision item first where it opens a design question. An entry here is only what it solves and when to start. A revisit condition, or any other condition that binds later items, lives in the linked decision record or in [`history/deferrals.md`](history/deferrals.md); the issue holds the details, design targets and discussion.
 
 1. **`Host` value validation** ([#138](https://github.com/sano-suguru/muntin/issues/138)). Solves: the adapter passes any `Host` value Flare admits, so a malformed one reaches `App.handle`, against RFC 9112's 400 ([M3-073](history/architecture-decisions.md#request-host-decision-m3-073) checks presence only). Start: now; a decision item first.
 2. **Comparison with Flare alone** ([#139](https://github.com/sano-suguru/muntin/issues/139)). Solves: shows, with the same applications written both ways, whether Muntin meets its long-term success criterion (below) and what its layer costs. Start: after the item above; a decision item whose pull request first states the question and what would settle it.
-3. **Linear request header conversion** ([#140](https://github.com/sano-suguru/muntin/issues/140)). Solves: the adapter's field check is quadratic in the number of fields, which keeps `max_header_fields` low ([M3-066](history/architecture-decisions.md#request-header-conversion-decision-m3-066)). Start: when Flare ships an ordered field accessor on `HeaderMap` (pull request #119 drafts it), then a pin change ([deferral](history/deferrals.md#linear-request-header-conversion)).
+3. **Linear request header conversion** ([#140](https://github.com/sano-suguru/muntin/issues/140)). Solves: the adapter's field check costs fields × distinct names comparisons inside Flare, which keeps `max_header_fields` low ([M3-066](history/architecture-decisions.md#request-header-conversion-decision-m3-066)). Start: when Flare ships an ordered field accessor on `HeaderMap` (pull request #119 drafts it), then a pin change ([deferral](history/deferrals.md#linear-request-header-conversion)).
 
-Later, unordered, each with its issue:
+Then, in priority order, each with its issue:
 
-- derived codecs and JSON follow-ups, the canonical `def create_user(body: CreateUser) -> User` ([#141](https://github.com/sano-suguru/muntin/issues/141));
-- OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
-- body limits beyond `FromBytes` ([#143](https://github.com/sano-suguru/muntin/issues/143));
-- compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
-- more route values: defaults, more value types, name-based binding ([#145](https://github.com/sano-suguru/muntin/issues/145));
-- more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
-- more body shapes: text type, optional, multiple, streaming, multipart ([#147](https://github.com/sano-suguru/muntin/issues/147));
-- fallible response conversions ([#148](https://github.com/sano-suguru/muntin/issues/148));
-- broader raw handlers ([#149](https://github.com/sano-suguru/muntin/issues/149));
-- more middleware: runtime-configured, per-route or per-group, error types ([#150](https://github.com/sano-suguru/muntin/issues/150));
-- request context over a closed type ([#151](https://github.com/sano-suguru/muntin/issues/151));
-- structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
-- observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
-- streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
-- serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
-- a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
-- handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
-- performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
+4. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
+5. body limits beyond `FromBytes` ([#143](https://github.com/sano-suguru/muntin/issues/143));
+6. JSON follow-ups and derived codecs, the canonical `def create_user(body: CreateUser) -> User` ([#141](https://github.com/sano-suguru/muntin/issues/141));
+7. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
+8. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
+9. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
+10. more body shapes: text type, optional, multiple, streaming, multipart ([#147](https://github.com/sano-suguru/muntin/issues/147));
+11. fallible response conversions ([#148](https://github.com/sano-suguru/muntin/issues/148));
+12. broader raw handlers ([#149](https://github.com/sano-suguru/muntin/issues/149));
+13. more middleware: runtime-configured, per-route or per-group, error types ([#150](https://github.com/sano-suguru/muntin/issues/150));
+14. request context over a closed type ([#151](https://github.com/sano-suguru/muntin/issues/151); its soundness conditions are in [deferrals](history/deferrals.md#request-context-over-a-closed-type-m3-065));
+15. structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
+16. observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
+17. streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
+18. serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
+19. a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
+20. handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
+21. performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
 
 ## Long-term success criterion
 
