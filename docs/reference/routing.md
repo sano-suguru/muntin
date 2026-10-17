@@ -38,7 +38,7 @@ Static path segments are not checked for target bytes: `/hello world` compiles a
 
 ## Route conflicts
 
-Two overlapping routes of one method register only when the more specific one comes first; a more general route first, the same path twice, or two routes neither of which is more specific (in either order) abort the registration ([M3-053](../history/architecture-decisions.md#route-conflict-decision-m3-053)):
+Two overlapping routes of one method register only when the more specific one comes first; a more general route first, the same path twice, or two routes neither of which is more specific (in either order) abort the registration ([M3-053](../history/decisions/m3-053-route-conflict-decision.md)):
 
 ```mojo
 def me() -> String:
@@ -223,7 +223,7 @@ var head = TestClient(app).head("/users/7")  # = app.handle(Request("HEAD", "/us
 Run by `tests/test_head.mojo` (`test_dx_example`), which checks each `HEAD` answer of `App.handle` against the `GET` answer and `TestClient.head`'s against `App.handle`'s. The "through Flare" parts are not checked on this `App`: `adapters/flare/test_localhost_roundtrip.mojo` (`test_headers_over_h2c_follow_the_same_rules`) checks the same rule on its own routes (a typed `/hello`, a raw `/report` with length 6, a route-value 400 with 11, a 405 on `/form` with 18), over HTTP/1.1 and cleartext HTTP/2.
 
 - `HEAD` is answered by the first `GET` route whose path matches, with every step of `GET`. A typed handler cannot tell `HEAD` from `GET`. A raw `get` handler receives `req.method == "HEAD"` and must return the body it would give `GET`: the backend declares that body's length, so a shorter body sends a wrong `Content-Length`, which Muntin cannot check. Middleware is under the same rule. Only the exact token `HEAD` maps.
-- `App.handle` keeps the body. A network backend sends the status and fields with no content and a `Content-Length` equal to the body's byte length, or none for 1xx, 204, 205 and 304. The Flare adapter applies this to every answer it sends for `HEAD`, its own 400, 431 and 500 included. For a `HEAD` 205 or 304, whose body the adapter has removed, Flare itself still writes `Content-Length: 0` over HTTP/1.1. The Flare adapter drops a handler's own `Content-Length`, as it does for every method; `App.handle` keeps it. Why: [M3-026](../history/architecture-decisions.md#head-decision-m3-026).
+- `App.handle` keeps the body. A network backend sends the status and fields with no content and a `Content-Length` equal to the body's byte length, or none for 1xx, 204, 205 and 304. The Flare adapter applies this to every answer it sends for `HEAD`, its own 400, 431 and 500 included. For a `HEAD` 205 or 304, whose body the adapter has removed, Flare itself still writes `Content-Length: 0` over HTTP/1.1. The Flare adapter drops a handler's own `Content-Length`, as it does for every method; `App.handle` keeps it. Why: [M3-026](../history/decisions/m3-026-head-decision.md).
 - `TestClient.head` returns `App.handle`'s answer unchanged, body included ([testing](testing.md)).
 - Cost: every `HEAD` computes and converts the whole `GET` body.
 
@@ -250,7 +250,7 @@ Run by `tests/test_method_not_allowed.mojo` (`test_dx_example`), which defines t
 
 - The answer is `Response.text("Method Not Allowed", status=405)` with one `Allow` field and no `Content-Type`. Nothing is decoded or converted and no handler runs.
 - `Allow` lists the methods of the routes whose path matches, each once, in the order their first such route was registered, `HEAD` right after `GET`, joined by `, `. A method in `Allow` selects a route, which may still answer 400.
-- Every method is answered alike: `OPTIONS`, unknown and lowercase methods are 405 on a path some route matches and 404 elsewhere. Muntin does not answer `OPTIONS` or a CORS preflight itself, and does not answer 501 ([M3-030](../history/architecture-decisions.md#method-not-allowed-decision-m3-030)).
+- Every method is answered alike: `OPTIONS`, unknown and lowercase methods are 405 on a path some route matches and 404 elsewhere. Muntin does not answer `OPTIONS` or a CORS preflight itself, and does not answer 501 ([M3-030](../history/decisions/m3-030-method-not-allowed-decision.md)).
 - Middleware may replace or change a 405; the `Allow` on a 405 it builds or changes is the application's responsibility.
 
 ## Order of checks
