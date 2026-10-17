@@ -184,7 +184,7 @@ app.delete["/users/{uid}/posts/{pid}"](remove_post)
 Run by `tests/test_route_values.mojo` (`test_dx_examples`, on `_dx_app`), which does not check the `Content-Type` of the `PATCH` answer and also checks that the same `PATCH` with a valid path and no `Content-Type` is 415. `test_swapped_names_bind_by_position` runs the swapped `post_of` of the bullets below, as `post_of_swapped`.
 
 - `V` may be any route-value type, in any combination. The literal declares exactly two placeholders: two segments, two query items, or one of each. The request's query order does not matter.
-- **Order is not checked for bare values.** Two values of one type declared in the other order compile and receive each other's values: `def post_of(pid: Int, uid: Int)` on `/users/{uid}/posts/{pid}` gets `pid == 1` for `/users/1/posts/2`. Declare both as `Param`s (below) to have the names checked ([why](../history/architecture-decisions.md#several-route-values-decision-m3-022)).
+- **Order is not checked for bare values.** Two values of one type declared in the other order compile and receive each other's values: `def post_of(pid: Int, uid: Int)` on `/users/{uid}/posts/{pid}` gets `pid == 1` for `/users/1/posts/2`. Declare both as `Param`s (below) to have the names checked ([why](../history/decisions/m3-022-several-route-values-decision.md)).
 - Three or more values are one `RouteValues` record (below); three bare values are `constraint failed: a get handler takes at most two route values` (or the method's).
 - Errors: `handler takes two route values; route must declare exactly two path or query parameters` (`... and the request body; ...` on a body route), whatever the values' types.
 
@@ -284,7 +284,7 @@ Run by `tests/test_optional_values.mojo` (`test_dx_examples`, on `_dx_app`), whi
 - An optional value binds a `{key}` query placeholder only; one at a path position is a compile error (`an Optional route value binds a query parameter; route values bind the path parameters first, then the query parameters`, or alone `handler takes one Optional route value; route must declare exactly one query parameter and no path parameter`).
 - Absent and empty are one case: a missing key, `limit=` and `limit` are all `None`; Muntin never passes `Some("")`. A route that must tell `?q=` from no `q` uses a raw handler. `limit=+` is a present space.
 - A present value keeps every rule of a required one: a bad escape or an `Int` that does not parse is 400, not `None`; a repeated key is 400.
-- A parameter default (`limit: Int = 20`) does not travel with a function value on Mojo 1.1.0: it registers as a required `Int` without a diagnostic. Use `Optional` and `or_else` ([why](../history/architecture-decisions.md#optional-query-values-decision-m3-024)).
+- A parameter default (`limit: Int = 20`) does not travel with a function value on Mojo 1.1.0: it registers as a required `Int` without a diagnostic. Use `Optional` and `or_else` ([why](../history/decisions/m3-024-optional-query-values-decision.md)).
 - Only `Optional[Int]` and `Optional[String]` are optional values. `Optional[Optional[Int]]`, `Optional[Float64]` and an `Optional` of a `FromRouteValue` type are parameters of no kind.
 - A typed function value spells it `var Optional[Int]`.
 
@@ -351,7 +351,7 @@ Run by `tests/test_app_route_values.mojo` (`test_dx_example`), which imports `Us
 - It goes wherever a required `String` value goes: once or twice, on every method, stateless or stateful, in a `Param`, as a record field. Values convert left to right, then the body; a raise stops the rest.
 - The type conforms in its own module and may be move-only.
 - A type is a route value or a body, not both: one that also conforms to `FromBody` or `FromBytes` is `a parameter's type conforms to FromRouteValue and to FromBody or FromBytes; a type is a route value or a body, not both`.
-- Standard types other than `Int` and `String` (`Bool`, `Float64`) cannot be route values: an application cannot conform them ([why](../history/architecture-decisions.md#application-route-value-types-decision-m3-054)).
+- Standard types other than `Int` and `String` (`Bool`, `Float64`) cannot be route values: an application cannot conform them ([why](../history/decisions/m3-054-application-route-value-types-decision.md)).
 
 ## Route-value records
 
@@ -454,7 +454,7 @@ app.get["/o/{org_id}/p/{project_id}"](get_task)
 
 Checked by `tests/route_records_api_fail/get_name.mojo` and `get_count.mojo` (and their `post_`, `state_delete_` and `state_patch_` variants), which `scripts/check.sh` builds and requires to fail with `constraint failed: ` and these messages. There the handler is `h`, which returns `String`, and `get_count.mojo` defines its own `TaskAt`.
 
-- **Muntin never calls the record's `__init__`.** It initializes the fields directly, so neither the record's initializer nor a relation across fields (`start_id <= end_id`) is checked. A record is a transport type for its route's values: validate one value in its field's type (a `FromRouteValue`), and build a domain type that relates fields in the handler. A record that declares its own `__init__` is not refused (Mojo 1.1.0 reflects fields, not initializers; [why](../history/architecture-decisions.md#route-value-records-decision-m3-061)). Its destructor runs once for a completed record and never for one whose conversion failed, so it must not rely on anything only `__init__` establishes.
+- **Muntin never calls the record's `__init__`.** It initializes the fields directly, so neither the record's initializer nor a relation across fields (`start_id <= end_id`) is checked. A record is a transport type for its route's values: validate one value in its field's type (a `FromRouteValue`), and build a domain type that relates fields in the handler. A record that declares its own `__init__` is not refused (Mojo 1.1.0 reflects fields, not initializers; [why](../history/decisions/m3-061-route-value-records-decision.md)). Its destructor runs once for a completed record and never for one whose conversion failed, so it must not rely on anything only `__init__` establishes.
 - Fields: one per placeholder, in the literal's order, each named after its placeholder (`{org-id}` binds `` var `org-id`: Int ``). Each is a bare route value (`Int`, `String`, a `FromRouteValue` type, or an `Optional` at a query placeholder). A record may be generic.
 - Shapes: a record takes the shapes of one bare value (`def(P)`, `def(P, Headers)`, `def(P, B)`, each after any `State`), and is the handler's only route value, its first parameter after any `State`. Not accepted: a record beside a bare value or another record, in a raw handler, a `Param` or a `WithHeaders`.
 - Fields convert in field order; the first invalid one is 400 and nothing after it, the body included, is converted.
