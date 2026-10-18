@@ -97,8 +97,8 @@ def _prefixed(prefix: String, body: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-# docs/reference/bodies.md, "Binary bodies": the text between the
-# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+# docs/reference/bodies.md, "Binary bodies (`FromBytes`)": the text between
+# the `# example:` lines is what the page shows (scripts/check_doc_examples.py).
 
 
 # fmt: off

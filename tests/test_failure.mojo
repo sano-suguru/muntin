@@ -120,9 +120,9 @@ struct Tiny(FromBytes):
         return Self(body.copy())
 
 
-# docs/reference/errors.md, "Reports of dropped errors", and middleware.md,
-# "Logging dropped errors": the text between the `# example:` lines is what
-# the pages show (scripts/check_doc_examples.py).
+# docs/reference/errors.md, "Reports of dropped errors", and
+# docs/reference/middleware.md, "Logging dropped errors": the text between the
+# `# example:` lines is what the pages show (scripts/check_doc_examples.py).
 
 
 # example: errors-report

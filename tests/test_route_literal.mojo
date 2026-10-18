@@ -91,7 +91,7 @@ def _malformed_query[literal: StaticString]() raises:
 
 
 def test_malformed_literals() raises:
-    # Path part (docs/reference/routing.md, "malformed route literal").
+    # Path part (docs/reference/routing.md, "Route literals").
     _malformed_path["hello"]()
     _malformed_path[""]()
     _malformed_path["?{q}"]()

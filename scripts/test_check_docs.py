@@ -43,7 +43,7 @@ def write(root, files):
 
 def run(files):
     with tempfile.TemporaryDirectory() as d:
-        root = pathlib.Path(d)
+        root = pathlib.Path(d) / "repo"  # "../x.md" is a file outside it
         write(root, {
             "README.md": "# Readme\n\n[Guide](docs/GUIDE.md)\n",
             "docs/GUIDE.md": "# Guide\n\n## Start\n",
@@ -194,6 +194,169 @@ CASES = [
     ("a fence in a list item across a blank line", {
         "docs/GUIDE.md": "# Guide\n\n## Start\n\n- ```\n  code\n\n  [x](gone.md)\n  ```\n",
     }, None),
+    ("sound section citations", {
+        "docs/DEVELOPMENT.md": "# Dev\n\n## 6. Finish\n\n## 7. Where information lives\n",
+        "README.md": ("# Readme\n\nSee `docs/DEVELOPMENT.md`, \"Where information lives\","
+                      " [`docs/GUIDE.md`](docs/GUIDE.md), \"Start\", `docs/DEVELOPMENT.md`"
+                      " sections 6 and 7, docs/reference/page.md (\"Text bodies\n"
+                      "(`FromBody`)\") and docs/reference/page.md, \"kept-anchor\".\n"),
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\nNot yet: [SPEC](DEVELOPMENT.md), \"Finish\".\n",
+        "src/muntin/app.mojo": ("# docs/reference/page.md,\n# \"Notes\"; docs/DEVELOPMENT.md"
+                                " section 7.\nx = 1\n"),
+        "scripts/check.sh": "echo \"see docs/GUIDE.md, \\\"Start\\\"\"\n",
+    }, None),
+    ("a citation of a missing heading", {
+        "README.md": "# Readme\n\nSee `docs/GUIDE.md`, \"Stop\".\n",
+    }, ['error: README.md:3: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation through a link of a missing heading", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\nSee [the page](reference/page.md#notes), \"Note\".\n",
+    }, ['error: docs/GUIDE.md:5: "Note": no such heading in docs/reference/page.md']),
+    ("a citation that drops a heading's code span", {
+        "README.md": "# Readme\n\nSee docs/reference/page.md, \"Text bodies\".\n",
+    }, ['error: README.md:3: "Text bodies": no such heading in docs/reference/page.md']),
+    ("a citation in code of a missing heading, across lines", {
+        "tests/test_x.mojo": "x = 1\n# Decision: docs/reference/page.md,\n# \"Text\n# bodies\".\n",
+    }, ['error: tests/test_x.mojo:2: "Text bodies": no such heading in docs/reference/page.md']),
+    ("a citation in an escaped string of a missing heading", {
+        "scripts/check.sh": "echo \"see docs/GUIDE.md, \\\"Stop\\\"\"\n",
+    }, ['error: scripts/check.sh:1: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation of a missing section number", {
+        "docs/DEVELOPMENT.md": "# Dev\n\n## 6. Finish\n",
+        "README.md": "# Readme\n\nSee `docs/DEVELOPMENT.md` sections 6 and 8.\n",
+    }, ['error: README.md:3: section 8: no such numbered heading in docs/DEVELOPMENT.md']),
+    ("a citation of a missing document", {
+        "src/muntin/app.mojo": "# See guide.md, \"Start\".\n",
+    }, ['error: src/muntin/app.mojo:1: guide.md: no such file']),
+    ("a quote a blank line or code away from a path", {
+        "README.md": ("# Readme\n\nSee docs/GUIDE.md\n\n\"Stop\" is a word.\n\n"
+                      "Or docs/GUIDE.md\n```\n```\n\"Stop\".\n"),
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n```\ndocs/GUIDE.md, \"Stop\"\n```\n",
+    }, None),
+    ("a URL to a Markdown file, then a quote", {
+        "docs/GUIDE.md": ("# Guide\n\n## Start\n\nSee [upstream](https://example.com/GUIDE.md),"
+                          " \"Start\", <https://example.com/a?b=docs/GUIDE.md>, \"Stop\" and"
+                          " https://example.com/x/docs/GUIDE.md \"Stop\".\n"),
+        "src/muntin/app.mojo": ("# See [upstream](https://example.com/GUIDE.md), \"Stop\", and"
+                                " https://example.com/docs/GUIDE.md, \"Stop\".\n"),
+    }, None),
+    ("a citation through a link in code of a missing heading", {
+        "src/muntin/app.mojo": "# See [guide](docs/GUIDE.md), \"Gone\".\n",
+    }, ['error: src/muntin/app.mojo:1: "Gone": no such heading in docs/GUIDE.md']),
+    ("a link's title, in code and in a document", {
+        "src/muntin/app.mojo": "# See [guide](docs/GUIDE.md \"Guide documentation\").\n",
+        "README.md": "# Readme\n\nSee [guide](docs/GUIDE.md \"Guide documentation\").\n",
+    }, None),
+    ("a decision record's citation of an old heading", {
+        "docs/history/decisions/m3-001-application-state-decision.md": (
+            "# Record\n\nSee `docs/GUIDE.md`, \"Stop\".\n"),
+    }, None),
+    ("a new decision record's citation of a missing heading", {
+        "docs/history/decisions/m3-099-new-decision.md": (
+            "# Record\n\nSee `docs/GUIDE.md`, \"Start\", and `docs/GUIDE.md`, \"Stop\".\n"),
+    }, ['error: docs/history/decisions/m3-099-new-decision.md:3: "Stop": no such heading'
+        ' in docs/GUIDE.md']),
+    ("citations through reference links of missing headings", {
+        "README.md": ("# Readme\n\nSee [guide][Doc], \"Stop\"; [doc][], \"Gone\"; [doc],"
+                      " \"Away\"; and [doc], \"Start\".\n\n[doc]: docs/GUIDE.md\n"),
+    }, ['error: README.md:3: "Stop": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Gone": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Away": no such heading in docs/GUIDE.md']),
+    ("citations through links with brackets in their text", {
+        "README.md": ("# Readme\n\nSee [API [v2]](docs/GUIDE.md), \"Gone\", [API [v[2]]](docs/GUIDE.md),"
+                      " \"Stop\", and [a `]` b](docs/GUIDE.md), \"Away\".\n"),
+    }, ['error: README.md:3: "Gone": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Stop": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Away": no such heading in docs/GUIDE.md']),
+    ("citations through links with each kind of title", {
+        "README.md": ("# Readme\n\nSee [guide](docs/GUIDE.md 'Guide'), \"Stop\", and"
+                      " [guide](<docs/GUIDE.md> (Guide)), \"Gone\".\n"),
+    }, ['error: README.md:3: "Stop": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Gone": no such heading in docs/GUIDE.md']),
+    ("escaped links, and a link after an escaped backslash", {
+        "README.md": ("# Readme\n\nSee [guide](docs/GUIDE.md), \"Away\"; \\[guide](docs/GUIDE.md),"
+                      " \"Stop\"; \\[doc], \"Stop\"; \\\\[guide](docs/GUIDE.md), \"Gone\"; and"
+                      " \\[guide][doc], \"Here\" (only \"[guide]\" is escaped).\n\n"
+                      "[doc]: docs/GUIDE.md\n"),
+        "src/muntin/app.mojo": "# See \\[guide](docs/GUIDE.md), \"Stop\".\n",
+    }, ['error: README.md:3: "Away": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Gone": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Here": no such heading in docs/GUIDE.md']),
+    ("a scheme-relative URL to a Markdown file, then a quote", {
+        "README.md": "# Readme\n\nSee //example.com/docs/GUIDE.md, \"Stop\".\n",
+        "src/muntin/app.mojo": "# See //example.com/docs/GUIDE.md, \"Stop\".\n",
+        "scripts/check.sh": "# See //example.com/docs/GUIDE.md, \"Stop\".\n",
+    }, None),
+    ("a path and a quote in different blocks of a document", {
+        "README.md": ("# Readme\n\n- `docs/GUIDE.md`\n- \"Stop\" is a sample string.\n\n"
+                      "> See docs/GUIDE.md\n\n\"Stop\" again.\n\n"
+                      "| a | docs/GUIDE.md\n\"Stop\" | b\n\n"
+                      "## Notes on docs/GUIDE.md\n\"Stop\" here.\n"),
+    }, None),
+    ("a path and a quote in different blocks of code", {
+        "scripts/x.py": ('# See docs/GUIDE.md\n"Stop"\n# docs/GUIDE.md\n#\n# "Stop"\n'
+                         'x = docs.GUIDE  # docs/GUIDE.md\n"Stop"\n'
+                         '"""See docs/GUIDE.md\n\n"Stop" is a docstring\'s word."""\n'),
+        "scripts/check.sh": ('# See docs/GUIDE.md\n"Stop"\n# docs/GUIDE.md\n#\n# "Stop"\n'
+                             'cat docs/GUIDE.md\n"Stop"\n'),
+    }, None),
+    ("a citation in a docstring of a missing heading, across lines", {
+        "scripts/x.py": 'def f():\n    """See docs/GUIDE.md,\n    "Stop"."""\n',
+    }, ['error: scripts/x.py:2: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation in a single-quoted docstring of a missing heading", {
+        "scripts/x.py": "def f():\n    '''See docs/GUIDE.md,\n    \"Stop\".'''\n",
+    }, ['error: scripts/x.py:2: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation in a formatted string of a missing heading", {
+        "scripts/x.py": 'x = f"See docs/GUIDE.md, \\"Stop\\" ({x})"\n',
+    }, ['error: scripts/x.py:1: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation in a comment after a comment with three quotes", {
+        "scripts/x.py": '# Example syntax: """\nx = 1\n# See docs/GUIDE.md,\n# "Stop"\n',
+        "scripts/check.sh": '# Example syntax: """\ncd .\n# See docs/GUIDE.md,\n# "Gone"\n',
+    }, ['error: scripts/check.sh:3: "Gone": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:3: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation in a Python file that does not tokenize", {
+        "scripts/x.py": 'x = (\n# See docs/GUIDE.md, "Stop".\n',
+    }, ['error: scripts/x.py:2: "Stop": no such heading in docs/GUIDE.md']),
+    ("comments in different scopes, and in one", {
+        "scripts/x.py": ('if True:\n    x = 1\n    # See docs/GUIDE.md,\n# "Stop" is a sample string.\n'
+                         'def f():\n    # See docs/GUIDE.md,\n    # "Gone"\n'),
+    }, ['error: scripts/x.py:6: "Gone": no such heading in docs/GUIDE.md']),
+    ("citations in strings Python joins, and in strings it does not", {
+        "scripts/x.py": ('message = (\n    "See docs/GUIDE.md, "\n    \'"Stop".\'\n)\n'
+                         'other = ("See docs/GUIDE.md, "  # a note\n         "\\"Gone\\"")\n'
+                         'f"See docs/GUIDE.md, " \'"Here"\'\n'
+                         '"See docs/GUIDE.md, "\n\'"Away" is a word.\'\n'
+                         'print("docs/GUIDE.md", "Away")\n'),
+    }, ['error: scripts/x.py:2: "Stop": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:5: "Gone": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:7: "Here": no such heading in docs/GUIDE.md']),
+    ("citations in strings, read as the values Python makes", {
+        "scripts/x.py": ('a = ("docs/GUIDE.md" \'"Stop"\')\n'
+                         'b = (\n    "docs/GUIDE.md"\n    " "\n    \'"Gone"\'\n)\n'
+                         'c = "See docs/GUIDE.md,\\n\\"Here\\""\n'
+                         'd = "\\N{NO SUCH NAME} docs/GUIDE.md, \\"Away\\""\n'
+                         'e = b"See docs/GUIDE.md, \\"There\\"" + "\\d"\n'
+                         'f = f"See docs/{name}.md, \\"Stop\\""\n'),
+    }, ['error: scripts/x.py:3: "Gone": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:7: "Here": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:8: "Away": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:9: "There": no such heading in docs/GUIDE.md']),
+    ("a link in a link's text, and images", {
+        "elsewhere.md": "# Elsewhere\n",
+        "README.md": ("# Readme\n\nSee [outer [inner](docs/GUIDE.md)](elsewhere.md), \"Stop\","
+                      " [a [doc] b](elsewhere.md), \"Stop\", [\\![doc] b](docs/GUIDE.md), \"Stop\","
+                      " [![badge](https://example.com/b.png)](docs/GUIDE.md), \"Gone\" and"
+                      " [a `[doc]` b](docs/GUIDE.md), \"Away\", and [outer ![badge][img]](docs/GUIDE.md),"
+                      " \"There\".\n\n[doc]: docs/GUIDE.md\n[img]: https://example.com/badge.png\n"),
+    }, ['error: README.md:3: "Gone": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Away": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "There": no such heading in docs/GUIDE.md']),
+    ("a citation at the start of a string of a missing heading", {
+        "scripts/check.sh": "echo \"docs/GUIDE.md, \\\"Stop\\\"\"\n",
+    }, ['error: scripts/check.sh:1: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation of a file outside the repository", {
+        "../outside.md": "# Outside\n\n## Start\n",
+        "README.md": "# Readme\n\nSee ../outside.md, \"Start\".\n",
+    }, ['error: README.md:3: ../outside.md: outside the repository']),
     ("the guide at its budget", {
         "docs/GUIDE.md": "# Guide\n\n## Start\n".ljust(20 * 1024, "x"),
     }, None),
