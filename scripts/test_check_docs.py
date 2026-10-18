@@ -176,6 +176,18 @@ CASES = [
     ("a link-like line in a comment across a blank line", {
         "docs/NOTES.md": "# Notes\n\n<!--\ncomment\n\n[example](gone.md)\n-->\n",
     }, None),
+    ("a list item and a quote in a comment, and a link after it", {
+        "docs/NOTES.md": "# Notes\n\n<!--\n- [example](gone.md)\n> [example](gone.md)\n-->\n[x](lost.md)\n",
+    }, ["error: docs/NOTES.md:7: lost.md: no such file"]),
+    ("a list item in a pre block, and a link after it", {
+        "docs/NOTES.md": "# Notes\n\n<pre>\n- [example](gone.md)\n</pre>\n\n[x](lost.md)\n",
+    }, ["error: docs/NOTES.md:7: lost.md: no such file"]),
+    ("a list item in a div block, and a link after it", {
+        "docs/NOTES.md": "# Notes\n\n<div>\n- [example](gone.md)\n\n[x](lost.md)\n",
+    }, ["error: docs/NOTES.md:6: lost.md: no such file"]),
+    ("a comment in a list item, and a link after the item", {
+        "docs/NOTES.md": "# Notes\n\n- <!--\n  - [example](gone.md)\n  -->\n\n[x](lost.md)\n",
+    }, ["error: docs/NOTES.md:7: lost.md: no such file"]),
     ("a link-like line in a pre block across a blank line", {
         "docs/NOTES.md": "# Notes\n\n<pre>\n\n[example](gone.md)\n</pre>\n",
     }, None),
@@ -203,6 +215,8 @@ def main():
         code, err = run(files)
         if expected is None:
             ok = code == 0
+        elif isinstance(expected, list):
+            ok = code != 0 and err.splitlines() == expected  # these errors only
         else:
             ok = code != 0 and expected in err
         print(f"{'ok' if ok else 'FAIL'}: {name}")

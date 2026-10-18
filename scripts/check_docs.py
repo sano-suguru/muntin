@@ -275,6 +275,13 @@ class Scan:
                     continue
                 del stack[matched:]
                 leaf, definition = None, None
+            if leaf == "html" and (html_end or rest.strip()):
+                # Like code, an HTML block holds text, not Markdown: nothing
+                # in it opens a block quote or list item before its end.
+                self.html.append((n, rest))
+                if html_end and html_end.search(rest):
+                    leaf = None
+                continue
             opened = False
             while not BREAK.match(rest):
                 m = QUOTE.match(rest)
@@ -290,11 +297,6 @@ class Scan:
                 opened = True
             if opened:
                 leaf, definition = None, None
-            if leaf == "html" and (html_end or rest.strip()):
-                self.html.append((n, rest))
-                if html_end and html_end.search(rest):
-                    leaf = None
-                continue
             if not rest.strip():
                 leaf, definition = None, None
                 continue
