@@ -1187,26 +1187,22 @@ def test_non_json_bodies_are_unchanged_and_uncapped() raises:
     _assert_fixed(client.post("/staff-notes", "fail"), 400, "Bad Request")
 
 
-def test_number_limits_on_mojo_1_1_0() raises:
-    # `float()` rejects overflow, and Mojo 1.1.0 `atof` rejects long literals
-    # (by length and magnitude, even with one significant digit): both raise
-    # (400 through a body). A pinned gap: valid JSON numbers a future `atof`
-    # may accept.
-    for s in [
-        "1e400",
-        "-1e400",
-        "123456789012345678901234",
-        "1.2345678901234567890123",
-        "100000000000000000000000",
-        "0.000000000000000000000000000001",
-    ]:
+def test_number_limits() raises:
+    # `float()` raises only past the largest finite double (400 through a
+    # body); below the smallest it is a signed zero. `int()` is exact.
+    for s in ["1e400", "-1e400", "1.7976931348623159e308", "1e999999999999"]:
         var raised = False
         try:
             _ = _parse_json(s).float()
         except:
             raised = True
         assert_true(raised, s)
-    assert_equal(_parse_json("1e-400").float(), 0.0)
+    assert_equal(_bits(_parse_json("1e-400").float()), UInt64(0))
+    assert_equal(
+        _bits(_parse_json("-1e-400").float()), UInt64(0x8000000000000000)
+    )
+    assert_equal(_bits(_parse_json("-0").float()), UInt64(0x8000000000000000))
+    assert_equal(_bits(_parse_json("0e999999999999").float()), UInt64(0))
     assert_equal(_parse_json("9223372036854775807").int(), Int.MAX)
     assert_equal(_parse_json("-9223372036854775808").int(), Int.MIN)
 
@@ -1221,29 +1217,53 @@ def _written(value: Float64) raises -> String:
     return w^._finish()
 
 
-def test_float_rounding_gaps_on_mojo_1_1_0() raises:
-    # Pinned Mojo 1.1.0 behavior, each 1 ulp from the correctly rounded
-    # value (Python's in the comments). `float()` uses `atof`; the writer
-    # uses `String(Float64)`. A fix in the toolchain turns these red: revisit
-    # (docs/history/architecture-decisions.md, "JSON codec decision (M3-008)").
-    # Shortest-repr doubles as JS/Python clients send them: correct
-    # 0xc42dddc22f41f7cd and 0x4429c9f9333a6521.
-    assert_equal(
-        _bits(_parse_json("-2.7546748226290886e+20").float()),
-        UInt64(0xC42DDDC22F41F7CC),
+def _assert_reads(text: String, expected: UInt64) raises:
+    assert_equal(_bits(_parse_json(text).float()), expected, text)
+
+
+def test_float_is_correctly_rounded() raises:
+    # Each literal reads as the nearest double, ties to even; the bits are
+    # Python's `float()`. The first seven came back 1 ulp off or raised
+    # through Mojo 1.1.0's `atof`.
+    _assert_reads("-2.7546748226290886e+20", 0xC42DDDC22F41F7CD)
+    _assert_reads("2.3786116091973052e+20", 0x4429C9F9333A6521)
+    _assert_reads("123456789012345678", 0x437B69B4BA630F35)
+    _assert_reads("123456789012345678901234", 0x44BA249B1F10A06D)
+    _assert_reads("1.2345678901234567890123", 0x3FF3C0CA428C59FB)
+    _assert_reads("100000000000000000000000", 0x44B52D02C7E14AF6)
+    _assert_reads("0.000000000000000000000000000001", 0x39B4484BFEEBC2A0)
+    _assert_reads("0.1", 0x3FB999999999999A)
+    _assert_reads("1e23", 0x44B52D02C7E14AF6)
+    _assert_reads("9007199254740993", 0x4340000000000000)
+    _assert_reads("8.98846567431158e307", 0x7FE0000000000000)
+    _assert_reads("1.7976931348623158e308", 0x7FEFFFFFFFFFFFFF)
+    _assert_reads("2.2250738585072011e-308", 0x000FFFFFFFFFFFFF)
+    _assert_reads("2.2250738585072012e-308", 0x0010000000000000)
+    _assert_reads("4.9406564584124654e-324", 0x0000000000000001)
+    _assert_reads("2.4703282292062328e-324", 0x0000000000000001)
+    _assert_reads("2.4703282292062327e-324", 0)
+    _assert_reads(String("1") + "0" * 308, 0x7FE1CCF385EBC8A0)
+    _assert_reads(String("0.") + "0" * 5000 + "1", 0)
+    # Exact ties, 1 + 2^-53 and 1 + 3 * 2^-53, go to the even neighbour;
+    # a nonzero digit past the 800 kept ones still breaks a tie upward.
+    var tie = String("1.00000000000000011102230246251565404236316680908203125")
+    _assert_reads(tie, 0x3FF0000000000000)
+    _assert_reads(
+        "1.00000000000000033306690738754696212708950042724609375",
+        0x3FF0000000000002,
     )
-    assert_equal(
-        _bits(_parse_json("2.3786116091973052e+20").float()),
-        UInt64(0x4429C9F9333A6520),
-    )
-    # A long integer literal read as a float: correct 0x437b69b4ba630f35
-    # (`int()` is exact).
-    assert_equal(
-        _bits(_parse_json("123456789012345678").float()),
-        UInt64(0x437B69B4BA630F34),
-    )
-    assert_equal(_parse_json("123456789012345678").int(), 123456789012345678)
-    # The writer's text does not always read back to the same double.
+    _assert_reads(tie + "0" * 900, 0x3FF0000000000000)
+    _assert_reads(tie + "0" * 900 + "1", 0x3FF0000000000001)
+    # Long, signed and scaled down.
+    _assert_reads(String("-") + tie + "0" * 900 + "1e-2", 0xBF847AE147AE147C)
+
+
+def test_float_writer_gap_on_mojo_1_1_0() raises:
+    # Pinned Mojo 1.1.0 behavior: the writer uses `String(Float64)`, whose
+    # text does not always read back to the same double (Python writes
+    # -3.7609587960547416e+16). A fix in the toolchain turns this red:
+    # revisit (docs/history/architecture-decisions.md, "JSON codec decision
+    # (M3-008)").
     var text = _written(bitcast[DType.float64](UInt64(0xC360B3B71251310B)))
     assert_equal(text, "-3.760958796054742e+16")
     assert_equal(_bits(_parse_json(text).float()), UInt64(0xC360B3B71251310C))

@@ -8,8 +8,7 @@ existing `ToResponse` when `T` conforms to `ToJson`, so it registers through
 chooses the result's status (M3-029, "JSON response status decision
 (M3-028)"). The codec is Muntin's own: a strict
 parser for the RFC 8259 grammar with Muntin's limits (duplicate member names
-rejected, nesting depth 64, 1 MiB, the Mojo 1.1.0 numeric limits of
-`float()`) and a writer.
+rejected, nesting depth 64, 1 MiB, `float()` finite) and a writer.
 
 Only documented Mojo 1.1.0 features are used: conditional conformance with
 `where`-gated methods, `conforms_to`, and safe std types. The parsed document
@@ -161,6 +160,273 @@ def _decode(text: String, start: Int, end: Int) raises -> String:
         run = i
     out += String(text[byte=run:end])
     return out^
+
+
+comptime _MAX_DIGITS = 800
+"""Significant digits `_to_float64` keeps. A decimal halfway between two
+doubles has at most 767, so the first 800 and whether a nonzero digit
+follows them decide the rounding."""
+
+
+def _pow2(k: Int) -> Float64:
+    """2^k for -1022 <= k <= 1023, exactly: every factor it multiplies in
+    is a normal power of two, so no product rounds."""
+    var base = Float64(2) if k >= 0 else Float64(0.5)
+    var e = k if k >= 0 else -k
+    var r = Float64(1)
+    while e > 0:
+        if e & 1 != 0:
+            r *= base
+        base *= base
+        e >>= 1
+    return r
+
+
+def _pow10(k: Int) -> Float64:
+    """10^k for 0 <= k <= 22, exactly (5^22 < 2^53)."""
+    var r = Float64(1)
+    for _ in range(k):
+        r *= 10
+    return r
+
+
+# Unsigned integers of any size for `_to_float64`: 32-bit limbs, least
+# significant first, no zero limb on top (zero is the empty list).
+
+
+def _big_mul_add(mut a: List[UInt32], m: UInt64, add: UInt64):
+    """`a = a * m + add`, for `m` and `add` below 2^32."""
+    var carry = add
+    for k in range(len(a)):
+        var x = UInt64(a[k]) * m + carry
+        a[k] = UInt32(x & 0xFFFFFFFF)
+        carry = x >> 32
+    if carry != 0:
+        a.append(UInt32(carry))
+
+
+def _big_mul_pow10(mut a: List[UInt32], k: Int):
+    var e = k
+    while e >= 9:
+        _big_mul_add(a, 1_000_000_000, 0)
+        e -= 9
+    var m: UInt64 = 1
+    for _ in range(e):
+        m *= 10
+    _big_mul_add(a, m, 0)
+
+
+def _big_mul_u64(a: List[UInt32], m: UInt64) -> List[UInt32]:
+    var out = List[UInt32](capacity=len(a) + 2)
+    var carry: UInt128 = 0
+    for k in range(len(a)):
+        var x = UInt128(a[k]) * UInt128(m) + carry
+        out.append(UInt32(x & 0xFFFFFFFF))
+        carry = x >> 32
+    while carry != 0:
+        out.append(UInt32(carry & 0xFFFFFFFF))
+        carry >>= 32
+    return out^
+
+
+def _big_bits(a: List[UInt32]) -> Int:
+    if len(a) == 0:
+        return 0
+    var top = a[len(a) - 1]
+    var n = 0
+    while top != 0:
+        top >>= 1
+        n += 1
+    return (len(a) - 1) * 32 + n
+
+
+def _big_shl(mut a: List[UInt32], s: Int):
+    if len(a) == 0 or s == 0:
+        return
+    var r = UInt64(s % 32)
+    var out = List[UInt32](capacity=len(a) + s // 32 + 1)
+    for _ in range(s // 32):
+        out.append(0)
+    var carry: UInt64 = 0
+    for k in range(len(a)):
+        var x = (UInt64(a[k]) << r) | carry
+        out.append(UInt32(x & 0xFFFFFFFF))
+        carry = x >> 32
+    if carry != 0:
+        out.append(UInt32(carry))
+    a = out^
+
+
+def _big_shr(a: List[UInt32], s: Int) -> UInt128:
+    """`a >> s`, for a result below 2^128."""
+    var out: UInt128 = 0
+    for k in range(s // 32, len(a)):
+        var at = 32 * k - s
+        if at < 0:
+            out |= UInt128(a[k]) >> UInt128(-at)
+        else:
+            out |= UInt128(a[k]) << UInt128(at)
+    return out
+
+
+def _big_cmp(a: List[UInt32], b: List[UInt32]) -> Int:
+    if len(a) != len(b):
+        return -1 if len(a) < len(b) else 1
+    var k = len(a) - 1
+    while k >= 0:
+        if a[k] != b[k]:
+            return -1 if a[k] < b[k] else 1
+        k -= 1
+    return 0
+
+
+def _big_sub(mut a: List[UInt32], b: List[UInt32]):
+    """`a -= b`, for `a >= b`."""
+    var borrow: UInt64 = 0
+    for k in range(len(a)):
+        var y = (UInt64(b[k]) if k < len(b) else 0) + borrow
+        var x = UInt64(a[k])
+        borrow = 1 if x < y else 0
+        a[k] = UInt32((x + (borrow << 32) - y) & 0xFFFFFFFF)
+    while len(a) > 0 and a[len(a) - 1] == 0:
+        _ = a.pop()
+
+
+def _to_float64(text: String) raises -> Float64:
+    """The double nearest a JSON number literal the parser has validated,
+    ties to even. Raises when that is past the largest finite double; below
+    the smallest it is a zero of the literal's sign."""
+    var b = text.as_bytes()
+    var n = len(b)
+    var i = 0
+    var negative = Int(b[0]) == ord("-")
+    if negative:
+        i = 1
+    # The value is the significant digits, as an integer, times 10^scale.
+    var digits = List[UInt8]()
+    var significant = 0
+    var dropped_nonzero = False
+    var scale = 0
+    var fraction = False
+    while i < n:
+        var c = Int(b[i])
+        if c == ord("e") or c == ord("E"):
+            break
+        i += 1
+        if c == ord("."):
+            fraction = True
+            continue
+        if fraction:
+            scale -= 1
+        if significant == 0 and c == ord("0"):
+            continue
+        significant += 1
+        if len(digits) < _MAX_DIGITS:
+            digits.append(UInt8(c - ord("0")))
+        elif c != ord("0"):
+            dropped_nonzero = True
+    if i < n:
+        i += 1
+        var exponent_negative = Int(b[i]) == ord("-")
+        if Int(b[i]) == ord("+") or exponent_negative:
+            i += 1
+        var exponent = 0
+        while i < n:
+            # Past 10^9 the result is zero or out of range whatever the
+            # digits, which the body cap keeps under 2^20.
+            if exponent < 1_000_000_000:
+                exponent = exponent * 10 + Int(b[i]) - ord("0")
+            i += 1
+        scale += -exponent if exponent_negative else exponent
+    var zero = -Float64(0) if negative else Float64(0)
+    if significant == 0:
+        return zero
+    scale += significant - len(digits)
+    while digits[len(digits) - 1] == 0:
+        _ = digits.pop()
+        scale += 1
+    var kept = len(digits)
+    # The value is in [10^(kept - 1 + scale), 10^(kept + scale)).
+    if kept - 1 + scale >= 309:
+        raise Error("JSON number is out of range")
+    if kept + scale <= -324:
+        return zero  # under half the smallest double
+
+    # An integer up to 2^53 times or over an exact power of ten: one
+    # correctly rounded operation (Clinger's fast path).
+    if kept <= 19 and not dropped_nonzero and scale >= -22 and scale <= 22:
+        var m: UInt64 = 0
+        for k in range(kept):
+            m = m * 10 + UInt64(digits[k])
+        if m <= UInt64(1) << 53:
+            var x = Float64(Int(m))
+            x = x * _pow10(scale) if scale >= 0 else x / _pow10(-scale)
+            return -x if negative else x
+
+    # Otherwise exactly: the value is num / den, and q, its leading 63 or
+    # 64 bits, is estimated from the top bits and then corrected with
+    # whole numbers, so the estimate's error costs time, never accuracy.
+    var num = List[UInt32]()
+    var k = 0
+    while k < kept:
+        var chunk: UInt64 = 0
+        var m: UInt64 = 1
+        while k < kept and m < 1_000_000_000:
+            chunk = chunk * 10 + UInt64(digits[k])
+            m *= 10
+            k += 1
+        _big_mul_add(num, m, chunk)
+    var den: List[UInt32] = [UInt32(1)]
+    if scale >= 0:
+        _big_mul_pow10(num, scale)
+    else:
+        _big_mul_pow10(den, -scale)
+    # q = floor(num * 2^s / den) is in [2^62, 2^64).
+    var s = 63 - (_big_bits(num) - _big_bits(den))
+    if s >= 0:
+        _big_shl(num, s)
+    else:
+        _big_shl(den, -s)
+    var top = max(_big_bits(den) - 64, 0)
+    var q = _big_shr(num, top) // _big_shr(den, top)
+    q = min(q, UInt128(UInt64.MAX))
+    var product = _big_mul_u64(den, UInt64(q))
+    while _big_cmp(product, num) > 0:
+        q -= 1
+        _big_sub(product, den)
+    _big_sub(num, product)
+    while _big_cmp(num, den) >= 0:
+        q += 1
+        _big_sub(num, den)
+    var inexact = dropped_nonzero or len(num) > 0
+
+    # The value is q * 2^-s, so its leading bit is 2^t.
+    var h = 63 if q >> 63 != 0 else 62
+    var t = h - s
+    if t > 1023:
+        raise Error("JSON number is out of range")
+    # Significand bits: 53, fewer below 2^-1022 (subnormal), none below
+    # 2^-1075, where the value rounds to zero.
+    var p = 53 if t >= -1022 else t + 1075
+    if p < 0:
+        return zero
+    var drop = UInt128(h + 1 - p)
+    var m = q >> drop
+    var half = (q >> (drop - 1)) & 1 != 0
+    var rest = q & ((UInt128(1) << (drop - 1)) - 1) != 0 or inexact
+    if half and (rest or m & 1 != 0):
+        m += 1
+    if t == 1023 and m == UInt128(1) << 53:
+        raise Error("JSON number is out of range")
+    # m * 2^e is the double: one exact step, or two below 2^-1022 (the
+    # first stays normal, the second lands on the representable result).
+    var e = t - p + 1
+    var x = Float64(Int(m))
+    if e >= -1022:
+        x *= _pow2(e)
+    else:
+        x = x * _pow2(e + 52) * _pow2(-52)
+    return -x if negative else x
 
 
 struct _Parser:
@@ -455,16 +721,12 @@ struct JsonValue(Copyable, Movable, Sized):
         return Int(t)
 
     def float(self) raises -> Float64:
-        """A number literal as a finite `Float64`, through Mojo 1.1.0's
-        `atof`: not always correctly rounded, and raising on long literals
-        (docs/history/architecture-decisions.md, "JSON codec decision (M3-008)"). Raises on
-        overflow to infinity and for any other kind."""
+        """A number literal as the nearest `Float64` (ties to even), of any
+        length. Raises when that is past the largest finite double, and for
+        any other kind."""
         if self._kind() != _NUMBER:
             raise Error("JSON value is not a number")
-        var x = atof(self._literal())
-        if x != x or x > Float64.MAX_FINITE or x < -Float64.MAX_FINITE:
-            raise Error("JSON number is out of range")
-        return x
+        return _to_float64(self._literal())
 
     def string(self) raises -> String:
         """The string's contents, escapes decoded (a copy); raises for any
