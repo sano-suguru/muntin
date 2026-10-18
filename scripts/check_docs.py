@@ -17,6 +17,11 @@
    named in a code, script or CI file, exists; a checker's own test
    (scripts/test_check_*.py) is skipped, since its fixtures name documents
    of a scratch repository.
+4. Every section cited by name or number exists: a Markdown file's path or
+   a link to it, then a quoted heading or "section N" (CITATION), in any
+   Markdown file but a decision record and in every code, script or CI
+   file. A quote right after a path is read as a heading, so quote other
+   text elsewhere in the sentence.
 
 Standard library only: python3 -I scripts/check_docs.py [ROOT], where ROOT
 (the repository by default) is for scripts/test_check_docs.py.
@@ -394,7 +399,7 @@ def check_budgets(errors):
         errors.append(
             "a document grew past its budget. Check each new fact against "
             "docs/DEVELOPMENT.md section 7, which names each document's "
-            "reader and what goes there (AGENTS.md, \"Before writing\", sums "
+            "reader and what goes there (AGENTS.md, \"Where to look\", sums "
             "it up), and move what belongs elsewhere. Never cut a "
             "constraint, exception or safety condition to fit: if the facts "
             "belong here, raise the budget in scripts/check_docs.py in this "
@@ -447,11 +452,94 @@ def check_paths(errors):
                     errors.append(f"{rel}:{n}: {m.group(0)}: no such file")
 
 
+# A section citation: a Markdown file, named by its path (in backticks or
+# not) or by a link to it, followed by a quoted heading (`, "Heading"`,
+# ` ("Heading"` or ` "Heading"`, starting on that line or the next and over
+# at most two lines) or by `section 7` (`sections 6 and 7`). It is read in
+# text where backticks are dropped and each link is replaced by its
+# destination, so the three ways to name the file are one.
+SEP = r"[ \t]*\n?[ \t]*"  # spaces, and at most one line break
+CITATION = re.compile(
+    r"(?<![\w./\"'-])([\w./-]+\.md)(?:#[\w-]*)?(?=[,\s(])"
+    rf",?{SEP}(?:\(?\"([^\"\s][^\"\n]*(?:\n[^\"\n]*)?)\""
+    rf"|sections?{SEP}(\d+(?:(?:,|,?{SEP}(?:and|or)){SEP}\d+)*))"
+)
+ANY_LINK = re.compile(r"\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+COMMENT = re.compile(r"\s*(?:#+|//+)?\s*")
+NUMBERED = re.compile(r"(\d+)\.\s+(.*)")
+
+SECTIONS = {}
+
+
+def sections(path):
+    """What a citation may name in a Markdown file: the anchor of each
+    heading or id, as a link's #anchor may, also the anchor of a numbered
+    heading's name ("Where information lives" for "7. Where information
+    lives"); and the numbers of its numbered headings."""
+    if path not in SECTIONS:
+        names, numbers = set(anchors(path)), set()
+        for heading in Scan(path.read_text()).headings:
+            m = NUMBERED.fullmatch(heading.strip())
+            if m:
+                numbers.add(m.group(1))
+                names.add(slug(m.group(2)))
+        SECTIONS[path] = names, numbers
+    return SECTIONS[path]
+
+
+def check_citations(errors):
+    """Each section citation names a heading or section number its file has.
+    Decision records are not read: their bodies are not rewritten
+    (docs/DEVELOPMENT.md section 2), cite headings their documents had then,
+    which docs/history/architecture-decisions.md maps to today's, and also
+    quote text that is not a heading right after a path."""
+    sources = []
+    for path in files({".md"}):
+        if path.parent == ROOT / "docs/history/decisions":
+            continue
+        lines, last = [], None
+        for n, line in Scan(path.read_text()).prose:
+            if last is not None and n != last + 1:
+                lines.append((n, ""))  # a gap: no citation spans it
+            lines.append((n, ANY_LINK.sub(r"\1", line).replace("`", "").strip()))
+            last = n
+        sources.append((path, lines))
+    for path in files(CODE_SUFFIXES):
+        if path.name.startswith("test_check_"):
+            continue  # its fixtures name documents of a scratch repository
+        sources.append((path, [
+            (n, COMMENT.sub("", line, count=1).replace('\\"', '"').replace("`", ""))
+            for n, line in enumerate(path.read_text().split("\n"), 1)
+        ]))
+    for path, lines in sources:
+        rel = path.relative_to(ROOT)
+        text = "\n".join(line for _, line in lines)
+        for m in CITATION.finditer(text):
+            n = lines[text.count("\n", 0, m.start())][0]
+            file, heading, numbers = m.groups()
+            heading = heading and " ".join(heading.split())
+            dest = path.parent / file
+            if not dest.exists():
+                dest = ROOT / file
+            if not dest.exists():
+                errors.append(f"{rel}:{n}: {file}: no such file")
+                continue
+            names, numbered = sections(dest.resolve())
+            where = dest.resolve().relative_to(ROOT)
+            if heading is not None and slug(heading) not in names:
+                errors.append(f"{rel}:{n}: \"{heading}\": no such heading in {where}")
+            for number in re.findall(r"\d+", numbers or ""):
+                if number not in numbered:
+                    errors.append(f"{rel}:{n}: section {number}: no such "
+                                  f"numbered heading in {where}")
+
+
 def main():
     errors = []
     check_budgets(errors)
     check_links(errors)
     check_paths(errors)
+    check_citations(errors)
     for e in errors:
         print(f"error: {e}", file=sys.stderr)
     if errors:

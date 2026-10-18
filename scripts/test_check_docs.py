@@ -194,6 +194,48 @@ CASES = [
     ("a fence in a list item across a blank line", {
         "docs/GUIDE.md": "# Guide\n\n## Start\n\n- ```\n  code\n\n  [x](gone.md)\n  ```\n",
     }, None),
+    ("sound section citations", {
+        "docs/DEVELOPMENT.md": "# Dev\n\n## 6. Finish\n\n## 7. Where information lives\n",
+        "README.md": ("# Readme\n\nSee `docs/DEVELOPMENT.md`, \"Where information lives\","
+                      " [`docs/GUIDE.md`](docs/GUIDE.md), \"Start\", `docs/DEVELOPMENT.md`"
+                      " sections 6 and 7, docs/reference/page.md (\"Text bodies\n"
+                      "(`FromBody`)\") and docs/reference/page.md, \"kept-anchor\".\n"),
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\nNot yet: [SPEC](DEVELOPMENT.md), \"Finish\".\n",
+        "src/muntin/app.mojo": ("# docs/reference/page.md,\n# \"Notes\"; docs/DEVELOPMENT.md"
+                                " section 7.\nx = 1\n"),
+        "scripts/check.sh": "echo \"see docs/GUIDE.md, \\\"Start\\\"\"\n",
+    }, None),
+    ("a citation of a missing heading", {
+        "README.md": "# Readme\n\nSee `docs/GUIDE.md`, \"Stop\".\n",
+    }, ['error: README.md:3: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation through a link of a missing heading", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\nSee [the page](reference/page.md#notes), \"Note\".\n",
+    }, ['error: docs/GUIDE.md:5: "Note": no such heading in docs/reference/page.md']),
+    ("a citation that drops a heading's code span", {
+        "README.md": "# Readme\n\nSee docs/reference/page.md, \"Text bodies\".\n",
+    }, ['error: README.md:3: "Text bodies": no such heading in docs/reference/page.md']),
+    ("a citation in code of a missing heading, across lines", {
+        "tests/test_x.mojo": "x = 1\n# Decision: docs/reference/page.md,\n# \"Text\n# bodies\".\n",
+    }, ['error: tests/test_x.mojo:2: "Text bodies": no such heading in docs/reference/page.md']),
+    ("a citation in an escaped string of a missing heading", {
+        "scripts/check.sh": "echo \"see docs/GUIDE.md, \\\"Stop\\\"\"\n",
+    }, ['error: scripts/check.sh:1: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation of a missing section number", {
+        "docs/DEVELOPMENT.md": "# Dev\n\n## 6. Finish\n",
+        "README.md": "# Readme\n\nSee `docs/DEVELOPMENT.md` sections 6 and 8.\n",
+    }, ['error: README.md:3: section 8: no such numbered heading in docs/DEVELOPMENT.md']),
+    ("a citation of a missing document", {
+        "src/muntin/app.mojo": "# See guide.md, \"Start\".\n",
+    }, ['error: src/muntin/app.mojo:1: guide.md: no such file']),
+    ("a quote a blank line or code away from a path", {
+        "README.md": ("# Readme\n\nSee docs/GUIDE.md\n\n\"Stop\" is a word.\n\n"
+                      "Or docs/GUIDE.md\n```\n```\n\"Stop\".\n"),
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n```\ndocs/GUIDE.md, \"Stop\"\n```\n",
+    }, None),
+    ("a decision record's citation of an old heading", {
+        "docs/history/decisions/m3-001-application-state-decision.md": (
+            "# Record\n\nSee `docs/GUIDE.md`, \"Stop\".\n"),
+    }, None),
     ("the guide at its budget", {
         "docs/GUIDE.md": "# Guide\n\n## Start\n".ljust(20 * 1024, "x"),
     }, None),

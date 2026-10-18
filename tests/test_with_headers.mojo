@@ -707,8 +707,9 @@ def test_raw_slot_adapter_function_on_production_app() raises:
     )
 
 
-# docs/reference/bodies.md, "Header fields with a body": the text between the
-# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+# docs/reference/bodies.md, "Header fields with a body (`WithHeaders[B]`)":
+# the text between the `# example:` lines is what the page shows
+# (scripts/check_doc_examples.py).
 # Its `Note` is also the body of every carrier route above: a move-only body,
 # which `take_body` must move out, never copy. `CreateUser` and `User` below
 # are the page's JSON example's.

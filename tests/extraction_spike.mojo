@@ -6,7 +6,8 @@
 # box, unchanged; route matching and `Int` conversion are production's own
 # helpers. check.sh builds it through that test (--Werror) and test.sh runs it.
 # Decision and evidence: docs/history/architecture-decisions.md, "Argument
-# extraction decision". Must-not-compile evidence: tests/extraction_fail.
+# extraction decision (M2-005)". Must-not-compile evidence:
+# tests/extraction_fail.
 #
 # Two separate questions, two separate places in this file:
 #
