@@ -170,7 +170,41 @@ FENCE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
 ATX = re.compile(r" {0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
 SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*$")
 BREAK = re.compile(r" {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
-HTML = re.compile(r" {0,3}<[A-Za-z/!?]")
+# CommonMark's kinds of HTML block, in order: how each starts, the text that
+# ends it (None: a blank line), and whether it may interrupt a paragraph. An
+# autolink such as <https://example.com>, or a tag with text after it on its
+# line, starts none of them and stays text.
+BLOCK_TAGS = (
+    "address|article|aside|base|basefont|blockquote|body|caption|center|col|"
+    "colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|"
+    "footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|"
+    "link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|"
+    "section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul"
+)
+ATTRIBUTE = r"""\s+[A-Za-z_:][\w.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?"""
+HTML_BLOCKS = [
+    (r"<(?:pre|script|style|textarea)(?:[ \t>]|$)", r"</(?:pre|script|style|textarea)>", True),
+    (r"<!--", r"-->", True),
+    (r"<\?", r"\?>", True),
+    (r"<![A-Za-z]", r">", True),
+    (r"<!\[CDATA\[", r"\]\]>", True),
+    (r"</?(?:%s)(?:[ \t>]|/>|$)" % BLOCK_TAGS, None, True),
+    (r"(?:<[A-Za-z][A-Za-z0-9-]*(?:%s)*\s*/?>|</[A-Za-z][A-Za-z0-9-]*\s*>)[ \t]*$"
+     % ATTRIBUTE, None, False),
+]
+HTML_BLOCKS = [(re.compile(r" {0,3}" + start, re.I), end and re.compile(end, re.I), interrupts)
+               for start, end, interrupts in HTML_BLOCKS]
+
+
+def html_block(rest, in_paragraph):
+    """The end pattern of the HTML block that rest starts (None: a blank
+    line ends it), or False when rest starts none."""
+    for start, end, interrupts in HTML_BLOCKS:
+        if start.match(rest) and (interrupts or not in_paragraph):
+            return end
+    return False
+
+
 # "[label]: destination", the destination on this line or the next; a
 # "[^1]:" is a footnote, not a link.
 REFERENCE = re.compile(r" {0,3}\[(?!\^)(?:[^\]\\]|\\.)+\]:[ \t]*(?:<([^>]*)>|(\S+))?")
@@ -193,7 +227,8 @@ def item_width(rest):
 
 def starts_block(rest):
     return bool(QUOTE.match(rest) or item_width(rest) or FENCE.match(rest)
-                or ATX.match(rest) or BREAK.match(rest))
+                or ATX.match(rest) or BREAK.match(rest)
+                or html_block(rest, True) is not False)
 
 
 class Scan:
@@ -210,7 +245,7 @@ class Scan:
         leaf = None  # the open leaf block: "paragraph", "table" or "html"
         paragraph = []
         definition = None  # a "[label]:" line still waiting for its destination
-        comment = False  # whether the open HTML block is a comment
+        html_end = None  # what ends the open HTML block; None: a blank line
         for n, raw in enumerate(text.split("\n"), 1):
             rest, matched = raw.expandtabs(4), 0
             for c in stack:
@@ -255,6 +290,11 @@ class Scan:
                 opened = True
             if opened:
                 leaf, definition = None, None
+            if leaf == "html" and (html_end or rest.strip()):
+                self.html.append((n, rest))
+                if html_end and html_end.search(rest):
+                    leaf = None
+                continue
             if not rest.strip():
                 leaf, definition = None, None
                 continue
@@ -262,13 +302,8 @@ class Scan:
                 self.references.append((n, rest.split()[0].strip("<>")))
                 definition = None
                 continue
-            if leaf != "paragraph" and leaf != "html" and rest.startswith("    "):
+            if leaf != "paragraph" and rest.startswith("    "):
                 continue  # indented code
-            if leaf == "html":
-                self.html.append((n, rest))
-                if comment and "-->" in rest:
-                    leaf = None
-                continue
             m = FENCE.match(rest)
             if m:
                 fence, self.unclosed, leaf = m.group(1), n, None
@@ -286,10 +321,10 @@ class Scan:
             if BREAK.match(rest):
                 leaf = None
                 continue
-            if leaf is None and HTML.match(rest):
-                # An HTML block ends at a blank line, a comment at its "-->".
-                comment = rest.lstrip().startswith("<!--")
-                leaf = None if comment and "-->" in rest else "html"
+            end = html_block(rest, leaf is not None)
+            if end is not False:
+                # Its own first line may already hold its end.
+                html_end, leaf = end, None if end and end.search(rest) else "html"
                 self.html.append((n, rest))
                 continue
             m = REFERENCE.match(rest)

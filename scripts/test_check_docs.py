@@ -155,6 +155,30 @@ CASES = [
     ("a link after a comment of several lines", {
         "docs/GUIDE.md": "# Guide\n\n## Start\n\n<!--\nnote\n-->\n[x](gone.md)\n",
     }, "gone.md: no such file"),
+    ("a link after an autolink", {
+        "docs/NOTES.md": "# Notes\n\n<https://example.com>\n[x](gone.md)\n",
+    }, "NOTES.md:4: gone.md: no such file"),
+    ("a link after inline HTML that starts a line", {
+        "docs/NOTES.md": "# Notes\n\n<code>x</code> and\n[x](gone.md)\n",
+    }, "NOTES.md:4: gone.md: no such file"),
+    ("a link after a tag that cannot interrupt a paragraph", {
+        "docs/NOTES.md": "# Notes\n\ntext\n<span>\n[x](gone.md)\n",
+    }, "NOTES.md:5: gone.md: no such file"),
+    ("a link after an HTML block and a blank line", {
+        "docs/NOTES.md": "# Notes\n\n<details>\n[x](skipped.md)\n\n[x](gone.md)\n",
+    }, "NOTES.md:6: gone.md: no such file"),
+    ("a link-like line in an HTML block that ends a quote", {
+        "docs/NOTES.md": "# Notes\n\n> text\n<div>\n[x](gone.md)\n",
+    }, None),
+    ("a link after a one-line comment", {
+        "docs/NOTES.md": "# Notes\n\n<!-- note -->\n[x](gone.md)\n",
+    }, "NOTES.md:4: gone.md: no such file"),
+    ("a link-like line in a comment across a blank line", {
+        "docs/NOTES.md": "# Notes\n\n<!--\ncomment\n\n[example](gone.md)\n-->\n",
+    }, None),
+    ("a link-like line in a pre block across a blank line", {
+        "docs/NOTES.md": "# Notes\n\n<pre>\n\n[example](gone.md)\n</pre>\n",
+    }, None),
     ("a fence in a list item across a blank line", {
         "docs/GUIDE.md": "# Guide\n\n## Start\n\n- ```\n  code\n\n  [x](gone.md)\n  ```\n",
     }, None),
