@@ -225,7 +225,7 @@ If one of these pins changes (a pinned fixture unexpectedly compiles, fails to c
 | `tests/context_known_gaps/reflected_names_collide.mojo` (must build) | [M3-063](history/decisions/m3-063-request-context-decision.md) |
 | `tests/context_known_gaps/erasure_drops_origin.mojo` (must build; `scripts/run_origin_gaps.sh` runs it under AddressSanitizer); `tests/context_fail` | [M3-065](history/decisions/m3-065-request-context-storage-decision.md) |
 | `tests/state_fail/state_origin_*.mojo`, `state_pack_tuple.mojo`, `state_pack_in_type_argument.mojo`, `state_empty_struct_parameter.mojo` and `state_function_parameter_*.mojo`; `tests/test_state.mojo`'s owned-state, wrapper and function-parameter tests; `tests/state_known_gaps/state_any_origin_associated_type.mojo` (must build; `scripts/run_origin_gaps.sh` runs it under AddressSanitizer) | [M3-074](history/decisions/m3-074-state-borrowing-decision.md) |
-| `tests/state_fail/state_any_origin_*.mojo`; `tests/state_known_gaps/state_any_origin_in_*.mojo` (must build; `scripts/run_origin_gaps.sh` runs them under AddressSanitizer) | [deferral](history/deferrals.md#closing-states-anyorigin-hole), pull request #PRNUM |
+| `tests/state_fail/state_any_origin_*.mojo`; `tests/state_known_gaps/state_any_origin_in_*.mojo` (must build; `scripts/run_origin_gaps.sh` runs them under AddressSanitizer) | [deferral](history/deferrals.md#closing-states-anyorigin-hole), [pull request #175](https://github.com/sano-suguru/muntin/pull/175) |
 
 ## Request/Response ownership
 
