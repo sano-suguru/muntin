@@ -52,11 +52,26 @@ Run by `tests/test_state_examples.mojo` (`test_state`), with `make_app` named `s
 - **Which parameter:** a handler takes state exactly when its registration passes a `State[S]`. Its first parameter is then `State[S]` (the same `S`), and the rest is one of the stateless shapes, bound as before: `def(State[Users], Int, CreateUser)` on `post` is state, route value, body. Request handling is the stateless twin's.
 - **Ownership:** `State(value)` takes the value. `State` is a shared handle: the application keeps its own, each registration keeps a copy, and the value is destroyed when the last handle goes. A request borrows the route's handle and copies or allocates nothing.
 - **Read-only:** `users[]` is read-only through every handle. A value that must change while serving keeps that mutability in its own fields, under its own rules. A reference from `users[]` lives no longer than its handle (`use of invalidated interior reference` after the handle is reassigned or moved).
-- **The state may borrow nothing.** `S` must own its data: `State(value)` does not compile when `S`'s name shows an origin or a parameter pack anywhere (`View[o]`, a closure that captures by reference): `constraint failed: State takes a value that owns its data; this type's name shows an origin or a parameter pack ({}), so it may borrow a value the App outlives: <the type>` ([M3-074](../history/decisions/m3-074-state-borrowing-decision.md)). The rule reads the type's name, so it also refuses some owned types: a static origin (`StaticString`, `Optional[StaticString]`) and packs (`Tuple`, `Variant`, `List[Tuple[...]]`). Move such a value into a field of the application's own struct (`struct Pair: var value: Tuple[Int, String]`, then `State(Pair(...))`). A type that hides `AnyOrigin` behind a trait's associated type still registers; Muntin claims no memory safety for values built with `AnyOrigin`.
+- **The state may borrow nothing.** `S` must own its data: `State(value)` does not compile when `S`'s name shows an origin or a parameter pack anywhere (`View[o]`, a closure that captures by reference): `constraint failed: State takes a value that owns its data; this type's name shows an origin or a parameter pack ({}), so it may borrow a value the App outlives: <the type>` ([M3-074](../history/decisions/m3-074-state-borrowing-decision.md)). The rule reads the type's name, so it also refuses some owned types: a static origin (`StaticString`, `Optional[StaticString]`) and packs (`Tuple`, `Variant`, `List[Tuple[...]]`). Move such a value into a field of the application's own struct (`struct Pair: var value: Tuple[Int, String]`, then `State(Pair(...))`). A type that hides `AnyOrigin` behind a trait's associated type still registers; Muntin claims no memory safety for values built with `AnyOrigin`. [Which state types compile](#which-state-types-compile) lists each case.
 - **Several values:** one `State` per handler; several values are the fields of one state type. Different routes may take different state types.
 - **Threads:** with the Flare adapter's `Server`, an `App` and its `State` values stay on one thread for the `App`'s life: `serve(app)` serves on the calling thread, and `serve[make](workers=n)` builds one `App`, with its own `State` values, per worker on its thread. A counter in one worker counts that worker's requests; state every worker must see belongs outside the process. That is the adapter's behavior, not Muntin's: another backend may call an `App` from several threads in turn, and then `State` values must be safe to use on another thread ([testing](testing.md#the-backend-seam)).
 
 State goes first so the body stays last. Access is `state[]` because a struct cannot forward field access.
+
+## Which state types compile
+
+| `S`, the type of `State(value)`'s value | Compiles | Pinned by |
+|---|---|---|
+| A struct whose fields own their data, a `StaticString` field included | yes | `tests/test_state.mojo` (`test_owned_state_types_register`) |
+| `List[String]`, `Dict[String, Int]`, `ArcPointer[T]` | yes | the same test |
+| A struct with an `Int`, a struct value or a function as a parameter | yes | the same test |
+| A `Tuple` or a `Variant` in a field of the application's own struct | yes | `tests/test_state.mojo` (`test_owned_values_in_a_wrapper_register`) |
+| A type with an origin parameter: a view of a local, mutable or not, `ImmutAnyOrigin`, `StaticString` | no | `tests/state_fail/state_origin_*.mojo` |
+| An origin inside a type argument (`Box[View[o]]`, `Tuple[View[o]]`, `Variant[View[o]]`) or a closure that captures by reference | no | the same fixtures |
+| A parameter pack as the whole state, even an owned one: `Tuple(1, String("a"))` (and `Variant[Int, String]`, `List[Tuple[...]]`) | no | `tests/state_fail/state_pack_tuple.mojo` |
+| A pointer built with `AnyOrigin` behind a trait's associated type | **yes, and it can read freed memory** | `tests/state_known_gaps/state_any_origin_associated_type.mojo` |
+
+The rule is a measure for the current toolchain, not a lasting guarantee: it searches the type's name as Mojo 1.1.0 prints it (`reflect[S].name()`) for `{}`, the text of every origin and of a parameter pack, an undocumented format, because Mojo has no origin bound that generic code can state. If Mojo stops printing an origin that way, the refused fixtures above build and `./scripts/check.sh` fails; the conditions for replacing the rule are [M3-074](../history/decisions/m3-074-state-borrowing-decision.md)'s "Revisit when".
 
 ## `post`, `put` and `patch`
 
