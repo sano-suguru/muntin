@@ -86,7 +86,7 @@ What each capability does for an application: the [guide](GUIDE.md) and the [ref
 
 ### Remaining candidates
 
-**Frozen:** no entry below starts until Muntin's value is evaluated and the owner decides how to go on; what is exempt and when the freeze ends are in [deferrals](history/deferrals.md#extensions-while-muntins-value-is-evaluated).
+**Frozen:** no entry below starts until Muntin's value is evaluated and the owner decides how to go on, except a correctness or safety fix such as entry 1; the exemptions and when the freeze ends are in [deferrals](history/deferrals.md#extensions-while-muntins-value-is-evaluated).
 
 In priority order: the first entry is the next item unless the user asks for another. Each becomes its own item, a decision item first where it opens a design question. An entry here is only what it solves and when to start. A revisit condition, or any other condition that binds later items, lives in the linked decision record or in [`history/deferrals.md`](history/deferrals.md); the issue holds the details, design targets and discussion.
 
