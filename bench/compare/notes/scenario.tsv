@@ -5,6 +5,7 @@
 #   break             the journal path becomes a directory: every write fails
 #   restore           the journal is back where it was
 #   log TEXT          what the program wrote since it started contains TEXT
+#   field NAME VALUE  the previous answer carries the field NAME: VALUE
 #   req METHOD TARGET AUTHORIZATION BODY STATUS RESPONSE_BODY
 #
 # AUTHORIZATION is the field's value (- for no field); BODY is sent with
@@ -13,7 +14,9 @@
 # (bo); a note is visible to its owner only, and 404 to everyone else.
 start	40
 req	GET	/notes	-	-	401	Unauthorized
+field	WWW-Authenticate	Bearer
 req	GET	/notes	Bearer nope	-	401	Unauthorized
+field	WWW-Authenticate	Bearer
 req	POST	/notes	-	{"text":"x"}	401	Unauthorized
 req	POST	/notes	Bearer t-ada	{"text":"buy milk"}	201	{"id":1,"owner":"ada","text":"buy milk"}
 req	POST	/notes	Bearer t-bo	{"text":"call Ada"}	201	{"id":2,"owner":"bo","text":"call Ada"}

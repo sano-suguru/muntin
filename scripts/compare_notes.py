@@ -15,8 +15,8 @@ In the `flare` environment, it
 2. builds both programs, and both with the change applied, and runs each
    through its scenario (scenario.tsv, then scenario_v2.tsv for the changed
    ones), restarting it, breaking and restoring its journal as the scenario
-   says; it fails if a program answers otherwise or does not log what the
-   scenario names. It prints what each program wrote to standard error
+   says; it fails if a program answers otherwise (status, body and any
+   field the scenario names) or does not log what the scenario names. It prints what each program wrote to standard error
    during each request. Then it prints both answers to defaults.tsv, which
    the scenario leaves open;
 3. plants each mistake in mistakes.txt in a copy of the program it names and
@@ -210,7 +210,7 @@ def print_log(text, indent="    "):
 def run_scenario(name, served, path):
     """Runs the scenario in PATH against SERVED; returns False if any step
     fails."""
-    ok = True
+    ok, fields = True, {}
     for raw in path.read_text().splitlines():
         if not raw or raw.startswith("#"):
             continue
@@ -230,11 +230,20 @@ def run_scenario(name, served, path):
             else:
                 print(f"FAIL\t{name}\tlog does not name {args[0]!r}")
                 ok = False
+        elif action == "field":
+            got = fields.get(args[0].lower())
+            if got == args[1]:
+                print(f"ok\t{name}\t{args[0]}: {args[1]}")
+            else:
+                print(f"FAIL\t{name}\t{args[0]} is {got!r}, expected {args[1]!r}")
+                ok = False
         elif action == "req":
+            fields = {}
             method, target, authz, body, status, expected = args
             label = f"{method} {target} ({authz})"
             try:
-                got_status, _, got = ask(served.port, method, target, authz, body)
+                got_status, headers, got = ask(served.port, method, target, authz, body)
+                fields = {k.lower(): v for k, v in headers}
             except (OSError, http.client.HTTPException) as e:
                 print(f"FAIL\t{name}\t{label}\tthe transfer failed ({e!r})")
                 print_log(served.logged())
