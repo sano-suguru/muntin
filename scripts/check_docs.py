@@ -6,9 +6,11 @@
    drop a constraint, exception or safety condition: docs/DEVELOPMENT.md
    section 7 says which document owns what, and why. When a fact does belong
    where it grew, raise that budget in the same pull request and say why.
-2. Every relative link in a Markdown file names a file that exists, and its
-   #anchor a heading or an id="..." in that file. External links are not
-   fetched.
+2. Every relative link in a Markdown file, inline or a reference
+   definition, names a file that exists, and its #anchor a heading (ATX or
+   setext, in a block quote or list item too) or an id="..." in that file.
+   Fenced code is skipped, closing only at its own closing fence, and a
+   fence that never closes is an error. External links are not fetched.
 3. Every repository path in backticks in the current documents (not
    docs/history/, which may cite removed files), and every docs/....md path
    named in a code, script or CI file, exists; a checker's own test
@@ -136,9 +138,23 @@ production-verification-policy-decision
 CURRENT_DOCS = ["README.md", "AGENTS.md", "docs/*.md", "docs/reference/*.md"]
 CODE_SUFFIXES = {".mojo", ".py", ".sh", ".yml", ".yaml", ".toml"}
 
-FENCE = re.compile(r"^\s*(```|~~~)")
-HEADING = re.compile(r"^#{1,6}\s+(.*?)(?:\s+#+)?\s*$")
+# What may come before a block on its line: indentation and the markers of
+# block quotes and list items (as in scripts/check_doc_examples.py).
+CONTAINER = r"(?:[ \t>]|[-*+][ \t]|\d{1,9}[.)][ \t])*"
+QUOTE = re.compile(r"^(?:[ \t]*>)*[ \t]*")
+# An opening fence, as CommonMark has it: three or more backticks (with no
+# backtick in its info string) or tildes. It closes only at a line of the
+# same character, at least as long, and nothing else.
+FENCE = re.compile(CONTAINER + r"(`{3,}(?=[^`]*$)|~{3,})")
+ATX = re.compile(CONTAINER + r"#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+SETEXT = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
+# Lines that start a block other than a paragraph, so no setext underline
+# can follow them: list items, tables, HTML, thematic breaks.
+NOT_PARAGRAPH = re.compile(r"^ {0,3}(?:[-*+][ \t]|\d{1,9}[.)][ \t]|\||<|(?:[-*_][ \t]*){3,}$)")
 LINK = re.compile(r"\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+# A link reference definition, "[label]: destination"; "[^1]: ..." is a
+# footnote, not a link.
+REFERENCE = re.compile(r"^(?:[ \t]*>)*[ \t]{0,3}\[(?!\^)(?:[^\]\\]|\\.)+\]:[ \t]*<?([^\s>]+)>?")
 CODE_SPAN = re.compile(r"(`+)(.+?)\1")
 ID_ATTR = re.compile(r"""\bid=["']([^"']+)["']""")
 PATH_SPAN = re.compile(
@@ -159,13 +175,44 @@ def files(suffixes):
 
 
 def prose(text):
-    """Yields (line number, line) for the lines outside fenced code."""
-    fenced = False
+    """Returns the (line number, line) pairs outside fenced code, and the
+    line number of a fence left open at the end (None if every fence
+    closes)."""
+    lines, close, opened = [], None, None
     for n, line in enumerate(text.split("\n"), 1):
-        if FENCE.match(line):
-            fenced = not fenced
-        elif not fenced:
-            yield n, line
+        if close:
+            if close.match(line):
+                close = None
+            continue
+        m = FENCE.match(line)
+        if m:
+            fence = m.group(1)
+            close = re.compile(CONTAINER + re.escape(fence[0]) + "{%d,}[ \\t]*$" % len(fence))
+            opened = n
+            continue
+        lines.append((n, line))
+    return lines, opened if close else None
+
+
+def headings(lines):
+    """Yields the text of each ATX and setext heading, in order."""
+    paragraph, last = [], 0
+    for n, line in lines:
+        if n != last + 1:
+            paragraph = []  # fenced code in between ends the paragraph
+        last = n
+        body = QUOTE.sub("", line, count=1) if line.lstrip().startswith(">") else line
+        m = ATX.match(line)
+        if m:
+            paragraph = []
+            yield m.group(1) or ""
+        elif paragraph and SETEXT.match(body):
+            yield " ".join(paragraph)
+            paragraph = []
+        elif not body.strip() or NOT_PARAGRAPH.match(body):
+            paragraph = []
+        else:
+            paragraph.append(body.strip())
 
 
 def slug(heading):
@@ -181,15 +228,15 @@ ANCHORS = {}
 
 def anchors(path):
     if path not in ANCHORS:
+        lines, _ = prose(path.read_text())
         found, seen = set(), {}
-        for _, line in prose(path.read_text()):
+        for _, line in lines:
             found.update(ID_ATTR.findall(line))
-            m = HEADING.match(line)
-            if m:
-                s = slug(m.group(1))
-                n = seen.get(s, 0)
-                seen[s] = n + 1
-                found.add(s if n == 0 else f"{s}-{n}")
+        for heading in headings(lines):
+            s = slug(heading)
+            n = seen.get(s, 0)
+            seen[s] = n + 1
+            found.add(s if n == 0 else f"{s}-{n}")
         ANCHORS[path] = found
     return ANCHORS[path]
 
@@ -221,28 +268,38 @@ def check_budgets(errors):
         )
 
 
+def check_target(errors, path, where, target):
+    if re.match(r"[a-z][a-z0-9+.-]*:", target):
+        return  # https:, mailto:, ...
+    file, _, anchor = target.partition("#")
+    dest = (path.parent / file).resolve() if file else path
+    if not dest.exists():
+        errors.append(f"{where}: {target}: no such file")
+    elif anchor and dest.suffix == ".md" and anchor not in anchors(dest):
+        errors.append(f"{where}: {target}: no heading or id \"{anchor}\" "
+                      f"in {dest.relative_to(ROOT)}")
+
+
 def check_links(errors):
     for path in files({".md"}):
         rel = path.relative_to(ROOT)
-        for n, line in prose(path.read_text()):
+        lines, unclosed = prose(path.read_text())
+        if unclosed:
+            errors.append(f"{rel}:{unclosed}: this fence has no closing "
+                          f"fence, so nothing after it is checked")
+        for n, line in lines:
+            m = REFERENCE.match(line)
+            if m:
+                check_target(errors, path, f"{rel}:{n}", m.group(1))
             for m in LINK.finditer(CODE_SPAN.sub("", line)):
-                target = m.group(1)
-                if re.match(r"[a-z][a-z0-9+.-]*:", target):
-                    continue  # https:, mailto:, ...
-                file, _, anchor = target.partition("#")
-                dest = (path.parent / file).resolve() if file else path
-                if not dest.exists():
-                    errors.append(f"{rel}:{n}: {target}: no such file")
-                elif anchor and dest.suffix == ".md" and anchor not in anchors(dest):
-                    errors.append(f"{rel}:{n}: {target}: no heading or id "
-                                  f"\"{anchor}\" in {dest.relative_to(ROOT)}")
+                check_target(errors, path, f"{rel}:{n}", m.group(1))
 
 
 def check_paths(errors):
     current = sorted({p for g in CURRENT_DOCS for p in ROOT.glob(g)})
     for path in current:
         rel = path.relative_to(ROOT)
-        for n, line in prose(path.read_text()):
+        for n, line in prose(path.read_text())[0]:
             for m in CODE_SPAN.finditer(line):
                 span = m.group(2).strip()
                 if PATH_SPAN.match(span) and not (ROOT / span).exists():

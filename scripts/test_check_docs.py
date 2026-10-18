@@ -81,6 +81,44 @@ CASES = [
     ("a missing document named in code", {
         "tests/test_x.mojo": "# See docs/reference/gone.md.\n",
     }, "tests/test_x.mojo:1: docs/reference/gone.md: no such file"),
+    ("a link after a long fence that holds a shorter one", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n````text\n```\n````\n[x](gone.md)\n",
+    }, "gone.md: no such file"),
+    ("a link-like line inside a long fence that holds a shorter one", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n````text\n```\n[x](gone.md)\n```\n````\n",
+    }, None),
+    ("a link-like line inside a tilde fence that holds backticks", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n~~~\n```\n[x](gone.md)\n~~~\n",
+    }, None),
+    ("a link after a fence in a block quote", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n> ```\n> code\n> ```\n\n[x](gone.md)\n",
+    }, "gone.md: no such file"),
+    ("a fence that never closes", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n```\n[x](gone.md)\n",
+    }, "docs/GUIDE.md:5: this fence has no closing fence"),
+    ("a reference definition to a missing file", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[x][g]\n\n[g]: gone.md\n",
+    }, "gone.md: no such file"),
+    ("a reference definition to a missing heading", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[x][g]\n\n[g]: <../README.md#stop> \"title\"\n",
+    }, 'no heading or id "stop" in README.md'),
+    ("a sound reference definition and a footnote", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[x][g][^1]\n\n[g]: ../README.md#readme\n[^1]: Not a link.\n",
+    }, None),
+    ("links to setext and quoted headings", {
+        "docs/GUIDE.md": ("# Guide\n\n## Start\n\n[a](#usage) [b](#more-usage) [c](#quoted)"
+                          " [d](#listed)\n\nUsage\n-----\n\nMore\nusage\n=====\n\n"
+                          "> ## Quoted\n\n- ### Listed\n"),
+    }, None),
+    ("a link to a thematic break, not a heading", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[a](#text)\n\nText\n\n---\n",
+    }, 'no heading or id "text"'),
+    ("a link to a list item above a rule", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[a](#--item)\n\n- item\n---\n",
+    }, 'no heading or id "--item"'),
+    ("a link to a paragraph that a code block separates from a rule", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[a](#text)\n\nText\n```\ncode\n```\n---\n",
+    }, 'no heading or id "text"'),
     ("the guide at its budget", {
         "docs/GUIDE.md": "# Guide\n\n## Start\n".ljust(20 * 1024, "x"),
     }, None),
