@@ -316,6 +316,27 @@ CASES = [
     ("a citation in a Python file that does not tokenize", {
         "scripts/x.py": 'x = (\n# See docs/GUIDE.md, "Stop".\n',
     }, ['error: scripts/x.py:2: "Stop": no such heading in docs/GUIDE.md']),
+    ("comments in different scopes, and in one", {
+        "scripts/x.py": ('if True:\n    x = 1\n    # See docs/GUIDE.md,\n# "Stop" is a sample string.\n'
+                         'def f():\n    # See docs/GUIDE.md,\n    # "Gone"\n'),
+    }, ['error: scripts/x.py:6: "Gone": no such heading in docs/GUIDE.md']),
+    ("citations in strings Python joins, and in strings it does not", {
+        "scripts/x.py": ('message = (\n    "See docs/GUIDE.md, "\n    \'"Stop".\'\n)\n'
+                         'other = ("See docs/GUIDE.md, "  # a note\n         "\\"Gone\\"")\n'
+                         'f"See docs/GUIDE.md, " \'"Here"\'\n'
+                         '"See docs/GUIDE.md, "\n\'"Away" is a word.\'\n'
+                         'print("docs/GUIDE.md", "Away")\n'),
+    }, ['error: scripts/x.py:2: "Stop": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:5: "Gone": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:7: "Here": no such heading in docs/GUIDE.md']),
+    ("a link in a link's text, and an image", {
+        "elsewhere.md": "# Elsewhere\n",
+        "README.md": ("# Readme\n\nSee [outer [inner](docs/GUIDE.md)](elsewhere.md), \"Stop\","
+                      " [a [doc] b](elsewhere.md), \"Stop\", [\\![doc] b](docs/GUIDE.md), \"Stop\","
+                      " [![badge](https://example.com/b.png)](docs/GUIDE.md), \"Gone\" and"
+                      " [a `[doc]` b](docs/GUIDE.md), \"Away\".\n\n[doc]: docs/GUIDE.md\n"),
+    }, ['error: README.md:3: "Gone": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Away": no such heading in docs/GUIDE.md']),
     ("a citation at the start of a string of a missing heading", {
         "scripts/check.sh": "echo \"docs/GUIDE.md, \\\"Stop\\\"\"\n",
     }, ['error: scripts/check.sh:1: "Stop": no such heading in docs/GUIDE.md']),

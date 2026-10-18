@@ -22,10 +22,11 @@
    (CITATION), in every Markdown file but the older decision records in
    UNCHECKED_CITATIONS and in every code, script or CI file. A block is a
    paragraph, heading or table row of a document, its inline Markdown read
-   as CommonMark reads it; in Python and Mojo, a run of comments or a
-   string, read by tokenize; elsewhere, a run of comment lines or a line
-   (blocks). A quote right after a path is read as a heading, so quote
-   other text elsewhere in the sentence.
+   as CommonMark reads it; in Python and Mojo, a run of comments in one
+   column or a string (adjacent ones Python joins as one), read by
+   tokenize; elsewhere, a run of comment lines or a line (blocks). A quote
+   right after a path is read as a heading, so quote other text elsewhere
+   in the sentence.
 
 Standard library only: python3 -I scripts/check_docs.py [ROOT], where ROOT
 (the repository by default) is for scripts/test_check_docs.py.
@@ -581,20 +582,38 @@ def link(line, i, labels):
     """The destination and end of the link whose text opens at line[i], as
     CommonMark reads it: inline ("[text](dest "title")"), full or collapsed
     reference ("[text][label]", "[text][]") or shortcut ("[label]"); or
-    None."""
+    None, also when its text holds a link, since no link holds another."""
     close = link_text_end(line, i)
     if close is None:
         return None
     text = label_key(line[i + 1:close])
     m = INLINE.match(line, close + 1)
     if m:
-        return m.group(1) or m.group(2) or "", m.end()
-    m = LABEL.match(line, close + 1)
-    if m and (label_key(m.group(1)) or text) in labels:
-        return labels[label_key(m.group(1)) or text], m.end()
-    if text in labels:
-        return labels[text], close + 1
-    return None
+        found = m.group(1) or m.group(2) or "", m.end()
+    elif (m := LABEL.match(line, close + 1)) and (label_key(m.group(1)) or text) in labels:
+        found = labels[label_key(m.group(1)) or text], m.end()
+    elif text in labels:
+        found = labels[text], close + 1
+    else:
+        return None
+    return None if holds_link(line[i + 1:close], labels) else found
+
+
+def holds_link(text, labels):
+    """Whether text holds a link; an image ("![alt](src)") is none."""
+    i, image = 0, False
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and text[i + 1:i + 2] in PUNCTUATION:
+            i, image = i + 2, False
+            continue
+        if c == "`":
+            i, image = code_span(text, i)[0], False
+            continue
+        if c == "[" and not image and link(text, i, labels):
+            return True
+        i, image = i + 1, c == "!"
+    return False
 
 
 def plain(line, labels):
@@ -642,36 +661,43 @@ def line_blocks(text):
 
 
 STRING = re.compile(r"[A-Za-z]*('''|\"\"\"|'|\")(.*)\1", re.S)
-STRINGS = {tokenize.STRING, getattr(tokenize, "FSTRING_MIDDLE", None)}
-LAYOUT = {tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT}
+FSTRING_START, FSTRING_MIDDLE, FSTRING_END = (
+    getattr(tokenize, name, None) for name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"))
 
 
 def token_blocks(text):
     """The blocks of a Python or Mojo file read by tokenize: each run of
-    comments on consecutive lines up to an empty one, and each string (a
-    docstring too) up to a blank line; code is not read."""
-    found, last = [], None  # the line of the comment a run may continue
+    comments on consecutive lines in one column (so in one scope), up to an
+    empty one; and each string, the adjacent strings Python joins ("a" "b",
+    with only line breaks and comments between) as one, up to a blank line.
+    Code is not read."""
+    found = []
+    comment = None  # the run a comment may continue: (row, column, block)
+    string, joins = None, False  # the string's block; whether a string joins it
     for token in tokenize.generate_tokens(io.StringIO(text).readline):
-        row = token.start[0]
-        if token.type == tokenize.COMMENT:
+        kind, (row, column) = token.type, token.start
+        if kind == tokenize.COMMENT:
             line = plain(token.string.lstrip("#").replace('\\"', '"').strip(), {})
-            if not line:
-                continue  # and the next comment starts a run
-            if last != row - 1:
-                found.append([])
-            found[-1].append((row, line))
-            last = row
-        elif token.type not in LAYOUT:
-            last = None
-            if token.type in STRINGS:
-                m = STRING.fullmatch(token.string)
-                found.append([])
-                for k, line in enumerate((m.group(2) if m else token.string).split("\n")):
-                    line = plain(line.replace('\\"', '"').strip(), {})
-                    if line:
-                        found[-1].append((row + k, line))
-                    else:
-                        found.append([])
+            if line and comment and comment[:2] == (row - 1, column):
+                comment[2].append((row, line))
+                comment = row, column, comment[2]
+            elif line:
+                found.append([(row, line)])
+                comment = row, column, found[-1]
+        if kind in (tokenize.STRING, FSTRING_START) and not joins:
+            string = []
+            found.append(string)
+        if kind in (tokenize.STRING, FSTRING_MIDDLE):
+            m = kind == tokenize.STRING and STRING.fullmatch(token.string)
+            for k, line in enumerate((m.group(2) if m else token.string).split("\n")):
+                line = plain(line.replace('\\"', '"').strip(), {})
+                if line:
+                    string.append((row + k, line))
+                else:
+                    string = []
+                    found.append(string)
+        joins = kind in (tokenize.STRING, FSTRING_END) or (
+            joins and kind in (tokenize.NL, tokenize.COMMENT))
     return [block for block in found if block]
 
 
