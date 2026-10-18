@@ -169,7 +169,7 @@ client_args() { # CASE PROTO: the client's arguments but --port and --pid; sets 
         ;;
     slow-mix | stop)
         args+=(--path /plaintext --expect-text 'Hello, World!' --slow-path /slow/20 --slow-every 200)
-        [[ $1 == stop ]] && args+=(--term-at 1000)
+        if [[ $1 == stop ]]; then args+=(--term-at 1000); fi
         ;;
     overload) args+=(--path /slow/2 --expect-text slow) ;;
     esac
