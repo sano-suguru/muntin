@@ -5,7 +5,7 @@
 # `CreateUser` is defined here, as an application's request body would be; the
 # conversion machinery lives in tests/extraction_spike.mojo, which does not
 # import this module. Decision: docs/history/architecture-decisions.md,
-# "Argument extraction decision".
+# "Argument extraction decision (M2-005)".
 
 from std.testing import assert_equal, TestSuite
 

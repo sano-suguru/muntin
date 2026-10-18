@@ -20,9 +20,9 @@ from muntin import (
 )
 
 
-# docs/reference/route-values.md, "Application route values": the text
-# between the `# example:` lines is what the page shows
-# (scripts/check_doc_examples.py).
+# docs/reference/route-values.md, "Application route values
+# (`FromRouteValue`)": the text between the `# example:` lines is what the
+# page shows (scripts/check_doc_examples.py).
 
 
 # fmt: off
