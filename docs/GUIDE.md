@@ -93,10 +93,8 @@ struct User(ToJson):
 
     def write_json(self, mut out: JsonWriter) raises:  # raise -> fixed 500, not the handler's error
         out.begin_object()
-        out.name("id")
-        out.int(self.id)
-        out.name("name")
-        out.string(self.name)
+        out.field("id", self.id)
+        out.field("name", self.name)
         out.end_object()
 
 
@@ -110,7 +108,7 @@ app.post["/users"](create_user)
 # Content-Type missing -> 415; a body over 1 MiB -> 413; malformed JSON -> 400
 ```
 
-- Fields are mapped by hand in `from_json` and `write_json`; there is no derived codec.
+- Fields are mapped by hand in `from_json` and `write_json` (`out.field`: [writing a `ToJson` type](reference/responses.md#writing-a-tojson-type)); there is no derived codec.
 - Other bodies: a `FromBody` type parses text itself, with no Muntin size limit (`Json[T]` keeps its 1 MiB one); a `FromBytes` type receives the bytes, and its `comptime max_bytes` is its size limit (a longer body is 413), required unless a refining trait gives a default.
 - A handler that also needs header fields takes `WithHeaders[B]` instead of `B`. **Muntin gives header fields no meaning**: a missing field is `None`, and the handler decides the status. Only a `Json[T]` body's `Content-Type` (415) is checked before the handler.
 - A handler with only route values, and at most one `Headers` last, on `post`, `put` or `patch` is bodyless: the body is not read.

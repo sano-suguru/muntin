@@ -789,10 +789,8 @@ struct User(ToJson):
 
     def write_json(self, mut out: JsonWriter) raises:
         out.begin_object()
-        out.name("id")
-        out.int(self.id)
-        out.name("name")
-        out.string(self.name)
+        out.field("id", self.id)
+        out.field("name", self.name)
         out.end_object()
 
 

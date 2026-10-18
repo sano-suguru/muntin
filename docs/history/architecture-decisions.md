@@ -87,6 +87,7 @@ Earlier records include production records written before that rule; they stay a
 | <a id="handler-execution-model-decision-m3-071"></a>[Handler execution model decision (M3-071)](decisions/m3-071-handler-execution-model-decision.md) | Current | [ARCHITECTURE, "Backend seam"](../ARCHITECTURE.md#backend-seam) |
 | <a id="request-host-decision-m3-073"></a>[Request Host decision (M3-073)](decisions/m3-073-request-host-decision.md) | Current | [headers reference, "Through the Flare adapter"](../reference/headers.md#through-the-flare-adapter) |
 | <a id="state-borrowing-decision-m3-074"></a>[State borrowing decision (M3-074)](decisions/m3-074-state-borrowing-decision.md) | Current | [state reference, "Rules"](../reference/state.md#rules) |
+| <a id="json-writer-members-decision-m3-075"></a>[JSON writer members decision (M3-075)](decisions/m3-075-json-writer-members-decision.md) | Current | [responses reference, "Writing a `ToJson` type"](../reference/responses.md#writing-a-tojson-type) |
 
 ## Documents older records cite
 
