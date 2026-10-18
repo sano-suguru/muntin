@@ -60,18 +60,24 @@ State goes first so the body stays last. Access is `state[]` because a struct ca
 
 ## Which state types compile
 
+The rule reads the type's full name, not who owns the data: it refuses `State(value)` exactly when that name, which the refusal prints, contains `{}`. The table lists only the types the named tests and fixtures try; read any other type by its name.
+
 | `S`, the type of `State(value)`'s value | Compiles | Pinned by |
 |---|---|---|
-| A struct whose fields own their data, a `StaticString` field included | yes | `tests/test_state.mojo` (`test_owned_state_types_register`) |
-| `List[String]`, `Dict[String, Int]`, `ArcPointer[T]` | yes | the same test |
-| A struct with an `Int`, a struct value or a function as a parameter | yes | the same test |
-| A `Tuple` or a `Variant` in a field of the application's own struct | yes | `tests/test_state.mojo` (`test_owned_values_in_a_wrapper_register`) |
-| A type with an origin parameter: a view of a local, mutable or not, `ImmutAnyOrigin`, `StaticString` | no | `tests/state_fail/state_origin_*.mojo` |
-| An origin inside a type argument (`Box[View[o]]`, `Tuple[View[o]]`, `Variant[View[o]]`) or a closure that captures by reference | no | the same fixtures |
-| A parameter pack as the whole state, even an owned one: `Tuple(1, String("a"))` (and `Variant[Int, String]`, `List[Tuple[...]]`) | no | `tests/state_fail/state_pack_tuple.mojo` |
-| A pointer built with `AnyOrigin` behind a trait's associated type | **yes, and it can read freed memory** | `tests/state_known_gaps/state_any_origin_associated_type.mojo` |
+| `List[String]`, `Dict[String, Int]`, `ArcPointer[Users]` (`Users`, a struct of owned fields) | yes | `tests/test_state.mojo` (`test_owned_state_types_register`) |
+| A struct with a `StaticString` field (`Label`) | yes | the same test |
+| A struct with an `Int` parameter (`Sized[3]`), a struct value with a field as a parameter (`Tuned[Mode.FAST]`), or a function as a parameter (`Computed[five]`) | yes | the same test |
+| A non-generic struct with a `Tuple[Int, String]` or `Variant[Int, String]` field (`Pair`, `Choice`) | yes | `tests/test_state.mojo` (`test_owned_values_in_a_wrapper_register`) |
+| An origin parameter: a view of a local, mutable or not, `ImmutAnyOrigin`, `StaticString` | no | `tests/state_fail/state_origin_*.mojo` |
+| An origin or a pack inside a type argument, owned or not: `Box[View[o]]`, `Tuple[View[o]]`, `Variant[View[o]]`, `ArcPointer[StaticString]`, `Box[Tuple[Int, String]]` | no | those fixtures and `tests/state_fail/state_pack_in_type_argument.mojo` |
+| A closure that captures by reference | no | `tests/state_fail/state_origin_closure.mojo` |
+| A pack as the whole state, even an owned one: `Tuple(1, String("a"))` | no | `tests/state_fail/state_pack_tuple.mojo` |
+| A struct value with no fields as a parameter (`Config[Flag()]`, printed `Config[{}]`) | no | `tests/state_fail/state_empty_struct_parameter.mojo` |
+| A pointer built with `AnyOrigin` behind a trait's associated type | **yes, and it reads freed memory** | `tests/state_known_gaps/state_any_origin_associated_type.mojo` |
 
-The rule is a measure for the current toolchain, not a lasting guarantee: it searches the type's name as Mojo 1.1.0 prints it (`reflect[S].name()`) for `{}`, the text of every origin and of a parameter pack, an undocumented format, because Mojo has no origin bound that generic code can state. If Mojo stops printing an origin that way, the refused fixtures above build and `./scripts/check.sh` fails; the conditions for replacing the rule are [M3-074](../history/decisions/m3-074-state-borrowing-decision.md)'s "Revisit when".
+So the migration for a refused owned value is a field whose type is written out in a non-generic struct of the application's own (`Pair`), not a generic wrapper (`Box[Tuple[...]]`).
+
+The rule is a measure for the current toolchain, not a lasting guarantee and not memory safety: it searches the name as Mojo 1.1.0 prints it (`reflect[S].name()`) for `{}`, the text of every origin, of a parameter pack and of a struct value with no fields, an undocumented format, because Mojo has no origin bound that generic code can state. The last row shows a state that passes it and reads freed memory. If Mojo stops printing an origin that way, the refused fixtures above build and `./scripts/check.sh` fails; the conditions for replacing the rule are [M3-074](../history/decisions/m3-074-state-borrowing-decision.md)'s "Revisit when".
 
 ## `post`, `put` and `patch`
 
