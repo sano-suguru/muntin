@@ -232,6 +232,20 @@ CASES = [
                       "Or docs/GUIDE.md\n```\n```\n\"Stop\".\n"),
         "docs/GUIDE.md": "# Guide\n\n## Start\n\n```\ndocs/GUIDE.md, \"Stop\"\n```\n",
     }, None),
+    ("a URL to a Markdown file, then a quote", {
+        "docs/GUIDE.md": ("# Guide\n\n## Start\n\nSee [upstream](https://example.com/GUIDE.md),"
+                          " \"Start\", <https://example.com/a?b=docs/GUIDE.md>, \"Stop\" and"
+                          " https://example.com/x/docs/GUIDE.md \"Stop\".\n"),
+        "src/muntin/app.mojo": ("# See [upstream](https://example.com/GUIDE.md), \"Stop\", and"
+                                " https://example.com/docs/GUIDE.md, \"Stop\".\n"),
+    }, None),
+    ("a citation through a link in code of a missing heading", {
+        "src/muntin/app.mojo": "# See [guide](docs/GUIDE.md), \"Gone\".\n",
+    }, ['error: src/muntin/app.mojo:1: "Gone": no such heading in docs/GUIDE.md']),
+    ("a link's title, in code and in a document", {
+        "src/muntin/app.mojo": "# See [guide](docs/GUIDE.md \"Guide documentation\").\n",
+        "README.md": "# Readme\n\nSee [guide](docs/GUIDE.md \"Guide documentation\").\n",
+    }, None),
     ("a decision record's citation of an old heading", {
         "docs/history/decisions/m3-001-application-state-decision.md": (
             "# Record\n\nSee `docs/GUIDE.md`, \"Stop\".\n"),

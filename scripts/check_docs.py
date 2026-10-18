@@ -456,8 +456,7 @@ def check_paths(errors):
 # not) or by a link to it, followed by a quoted heading (`, "Heading"`,
 # ` ("Heading"` or ` "Heading"`, starting on that line or the next and over
 # at most two lines) or by `section 7` (`sections 6 and 7`). It is read in
-# text where backticks are dropped and each link is replaced by its
-# destination, so the three ways to name the file are one.
+# plain text (plain), the same for a document and a code comment.
 SEP = r"[ \t]*\n?[ \t]*"  # spaces, and at most one line break
 CITATION = re.compile(
     r"(?<![\w./\"'-])([\w./-]+\.md)(?:#[\w-]*)?(?=[,\s(])"
@@ -465,10 +464,19 @@ CITATION = re.compile(
     rf"|sections?{SEP}(\d+(?:(?:,|,?{SEP}(?:and|or)){SEP}\d+)*))"
 )
 ANY_LINK = re.compile(r"\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+URL = re.compile(r"\b[A-Za-z][\w+.-]*://[^\s<>\"'`]*")
 COMMENT = re.compile(r"\s*(?:#+|//+)?\s*")
 NUMBERED = re.compile(r"(\d+)\.\s+(.*)")
 
 SECTIONS = {}
+
+
+def plain(line):
+    """A line as CITATION reads it: each link replaced by its destination
+    (its title dropped), each URL by a word that is no path, and backticks
+    dropped; so a path, a path in backticks and a link name a file alike,
+    and a URL never names one."""
+    return URL.sub("URL", ANY_LINK.sub(r"\1", line)).replace("`", "")
 
 
 def sections(path):
@@ -501,14 +509,14 @@ def check_citations(errors):
         for n, line in Scan(path.read_text()).prose:
             if last is not None and n != last + 1:
                 lines.append((n, ""))  # a gap: no citation spans it
-            lines.append((n, ANY_LINK.sub(r"\1", line).replace("`", "").strip()))
+            lines.append((n, plain(line).strip()))
             last = n
         sources.append((path, lines))
     for path in files(CODE_SUFFIXES):
         if path.name.startswith("test_check_"):
             continue  # its fixtures name documents of a scratch repository
         sources.append((path, [
-            (n, COMMENT.sub("", line, count=1).replace('\\"', '"').replace("`", ""))
+            (n, plain(COMMENT.sub("", line, count=1).replace('\\"', '"')))
             for n, line in enumerate(path.read_text().split("\n"), 1)
         ]))
     for path, lines in sources:
