@@ -9,8 +9,8 @@ the median over the rounds of the ok answers per second, their latency
 percentiles, the server's CPU time per ok answer and its peak resident
 memory. `flare/muntin` is the median of the rounds' ratios of ok answers
 per second, with the smallest and the largest. A row marked `†` had answers
-that were not ok: its rate is not a throughput comparison, read it with
-the counts beside it. Stop runs get their own table: before and after the
+that were not ok, stray bytes or frames after a stream's end: its rate is
+not a throughput comparison, read it with the counts beside it. Stop runs get their own table: before and after the
 signal, and when the server ended."""
 
 import statistics
@@ -77,7 +77,7 @@ def main():
                 if not rows:
                     continue
                 counts = [total(rows, k) for k in OUT]
-                bad = "†" if any(counts[2:]) else ""
+                bad = "†" if any(counts[2:]) or total(rows, "stray") or total(rows, "after_end") else ""
                 print(f"| {key[1]} | {key[2]} | {impl} | " + " | ".join(f"{c:,}" for c in counts)
                       + f" | {fmt(med(rows, 'ok_per_s'))}{bad} | {fmt(med(rows, 'p50_us'), 1000, 2)}"
                       f" | {fmt(med(rows, 'p99_us'), 1000, 2)} | {fmt(med(rows, 'srv_cpu_us_per_ok'), 1, 1)}"
@@ -116,7 +116,9 @@ def main():
                           f" | {total(rows, 'connect_failed'):,} | {', '.join(exits)} |")
     warm = sum(int(r["warmup_bad"]) for r in runs)
     stray = sum(int(r["stray"]) for r in runs)
-    print(f"\nWarm-up requests not ok, all runs: {warm:,}. Connections with stray bytes: {stray:,}.")
+    after_end = sum(int(r["after_end"]) for r in runs)
+    print(f"\nWarm-up requests not ok, all runs: {warm:,}. Connections with stray bytes: {stray:,}."
+          f" Frames on a stream the server had ended: {after_end:,}.")
     reasons = defaultdict(int)
     for r in runs:
         for key in ("invalid_as", "disconnected_as", "status_as"):

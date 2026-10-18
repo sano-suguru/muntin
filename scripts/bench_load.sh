@@ -35,7 +35,7 @@
 #   when the server ended.
 #
 # CPUs: the allowed CPUs (at least 4) are split in two; the first half runs
-# the servers, the second the client, one thread per CPU.
+# the servers, the second the client, one thread per CPU but no more than its connections.
 #
 # Settings, from the environment:
 #   ROUNDS    rounds (default 3)
@@ -149,12 +149,15 @@ client_args() { # CASE PROTO: the client's arguments but --port and --pid; sets 
     mw=0
     [[ $1 == stop ]] && dur=8
     [[ $1 == plaintext-bare ]] && headers=none
-    args=(--proto "$proto" --threads "$threads" --warmup "$warmup" --duration "$dur" --headers "$headers")
+    local conns=64 streams=1
     case $1 in
-    echo-1m) args+=(--conns 4) ;;
-    overload) if [[ $proto == h1 ]]; then args+=(--conns 1024); else args+=(--conns 64 --streams 16); fi ;;
-    *) if [[ $proto == h1 ]]; then args+=(--conns 64); else args+=(--conns 8 --streams 8); fi ;;
+    echo-1m) conns=4 ;;
+    overload) if [[ $proto == h1 ]]; then conns=1024; else conns=64 streams=16; fi ;;
+    *) if [[ $proto == h2c ]]; then conns=8 streams=8; fi ;;
     esac
+    # The client refuses more threads than connections.
+    args=(--proto "$proto" --threads "$((threads < conns ? threads : conns))" --conns "$conns" --streams "$streams"
+        --warmup "$warmup" --duration "$dur" --headers "$headers")
     case $1 in
     plaintext-bare | plaintext) args+=(--path /plaintext --expect-text 'Hello, World!') ;;
     json-get) args+=(--path /json --expect-text '{"message":"Hello, World!"}') ;;
