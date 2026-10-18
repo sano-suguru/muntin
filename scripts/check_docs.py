@@ -23,8 +23,9 @@
    UNCHECKED_CITATIONS and in every code, script or CI file. A block is a
    paragraph, heading or table row of a document, its inline Markdown read
    as CommonMark reads it; in Python and Mojo, a run of comments in one
-   column or a string (adjacent ones Python joins as one), read by
-   tokenize; elsewhere, a run of comment lines or a line (blocks). A quote
+   column, or a string read as the value Python makes of it (adjacent
+   literals joined, escapes decoded); elsewhere, a run of comment lines or
+   a line (blocks). A quote
    right after a path is read as a heading, so quote other text elsewhere
    in the sentence.
 
@@ -32,6 +33,7 @@ Standard library only: python3 -I scripts/check_docs.py [ROOT], where ROOT
 (the repository by default) is for scripts/test_check_docs.py.
 """
 
+import ast
 import io
 import os
 import pathlib
@@ -39,6 +41,7 @@ import re
 import string
 import sys
 import tokenize
+import warnings
 
 ROOT = (
     pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1
@@ -600,19 +603,22 @@ def link(line, i, labels):
 
 
 def holds_link(text, labels):
-    """Whether text holds a link; an image ("![alt](src)") is none."""
-    i, image = 0, False
+    """Whether text holds a link; an image ("![alt](src)", "![alt][label]")
+    is none."""
+    i = 0
     while i < len(text):
         c = text[i]
         if c == "\\" and text[i + 1:i + 2] in PUNCTUATION:
-            i, image = i + 2, False
-            continue
-        if c == "`":
-            i, image = code_span(text, i)[0], False
-            continue
-        if c == "[" and not image and link(text, i, labels):
+            i += 2
+        elif c == "`":
+            i = code_span(text, i)[0]
+        elif c == "!" and text[i + 1:i + 2] == "[":
+            image = link(text, i + 1, labels)  # its label is no link
+            i = image[1] if image else i + 1
+        elif c == "[" and link(text, i, labels):
             return True
-        i, image = i + 1, c == "!"
+        else:
+            i += 1
     return False
 
 
@@ -660,23 +666,69 @@ def line_blocks(text):
     return found
 
 
-STRING = re.compile(r"[A-Za-z]*('''|\"\"\"|'|\")(.*)\1", re.S)
-FSTRING_START, FSTRING_MIDDLE, FSTRING_END = (
-    getattr(tokenize, name, None) for name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"))
+FSTRING_START, FSTRING_END = (getattr(tokenize, name, None)
+                              for name in ("FSTRING_START", "FSTRING_END"))
+
+
+def string_value(source):
+    """The string Python makes of source, one or more adjacent literals:
+    joined, escapes decoded, and an f-string's fields each "{}"; or, if
+    Python cannot read it (as a Mojo literal it does not know), the
+    source."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # an invalid escape is no error here
+            node = ast.parse("(" + source + "\n)", mode="eval").body
+    except SyntaxError:
+        node = None
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Constant) and isinstance(node.value, bytes):
+        return node.value.decode("latin-1")
+    if isinstance(node, ast.JoinedStr):
+        return "".join(part.value if isinstance(part, ast.Constant) else "{}"
+                       for part in node.values)
+    return source
 
 
 def token_blocks(text):
     """The blocks of a Python or Mojo file read by tokenize: each run of
     comments on consecutive lines in one column (so in one scope), up to an
-    empty one; and each string, the adjacent strings Python joins ("a" "b",
-    with only line breaks and comments between) as one, up to a blank line.
-    Code is not read."""
+    empty one; and each string, as the value Python makes of it (adjacent
+    literals joined, as "a" "b" is "ab": string_value), up to a blank line,
+    each line numbered from the string's first. Code is not read."""
+    offsets = [0]
+    for line in text.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
     found = []
     comment = None  # the run a comment may continue: (row, column, block)
-    string, joins = None, False  # the string's block; whether a string joins it
+    string = None  # where the adjacent literals start and end, as (row, column)
+    depth = 0  # how many f-strings the token is in
+
+    def read(string):
+        (row, column), (end_row, end_column) = string
+        value = string_value(text[offsets[row - 1] + column:offsets[end_row - 1] + end_column])
+        found.append([])
+        for k, line in enumerate(value.split("\n")):
+            line = plain(line.strip(), {})
+            if line:
+                found[-1].append((row + k, line))
+            else:
+                found.append([])
+
     for token in tokenize.generate_tokens(io.StringIO(text).readline):
-        kind, (row, column) = token.type, token.start
-        if kind == tokenize.COMMENT:
+        kind, (row, column), literal = token.type, token.start, None
+        if kind == FSTRING_START:
+            depth += 1
+            begin = token.start if depth == 1 else begin
+        elif kind == FSTRING_END:
+            depth -= 1
+            literal = None if depth else (begin, token.end)
+        elif depth:
+            pass
+        elif kind == tokenize.STRING:
+            literal = token.start, token.end
+        elif kind == tokenize.COMMENT:
             line = plain(token.string.lstrip("#").replace('\\"', '"').strip(), {})
             if line and comment and comment[:2] == (row - 1, column):
                 comment[2].append((row, line))
@@ -684,20 +736,11 @@ def token_blocks(text):
             elif line:
                 found.append([(row, line)])
                 comment = row, column, found[-1]
-        if kind in (tokenize.STRING, FSTRING_START) and not joins:
-            string = []
-            found.append(string)
-        if kind in (tokenize.STRING, FSTRING_MIDDLE):
-            m = kind == tokenize.STRING and STRING.fullmatch(token.string)
-            for k, line in enumerate((m.group(2) if m else token.string).split("\n")):
-                line = plain(line.replace('\\"', '"').strip(), {})
-                if line:
-                    string.append((row + k, line))
-                else:
-                    string = []
-                    found.append(string)
-        joins = kind in (tokenize.STRING, FSTRING_END) or (
-            joins and kind in (tokenize.NL, tokenize.COMMENT))
+        elif kind != tokenize.NL and string:  # ENDMARKER ends the last
+            read(string)  # only line breaks and comments may stand between
+            string = None
+        if literal:
+            string = (string[0] if string else literal[0]), literal[1]
     return [block for block in found if block]
 
 

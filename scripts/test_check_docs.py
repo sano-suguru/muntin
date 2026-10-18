@@ -329,14 +329,27 @@ CASES = [
     }, ['error: scripts/x.py:2: "Stop": no such heading in docs/GUIDE.md',
         'error: scripts/x.py:5: "Gone": no such heading in docs/GUIDE.md',
         'error: scripts/x.py:7: "Here": no such heading in docs/GUIDE.md']),
-    ("a link in a link's text, and an image", {
+    ("citations in strings, read as the values Python makes", {
+        "scripts/x.py": ('a = ("docs/GUIDE.md" \'"Stop"\')\n'
+                         'b = (\n    "docs/GUIDE.md"\n    " "\n    \'"Gone"\'\n)\n'
+                         'c = "See docs/GUIDE.md,\\n\\"Here\\""\n'
+                         'd = "\\N{NO SUCH NAME} docs/GUIDE.md, \\"Away\\""\n'
+                         'e = b"See docs/GUIDE.md, \\"There\\"" + "\\d"\n'
+                         'f = f"See docs/{name}.md, \\"Stop\\""\n'),
+    }, ['error: scripts/x.py:3: "Gone": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:7: "Here": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:8: "Away": no such heading in docs/GUIDE.md',
+        'error: scripts/x.py:9: "There": no such heading in docs/GUIDE.md']),
+    ("a link in a link's text, and images", {
         "elsewhere.md": "# Elsewhere\n",
         "README.md": ("# Readme\n\nSee [outer [inner](docs/GUIDE.md)](elsewhere.md), \"Stop\","
                       " [a [doc] b](elsewhere.md), \"Stop\", [\\![doc] b](docs/GUIDE.md), \"Stop\","
                       " [![badge](https://example.com/b.png)](docs/GUIDE.md), \"Gone\" and"
-                      " [a `[doc]` b](docs/GUIDE.md), \"Away\".\n\n[doc]: docs/GUIDE.md\n"),
+                      " [a `[doc]` b](docs/GUIDE.md), \"Away\", and [outer ![badge][img]](docs/GUIDE.md),"
+                      " \"There\".\n\n[doc]: docs/GUIDE.md\n[img]: https://example.com/badge.png\n"),
     }, ['error: README.md:3: "Gone": no such heading in docs/GUIDE.md',
-        'error: README.md:3: "Away": no such heading in docs/GUIDE.md']),
+        'error: README.md:3: "Away": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "There": no such heading in docs/GUIDE.md']),
     ("a citation at the start of a string of a missing heading", {
         "scripts/check.sh": "echo \"docs/GUIDE.md, \\\"Stop\\\"\"\n",
     }, ['error: scripts/check.sh:1: "Stop": no such heading in docs/GUIDE.md']),
