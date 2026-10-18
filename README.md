@@ -2,7 +2,29 @@
 
 Muntin is a typed application layer for building web services in Mojo. Your handlers depend on Muntin, not on Flare or another networking runtime.
 
-Muntin is pre-alpha and its public API is still changing. Today it is for building and testing typed web application logic: applications run in memory through `TestClient`, and the Flare adapter's `Server` serves one over HTTP or HTTPS, with an IP-literal host. On SIGTERM or SIGINT it stops taking connections and serves the open ones for a grace window; it does not cancel or notify running handlers, and if the server has not stopped one second after the window, it ends the whole process without cleanup. It is not production-ready.
+**Pre-alpha and not production-ready:** the public API is still changing.
+
+## What it is for today
+
+- **Use it for** short synchronous HTTP APIs, such as ones calling existing Mojo code, and for testing typed application logic in memory with `TestClient`.
+- **Avoid** long computations inside a handler. Handlers run one at a time per worker thread: while one runs, its worker answers nothing else, on any connection or h2c stream, and requests waiting on kept-open connections can be closed unanswered once it returns, past `idle_timeout_ms`. Run long work outside the server process, and let the handler hand it off ([serving](docs/reference/serving.md#one-request-at-a-time)).
+- **Works today:** typed routes and route values, JSON and binary bodies, typed results and errors, shared read-only state, header fields, middleware functions, raw `Request -> Response` handlers, in-memory testing, and serving over HTTP/1.1, h2c or HTTPS from an IP-literal host, on one or several worker threads, with a graceful stop.
+- **Serious limits:**
+  - A stop does not cancel or notify running handlers; if the server has not stopped one second after its grace window, the process ends without cleanup ([stopping](docs/reference/serving.md#stopping)).
+  - Middleware is configured at compile time and runs on every request; no typed request-scoped value, such as an authenticated user, passes from middleware to a handler (a middleware can only change the request).
+  - JSON fields are mapped by hand, so a misspelled key compiles; a decimal read as `Float64` can be 1 ulp off, and a written one may not read back the same ([JSON](docs/reference/bodies.md#json-jsont)). Route values bind by position; names are checked only through `Param` and `RouteValues` ([route values](docs/reference/route-values.md)).
+  - `State` judges whether a type may borrow by reading its name: it refuses some owned types (`Tuple`, `Variant`), and a type hiding `AnyOrigin` behind an associated type passes, letting a handler read freed memory in safe code ([state](docs/reference/state.md)).
+  - Not built: streaming, cancellation, OpenAPI, CORS preflight, logging, metrics, tracing ([candidates](docs/SPEC.md#remaining-candidates)).
+  - Flare is the only network backend. Application code is kept apart from it, but a move to another backend is untested, and serving (`Server`, its settings, workers, stop) would be rewritten ([backend seam](docs/reference/testing.md#the-backend-seam)).
+  - No performance figures for the current code: what Muntin adds over Flare was measured on earlier revisions (pull requests #114, #125 and #136).
+- **Verified with** Mojo 1.1.0 (8189361e) and Flare v0.12.0, on Linux and macOS, by CI on each pull request that changes code (tests, the transport boundary, unsafe confinement, compile errors, the adapter over loopback). CI does not run the AddressSanitizer check of Muntin's unsafe storage ([verification](docs/DEVELOPMENT.md#3-verify-with-the-strongest-available-oracle)). To reproduce CI's checks after installing [pixi](https://pixi.sh):
+
+```sh
+pixi install
+./scripts/check.sh && ./scripts/test.sh && ./scripts/check_flare.sh
+```
+
+## A first application
 
 <!-- example: tests/test_guide.mojo#first-application first_application=main -->
 ```mojo
@@ -71,19 +93,9 @@ application code
   in memory         over HTTP (Server)
 ```
 
-Your handlers and routes stay independent of Flare or any other networking runtime, and Muntin adds no executor or async runtime that application code must adopt. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Your handlers and routes import nothing from Flare, and Muntin adds no executor or async runtime that application code must adopt. That a second backend could replace Flare is a design aim, not a demonstrated fact (above). Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 The name comes from the window: a muntin is the narrow bar that divides and supports the panes. It holds the structure together without being what you look at.
-
-## Kept honest by CI
-
-CI enforces the transport boundary, unsafe-code confinement and the documented compile errors, and exercises the Flare adapter over a real loopback connection on Ubuntu and macOS.
-
-## Status
-
-- **Today:** typed routing, typed request bodies and results (including JSON and binary bodies), application errors, shared application state, headers, middleware functions (`app.use`), and a raw `Request -> Response` escape hatch.
-- **Serving:** the Flare adapter's `Server` serves an `App` over cleartext HTTP/1.1 and h2c, or over HTTPS with `tls=Tls(cert_file=..., key_file=...)`, on one thread or on several workers with one `App` each, from an IP-literal host, and on SIGTERM or SIGINT serves the open connections for a grace window, then returns, or ends the process if it has not stopped one second later (no handler is cancelled or notified). Its settings and limits: [`docs/reference/serving.md`](docs/reference/serving.md).
-- **Not yet:** see [`docs/SPEC.md`](docs/SPEC.md), "Remaining candidates".
 
 ## Try it
 
@@ -133,7 +145,7 @@ workspace/
     └── app.mojo
 ```
 
-`myapp/pixi.toml` needs Muntin's channels and Mojo, in the range Muntin's own `pixi.toml` declares (Muntin is checked only with the toolchain named under [Development](#development); your `pixi.lock` records the version you get):
+`myapp/pixi.toml` needs Muntin's channels and Mojo, in the range Muntin's own `pixi.toml` declares (Muntin is checked only with the toolchain named under [What it is for today](#what-it-is-for-today); your `pixi.lock` records the version you get):
 
 ```toml
 [workspace]
@@ -177,7 +189,7 @@ pixi run mojo run -I ../muntin/src -I ../muntin/adapters/flare app.mojo
 
 ## Development
 
-Toolchain: **Mojo 1.1.0 (8189361e)**, managed by pixi and pinned in `pixi.lock`. After `pixi install`, `./scripts/check.sh`, `./scripts/test.sh` and `./scripts/check_flare.sh` are the checks CI runs; what each covers and how to work on Muntin: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). `pixi run format` formats sources.
+The toolchain is managed by pixi and pinned in `pixi.lock`. What each check script covers and how to work on Muntin: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). `pixi run format` formats sources.
 
 ## License
 
