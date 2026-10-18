@@ -119,6 +119,45 @@ CASES = [
     ("a link to a paragraph that a code block separates from a rule", {
         "docs/GUIDE.md": "# Guide\n\n## Start\n\n[a](#text)\n\nText\n```\ncode\n```\n---\n",
     }, 'no heading or id "text"'),
+    ("a quote marker inside a top-level fence", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n```text\n> ```\n[x](gone.md)\n```\n",
+    }, None),
+    ("a fence inside a block quote, closed inside it", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n> ```\n> [x](gone.md)\n> ```\n",
+    }, None),
+    ("a link after a quote that ends with its fence still open", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n> ```\n> code\n\n[x](gone.md)\n",
+    }, "gone.md: no such file"),
+    ("a link-like line in indented code", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n    [x](gone.md)\n",
+    }, None),
+    ("a link to a setext heading in a list item", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[x](#usage)\n\n- Usage\n  -----\n",
+    }, None),
+    ("a link to text above a quoted rule", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[x](#usage)\n\nUsage\n> -----\n",
+    }, 'no heading or id "usage"'),
+    ("a link to quoted text above an unquoted rule", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[x](#usage)\n\n> Usage\n-----\n",
+    }, 'no heading or id "usage"'),
+    ("a reference definition with its destination on the next line", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[x][g]\n[g]:\n  gone.md\n",
+    }, "GUIDE.md:7: gone.md: no such file"),
+    ("an HTML comment above a fence", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n<!-- note -->\n```\n[x](gone.md)\n```\n",
+    }, None),
+    ("a link to a quoted setext heading with a lazy line", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[x](#usage-continued)\n\n> Usage\ncontinued\n> -----\n",
+    }, None),
+    ("a link to a heading just after a list", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n[x](#usage)\n\n- item\n\nUsage\n  -----\n",
+    }, None),
+    ("a link after a comment of several lines", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n<!--\nnote\n-->\n[x](gone.md)\n",
+    }, "gone.md: no such file"),
+    ("a fence in a list item across a blank line", {
+        "docs/GUIDE.md": "# Guide\n\n## Start\n\n- ```\n  code\n\n  [x](gone.md)\n  ```\n",
+    }, None),
     ("the guide at its budget", {
         "docs/GUIDE.md": "# Guide\n\n## Start\n".ljust(20 * 1024, "x"),
     }, None),

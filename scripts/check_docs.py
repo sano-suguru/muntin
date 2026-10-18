@@ -8,9 +8,10 @@
    where it grew, raise that budget in the same pull request and say why.
 2. Every relative link in a Markdown file, inline or a reference
    definition, names a file that exists, and its #anchor a heading (ATX or
-   setext, in a block quote or list item too) or an id="..." in that file.
-   Fenced code is skipped, closing only at its own closing fence, and a
-   fence that never closes is an error. External links are not fetched.
+   setext) or an id="..." in that file. Lines are read through the block
+   quotes and list items they belong to (Scan); code, fenced or indented,
+   and HTML blocks are skipped, and a fence that never closes is an error.
+   External links are not fetched.
 3. Every repository path in backticks in the current documents (not
    docs/history/, which may cite removed files), and every docs/....md path
    named in a code, script or CI file, exists; a checker's own test
@@ -138,23 +139,7 @@ production-verification-policy-decision
 CURRENT_DOCS = ["README.md", "AGENTS.md", "docs/*.md", "docs/reference/*.md"]
 CODE_SUFFIXES = {".mojo", ".py", ".sh", ".yml", ".yaml", ".toml"}
 
-# What may come before a block on its line: indentation and the markers of
-# block quotes and list items (as in scripts/check_doc_examples.py).
-CONTAINER = r"(?:[ \t>]|[-*+][ \t]|\d{1,9}[.)][ \t])*"
-QUOTE = re.compile(r"^(?:[ \t]*>)*[ \t]*")
-# An opening fence, as CommonMark has it: three or more backticks (with no
-# backtick in its info string) or tildes. It closes only at a line of the
-# same character, at least as long, and nothing else.
-FENCE = re.compile(CONTAINER + r"(`{3,}(?=[^`]*$)|~{3,})")
-ATX = re.compile(CONTAINER + r"#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
-SETEXT = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
-# Lines that start a block other than a paragraph, so no setext underline
-# can follow them: list items, tables, HTML, thematic breaks.
-NOT_PARAGRAPH = re.compile(r"^ {0,3}(?:[-*+][ \t]|\d{1,9}[.)][ \t]|\||<|(?:[-*_][ \t]*){3,}$)")
 LINK = re.compile(r"\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
-# A link reference definition, "[label]: destination"; "[^1]: ..." is a
-# footnote, not a link.
-REFERENCE = re.compile(r"^(?:[ \t]*>)*[ \t]{0,3}\[(?!\^)(?:[^\]\\]|\\.)+\]:[ \t]*<?([^\s>]+)>?")
 CODE_SPAN = re.compile(r"(`+)(.+?)\1")
 ID_ATTR = re.compile(r"""\bid=["']([^"']+)["']""")
 PATH_SPAN = re.compile(
@@ -174,45 +159,157 @@ def files(suffixes):
                 yield pathlib.Path(top) / name
 
 
-def prose(text):
-    """Returns the (line number, line) pairs outside fenced code, and the
-    line number of a fence left open at the end (None if every fence
-    closes)."""
-    lines, close, opened = [], None, None
-    for n, line in enumerate(text.split("\n"), 1):
-        if close:
-            if close.match(line):
-                close = None
-            continue
-        m = FENCE.match(line)
-        if m:
-            fence = m.group(1)
-            close = re.compile(CONTAINER + re.escape(fence[0]) + "{%d,}[ \\t]*$" % len(fence))
-            opened = n
-            continue
-        lines.append((n, line))
-    return lines, opened if close else None
+# The block structure CommonMark gives a Markdown file, as far as this check
+# needs it: which lines are text and which are code, the headings, and the
+# link reference definitions. Each line is read through the block quotes and
+# list items still open above it, so a marker inside code, or one across a
+# quote's edge, is not taken for structure.
+QUOTE = re.compile(r" {0,3}> ?")
+ITEM = re.compile(r"( {0,3})([-*+]|\d{1,9}[.)])( *)(.*)$")
+FENCE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
+ATX = re.compile(r" {0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*$")
+BREAK = re.compile(r" {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
+HTML = re.compile(r" {0,3}<[A-Za-z/!?]")
+# "[label]: destination", the destination on this line or the next; a
+# "[^1]:" is a footnote, not a link.
+REFERENCE = re.compile(r" {0,3}\[(?!\^)(?:[^\]\\]|\\.)+\]:[ \t]*(?:<([^>]*)>|(\S+))?")
 
 
-def headings(lines):
-    """Yields the text of each ATX and setext heading, in order."""
-    paragraph, last = [], 0
-    for n, line in lines:
-        if n != last + 1:
-            paragraph = []  # fenced code in between ends the paragraph
-        last = n
-        body = QUOTE.sub("", line, count=1) if line.lstrip().startswith(">") else line
-        m = ATX.match(line)
-        if m:
-            paragraph = []
-            yield m.group(1) or ""
-        elif paragraph and SETEXT.match(body):
-            yield " ".join(paragraph)
-            paragraph = []
-        elif not body.strip() or NOT_PARAGRAPH.match(body):
-            paragraph = []
-        else:
-            paragraph.append(body.strip())
+def item_width(rest):
+    """The content indent of the list item that rest starts, or 0."""
+    m = ITEM.match(rest)
+    if not m or BREAK.match(rest):
+        return 0
+    spaces = len(m.group(3))
+    if not m.group(4):
+        spaces = 1
+    elif spaces == 0:
+        return 0
+    elif spaces > 4:
+        spaces = 1  # the item starts with indented code
+    return len(m.group(1)) + len(m.group(2)) + spaces
+
+
+def starts_block(rest):
+    return bool(QUOTE.match(rest) or item_width(rest) or FENCE.match(rest)
+                or ATX.match(rest) or BREAK.match(rest))
+
+
+class Scan:
+    """A Markdown file's text lines (number, text without its quote and list
+    markers), outside code and HTML blocks; its HTML block lines; its
+    headings in order; its link reference definitions (number, destination);
+    and the line of a fence that never closes, or None."""
+
+    def __init__(self, text):
+        self.prose, self.html, self.headings, self.references = [], [], [], []
+        self.unclosed = None
+        stack = []  # open containers: ">" or a list item's content indent
+        fence = None  # the open fence's text, and its line
+        leaf = None  # the open leaf block: "paragraph", "table" or "html"
+        paragraph = []
+        definition = None  # a "[label]:" line still waiting for its destination
+        comment = False  # whether the open HTML block is a comment
+        for n, raw in enumerate(text.split("\n"), 1):
+            rest, matched = raw.expandtabs(4), 0
+            for c in stack:
+                if c == ">":
+                    m = QUOTE.match(rest)
+                    if not m:
+                        break
+                    rest = rest[m.end():]
+                elif not rest.strip():
+                    rest = ""
+                elif len(rest) - len(rest.lstrip(" ")) >= c:
+                    rest = rest[c:]
+                else:
+                    break
+                matched += 1
+            if fence:
+                if matched == len(stack):
+                    close = r" {0,3}%s{%d,}[ \t]*$" % (re.escape(fence[0]), len(fence))
+                    if re.match(close, rest):
+                        fence = None
+                    continue
+                fence = None  # its container ended, and the code with it
+            if matched < len(stack):
+                if leaf == "paragraph" and rest.strip() and not starts_block(rest):
+                    paragraph.append(rest.strip())  # a lazy continuation line
+                    self.prose.append((n, rest))
+                    continue
+                del stack[matched:]
+                leaf, definition = None, None
+            opened = False
+            while not BREAK.match(rest):
+                m = QUOTE.match(rest)
+                if m:
+                    stack.append(">")
+                    rest = rest[m.end():]
+                elif item_width(rest):
+                    width = item_width(rest)
+                    stack.append(width)
+                    rest = rest[width:]
+                else:
+                    break
+                opened = True
+            if opened:
+                leaf, definition = None, None
+            if not rest.strip():
+                leaf, definition = None, None
+                continue
+            if definition:
+                self.references.append((n, rest.split()[0].strip("<>")))
+                definition = None
+                continue
+            if leaf != "paragraph" and leaf != "html" and rest.startswith("    "):
+                continue  # indented code
+            if leaf == "html":
+                self.html.append((n, rest))
+                if comment and "-->" in rest:
+                    leaf = None
+                continue
+            m = FENCE.match(rest)
+            if m:
+                fence, self.unclosed, leaf = m.group(1), n, None
+                continue
+            m = ATX.match(rest)
+            if m:
+                self.headings.append(m.group(1) or "")
+                self.prose.append((n, rest))
+                leaf = None
+                continue
+            if leaf == "paragraph" and SETEXT.match(rest):
+                self.headings.append(" ".join(paragraph))
+                leaf = None
+                continue
+            if BREAK.match(rest):
+                leaf = None
+                continue
+            if leaf is None and HTML.match(rest):
+                # An HTML block ends at a blank line, a comment at its "-->".
+                comment = rest.lstrip().startswith("<!--")
+                leaf = None if comment and "-->" in rest else "html"
+                self.html.append((n, rest))
+                continue
+            m = REFERENCE.match(rest)
+            if m and leaf != "table":
+                # Checked even where CommonMark would read it as the text of
+                # the paragraph above: a broken one is never a sound link.
+                destination = m.group(1) or m.group(2)
+                if destination:
+                    self.references.append((n, destination))
+                else:
+                    definition = n
+                leaf = None
+                continue
+            if leaf is None:
+                leaf = "table" if rest.lstrip().startswith("|") else "paragraph"
+                paragraph = []
+            paragraph.append(rest.strip())
+            self.prose.append((n, rest))
+        if not fence:
+            self.unclosed = None
 
 
 def slug(heading):
@@ -228,11 +325,11 @@ ANCHORS = {}
 
 def anchors(path):
     if path not in ANCHORS:
-        lines, _ = prose(path.read_text())
+        scan = Scan(path.read_text())
         found, seen = set(), {}
-        for _, line in lines:
+        for _, line in scan.prose + scan.html:
             found.update(ID_ATTR.findall(line))
-        for heading in headings(lines):
+        for heading in scan.headings:
             s = slug(heading)
             n = seen.get(s, 0)
             seen[s] = n + 1
@@ -283,14 +380,13 @@ def check_target(errors, path, where, target):
 def check_links(errors):
     for path in files({".md"}):
         rel = path.relative_to(ROOT)
-        lines, unclosed = prose(path.read_text())
-        if unclosed:
-            errors.append(f"{rel}:{unclosed}: this fence has no closing "
+        scan = Scan(path.read_text())
+        if scan.unclosed:
+            errors.append(f"{rel}:{scan.unclosed}: this fence has no closing "
                           f"fence, so nothing after it is checked")
-        for n, line in lines:
-            m = REFERENCE.match(line)
-            if m:
-                check_target(errors, path, f"{rel}:{n}", m.group(1))
+        for n, target in scan.references:
+            check_target(errors, path, f"{rel}:{n}", target)
+        for n, line in scan.prose:
             for m in LINK.finditer(CODE_SPAN.sub("", line)):
                 check_target(errors, path, f"{rel}:{n}", m.group(1))
 
@@ -299,7 +395,7 @@ def check_paths(errors):
     current = sorted({p for g in CURRENT_DOCS for p in ROOT.glob(g)})
     for path in current:
         rel = path.relative_to(ROOT)
-        for n, line in prose(path.read_text())[0]:
+        for n, line in Scan(path.read_text()).prose:
             for m in CODE_SPAN.finditer(line):
                 span = m.group(2).strip()
                 if PATH_SPAN.match(span) and not (ROOT / span).exists():
