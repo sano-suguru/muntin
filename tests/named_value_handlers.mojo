@@ -28,8 +28,9 @@ struct Note(FromBody, Movable):
         return Self(body)
 
 
-# docs/reference/route-values.md, "Named route values": the text between the
-# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+# docs/reference/route-values.md, "Named route values (`Param`)": the text
+# between the `# example:` lines is what the page shows
+# (scripts/check_doc_examples.py).
 
 
 # fmt: off

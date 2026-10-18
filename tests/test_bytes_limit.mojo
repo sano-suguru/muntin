@@ -132,8 +132,9 @@ def _sent() raises -> Headers:
 comptime SENT_FIELDS = "X-Sig=<a>;x-sig=<b>;Empty=<>;Content-Type=<x/y>;"
 
 
-# docs/reference/bodies.md, "Body size limits": the text between the
-# `# example:` lines is what the page shows (scripts/check_doc_examples.py).
+# docs/reference/bodies.md, "Body size limits (`max_bytes`)": the text
+# between the `# example:` lines is what the page shows
+# (scripts/check_doc_examples.py).
 
 
 # fmt: off
