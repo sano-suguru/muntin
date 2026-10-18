@@ -1,0 +1,44 @@
+# The notes application both programs implement, run in order against each:
+# one step per line, tab-separated.
+#
+#   start MAX_TEXT    (re)start the program on the same journal with that limit
+#   break             the journal path becomes a directory: every write fails
+#   restore           the journal is back where it was
+#   log TEXT          what the program wrote to standard error since it
+#                     started contains TEXT (standard output does not count)
+#   field NAME VALUE  the previous answer carries the field NAME: VALUE
+#   req METHOD TARGET AUTHORIZATION BODY STATUS RESPONSE_BODY
+#
+# AUTHORIZATION is the field's value (- for no field); BODY is sent with
+# Content-Type: application/json (- for none). scripts/compare_notes.py fails
+# if a program answers otherwise. The tokens are t-ada (user ada) and t-bo
+# (bo); a note is visible to its owner only, and 404 to everyone else.
+start	40
+req	GET	/notes	-	-	401	Unauthorized
+field	WWW-Authenticate	Bearer
+req	GET	/notes	Bearer nope	-	401	Unauthorized
+field	WWW-Authenticate	Bearer
+req	POST	/notes	-	{"text":"x"}	401	Unauthorized
+req	POST	/notes	Bearer t-ada	{"text":"buy milk"}	201	{"id":1,"owner":"ada","text":"buy milk"}
+req	POST	/notes	Bearer t-bo	{"text":"call Ada"}	201	{"id":2,"owner":"bo","text":"call Ada"}
+req	GET	/notes/1	Bearer t-ada	-	200	{"id":1,"owner":"ada","text":"buy milk"}
+req	GET	/notes/1	Bearer t-bo	-	404	no note 1
+req	GET	/notes/9	Bearer t-ada	-	404	no note 9
+req	GET	/notes/x	Bearer t-ada	-	400	Bad Request
+req	GET	/notes	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk"}]
+req	POST	/notes	Bearer t-ada	{"txt":"x"}	400	Bad Request
+req	POST	/notes	Bearer t-ada	{"text":"this text is longer than forty bytes long"}	422	text too long
+# A failed write answers 503, keeps nothing and says why on standard error.
+break
+req	POST	/notes	Bearer t-ada	{"text":"lost"}	503	storage unavailable
+log	Is a directory
+req	GET	/notes	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk"}]
+req	GET	/notes/3	Bearer t-ada	-	404	no note 3
+restore
+req	POST	/notes	Bearer t-ada	{"text":"walk"}	201	{"id":3,"owner":"ada","text":"walk"}
+# A restart reads the journal back; the new limit applies.
+start	10
+req	GET	/notes/3	Bearer t-ada	-	200	{"id":3,"owner":"ada","text":"walk"}
+req	GET	/notes	Bearer t-bo	-	200	[{"id":2,"owner":"bo","text":"call Ada"}]
+req	POST	/notes	Bearer t-ada	{"text":"buy oat milk"}	422	text too long
+req	POST	/notes	Bearer t-ada	{"text":"ten bytes!"}	201	{"id":4,"owner":"ada","text":"ten bytes!"}

@@ -6,7 +6,7 @@
 # cross-module extensions work: an application could then make a builtin a body
 # type, and only the registration's type-equality check keeps a forgotten `{b}`
 # from reading the body (docs/history/architecture-decisions.md, "Argument
-# extraction decision", revisit conditions).
+# extraction decision (M2-005)", revisit conditions).
 # Expected diagnostic (checked by scripts/check.sh): does not implement all requirements for 'FromBody'
 
 from extraction_spike import ExtractApp, FromBody

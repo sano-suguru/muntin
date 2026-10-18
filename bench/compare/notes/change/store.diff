@@ -1,0 +1,60 @@
+--- a/store.mojo
++++ b/store.mojo
+@@ -23,9 +23,10 @@
+     var id: Int
+     var owner: String
+     var text: String
++    var tag: String
+
+     def __init__(out self):
+-        self = Self(0, "", "")
++        self = Self(0, "", "", "")
+
+
+ struct _Notes(Movable):
+@@ -85,19 +86,29 @@
+                             Int(parts[0]),
+                             String(parts[1]),
+                             _unescaped(String(parts[2])),
++                            _unescaped(String(parts[3])),
+                         )
+                     )
+         return store^
+
+-    def add(self, owner: String, text: String) raises -> Note:
++    def add(self, owner: String, text: String, tag: String) raises -> Note:
+         """Writes the note to the journal, then keeps it; raises, keeping
+         nothing, when the journal cannot be written."""
+         ref data = self._data[]
+         var id = data.notes[len(data.notes) - 1].id + 1 if data.notes else 1
+-        var note = Note(id, owner, text)
++        var note = Note(id, owner, text, tag)
+         try:
+             with open(data.path, "a") as f:
+-                f.write(id, "\t", owner, "\t", _escaped(text), "\n")
++                f.write(
++                    id,
++                    "\t",
++                    owner,
++                    "\t",
++                    _escaped(text),
++                    "\t",
++                    _escaped(tag),
++                    "\n",
++                )
+         except e:
+             raise Error("journal ", data.path, ": ", e)
+         data.notes.append(note.copy())
+@@ -109,10 +120,10 @@
+                 return note.copy()
+         return None
+
+-    def owned_by(self, owner: String) -> List[Note]:
++    def owned_by(self, owner: String, tag: Optional[String]) -> List[Note]:
+         var out = List[Note]()
+         for note in self._data[].notes:
+-            if note.owner == owner:
++            if note.owner == owner and (not tag or note.tag == tag.value()):
+                 out.append(note.copy())
+         return out^
+

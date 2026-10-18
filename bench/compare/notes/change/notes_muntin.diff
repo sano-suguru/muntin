@@ -1,0 +1,68 @@
+--- a/notes_muntin.mojo
++++ b/notes_muntin.mojo
+@@ -59,6 +59,7 @@
+         out.field("id", self.note.id)
+         out.field("owner", self.note.owner)
+         out.field("text", self.note.text)
++        out.field("tag", self.note.tag)
+         out.end_object()
+
+
+@@ -76,10 +77,11 @@
+ @fieldwise_init
+ struct NewNote(FromJson):
+     var text: String
++    var tag: String
+
+     @staticmethod
+     def from_json(value: JsonValue) raises -> Self:
+-        return Self(value["text"].string())
++        return Self(value["text"].string(), value["tag"].string())
+
+
+ def authenticate(svc: Service, headers: Headers) raises ApiError -> String:
+@@ -91,19 +93,21 @@
+     raise ApiError(401, "Unauthorized")
+
+
+-def stored(svc: Service, owner: String, text: String) raises ApiError -> Note:
++def stored(
++    svc: Service, owner: String, text: String, tag: String
++) raises ApiError -> Note:
+     try:
+-        return svc.store.add(owner, text)
++        return svc.store.add(owner, text, tag)
+     except e:
+         print("storage:", e, file=stderr)
+         raise ApiError(503, "storage unavailable")
+
+
+ def list_notes(
+-    svc: State[Service], headers: Headers
++    svc: State[Service], tag: Optional[String], headers: Headers
+ ) raises ApiError -> Json[NoteList]:
+     var user = authenticate(svc[], headers)
+-    return Json(NoteList(svc[].store.owned_by(user)))
++    return Json(NoteList(svc[].store.owned_by(user, tag)))
+
+
+ def get_note(
+@@ -123,7 +127,8 @@
+     ref text = input.body.value.text
+     if text.byte_length() > svc[].max_text:
+         raise ApiError(422, "text too long")
+-    return Json(NoteJson(stored(svc[], user, text)), status=201)
++    var note = stored(svc[], user, text, input.body.value.tag)
++    return Json(NoteJson(note^), status=201)
+
+
+ def main() raises:
+@@ -136,7 +141,7 @@
+         )
+     )
+     var app = App()
+-    app.get["/notes"](list_notes, svc)
++    app.get["/notes?{tag}"](list_notes, svc)
+     app.get["/notes/{id}"](get_note, svc)
+     app.post["/notes"](create_note, svc)
+     var server = Server.bind("127.0.0.1", config.port)
