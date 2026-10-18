@@ -16,9 +16,10 @@ In the `flare` environment, it
    through its scenario (scenario.tsv, then scenario_v2.tsv for the changed
    ones), restarting it, breaking and restoring its journal as the scenario
    says; it fails if a program answers otherwise (status, body and any
-   field the scenario names) or does not log what the scenario names. It prints what each program wrote to standard error
-   during each request. Then it prints both answers to defaults.tsv, which
-   the scenario leaves open;
+   field the scenario names) or does not write to standard error what the
+   scenario names. It prints what each program wrote to standard output and
+   to standard error during each request. Then it prints both answers to
+   defaults.tsv, which the scenario leaves open;
 3. plants each mistake in mistakes.txt in a copy of the program it names and
    reports whether the copy builds: the compiler's first error if not,
    otherwise what the copy answers to the mistake's request and what it
@@ -138,33 +139,34 @@ class Served:
         self.binary = binary
         self.dir = pathlib.Path(workdir)
         self.journal = self.dir / "journal.log"
-        self.log = self.dir / "serve.log"
+        self.streams = {"stdout": self.dir / "serve.out", "stderr": self.dir / "serve.err"}
         self.proc = None
         self.port = None
-        self.mark = 0
+        self.marks = {}
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / "tokens").write_text(TOKENS)
 
     def start(self, max_text):
         self.stop()
         self.port = free_port()
-        with open(self.log, "w") as log:
+        with open(self.streams["stdout"], "w") as out, open(self.streams["stderr"], "w") as err:
             self.proc = subprocess.Popen(
                 [str(self.binary), str(self.port), str(self.journal), str(self.dir / "tokens"),
                  str(max_text)],
-                stdout=log,
-                stderr=subprocess.STDOUT,
+                stdout=out,
+                stderr=err,
             )
         for _ in range(100):
             try:
                 ask(self.port, "GET", "/")
-                self.mark = len(self.log.read_bytes())
+                self.marks = {k: len(f.read_bytes()) for k, f in self.streams.items()}
                 return
             except (OSError, http.client.HTTPException):
                 if self.proc.poll() is not None:
                     break
                 time.sleep(0.1)
-        print(self.log.read_text(), file=sys.stderr)
+        for f in self.streams.values():
+            print(f.read_text(), file=sys.stderr)
         fail(f"{self.binary} did not answer on port {self.port}")
 
     def stop(self):
@@ -189,22 +191,26 @@ class Served:
             saved.rename(self.journal)
 
     def logged(self):
-        """What the program wrote since the previous call (or its start)."""
-        data = self.log.read_bytes()
-        new, self.mark = data[self.mark :], len(data)
-        return new.decode(errors="replace")
+        """What the program wrote to each stream since the previous call (or
+        its start)."""
+        new = {}
+        for k, f in self.streams.items():
+            data = f.read_bytes()
+            new[k], self.marks[k] = data[self.marks[k] :].decode(errors="replace"), len(data)
+        return new
 
-    def since_start(self):
-        return self.log.read_text(errors="replace")
+    def stderr_since_start(self):
+        return self.streams["stderr"].read_text(errors="replace")
 
 
 def shown(body):
     return body.decode(errors="replace")
 
 
-def print_log(text, indent="    "):
-    for line in text.splitlines():
-        print(f"{indent}stderr: {line}")
+def print_log(streams, indent="    "):
+    for name, text in streams.items():
+        for line in text.splitlines():
+            print(f"{indent}{name}: {line}")
 
 
 def run_scenario(name, served, path):
@@ -225,10 +231,10 @@ def run_scenario(name, served, path):
             served.restore_journal()
             print(f"{name}\tjournal restored")
         elif action == "log":
-            if args[0] in served.since_start():
-                print(f"ok\t{name}\tlog names {args[0]!r}")
+            if args[0] in served.stderr_since_start():
+                print(f"ok\t{name}\tstandard error names {args[0]!r}")
             else:
-                print(f"FAIL\t{name}\tlog does not name {args[0]!r}")
+                print(f"FAIL\t{name}\tstandard error does not name {args[0]!r}")
                 ok = False
         elif action == "field":
             got = fields.get(args[0].lower())
@@ -322,19 +328,26 @@ def plant(block, source):
     return "\n".join(lines)
 
 
+# A located compiler diagnostic, `PATH:LINE:COLUMN: KIND: MESSAGE`; PATH may
+# hold spaces.
+DIAGNOSTIC = re.compile(r"(.+?):(\d+):(\d+): (error|warning|note): (.*)")
+
+
 def diagnostic(base):
+    """The compiler's first constraint note or error for the copy at BASE, and
+    the lines of the copy its output names; None if it names no error."""
     log = pathlib.Path(f"{base}.log").read_text().splitlines()
     src = pathlib.Path(f"{base}.mojo").read_text().split("\n")
-    msg = next((l.split("note: ", 1)[1] for l in log if "note: constraint failed:" in l), None)
+    found = [m.groups() for m in map(DIAGNOSTIC.fullmatch, log) if m]
+    msg = next((t for _, _, _, k, t in found if k == "note" and t.startswith("constraint failed:")), None)
     if msg is None:
-        msg = next((l.split("error: ", 1)[1] for l in log if re.match(r"\S+:\d+:\d+: error: ", l)), None)
+        msg = next((t for _, _, _, k, t in found if k == "error"), None)
     if msg is None:
         return None
     own = []
-    for l in log:
-        m = re.match(r"\S*" + re.escape(base.name) + r"\.mojo:(\d+):\d+: ", l)
-        if m and int(m.group(1)) not in own:
-            own.append(int(m.group(1)))
+    for path, line, _, _, _ in found:
+        if pathlib.Path(path).name == f"{base.name}.mojo" and int(line) not in own:
+            own.append(int(line))
     where = "; ".join(f"line {n}: {src[n - 1].strip()}" for n in own)
     return f"{msg} [{len(log)} lines of compiler output; names {where}]"
 
@@ -384,7 +397,7 @@ def main():
     if not passed:
         fail("a program does not run its scenario as specified")
 
-    step("left open by the scenario (defaults.tsv): status, fields, body, standard error")
+    step("left open by the scenario (defaults.tsv): status, fields, body, standard output and error")
     servers = {p: Served(OUT / f"notes_{p}", OUT / f"defaults_{p}") for p in PROGRAMS}
     for raw in (SRC / "defaults.tsv").read_text().splitlines():
         if not raw or raw.startswith("#"):

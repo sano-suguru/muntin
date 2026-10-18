@@ -4,7 +4,8 @@
 #   start MAX_TEXT    (re)start the program on the same journal with that limit
 #   break             the journal path becomes a directory: every write fails
 #   restore           the journal is back where it was
-#   log TEXT          what the program wrote since it started contains TEXT
+#   log TEXT          what the program wrote to standard error since it
+#                     started contains TEXT (standard output does not count)
 #   field NAME VALUE  the previous answer carries the field NAME: VALUE
 #   req METHOD TARGET AUTHORIZATION BODY STATUS RESPONSE_BODY
 #
@@ -32,6 +33,7 @@ break
 req	POST	/notes	Bearer t-ada	{"text":"lost"}	503	storage unavailable
 log	Is a directory
 req	GET	/notes	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk"}]
+req	GET	/notes/3	Bearer t-ada	-	404	no note 3
 restore
 req	POST	/notes	Bearer t-ada	{"text":"walk"}	201	{"id":3,"owner":"ada","text":"walk"}
 # A restart reads the journal back; the new limit applies.

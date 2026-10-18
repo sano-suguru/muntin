@@ -1,6 +1,6 @@
 --- a/store.mojo
 +++ b/store.mojo
-@@ -20,9 +20,10 @@
+@@ -23,9 +23,10 @@
      var id: Int
      var owner: String
      var text: String
@@ -12,7 +12,7 @@
 
 
  struct _Notes(Movable):
-@@ -82,19 +83,29 @@
+@@ -85,19 +86,29 @@
                              Int(parts[0]),
                              String(parts[1]),
                              _unescaped(String(parts[2])),
@@ -45,7 +45,7 @@
          except e:
              raise Error("journal ", data.path, ": ", e)
          data.notes.append(note.copy())
-@@ -106,10 +117,10 @@
+@@ -109,10 +120,10 @@
                  return note.copy()
          return None
 

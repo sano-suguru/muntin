@@ -1,8 +1,8 @@
 # Mistakes an application author plausibly makes, each planted in a copy of
 # one program by scripts/compare_notes.py, which then reports whether the copy
 # builds, the compiler's first error if it does not, and otherwise what the
-# copy answers to the request named and what it wrote to standard error. A
-# block is
+# copy answers to the request named and what it wrote to standard output and
+# standard error. A block is
 #
 #   == NAME PROGRAM METHOD TARGET TOKEN [BODY]
 #   ! broken-journal        (optional: the request is sent once writes fail)

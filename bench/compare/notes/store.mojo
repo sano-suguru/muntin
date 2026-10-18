@@ -6,7 +6,10 @@ Notes live in memory and in a journal file, one line per note, written
 before the note is kept: a note whose line cannot be written is not stored,
 and a restart reads the journal back. The file is opened for each write, so
 a journal that cannot be opened fails that write and the next one succeeds
-once it can.
+once it can. That is the only failure handled: a write that fails after part
+of its line reached the file is not undone, and the reader checks neither a
+line's columns nor its newline, so such a line would be read as a note and
+the next line appended to it.
 """
 
 from std.collections import Dict

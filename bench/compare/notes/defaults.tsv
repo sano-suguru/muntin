@@ -6,7 +6,7 @@
 # sent (- for none). Each is sent to each program, started for that request
 # with MAX_TEXT 40 on a journal holding ada's note 1 and bo's note 2;
 # scripts/compare_notes.py prints the answers and what each program wrote to
-# standard error, and checks nothing.
+# standard output and standard error, and checks nothing.
 GET	/notes/x	-	-	-
 POST	/notes	-	{"text":	application/json
 POST	/notes	Bearer t-ada	{"text":"x"}	-

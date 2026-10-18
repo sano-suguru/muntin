@@ -21,8 +21,14 @@ req	GET	/notes/3	Bearer t-ada	-	404	no note 3
 break
 req	POST	/notes	Bearer t-ada	{"text":"lost","tag":"home"}	503	storage unavailable
 log	Is a directory
-restore
-start	10
+# Before the restart, which would forget a note kept in memory only: the
+# failed note is not kept, and the next one takes the id it did not use.
 req	GET	/notes?tag=home	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk","tag":"home"}]
+req	GET	/notes/4	Bearer t-ada	-	404	no note 4
+restore
+req	POST	/notes	Bearer t-ada	{"text":"walk","tag":"home"}	201	{"id":4,"owner":"ada","text":"walk","tag":"home"}
+start	10
+req	GET	/notes?tag=home	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk","tag":"home"},{"id":4,"owner":"ada","text":"walk","tag":"home"}]
 req	GET	/notes/3	Bearer t-bo	-	200	{"id":3,"owner":"bo","text":"call Ada","tag":"home"}
 req	POST	/notes	Bearer t-ada	{"text":"buy oat milk","tag":"home"}	422	text too long
+req	POST	/notes	Bearer t-ada	{"text":"ten bytes!","tag":"work"}	201	{"id":5,"owner":"ada","text":"ten bytes!","tag":"work"}
