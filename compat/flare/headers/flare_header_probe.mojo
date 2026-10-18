@@ -29,6 +29,13 @@ obs-text-lenient HTTP/1.1 server answers 400 to a value that is not UTF-8
 refused (both reached the handler), and a value that is not UTF-8 reaches
 it byte for byte (it arrived with U+FFFD).
 
+The `Host` cases (M3-073, M3-076) record what the adapter's `Host` rule
+starts from: over HTTP/1.1 a missing `Host`, and any value, are admitted
+(trimmed); over h2c `:authority` becomes the one `Host` whatever its value,
+a `host` beside it is dropped after a byte comparison (case included) that
+an empty `:authority` skips, and of two `host` fields alone the second is
+dropped.
+
 The echo path reads request headers only through `HeaderMap.encode_to`,
 the one public whole-map accessor (besides `write_to`); `len`, `get`,
 `get_all`, `contains` are lookups by name. Iterating by index needs the
@@ -583,6 +590,20 @@ def run_inbound(mut c: Checks, port: UInt16, lenient: UInt16) raises:
         exchange(port, "GET /echo HTTP/1.1\r\nConnection: close\r\n\r\n"),
         echo_ok("len=1 get(x-a)= get_all(x-a)=0\nConnection: close\r\n"),
     )
+    c.eq(
+        "2. Host value not checked (userinfo, space, path), trimmed",
+        exchange(
+            port,
+            (
+                "GET /echo HTTP/1.1\r\nHost:  u@a b/c \r\nConnection:"
+                " close\r\n\r\n"
+            ),
+        ),
+        echo_ok(
+            "len=2 get(x-a)= get_all(x-a)=0\nHost: u@a b/c\r\n"
+            "Connection: close\r\n"
+        ),
+    )
 
 
 def run_outbound(mut c: Checks, port: UInt16) raises:
@@ -710,17 +731,23 @@ def _render_fields(fields: List[HpackHeader]) raises -> String:
 
 
 def h2_exchange(
-    port: UInt16, path: String, fields: List[String]
+    port: UInt16,
+    path: String,
+    fields: List[String],
+    authority: String = "probe",
+    send_authority: Bool = True,
 ) raises -> String:
-    """One GET on stream 1 over h2c. `fields` alternates name, value, both
-    in the escaped notation. Returns the stream-1 frames (and any GOAWAY)
-    the server sent back, rendered, until END_STREAM, RST_STREAM or GOAWAY.
+    """One GET on stream 1 over h2c, with `:authority` (none unless
+    `send_authority`). `fields` alternates name, value, both in the escaped
+    notation. Returns the stream-1 frames (and any GOAWAY) the server sent
+    back, rendered, until END_STREAM, RST_STREAM or GOAWAY.
     """
     var hdrs = List[HpackHeader]()
     hdrs.append(HpackHeader(":method", "GET"))
     hdrs.append(HpackHeader(":scheme", "http"))
     hdrs.append(HpackHeader(":path", path))
-    hdrs.append(HpackHeader(":authority", "probe"))
+    if send_authority:
+        hdrs.append(HpackHeader(":authority", authority))
     var i = 0
     while i + 1 < len(fields):
         hdrs.append(
@@ -840,6 +867,34 @@ def run_h2c(mut c: Checks, port: UInt16) raises:
             "x-del: a\\x7Fb\r\nx-utf8: \\xC3\\xA9\r\n"
             "x-bad: a\\xFFb\r\nx-e: \r\nx-r: 2\r\ncookie: c=1; d=2\r\n"
         ),
+    )
+    # M3-076: what Flare does with `:authority` and `host`.
+    c.eq(
+        "h2. :authority value not checked",
+        h2_exchange(port, "/h2echo", [], authority="u@a b/c"),
+        h2_echo("version=HTTP/2 len=1 get_all(x-r)=0\nHost: u@a b/c\r\n"),
+    )
+    c.eq(
+        "h2. host equal to :authority dropped",
+        h2_exchange(port, "/h2echo", ["host", "probe"]),
+        h2_echo("version=HTTP/2 len=1 get_all(x-r)=0\nHost: probe\r\n"),
+    )
+    c.eq(
+        "h2. host differing from :authority in case only refused (bytes)",
+        h2_exchange(port, "/h2echo", ["host", "PROBE"]),
+        H2_REFUSED,
+    )
+    c.eq(
+        "h2. empty :authority beside host: empty Host, host dropped",
+        h2_exchange(port, "/h2echo", ["host", "other"], authority=""),
+        h2_echo("version=HTTP/2 len=1 get_all(x-r)=0\nHost: \r\n"),
+    )
+    c.eq(
+        "h2. two host fields without :authority: the second dropped",
+        h2_exchange(
+            port, "/h2echo", ["host", "a", "host", "b"], send_authority=False
+        ),
+        h2_echo("version=HTTP/2 len=1 get_all(x-r)=0\nhost: a\r\n"),
     )
     c.eq(
         "h2. ':' inside a name refused",
