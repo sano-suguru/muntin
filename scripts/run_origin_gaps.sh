@@ -3,9 +3,9 @@
 # Mojo's AddressSanitizer, runs each, and requires the sanitizer report its
 # "# Expected report: " line names. scripts/check.sh only builds these files,
 # which shows that the compiler accepts them; this script shows that running
-# them still reads or writes freed memory. It is a measurement, not a CI
-# check: run it when the Mojo version changes, and reopen the linked decision
-# if a file stops reporting (docs/DEVELOPMENT.md, section 3).
+# them still reads or writes freed memory. CI runs it on Linux after the
+# sanitized test.sh; a file that stops reporting fails it and reopens the
+# linked decision (docs/DEVELOPMENT.md, section 3).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
