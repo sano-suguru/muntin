@@ -44,6 +44,7 @@ The measurements below are not checks, and CI does not run them. Each script's h
 | `./scripts/bench_routing.sh` | routing cost by route count, Muntin against Flare alone |
 | `./scripts/bench_headers.sh` | the adapter's request header conversion by header shape, in process and over loopback |
 | `./scripts/compare_dx.sh` | one small API written with Muntin and against Flare alone: code size, answers, planted mistakes |
+| `python3 -I scripts/compare_notes.py` | the same for an application with stored data, users, a failing journal, start-up settings and one change |
 | `./scripts/bench_overhead.sh` | what Muntin costs on top of Flare: time, allocations, throughput, latency, memory |
 | `./scripts/bench_hol.sh`, `bench/hol/spread/run_spread.sh` | what one blocking handler does to the other requests; how kept-open connections spread over workers (Linux) |
 | `./scripts/run_origin_gaps.sh` | that the known gaps erasing a value which borrows a dropped local still read freed memory under AddressSanitizer |

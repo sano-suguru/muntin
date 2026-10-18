@@ -1,0 +1,17 @@
+# Requests the specification (scenario.tsv) leaves open, where each program
+# answers by its framework's defaults, or for the Authorization field by its
+# own parser (the Muntin program's hand-written one, Flare's
+# parse_bearer_token): one per line, tab-separated: method, target,
+# Authorization value (- for none), request body (- for none), Content-Type
+# sent (- for none). Each is sent to each program, started for that request
+# with MAX_TEXT 40 on a journal holding ada's note 1 and bo's note 2;
+# scripts/compare_notes.py prints the answers and what each program wrote to
+# standard error, and checks nothing.
+GET	/notes/x	-	-	-
+POST	/notes	-	{"text":	application/json
+POST	/notes	Bearer t-ada	{"text":"x"}	-
+GET	/notes	bearer t-ada	-	-
+GET	/notes	Bearer	-	-
+GET	/notes/1	Basic dC1hZGE6	-	-
+POST	/notes	Bearer t-ada	{"text":"buy milk","extra":1}	application/json
+DELETE	/notes/1	Bearer t-ada	-	-

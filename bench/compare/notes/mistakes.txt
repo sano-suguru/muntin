@@ -1,0 +1,96 @@
+# Mistakes an application author plausibly makes, each planted in a copy of
+# one program by scripts/compare_notes.py, which then reports whether the copy
+# builds, the compiler's first error if it does not, and otherwise what the
+# copy answers to the request named and what it wrote to standard error. A
+# block is
+#
+#   == NAME PROGRAM METHOD TARGET TOKEN [BODY]
+#   ! broken-journal        (optional: the request is sent once writes fail)
+#   - consecutive lines of the program, matched with their indentation removed
+#   + what replaces them (none deletes them), indented as the first matched
+#     line plus any spaces after "+ "
+#
+# PROGRAM is muntin or flare, or muntin-v2 or flare-v2 for the program with
+# the change (change/*.diff) applied. TOKEN is sent as `Authorization: Bearer
+# TOKEN` (- for no field); a body is sent with Content-Type: application/json.
+# Each copy starts on a journal holding ada's note 1 and bo's note 2, with
+# MAX_TEXT 40. Each run of `-` lines must match exactly once. A mistake is
+# planted in both programs where the same intent can be written in both; a
+# name that appears once has no counterpart in the other program.
+
+# The registration does not pass the application's state.
+== state-not-passed muntin GET /notes/1 t-ada
+- app.get["/notes/{id}"](get_note, svc)
++ app.get["/notes/{id}"](get_note)
+== state-not-passed flare GET /notes/1 t-ada
+- Extracted(GetNote(svc.copy(), user.copy(), PathInt["id"]())),
++ Extracted(GetNote(State[Service](), user.copy(), PathInt["id"]())),
+
+# Flare's authenticated user is its own extractor, which needs the accounts in
+# each handler's prototype; Muntin's handlers read them from the one state.
+== accounts-not-passed flare GET /notes/1 t-ada
+- Extracted(GetNote(svc.copy(), user.copy(), PathInt["id"]())),
++ Extracted(GetNote(svc.copy(), CurrentUser(), PathInt["id"]())),
+
+# The route's placeholder is renamed; the handler is not.
+== renamed-placeholder muntin GET /notes/1 t-ada
+- app.get["/notes/{id}"](get_note, svc)
++ app.get["/notes/{note_id}"](get_note, svc)
+== renamed-placeholder flare GET /notes/1 t-ada
+- "/notes/:id",
++ "/notes/:note_id",
+
+# The handler authenticates the user and forgets to check the owner.
+== owner-not-checked muntin GET /notes/1 t-bo
+- if not note or note.value().owner != user:
++ if not note:
+== owner-not-checked flare GET /notes/1 t-bo
+- if not note or note.value().owner != self.user.name:
++ if not note:
+
+# The storage error is not turned into the 503.
+== storage-error-not-handled muntin POST /notes t-ada {"text":"lost"}
+! broken-journal
+- return Json(NoteJson(stored(svc[], user, text)), status=201)
++ return Json(NoteJson(svc[].store.add(user, text)), status=201)
+== storage-error-not-handled flare POST /notes t-ada {"text":"lost"}
+! broken-journal
+- var note: Note
+- try:
+- note = svc.store.add(self.user.name, note_text)
+- except e:
+- print("storage:", e, file=stderr)
+- return text(503, "Service Unavailable", "storage unavailable")
++ var note = svc.store.add(self.user.name, note_text)
+
+# The created note is answered with the default status.
+== created-status-forgotten muntin POST /notes t-ada {"text":"walk"}
+- return Json(NoteJson(stored(svc[], user, text)), status=201)
++ return Json(NoteJson(stored(svc[], user, text)))
+== created-status-forgotten flare POST /notes t-ada {"text":"walk"}
+- resp.status = 201
+- resp.reason = "Created"
+
+# The handler is registered without Flare's Extracted, which fills its
+# extractor fields: Router.get takes the handler struct as it is. Muntin has
+# no such wrapper.
+== extracted-forgotten flare POST /notes - {"text":"walk"}
+- Extracted(CreateNote(svc.copy(), user.copy(), JsonAs[NewNote]())),
++ CreateNote(svc.copy(), user.copy(), JsonAs[NewNote]()),
+
+# Header fields declared before the route value. Flare's extractor fields go
+# in any order.
+== headers-before-route-value muntin GET /notes/1 t-ada
+- svc: State[Service], id: Int, headers: Headers
++ svc: State[Service], headers: Headers, id: Int
+
+# A JSON member name is misspelled in a hand-written decoder. Flare's
+# deserialize_value takes the names from the fields.
+== misspelled-json-member muntin POST /notes t-ada {"text":"buy milk"}
+- return Self(value["text"].string())
++ return Self(value["txet"].string())
+
+# The change adds a field, and the hand-written encoder is not updated. Flare's
+# serialize_json reflects over the fields.
+== new-field-not-encoded muntin-v2 POST /notes t-ada {"text":"buy milk","tag":"home"}
+- out.field("tag", self.note.tag)
