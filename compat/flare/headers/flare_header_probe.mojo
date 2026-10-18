@@ -32,9 +32,9 @@ it byte for byte (it arrived with U+FFFD).
 The `Host` cases (M3-073, M3-076) record what the adapter's `Host` rule
 starts from: over HTTP/1.1 a missing `Host`, and any value, are admitted
 (trimmed); over h2c `:authority` becomes the one `Host` whatever its value,
-a `host` beside it is dropped after a byte comparison (case included) that
-an empty `:authority` skips, and of two `host` fields alone the second is
-dropped.
+`host` fields beside it are dropped after a byte comparison (case
+included) of the last one only, which an empty `:authority` skips, and of
+two `host` fields alone the second is dropped.
 
 The echo path reads request headers only through `HeaderMap.encode_to`,
 the one public whole-map accessor (besides `write_to`); `len`, `get`,
@@ -883,6 +883,11 @@ def run_h2c(mut c: Checks, port: UInt16) raises:
         "h2. host differing from :authority in case only refused (bytes)",
         h2_exchange(port, "/h2echo", ["host", "PROBE"]),
         H2_REFUSED,
+    )
+    c.eq(
+        "h2. only the last host compared with :authority, every host dropped",
+        h2_exchange(port, "/h2echo", ["host", "other", "host", "probe"]),
+        h2_echo("version=HTTP/2 len=1 get_all(x-r)=0\nHost: probe\r\n"),
     )
     c.eq(
         "h2. empty :authority beside host: empty Host, host dropped",

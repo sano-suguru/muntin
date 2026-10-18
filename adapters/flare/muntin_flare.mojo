@@ -589,8 +589,9 @@ def _refuses_host(request: FlareRequest) -> Bool:
     `HTTP/<digit>.<digit>` only (`HTTP/1.1` for a request line without
     one), refuses a second `Host` and trims the value; its HTTP/2 requests,
     an `Upgrade: h2c` one included, say `HTTP/2`, with `:authority` written
-    as the one `Host` (a `host` field dropped, after a byte comparison when
-    both are non-empty; an upgrade's empty `Host` dropped too). Its minimal
+    as the one `Host` (every `host` field dropped, after a byte comparison
+    of the last one when both are non-empty; of `host` fields alone, all but
+    the first dropped; an upgrade's empty `Host` dropped too). Its minimal
     parser (`ServerConfig.skip_header_decode_for_short_requests`, off by
     default, which `_server_config` keeps) stores no fields, so this would
     refuse every HTTP/1.1 request under it."""

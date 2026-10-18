@@ -786,11 +786,16 @@ def test_more_fields_than_the_limit_answer_431_before_app_handle() raises:
     assert_equal(head.status, 431)
     assert_equal(len(head.body), 0)
     assert_equal(_wire(head), "Content-Length: 31\r\n")
-    # The `Host` rule comes first (M3-073): without `Host`, 400.
+    # The `Host` rule comes first (M3-073): without `Host`, 400; so does
+    # its value's (M3-076): an invalid one, 400.
     var hostless = FlareRequest("GET", "/fields")
+    var invalid = FlareRequest("GET", "/fields")
+    invalid.headers.append("Host", "a b")
     for i in range(101):
         hostless.headers.append(String("X-F", i), "v")
+        invalid.headers.append(String("X-F", i), "v")
     assert_equal(handler.serve(hostless).status, 400)
+    assert_equal(handler.serve(invalid).status, 400)
 
 
 def test_a_raised_field_limit_converts_every_field() raises:
