@@ -2,7 +2,7 @@
 
 > **Current.** Now described in [headers reference, "Through the Flare adapter"](../../reference/headers.md#through-the-flare-adapter) and [ARCHITECTURE, "Flare adapter"](../../ARCHITECTURE.md#flare-adapter).
 
-Status: **decision and production** (M3-076, pull request #PR; `src/muntin` unchanged). It changes part of [M3-073](m3-073-request-host-decision.md) and, like it, reopens M2 under [M2-016](m2-016-m2-closure.md). The RFC text, Flare's source and the observations are in the pull request.
+Status: **decision and production** (M3-076, pull request #174; `src/muntin` unchanged). It changes part of [M3-073](m3-073-request-host-decision.md) and, like it, reopens M2 under [M2-016](m2-016-m2-closure.md). The RFC text, Flare's source and the observations are in the pull request.
 
 **Question and what settles it.** RFC 9112 section 3.2 answers 400 to "a Host header field with an invalid field value" in any request; M3-073 checks presence only, and Flare v0.12.0 admits any value. What grammar per protocol, when is an empty value allowed, and how must `host` and `:authority` agree over HTTP/2? Settled by RFC 9110 section 7.2, RFC 9112 sections 3.2 and 3.3, RFC 9113 section 8.3.1, and what Flare hands the adapter (`compat/flare/headers/flare_header_probe.mojo`).
 
