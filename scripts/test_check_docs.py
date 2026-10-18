@@ -43,7 +43,7 @@ def write(root, files):
 
 def run(files):
     with tempfile.TemporaryDirectory() as d:
-        root = pathlib.Path(d)
+        root = pathlib.Path(d) / "repo"  # "../x.md" is a file outside it
         write(root, {
             "README.md": "# Readme\n\n[Guide](docs/GUIDE.md)\n",
             "docs/GUIDE.md": "# Guide\n\n## Start\n",
@@ -250,6 +250,41 @@ CASES = [
         "docs/history/decisions/m3-001-application-state-decision.md": (
             "# Record\n\nSee `docs/GUIDE.md`, \"Stop\".\n"),
     }, None),
+    ("a new decision record's citation of a missing heading", {
+        "docs/history/decisions/m3-099-new-decision.md": (
+            "# Record\n\nSee `docs/GUIDE.md`, \"Start\", and `docs/GUIDE.md`, \"Stop\".\n"),
+    }, ['error: docs/history/decisions/m3-099-new-decision.md:3: "Stop": no such heading'
+        ' in docs/GUIDE.md']),
+    ("citations through reference links of missing headings", {
+        "README.md": ("# Readme\n\nSee [guide][Doc], \"Stop\"; [doc][], \"Gone\"; [doc],"
+                      " \"Away\"; and [doc], \"Start\".\n\n[doc]: docs/GUIDE.md\n"),
+    }, ['error: README.md:3: "Stop": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Gone": no such heading in docs/GUIDE.md',
+        'error: README.md:3: "Away": no such heading in docs/GUIDE.md']),
+    ("a citation through a link with brackets in its text", {
+        "README.md": "# Readme\n\nSee [API [v2]](docs/GUIDE.md), \"Gone\".\n",
+    }, ['error: README.md:3: "Gone": no such heading in docs/GUIDE.md']),
+    ("a path and a quote in different blocks of a document", {
+        "README.md": ("# Readme\n\n- `docs/GUIDE.md`\n- \"Stop\" is a sample string.\n\n"
+                      "> See docs/GUIDE.md\n\n\"Stop\" again.\n\n"
+                      "| a | docs/GUIDE.md\n\"Stop\" | b\n\n"
+                      "## Notes on docs/GUIDE.md\n\"Stop\" here.\n"),
+    }, None),
+    ("a path and a quote in different blocks of code", {
+        "scripts/x.py": ('# See docs/GUIDE.md\n"Stop"\n# docs/GUIDE.md\n#\n# "Stop"\n'
+                         'cat docs/GUIDE.md\n"Stop"\n'
+                         '"""See docs/GUIDE.md\n\n"Stop" is a docstring\'s word."""\n'),
+    }, None),
+    ("a citation in a docstring of a missing heading, across lines", {
+        "scripts/x.py": 'def f():\n    """See docs/GUIDE.md,\n    "Stop"."""\n',
+    }, ['error: scripts/x.py:2: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation at the start of a string of a missing heading", {
+        "scripts/check.sh": "echo \"docs/GUIDE.md, \\\"Stop\\\"\"\n",
+    }, ['error: scripts/check.sh:1: "Stop": no such heading in docs/GUIDE.md']),
+    ("a citation of a file outside the repository", {
+        "../outside.md": "# Outside\n\n## Start\n",
+        "README.md": "# Readme\n\nSee ../outside.md, \"Start\".\n",
+    }, ['error: README.md:3: ../outside.md: outside the repository']),
     ("the guide at its budget", {
         "docs/GUIDE.md": "# Guide\n\n## Start\n".ljust(20 * 1024, "x"),
     }, None),

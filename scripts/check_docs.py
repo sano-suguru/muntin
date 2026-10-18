@@ -18,10 +18,11 @@
    (scripts/test_check_*.py) is skipped, since its fixtures name documents
    of a scratch repository.
 4. Every section cited by name or number exists: a Markdown file's path or
-   a link to it, then a quoted heading or "section N" (CITATION), in any
-   Markdown file but a decision record and in every code, script or CI
-   file. A quote right after a path is read as a heading, so quote other
-   text elsewhere in the sentence.
+   a link to it, then a quoted heading or "section N" in the same paragraph
+   or comment (CITATION), in every Markdown file but the older decision
+   records in UNCHECKED_CITATIONS and in every code, script or CI file. A
+   quote right after a path is read as a heading, so quote other text
+   elsewhere in the sentence.
 
 Standard library only: python3 -I scripts/check_docs.py [ROOT], where ROOT
 (the repository by default) is for scripts/test_check_docs.py.
@@ -212,7 +213,12 @@ def html_block(rest, in_paragraph):
 
 # "[label]: destination", the destination on this line or the next; a
 # "[^1]:" is a footnote, not a link.
-REFERENCE = re.compile(r" {0,3}\[(?!\^)(?:[^\]\\]|\\.)+\]:[ \t]*(?:<([^>]*)>|(\S+))?")
+REFERENCE = re.compile(r" {0,3}\[(?!\^)((?:[^\]\\]|\\.)+)\]:[ \t]*(?:<([^>]*)>|(\S+))?")
+
+
+def label_key(label):
+    """A link label as CommonMark matches it: case and spacing ignored."""
+    return " ".join(label.split()).casefold()
 
 
 def item_width(rest):
@@ -240,16 +246,19 @@ class Scan:
     """A Markdown file's text lines (number, text without its quote and list
     markers), outside code and HTML blocks; its HTML block lines; its
     headings in order; its link reference definitions (number, destination);
+    its text lines again, grouped by the block (paragraph, heading or table
+    row) each belongs to; the destination of each definition's label;
     and the line of a fence that never closes, or None."""
 
     def __init__(self, text):
         self.prose, self.html, self.headings, self.references = [], [], [], []
+        self.blocks, self.labels = [], {}
         self.unclosed = None
         stack = []  # open containers: ">" or a list item's content indent
         fence = None  # the open fence's text, and its line
         leaf = None  # the open leaf block: "paragraph", "table" or "html"
         paragraph = []
-        definition = None  # a "[label]:" line still waiting for its destination
+        definition = None  # a "[label]:" line's label, waiting for its destination
         html_end = None  # what ends the open HTML block; None: a blank line
         for n, raw in enumerate(text.split("\n"), 1):
             rest, matched = raw.expandtabs(4), 0
@@ -277,6 +286,7 @@ class Scan:
                 if leaf == "paragraph" and rest.strip() and not starts_block(rest):
                     paragraph.append(rest.strip())  # a lazy continuation line
                     self.prose.append((n, rest))
+                    self.blocks[-1].append((n, rest))
                     continue
                 del stack[matched:]
                 leaf, definition = None, None
@@ -306,7 +316,9 @@ class Scan:
                 leaf, definition = None, None
                 continue
             if definition:
-                self.references.append((n, rest.split()[0].strip("<>")))
+                destination = rest.split()[0].strip("<>")
+                self.references.append((n, destination))
+                self.labels.setdefault(definition, destination)
                 definition = None
                 continue
             if leaf != "paragraph" and rest.startswith("    "):
@@ -319,6 +331,7 @@ class Scan:
             if m:
                 self.headings.append(m.group(1) or "")
                 self.prose.append((n, rest))
+                self.blocks.append([(n, rest)])
                 leaf = None
                 continue
             if leaf == "paragraph" and SETEXT.match(rest):
@@ -338,18 +351,22 @@ class Scan:
             if m and leaf != "table":
                 # Checked even where CommonMark would read it as the text of
                 # the paragraph above: a broken one is never a sound link.
-                destination = m.group(1) or m.group(2)
+                label, destination = label_key(m.group(1)), m.group(2) or m.group(3)
                 if destination:
                     self.references.append((n, destination))
+                    self.labels.setdefault(label, destination)
                 else:
-                    definition = n
+                    definition = label
                 leaf = None
                 continue
             if leaf is None:
                 leaf = "table" if rest.lstrip().startswith("|") else "paragraph"
                 paragraph = []
+            if leaf == "table" or not paragraph:
+                self.blocks.append([])  # a new paragraph, or a table's row
             paragraph.append(rest.strip())
             self.prose.append((n, rest))
+            self.blocks[-1].append((n, rest))
         if not fence:
             self.unclosed = None
 
@@ -455,28 +472,106 @@ def check_paths(errors):
 # A section citation: a Markdown file, named by its path (in backticks or
 # not) or by a link to it, followed by a quoted heading (`, "Heading"`,
 # ` ("Heading"` or ` "Heading"`, starting on that line or the next and over
-# at most two lines) or by `section 7` (`sections 6 and 7`). It is read in
-# plain text (plain), the same for a document and a code comment.
+# at most two lines) or by `section 7` (`sections 6 and 7`), all in one
+# block (blocks). It is read in plain text (plain), the same for a document
+# and a code comment.
 SEP = r"[ \t]*\n?[ \t]*"  # spaces, and at most one line break
 CITATION = re.compile(
-    r"(?<![\w./\"'-])([\w./-]+\.md)(?:#[\w-]*)?(?=[,\s(])"
+    r"(?<![\w./-])([\w./-]+\.md)(?:#[\w-]*)?(?=[,\s(])"
     rf",?{SEP}(?:\(?\"([^\"\s][^\"\n]*(?:\n[^\"\n]*)?)\""
     rf"|sections?{SEP}(\d+(?:(?:,|,?{SEP}(?:and|or)){SEP}\d+)*))"
 )
-ANY_LINK = re.compile(r"\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+# A link: its text (brackets in it nested once), then a destination, a
+# label ("[text][label]", "[text][]") or nothing ("[label]").
+LINK_TEXT = r"\[((?:[^\[\]\\]|\\.|\[(?:[^\[\]\\]|\\.)*\])*)\]"
+ANY_LINK = re.compile(
+    LINK_TEXT + r"(?:\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)|\[([^\]]*)\]|(?![\[(]))"
+)
 URL = re.compile(r"\b[A-Za-z][\w+.-]*://[^\s<>\"'`]*")
-COMMENT = re.compile(r"\s*(?:#+|//+)?\s*")
 NUMBERED = re.compile(r"(\d+)\.\s+(.*)")
+# Records written before this check whose citations name headings their
+# documents had then, which docs/history/architecture-decisions.md maps to
+# today's, or quote text that is not a heading right after a path. Their
+# bodies are not rewritten (docs/DEVELOPMENT.md section 2), so they are not
+# read for citations. Nothing is added here: a new record is checked.
+UNCHECKED_CITATIONS = set("""
+m3-001-application-state-decision
+m3-004-state-storage-decision
+m3-016-typed-get-header-access-decision
+m3-018-route-value-decoding-and-string-route-values-decision
+m3-020-http-methods-decision
+m3-026-head-decision
+m3-028-json-response-status-decision
+m3-030-method-not-allowed-decision
+m3-032-serving-entrypoint-decision
+m3-036-testclient-head-decision
+m3-038-request-body-bytes-decision
+m3-039-request-target-and-method-bytes-decision
+m3-044-server-receive-body-limit-decision
+m3-045-graceful-shutdown-decision
+m3-046-head-of-line-blocking-decision
+m3-047-server-idle-timeout-decision
+m3-048-bodyless-typed-post-put-and-patch-handlers-decision
+m3-049-multi-worker-serving-decision
+m3-051-server-tls-decision
+m3-056-streaming-responses-and-cancellation-decision
+m3-058-dropped-error-report-decision
+m3-059-dropped-error-report-amendment
+m3-060-tls-with-workers-decision
+m3-063-request-context-decision
+m3-066-request-header-conversion-decision
+m3-068-worker-connection-spread-decision
+m3-070-backend-coupling-decision
+m3-071-handler-execution-model-decision
+m3-073-request-host-decision
+m3-074-state-borrowing-decision
+""".split())
 
 SECTIONS = {}
 
 
-def plain(line):
+def plain(line, labels):
     """A line as CITATION reads it: each link replaced by its destination
-    (its title dropped), each URL by a word that is no path, and backticks
-    dropped; so a path, a path in backticks and a link name a file alike,
-    and a URL never names one."""
-    return URL.sub("URL", ANY_LINK.sub(r"\1", line)).replace("`", "")
+    (an inline one's title dropped, a reference's looked up in labels), each
+    URL by a word that is no path, and backticks dropped; so a path, a path
+    in backticks and a link name a file alike, and a URL never names one."""
+    def destination(m):
+        if m.group(2):
+            return m.group(2)
+        return labels.get(label_key(m.group(3) or m.group(1)), m.group(0))
+    return URL.sub("URL", ANY_LINK.sub(destination, line)).replace("`", "")
+
+
+def blocks(path):
+    """The blocks a citation may not cross, each a list of (number, text):
+    in a Markdown file, each paragraph, heading or table row (Scan); in a
+    code file, each run of comment lines or of docstring lines up to a blank
+    one, and each other line on its own, with \\" read as "."""
+    if path.suffix == ".md":
+        scan = Scan(path.read_text())
+        return [[(n, plain(line, scan.labels).strip()) for n, line in block]
+                for block in scan.blocks]
+    found, kind, docstring = [], None, False
+    for n, line in enumerate(path.read_text().split("\n"), 1):
+        text = line.strip()
+        toggles = text.count('"' * 3) % 2 == 1
+        if docstring or toggles:
+            now, text = "docstring", text.replace('"' * 3, "")
+        elif text.startswith("#"):
+            now, text = "comment", text.lstrip("#")
+        else:
+            now = "code"
+        if toggles:
+            docstring = not docstring
+        text = plain(text.replace('\\"', '"').strip(), {})
+        if not text:
+            kind = None
+            continue
+        if now != kind or now == "code":
+            found.append([])
+        found[-1].append((n, text))
+        kind = now
+    return found
 
 
 def sections(path):
@@ -496,50 +591,45 @@ def sections(path):
 
 
 def check_citations(errors):
-    """Each section citation names a heading or section number its file has.
-    Decision records are not read: their bodies are not rewritten
-    (docs/DEVELOPMENT.md section 2), cite headings their documents had then,
-    which docs/history/architecture-decisions.md maps to today's, and also
-    quote text that is not a heading right after a path."""
-    sources = []
-    for path in files({".md"}):
-        if path.parent == ROOT / "docs/history/decisions":
-            continue
-        lines, last = [], None
-        for n, line in Scan(path.read_text()).prose:
-            if last is not None and n != last + 1:
-                lines.append((n, ""))  # a gap: no citation spans it
-            lines.append((n, plain(line).strip()))
-            last = n
-        sources.append((path, lines))
-    for path in files(CODE_SUFFIXES):
-        if path.name.startswith("test_check_"):
-            continue  # its fixtures name documents of a scratch repository
-        sources.append((path, [
-            (n, plain(COMMENT.sub("", line, count=1).replace('\\"', '"')))
-            for n, line in enumerate(path.read_text().split("\n"), 1)
-        ]))
-    for path, lines in sources:
+    """Each section citation names a heading or section number its file has,
+    in every Markdown file but the records in UNCHECKED_CITATIONS and in
+    every code, script or CI file."""
+    sources = [p for p in files({".md"})
+               if not (p.parent == ROOT / "docs/history/decisions"
+                       and p.stem in UNCHECKED_CITATIONS)]
+    sources += [p for p in files(CODE_SUFFIXES)
+                # a checker's own test: its fixtures name a scratch repository
+                if not p.name.startswith("test_check_")]
+    for path in sources:
         rel = path.relative_to(ROOT)
-        text = "\n".join(line for _, line in lines)
-        for m in CITATION.finditer(text):
-            n = lines[text.count("\n", 0, m.start())][0]
-            file, heading, numbers = m.groups()
-            heading = heading and " ".join(heading.split())
-            dest = path.parent / file
-            if not dest.exists():
-                dest = ROOT / file
-            if not dest.exists():
-                errors.append(f"{rel}:{n}: {file}: no such file")
-                continue
-            names, numbered = sections(dest.resolve())
-            where = dest.resolve().relative_to(ROOT)
-            if heading is not None and slug(heading) not in names:
-                errors.append(f"{rel}:{n}: \"{heading}\": no such heading in {where}")
-            for number in re.findall(r"\d+", numbers or ""):
-                if number not in numbered:
-                    errors.append(f"{rel}:{n}: section {number}: no such "
-                                  f"numbered heading in {where}")
+        for block in blocks(path):
+            text = "\n".join(line for _, line in block)
+            for m in CITATION.finditer(text):
+                n = block[text.count("\n", 0, m.start())][0]
+                check_citation(errors, path, f"{rel}:{n}", *m.groups())
+
+
+def check_citation(errors, path, where, file, heading, numbers):
+    dest = path.parent / file
+    if not dest.exists():
+        dest = ROOT / file
+    dest = dest.resolve()
+    if ROOT not in dest.parents:
+        errors.append(f"{where}: {file}: outside the repository")
+        return
+    if not dest.is_file():
+        errors.append(f"{where}: {file}: no such file")
+        return
+    names, numbered = sections(dest)
+    rel = dest.relative_to(ROOT)
+    if heading is not None:
+        heading = " ".join(heading.split())
+        if slug(heading) not in names:
+            errors.append(f"{where}: \"{heading}\": no such heading in {rel}")
+    for number in re.findall(r"\d+", numbers or ""):
+        if number not in numbered:
+            errors.append(f"{where}: section {number}: no such numbered "
+                          f"heading in {rel}")
 
 
 def main():
