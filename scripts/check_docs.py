@@ -25,9 +25,8 @@
    as CommonMark reads it; in Python and Mojo, a run of comments in one
    column, or a string read as the value Python makes of it (adjacent
    literals joined, escapes decoded); elsewhere, a run of comment lines or
-   a line (blocks). A quote
-   right after a path is read as a heading, so quote other text elsewhere
-   in the sentence.
+   a line (blocks). A quote right after a path is read as a heading, so
+   quote other text elsewhere in the sentence.
 
 Standard library only: python3 -I scripts/check_docs.py [ROOT], where ROOT
 (the repository by default) is for scripts/test_check_docs.py.
