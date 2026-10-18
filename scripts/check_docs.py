@@ -18,20 +18,26 @@
    (scripts/test_check_*.py) is skipped, since its fixtures name documents
    of a scratch repository.
 4. Every section cited by name or number exists: a Markdown file's path or
-   a link to it, then a quoted heading or "section N" in the same paragraph
-   or comment (CITATION), in every Markdown file but the older decision
-   records in UNCHECKED_CITATIONS and in every code, script or CI file. A
-   quote right after a path is read as a heading, so quote other text
-   elsewhere in the sentence.
+   a link to it, then a quoted heading or "section N" in the same block
+   (CITATION), in every Markdown file but the older decision records in
+   UNCHECKED_CITATIONS and in every code, script or CI file. A block is a
+   paragraph, heading or table row of a document, its inline Markdown read
+   as CommonMark reads it; in Python and Mojo, a run of comments or a
+   string, read by tokenize; elsewhere, a run of comment lines or a line
+   (blocks). A quote right after a path is read as a heading, so quote
+   other text elsewhere in the sentence.
 
 Standard library only: python3 -I scripts/check_docs.py [ROOT], where ROOT
 (the repository by default) is for scripts/test_check_docs.py.
 """
 
+import io
 import os
 import pathlib
 import re
+import string
 import sys
+import tokenize
 
 ROOT = (
     pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1
@@ -473,21 +479,17 @@ def check_paths(errors):
 # not) or by a link to it, followed by a quoted heading (`, "Heading"`,
 # ` ("Heading"` or ` "Heading"`, starting on that line or the next and over
 # at most two lines) or by `section 7` (`sections 6 and 7`), all in one
-# block (blocks). It is read in plain text (plain), the same for a document
-# and a code comment.
+# block (blocks). It is read in plain text (plain), the same for a document,
+# a comment and a string.
 SEP = r"[ \t]*\n?[ \t]*"  # spaces, and at most one line break
 CITATION = re.compile(
     r"(?<![\w./-])([\w./-]+\.md)(?:#[\w-]*)?(?=[,\s(])"
     rf",?{SEP}(?:\(?\"([^\"\s][^\"\n]*(?:\n[^\"\n]*)?)\""
     rf"|sections?{SEP}(\d+(?:(?:,|,?{SEP}(?:and|or)){SEP}\d+)*))"
 )
-# A link: its text (brackets in it nested once), then a destination, a
-# label ("[text][label]", "[text][]") or nothing ("[label]").
-LINK_TEXT = r"\[((?:[^\[\]\\]|\\.|\[(?:[^\[\]\\]|\\.)*\])*)\]"
-ANY_LINK = re.compile(
-    LINK_TEXT + r"(?:\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)|\[([^\]]*)\]|(?![\[(]))"
-)
-URL = re.compile(r"\b[A-Za-z][\w+.-]*://[^\s<>\"'`]*")
+# A URL, with a scheme or scheme-relative ("//host/path").
+URL = re.compile(r"\b[A-Za-z][\w+.-]*://[^\s<>\"'`]*|(?<![\w./:-])//[^\s<>\"'`]*")
+PUNCTUATION = set(string.punctuation)  # what a backslash escapes
 NUMBERED = re.compile(r"(\d+)\.\s+(.*)")
 # Records written before this check whose citations name headings their
 # documents had then, which docs/history/architecture-decisions.md maps to
@@ -530,48 +532,166 @@ m3-074-state-borrowing-decision
 SECTIONS = {}
 
 
+def code_span(line, i):
+    """Where the code span opening at line[i] ends, and its content; or the
+    end of the unmatched backtick run, and None."""
+    run = len(line) - i - len(line[i:].lstrip("`"))
+    j = i + run
+    while True:
+        j = line.find("`" * run, j)
+        if j < 0:
+            return i + run, None
+        end = len(line) - len(line[j:].lstrip("`"))
+        if end - j == run:
+            return end, line[i + run:j]
+        j = end
+
+
+def link_text_end(line, i):
+    """Where the bracket opening at line[i] closes (brackets nested to any
+    depth, escapes and code spans skipped), or None."""
+    depth, j = 0, i
+    while j < len(line):
+        c = line[j]
+        if c == "\\" and line[j + 1:j + 2] in PUNCTUATION:
+            j += 2
+            continue
+        if c == "`":
+            j = code_span(line, j)[0]
+            continue
+        if c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return None
+
+
+# After a link's text: "(dest)", "(<dest>)", either with a title in "", ''
+# or (); and "[label]" or "[]".
+INLINE = re.compile(
+    r"\(\s*(?:<([^<>\n]*)>|((?:[^\s()\\]|\\.|\((?:[^\s()\\]|\\.)*\))+))?"
+    r"(?:\s+(?:\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\)))?\s*\)")
+LABEL = re.compile(r"\[((?:[^\[\]\\]|\\.)*)\]")
+
+
+def link(line, i, labels):
+    """The destination and end of the link whose text opens at line[i], as
+    CommonMark reads it: inline ("[text](dest "title")"), full or collapsed
+    reference ("[text][label]", "[text][]") or shortcut ("[label]"); or
+    None."""
+    close = link_text_end(line, i)
+    if close is None:
+        return None
+    text = label_key(line[i + 1:close])
+    m = INLINE.match(line, close + 1)
+    if m:
+        return m.group(1) or m.group(2) or "", m.end()
+    m = LABEL.match(line, close + 1)
+    if m and (label_key(m.group(1)) or text) in labels:
+        return labels[label_key(m.group(1)) or text], m.end()
+    if text in labels:
+        return labels[text], close + 1
+    return None
+
+
 def plain(line, labels):
-    """A line as CITATION reads it: each link replaced by its destination
-    (an inline one's title dropped, a reference's looked up in labels), each
-    URL by a word that is no path, and backticks dropped; so a path, a path
-    in backticks and a link name a file alike, and a URL never names one."""
-    def destination(m):
-        if m.group(2):
-            return m.group(2)
-        return labels.get(label_key(m.group(3) or m.group(1)), m.group(0))
-    return URL.sub("URL", ANY_LINK.sub(destination, line)).replace("`", "")
+    """A line as CITATION reads it, its inline Markdown read left to right as
+    CommonMark does: an escaped character (\\[) is that character and no
+    syntax; a code span is its content, backticks dropped; a link is its
+    destination (a reference's looked up in labels), its text and title
+    dropped; and each URL is a word that is no path. So a path, a path in
+    backticks and a link name a file alike, and a URL never names one. Each
+    line is read alone: a link or code span broken across lines is text."""
+    out, i = [], 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and line[i + 1:i + 2] in PUNCTUATION:
+            out.append(line[i + 1])
+            i += 2
+        elif c == "`":
+            i, content = code_span(line, i)
+            out.append(content or "")
+        elif c == "[" and (found := link(line, i, labels)):
+            out.append(found[0])
+            i = found[1]
+        else:
+            out.append(c)
+            i += 1
+    return URL.sub("URL", "".join(out))
+
+
+def line_blocks(text):
+    """The blocks of a file read line by line: each run of comment lines
+    ("#" first) up to an empty or blank one, and each other line."""
+    found, comment = [], False
+    for n, line in enumerate(text.split("\n"), 1):
+        line = line.strip()
+        now = line.startswith("#")
+        line = plain(line.lstrip("#").replace('\\"', '"').strip(), {})
+        if not line:
+            comment = False
+            continue
+        if not (now and comment):
+            found.append([])
+        found[-1].append((n, line))
+        comment = now
+    return found
+
+
+STRING = re.compile(r"[A-Za-z]*('''|\"\"\"|'|\")(.*)\1", re.S)
+STRINGS = {tokenize.STRING, getattr(tokenize, "FSTRING_MIDDLE", None)}
+LAYOUT = {tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT}
+
+
+def token_blocks(text):
+    """The blocks of a Python or Mojo file read by tokenize: each run of
+    comments on consecutive lines up to an empty one, and each string (a
+    docstring too) up to a blank line; code is not read."""
+    found, last = [], None  # the line of the comment a run may continue
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        row = token.start[0]
+        if token.type == tokenize.COMMENT:
+            line = plain(token.string.lstrip("#").replace('\\"', '"').strip(), {})
+            if not line:
+                continue  # and the next comment starts a run
+            if last != row - 1:
+                found.append([])
+            found[-1].append((row, line))
+            last = row
+        elif token.type not in LAYOUT:
+            last = None
+            if token.type in STRINGS:
+                m = STRING.fullmatch(token.string)
+                found.append([])
+                for k, line in enumerate((m.group(2) if m else token.string).split("\n")):
+                    line = plain(line.replace('\\"', '"').strip(), {})
+                    if line:
+                        found[-1].append((row + k, line))
+                    else:
+                        found.append([])
+    return [block for block in found if block]
 
 
 def blocks(path):
     """The blocks a citation may not cross, each a list of (number, text):
     in a Markdown file, each paragraph, heading or table row (Scan); in a
-    code file, each run of comment lines or of docstring lines up to a blank
-    one, and each other line on its own, with \\" read as "."""
+    Python or Mojo file, its comments and strings (token_blocks), or line by
+    line if it does not tokenize; in any other code file, line by line
+    (line_blocks); with \\" read as " in code."""
+    text = path.read_text()
     if path.suffix == ".md":
-        scan = Scan(path.read_text())
+        scan = Scan(text)
         return [[(n, plain(line, scan.labels).strip()) for n, line in block]
                 for block in scan.blocks]
-    found, kind, docstring = [], None, False
-    for n, line in enumerate(path.read_text().split("\n"), 1):
-        text = line.strip()
-        toggles = text.count('"' * 3) % 2 == 1
-        if docstring or toggles:
-            now, text = "docstring", text.replace('"' * 3, "")
-        elif text.startswith("#"):
-            now, text = "comment", text.lstrip("#")
-        else:
-            now = "code"
-        if toggles:
-            docstring = not docstring
-        text = plain(text.replace('\\"', '"').strip(), {})
-        if not text:
-            kind = None
-            continue
-        if now != kind or now == "code":
-            found.append([])
-        found[-1].append((n, text))
-        kind = now
-    return found
+    if path.suffix in (".py", ".mojo"):
+        try:
+            return token_blocks(text)
+        except (tokenize.TokenError, SyntaxError):
+            pass
+    return line_blocks(text)
 
 
 def sections(path):
