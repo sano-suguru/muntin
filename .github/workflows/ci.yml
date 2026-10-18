@@ -56,6 +56,12 @@ jobs:
           - { label: check 1/2, script: check, shard: 1/2 }
           - { label: check 2/2, script: check, shard: 2/2 }
           - { label: test, script: test, shard: "" }
+        # test.sh under AddressSanitizer (SANITIZE in scripts/test.sh), then
+        # the known gaps that must still report (scripts/run_origin_gaps.sh).
+        # Linux only: leak detection is verified there alone.
+        include:
+          - os: ubuntu-latest
+            task: { label: test asan, script: test, shard: "", sanitize: address }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -72,11 +78,14 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: .pixi/envs/default/share/max/cache/.mojo_cache
-          key: mojo-${{ runner.os }}-${{ matrix.task.script }}${{ matrix.task.shard }}-${{ hashFiles('pixi.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: mojo-${{ runner.os }}-${{ matrix.task.script }}${{ matrix.task.shard }}-${{ hashFiles('pixi.lock') }}-
+          key: mojo-${{ runner.os }}-${{ matrix.task.script }}${{ matrix.task.shard }}${{ matrix.task.sanitize }}-${{ hashFiles('pixi.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mojo-${{ runner.os }}-${{ matrix.task.script }}${{ matrix.task.shard }}${{ matrix.task.sanitize }}-${{ hashFiles('pixi.lock') }}-
       - env:
           CHECK_SHARD: ${{ matrix.task.shard }}
+          SANITIZE: ${{ matrix.task.sanitize }}
         run: ./scripts/${{ matrix.task.script }}.sh
+      - if: matrix.task.sanitize == 'address'
+        run: ./scripts/run_origin_gaps.sh
       - if: matrix.task.script == 'check'
         run: git diff --check
       # Muntin's own checks must not need Flare: only the default
