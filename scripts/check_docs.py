@@ -38,6 +38,9 @@ BUDGETS = [
     ("README.md", 10 * KB),
     ("AGENTS.md", 6 * KB),
     ("docs/GUIDE.md", 20 * KB),
+    # #163 restored the stop's constraints and exceptions the reduction had
+    # dropped; split the page before raising this again.
+    ("docs/reference/serving.md", 35 * KB),
     ("docs/reference/*.md", 28 * KB),  # past this, split the topic
     ("docs/ARCHITECTURE.md", 50 * KB),  # target 20 KB
     ("docs/DEVELOPMENT.md", 20 * KB),  # target 10 KB
