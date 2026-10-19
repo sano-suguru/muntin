@@ -260,7 +260,13 @@ request with neither `:authority` nor `host`, and one upgraded from
 HTTP/1.1 with `Upgrade: h2c` without `Host` (Flare answers the upgrade
 101 and the request on stream 1). An empty `Host`, a `Host` in another
 casing, HTTP/1.0 without one, an h2c request with `host` only and an
-upgrade with `Host` are answered by `App.handle`. The child keeps
+upgrade with `Host` are answered by `App.handle`. M3-076 adds `Host`
+values in the same case: one that is not `uri-host [ ":" port ]` (userinfo,
+a space, a path, an unclosed bracket) is the adapter's 400 over HTTP/1.1,
+HTTP/1.0 and h2c, in `:authority` or in `host`, and after an upgrade; so is
+an empty value over h2c (an empty `:authority` beside a `host`, an empty
+`host`, an upgrade's empty `Host`); an IP literal with a port, and a value
+with whitespace that Flare trims, are `App.handle`'s answer. The child keeps
 answering.
 
 M3-044 serves `receive_app()` (a middleware `counted` that counts the
@@ -3345,10 +3351,12 @@ def test_request_target_and_method_bytes_over_h2c_and_http1() raises:
         waitpid(child.pid)
 
 
-def test_request_without_host_is_400_over_localhost() raises:
+def test_request_host_is_checked_over_localhost() raises:
     """An HTTP/1.1 request without `Host`, and an h2c one with neither
     `:authority` nor `host`, upgraded or not, are the adapter's 400 before
-    `App.handle`; HTTP/1.0 needs none (M3-073)."""
+    `App.handle`; HTTP/1.0 needs none (M3-073). So is a `Host` value that is
+    not `uri-host [ ":" port ]` on every version, and an empty one over
+    h2c, upgraded or not (M3-076)."""
     var child = _serve_in_child(targets_app())
     try:
         var close = String("Connection: close\r\n\r\n")
@@ -3363,6 +3371,30 @@ def test_request_without_host_is_400_over_localhost() raises:
                 True,
             ),
             (String("GET /hello HTTP/1.0\r\n") + close, True),
+            # M3-076: the value, which Flare trims and otherwise admits.
+            (
+                String("GET /hello HTTP/1.1\r\nHost: user@localhost\r\n")
+                + close,
+                False,
+            ),
+            (
+                String("GET /missing HTTP/1.1\r\nHost: local host\r\n") + close,
+                False,
+            ),
+            (String("GET /hello HTTP/1.0\r\nHost: a/b\r\n") + close, False),
+            (
+                String("GET /hello HTTP/1.1\r\nHost: [::1:8080\r\n") + close,
+                False,
+            ),
+            (
+                String("GET /hello HTTP/1.1\r\nHost: [::1]:8080\r\n") + close,
+                True,
+            ),
+            (
+                String("GET /hello HTTP/1.1\r\nHost: \t localhost:80 \r\n")
+                + close,
+                True,
+            ),
         ]
         for c in cases:
             var got = h1_wire(child.port, c[0])
@@ -3392,6 +3424,16 @@ def test_request_without_host_is_400_over_localhost() raises:
         assert_true("\r\nContent-Length: 11\r\n" in head, head)
         assert_true("X-Seen" not in head, head)
         assert_true(head.endswith("\r\n\r\n"), head)
+        var head_value = h1_wire(
+            child.port, String("HEAD /hello HTTP/1.1\r\nHost: a b\r\n") + close
+        )
+        print("observed HEAD with Host a b:", repr(head_value))
+        assert_true(
+            head_value.startswith("HTTP/1.1 400 Bad Request\r\n"), head_value
+        )
+        assert_true("\r\nContent-Length: 11\r\n" in head_value, head_value)
+        assert_true("X-Seen" not in head_value, head_value)
+        assert_true(head_value.endswith("\r\n\r\n"), head_value)
 
         # h2c: Flare writes `:authority` as `Host`; with neither it is the
         # adapter's 400, with `host` only `App.handle`'s answer.
@@ -3413,6 +3455,44 @@ def test_request_without_host_is_400_over_localhost() raises:
         assert_equal(_h2_field(hosted[0], ":status"), "200")
         assert_equal(String(from_utf8=Span(hosted[1])), "hello")
         assert_equal(_h2_field(hosted[0], "x-seen"), "1")
+        # M3-076: an invalid value in `:authority` or `host`, an empty
+        # `host`, and an empty `:authority`, which Flare hands over as the
+        # empty `Host` without the `host` beside it, are the adapter's 400; a
+        # valid IP literal is `App.handle`'s answer.
+        var h2_cases: List[Tuple[String, String, String]] = [
+            (String("user@localhost"), String(""), String("400")),
+            (String(""), String("local host"), String("400")),
+            (String(""), String("<empty>"), String("400")),
+            (String("<empty>"), String("localhost"), String("400")),
+            (String("[::1]:1"), String(""), String("200")),
+        ]
+        for c in h2_cases:
+            var fields = List[Tuple[String, String]]()
+            var authority = c[0]
+            if c[0] == "<empty>":
+                fields.append((String(":authority"), String("")))
+                authority = ""
+            if c[1] == "<empty>":
+                fields.append((String("host"), String("")))
+            elif c[1].byte_length() > 0:
+                fields.append((String("host"), c[1]))
+            var got = h2_exchange(
+                child.port,
+                "GET",
+                "/hello",
+                fields,
+                List[UInt8](),
+                authority=authority,
+            )
+            var at = String(":authority ", c[0], " host ", c[1])
+            print("observed h2c", at, ":", _h2_fields(got[0]))
+            assert_equal(_h2_field(got[0], ":status"), c[2], at)
+            if c[2] == "400":
+                assert_equal(String(from_utf8=Span(got[1])), "Bad Request", at)
+                assert_equal(_h2_field(got[0], "x-seen"), "<none>", at)
+            else:
+                assert_equal(String(from_utf8=Span(got[1])), "hello", at)
+                assert_equal(_h2_field(got[0], "x-seen"), "1", at)
 
         # `Upgrade: h2c` (RFC 7540 section 3.2; obsolete in RFC 9113, still
         # served by Flare v0.12.0): the request is HTTP/1.1, answered on
@@ -3444,6 +3524,25 @@ def test_request_without_host_is_400_over_localhost() raises:
         assert_equal(_h2_field(with_host[1], ":status"), "200")
         assert_equal(String(from_utf8=Span(with_host[2])), "hello")
         assert_equal(_h2_field(with_host[1], "x-seen"), "1")
+        # M3-076: an invalid `Host`, and an empty one (which Flare drops, so
+        # stream 1 carries neither `:authority` nor `host`), 400 after the 101.
+        for value in ["user@localhost", ""]:
+            var refused = h2c_upgraded(
+                child.port, upgrade + "Host: " + value + "\r\n\r\n"
+            )
+            print(
+                "observed upgrade with Host",
+                repr(value),
+                ":",
+                refused[0],
+                _h2_fields(refused[1]),
+            )
+            assert_true(refused[0].startswith("HTTP/1.1 101 "), refused[0])
+            assert_equal(_h2_field(refused[1], ":status"), "400", value)
+            assert_equal(
+                String(from_utf8=Span(refused[2])), "Bad Request", value
+            )
+            assert_equal(_h2_field(refused[1], "x-seen"), "<none>", value)
         assert_true(_running(child.pid))
     finally:
         _ = kill(child.pid, SIGKILL)
