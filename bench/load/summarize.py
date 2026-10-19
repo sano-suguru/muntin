@@ -4,15 +4,18 @@ library only). Not run by CI.
     python3 bench/load/summarize.py RUNS_FILE
 
 One row per worker count, case, protocol and implementation: the outcomes
-summed over the rounds (bench/load/load.c says what each one means), and
-the median over the rounds of the ok answers per second, their latency
-percentiles, the server's CPU time per ok answer and its peak resident
-memory. `flare/muntin` is the median of the rounds' ratios of ok answers
+of the requests sent in the measured window, summed over the rounds
+(bench/load/load.c says what each one means), and how many of them were
+still in flight when it ended; the median over the rounds of the ok answers
+per second that ended in the window, the latency percentiles of the
+requests sent in it, the server's CPU time in the window per ok answer that
+ended in it, and its peak resident memory. `flare/muntin` is the median of the rounds' ratios of ok answers
 per second, with the smallest and the largest. A row marked `†` had answers
 that were not ok, stray bytes, frames after a stream's end or h2c
 connection errors: its rate is not a throughput comparison, read it with
 the counts beside it. Stop runs get their own table: before and after the
-signal, and when the server ended."""
+signal, and when the server ended. Last, the most CPU time one client
+thread used in any run's window."""
 
 import statistics
 import sys
@@ -67,9 +70,9 @@ def main():
     print(f"Rounds: {rounds}. Counts are sums over the rounds; rates, latencies, CPU and memory are medians.")
     for workers in sorted({k[0] for k in order}, key=int):
         print(f"\n### {workers} worker(s)\n")
-        print("| case | proto | impl | sent | ok | status | invalid | disconnected | timeout | ok/s | p50 ms | p99 ms "
-              "| server CPU µs/ok | peak RSS MiB | flare/muntin |")
-        print("|---|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+        print("| case | proto | impl | sent | ok | status | invalid | disconnected | timeout | in flight at end | ok/s "
+              "| p50 ms | p99 ms | server CPU µs/ok | peak RSS MiB | flare/muntin |")
+        print("|---|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
         for key in order:
             if key[0] != workers or key[1] == "stop":
                 continue
@@ -81,7 +84,7 @@ def main():
                 counts = [total(rows, k) for k in OUT]
                 bad = "†" if any(counts[2:]) or any(total(rows, k) for k in ANOMALIES) else ""
                 print(f"| {key[1]} | {key[2]} | {impl} | " + " | ".join(f"{c:,}" for c in counts)
-                      + f" | {fmt(med(rows, 'ok_per_s'))}{bad} | {fmt(med(rows, 'p50_us'), 1000, 2)}"
+                      + f" | {total(rows, 'inflight_end'):,} | {fmt(med(rows, 'ok_per_s'))}{bad} | {fmt(med(rows, 'p50_us'), 1000, 2)}"
                       f" | {fmt(med(rows, 'p99_us'), 1000, 2)} | {fmt(med(rows, 'srv_cpu_us_per_ok'), 1, 1)}"
                       f" | {fmt(med(rows, 'srv_rss_peak_kib'), 1024, 1)} | {ratio(by_impl) if impl == 'flare' else ''} |")
         slow = [k for k in order if k[0] == workers and any("slow_sent" in r for rs in groups[k].values() for r in rs)]
@@ -102,7 +105,7 @@ def main():
             print("\nStop (SIGTERM 1 s into the window): requests sent before the signal and from it on, and the"
                   " server's end\n")
             print("| proto | impl | before: sent | ok | not ok | after: sent | ok | invalid | disconnected | timeout "
-                  "| connect failed | exit ms |")
+                  "| connections refused | exit ms |")
             print("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
             for key in stops:
                 for impl in ("muntin", "flare"):
@@ -115,13 +118,15 @@ def main():
                     print(f"| {key[2]} | {impl} | {sent:,} | {ok:,} | {sent - ok:,} | {total(rows, 'after_sent'):,}"
                           f" | {total(rows, 'after_ok'):,} | {total(rows, 'after_invalid'):,}"
                           f" | {total(rows, 'after_disconnected'):,} | {total(rows, 'after_timeout'):,}"
-                          f" | {total(rows, 'connect_failed'):,} | {', '.join(exits)} |")
+                          f" | {total(rows, 'after_connect_failed'):,} | {', '.join(exits)} |")
     warm = sum(int(r["warmup_bad"]) for r in runs)
     stray = sum(int(r["stray"]) for r in runs)
     after_end = sum(int(r["after_end"]) for r in runs)
     conn_errors = sum(int(r["conn_errors"]) for r in runs)
+    thread_cpu = max(float(r["cli_thread_cpu_max_s"]) for r in runs)
     print(f"\nWarm-up requests not ok, all runs: {warm:,}. Connections with stray bytes: {stray:,}."
-          f" Frames on a stream the server had ended: {after_end:,}. h2c connection errors: {conn_errors:,}.")
+          f" Frames on a stream the server had ended: {after_end:,}. h2c connection errors: {conn_errors:,}."
+          f" Most CPU time of one client thread in a window: {thread_cpu:.2f} s.")
     reasons = defaultdict(int)
     for r in runs:
         for key in ("invalid_as", "disconnected_as", "status_as", "conn_errors_as"):

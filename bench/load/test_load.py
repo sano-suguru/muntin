@@ -89,6 +89,11 @@ H1 = {
     "reset-mid-body": lambda conn: [conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\no"), reset(conn)],
     "silent": lambda conn: time.sleep(1.0),
     "no-required": lambda conn: conn.sendall(response(b"ok")),
+    # Connection is a list (RFC 9110 7.6.1): the client must not reuse it.
+    "connection-list-close": lambda conn: [conn.sendall(response(b"ok", extra=b"Connection: keep-alive, close\r\n")),
+                                           conn.shutdown(socket.SHUT_WR)],
+    "late-stray": lambda conn: conn.sendall(response(b"ok")),
+    "delay": lambda conn: [time.sleep(0.2), conn.sendall(response(b"ok"))],
 }
 
 
@@ -96,6 +101,11 @@ def h1_serve(conn, mode):
     data = b""
     with conn:
         while True:
+            if mode == "late-stray" and not select.select([conn], [], [], 0.1)[0]:
+                # No request for 0.1 s: the client sent its last; a stray
+                # byte now is one it reads only if it lingers.
+                conn.sendall(b"x")
+                mode = "ok"
             head, body, data = recv_request(conn, data)
             if head is None:
                 return
@@ -106,7 +116,7 @@ def h1_serve(conn, mode):
                 conn.sendall(response(body))
                 continue
             H1[mode](conn)
-            if mode in ("close", "reset", "short-body", "reset-mid-body", "no-length"):
+            if mode in ("close", "reset", "short-body", "reset-mid-body", "no-length", "connection-list-close"):
                 return
             try:
                 conn.getpeername()
@@ -147,6 +157,7 @@ class H2Server:
         self.bodies = {}  # request bodies of streams not yet whole
         self.pending = []  # whole requests not yet answered: (sid, body)
         self.answered = 0
+        self.last_sid = 0  # late-after-idle: the stream last answered
 
     def read(self, n):
         while len(self.data) < n:
@@ -168,11 +179,21 @@ class H2Server:
             try:
                 if self.read(24) != b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n":
                     return
-                if self.mode == "max-streams-huge":  # MAX_CONCURRENT_STREAMS 2^32-1, which is legal
-                    self.conn.sendall(frame(4, 0, 0, struct.pack(">HI", 3, 0xFFFFFFFF)))
-                else:
-                    self.conn.sendall(frame(4, 0, 0))
+                first = {
+                    "max-streams-huge": frame(4, 0, 0, struct.pack(">HI", 3, 0xFFFFFFFF)),  # legal
+                    "enable-push-0": frame(4, 0, 0, struct.pack(">HI", 2, 0)),  # legal
+                    "enable-push-1": frame(4, 0, 0, struct.pack(">HI", 2, 1)),  # RFC 9113 6.5.2
+                    "enable-push-2": frame(4, 0, 0, struct.pack(">HI", 2, 2)),
+                    "preface-ping": frame(6, 0, 0, b"12345678") + frame(4, 0, 0),  # RFC 9113 3.4
+                }.get(self.mode, frame(4, 0, 0))
+                self.conn.sendall(first)
                 while True:
+                    if self.mode == "late-after-idle" and self.last_sid and self.idle(0.1):
+                        # Nothing for 0.1 s after an answer: the client sent
+                        # its last request; DATA on its ended stream now is
+                        # seen only by a client that lingers.
+                        self.conn.sendall(frame(0, 0, self.last_sid, b"late"))
+                        self.last_sid = 0
                     head = self.read(9)
                     length = int.from_bytes(head[:3], "big")
                     kind, flags, sid = head[3], head[4], int.from_bytes(head[5:9], "big") & 0x7FFFFFFF
@@ -221,8 +242,25 @@ class H2Server:
     def answer(self, sid, body):
         m, send, first = self.mode, self.conn.sendall, self.answered == 0
         ok = frame(1, 4, sid, block()) + frame(0, 1, sid, b"ok")
-        if m in ("ok", "max-streams-huge"):
+        if m in ("ok", "max-streams-huge", "enable-push-0", "enable-push-1", "enable-push-2", "preface-ping"):
             send(ok)
+        elif m == "late-after-idle":
+            send(ok)
+            self.last_sid = sid
+        elif m == "rst-idle":  # stream sid+1 is even: one this client cannot open (RFC 9113 5.1)
+            send(frame(3, 0, sid + 1, struct.pack(">I", 1)) + ok)
+        elif m == "rst-idle-odd":  # sid+2: not opened yet
+            send(frame(3, 0, sid + 2, struct.pack(">I", 1)) + ok)
+        elif m == "wu-idle":
+            send(frame(8, 0, sid + 2, struct.pack(">I", 1)) + ok)
+        elif m == "priority-idle":  # PRIORITY may name an idle stream
+            send(frame(2, 0, sid + 2, struct.pack(">IB", 0, 15)) + ok)
+        elif m == "priority-stream-0":
+            send(frame(2, 0, 0, struct.pack(">IB", 0, 15)) + ok)
+        elif m == "priority-length":
+            send(frame(2, 0, sid, struct.pack(">I", 0)) + ok)
+        elif m == "priority-self":
+            send(frame(2, 0, sid, struct.pack(">IB", sid, 15)) + ok)
         elif m == "ok-post-echo":
             out = frame(1, 4, sid, block(length=str(len(body)).encode()))
             for i in range(0, len(body), 16384):
@@ -345,6 +383,9 @@ CASES = [
     ("h1", "reset-mid-body", "invalid", "in_the_middle_of_a_response", [], None),
     ("h1", "silent", "timeout", None, [], None),
     ("h1", "no-required", "invalid", "without_the_required_header", ["--require-header", "x-need: 1"], None),
+    ("h1", "connection-list-close", "ok", None, [], None),
+    ("h1", "late-stray", "ok", None, [], "stray"),
+    ("h1", "delay", "ok", None, [], None),
     ("h2c", "ok", "ok", None, [], None),
     ("h2c", "ok-interleaved", "ok", None, MUX, None),
     ("h2c", "ok-post-echo", "ok", None, MUX + POST, None),
@@ -381,6 +422,18 @@ CASES = [
     ("h2c", "frame-header-cut", "disconnected", "closed_in_the_middle_of_a_frame", [], "conn_errors"),
     ("h2c", "continuation-cut", "invalid", "closed_in_the_middle_of_a_header_block", [], "conn_errors"),
     ("h2c", "max-streams-huge", "ok", None, MUX, None),
+    ("h2c", "late-after-idle", "ok", "DATA_on_a_stream_the_server_had_ended", [], "after_end conn_errors"),
+    ("h2c", "rst-idle", "invalid", "RST_STREAM_on_an_idle_stream", [], "conn_errors"),
+    ("h2c", "rst-idle-odd", "invalid", "RST_STREAM_on_an_idle_stream", [], "conn_errors"),
+    ("h2c", "wu-idle", "invalid", "WINDOW_UPDATE_on_an_idle_stream", [], "conn_errors"),
+    ("h2c", "enable-push-0", "ok", None, [], None),
+    ("h2c", "enable-push-1", "invalid", "SETTINGS_ENABLE_PUSH", [], "conn_errors"),
+    ("h2c", "enable-push-2", "invalid", "SETTINGS_ENABLE_PUSH", [], "conn_errors"),
+    ("h2c", "preface-ping", "invalid", "a_first_frame_other_than_SETTINGS", [], "conn_errors"),
+    ("h2c", "priority-idle", "ok", None, [], None),
+    ("h2c", "priority-stream-0", "invalid", "PRIORITY_on_stream_0", [], "conn_errors"),
+    ("h2c", "priority-length", "invalid", "a_PRIORITY_frame_not_5_bytes_long", [], None),
+    ("h2c", "priority-self", "invalid", "a_stream_that_depends_on_itself", [], None),
     ("h2c", "close-mid-body", "invalid", "in_the_middle_of_a_response", [], None),
     ("h2c", "close", "disconnected", "closed", [], None),
     ("h2c", "silent", "timeout", None, [], None),
@@ -390,6 +443,11 @@ ANOMALIES = ["stray", "after_end", "conn_errors"]
 # Cases that must also send at least this many requests in their 0.3 s: a
 # client that stops sending still puts every request it sent in one outcome.
 MIN_SENT = {"max-streams-huge": 500}
+# Further fields a case's run must show. `delay` answers 0.2 s after each
+# request in a 0.3 s window: the first answer ends inside it, the second
+# after it, so 1 answer per 0.3 s is the rate and 1 request was in flight at
+# the window's end.
+FIELDS = {"delay": {"ok_per_s": "3", "inflight_end": "1", "ok_late": "1"}}
 
 
 def serve(proto, mode):
@@ -414,7 +472,7 @@ def serve(proto, mode):
 def run(load, proto, mode, extra, body_file):
     listener = serve(proto, mode)
     args = [load, "--port", str(listener.getsockname()[1]), "--proto", proto, "--warmup", "0",
-            "--duration", "0.3", "--timeout", "300", "--path", "/"]
+            "--duration", "0.3", "--timeout", "300", "--linger", "200", "--path", "/"]
     if "--conns" not in extra:
         args += ["--conns", "1"]
     if "--expect" not in extra:
@@ -459,6 +517,9 @@ def main():
                     raise AssertionError(f"want every request {want}: {counts} {f['invalid_as']}")
                 if sent < MIN_SENT.get(mode, 1):
                     raise AssertionError(f"want at least {MIN_SENT[mode]} requests sent: {sent}")
+                for k, v in FIELDS.get(mode, {}).items():
+                    if f[k] != v:
+                        raise AssertionError(f"want {k}={v}: {f[k]}")
                 reasons = " ".join(f[k] for k in ("invalid_as", "disconnected_as", "conn_errors_as"))
                 if why and why not in reasons:
                     raise AssertionError(f"want the reason {why!r}: {reasons}")

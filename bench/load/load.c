@@ -5,8 +5,9 @@
  * server sends.
  *
  *   load --port P --proto h1|h2c --conns C [--streams S] [--threads T]
- *        --warmup W_S --duration D_S [--timeout MS] --method M --path PATH
- *        [--body FILE] (--expect FILE | --expect-text TEXT)
+ *        --warmup W_S --duration D_S [--timeout MS] [--linger MS] --method M
+ *        --path PATH [--body FILE]
+ *        (--expect FILE | --expect-text TEXT | --expect-fields)
  *        [--headers none|browser] [--require-header 'name: value']
  *        [--content-type TYPE] [--slow-path PATH --slow-every N]
  *        [--pid PID] [--term-at MS]
@@ -16,12 +17,16 @@
  * with --slow-every N, every Nth request a thread sends is `GET SLOW_PATH`
  * instead, whose answer must be `slow`. A request with a body says
  * Content-Type TYPE (default application/octet-stream). --headers browser
- * adds the fields of a browser's navigation (BROWSER below) to every request. Requests sent
- * during the first W_S seconds are warm-up; those sent in the D_S seconds
- * after are measured; after that none is sent and the run waits for the
- * ones in flight. With --term-at MS the client sends SIGTERM to PID MS
- * milliseconds into the measured window and goes on sending: requests sent
- * from then on are counted apart (`after_`).
+ * adds the fields of a browser's navigation (BROWSER below) to every
+ * request. --expect-fields expects the answer bench/load's servers give to
+ * `GET /headers`: the request's fields as the handler sees them
+ * (fields_echo below). Requests sent during the first W_S seconds are
+ * warm-up; those sent in the D_S seconds after (the window) are measured;
+ * after that none is sent, the run waits for the ones in flight, then
+ * lingers --linger MS (default 300) with none in flight, still reading and
+ * checking what the server sends. With --term-at MS the client sends
+ * SIGTERM to PID MS milliseconds into the window and goes on sending:
+ * requests sent from then on are counted apart (`after_`).
  *
  * Each request sent (this client began to write it) ends in exactly one
  * outcome:
@@ -43,9 +48,13 @@
  * CRLF; no control character but HTAB in a value or the reason (RFC 9110
  * field-value); no Transfer-Encoding; one Content-Length value (repeated
  * identically at most) and exactly that many body bytes; no byte after it
- * before the next request. Over h2c: frames within the default 16,384-byte
- * frame size, on stream ids this client opened, HPACK without Huffman
- * coding (it is not decoded, so it counts as invalid with that reason); one
+ * before the next request. A `close` among Connection's tokens ends the
+ * connection after that answer. Over h2c: a SETTINGS frame first (the
+ * server's preface), with SETTINGS_ENABLE_PUSH 0 if any; frames within
+ * the default 16,384-byte frame size; on stream ids this client opened,
+ * but PRIORITY, which may name an idle one (not stream 0, 5 bytes, not
+ * depending on its own stream); HPACK without Huffman coding (it is not
+ * decoded, so it counts as invalid with that reason); one
  * `:status` first and no other pseudo-header; lowercase token names, no
  * connection-specific field, values without a control character but HTAB
  * and without surrounding whitespace; Content-Length, if any, equal to the
@@ -58,28 +67,36 @@
  * is counted as `after_end`. Frames on a stream this client reset are
  * ignored, as RFC 9113 section 5.1 allows.
  * Over h2c, `conn_errors` counts connection errors (RFC 9113 5.4.1): a
- * rule above broken for the connection as a whole (frame size, HPACK
- * decoding, PUSH_PROMISE, the connection's window or its WINDOW_UPDATE,
- * an `after_end` frame) and a frame or header block cut short by the
- * connection's end. It counts them whether or not a request was in
+ * rule above broken for the connection as a whole (the preface, SETTINGS,
+ * frame size, a frame on an idle stream, HPACK decoding, PUSH_PROMISE, the
+ * connection's window or its WINDOW_UPDATE, an `after_end` frame, a stream
+ * error on a stream not in flight) and a frame or header block cut short
+ * by the connection's end. It counts them whether or not a request was in
  * flight, since an error after the last answer leaves no request to count
  * it on. The connection is then closed and the streams in flight on it
  * are invalid; one whose frame header arrived before the cut is invalid,
- * not disconnected. A malformed response head or body, and a stream's own
- * window or WINDOW_UPDATE, are stream errors: only that stream is
- * invalid.
+ * not disconnected. A malformed response head or body, a stream's own
+ * window or WINDOW_UPDATE, and a bad PRIORITY on a stream in flight are
+ * stream errors: only that stream is invalid.
  * A connection that fails to open is counted (`connect_failed`), not a
  * request; it is retried after 10 ms.
  *
  * Prints one line of `key=value` fields: for the measured requests `sent`,
- * `ok`, `status`, `invalid`, `disconnected`, `timeout`, `ok_per_s`, the ok
- * answers' latency from sending `p50_us`, `p99_us`, `max_us`; the same for
- * the slow requests with `slow_`; `after_` the same for those sent after
- * SIGTERM, and `exit_ms` when PID ended after it (or `-`); `warmup_bad`,
- * the warm-up requests that were not ok; `srv_cpu_s` (PID's user and system
- * CPU during the measured window), `srv_cpu_us_per_ok`, `srv_rss_peak_kib`
- * (VmHWM at its end) and `srv_rss_kib` (VmRSS); `cli_cpu_s`, this client's
- * own; `connects`, `connect_failed`, `stray` (h1 connections that sent
+ * `ok`, `status`, `invalid`, `disconnected`, `timeout`; `ok_per_s`, the ok
+ * answers that ended in the window (whenever sent) per second; the
+ * measured ok answers' latency from sending `p50_us`, `p99_us`, `max_us`;
+ * `inflight_end`, the requests sent before the window's end that ended
+ * after it (their outcomes are counted, their ok answers are not in
+ * `ok_per_s`), and `ok_late`, the measured ones of them that were ok; the
+ * counts and latencies again for the slow requests with `slow_`, and for
+ * those sent after SIGTERM with `after_`, then `after_connect_failed` and
+ * `exit_ms` when PID ended after it (or `-`); `warmup_bad`, the warm-up
+ * requests that were not ok; `srv_cpu_s` (PID's user and system CPU during the window, or up
+ * to SIGTERM), `srv_cpu_us_per_ok` (that CPU time per ok answer that ended
+ * in the window; `-` with SIGTERM), `srv_rss_peak_kib` (VmHWM at its end)
+ * and `srv_rss_kib` (VmRSS); `cli_cpu_s`, this client's own, and
+ * `cli_thread_cpu_max_s`, the most of one of its threads; `connects`,
+ * `connect_failed`, `stray` (h1 connections that sent
  * bytes with no request in flight, which this client then closed) and
  * `after_end` and `conn_errors` (above); then `invalid_as=`,
  * `disconnected_as=` and `conn_errors_as=` with up to four reasons and
@@ -149,7 +166,8 @@ typedef struct {
 static Req reqs[NK];
 
 static double t0, t_signal = -1; /* t_signal: when SIGTERM was sent, or -1 */
-static volatile int signalled;
+static int signalled; /* set (release) after t_signal; read with acquire */
+static double linger_s = 0.3;
 
 static double now(void) {
     struct timespec ts;
@@ -188,7 +206,11 @@ typedef struct {
 
 typedef struct {
     Bucket b[NG][NK];
-    uint64_t connects, connect_failed, stray, after_end, conn_errors;
+    uint64_t connects, connect_failed, after_connect_failed, stray, after_end, conn_errors;
+    /* ok answers that ended inside the measured window, whenever sent (by
+     * kind); requests sent before the window ended that ended after it, and
+     * the measured ones of those that were ok */
+    uint64_t ok_in_window[NK], inflight_end, ok_late;
     Reason why[4][8]; /* [0] invalid, [1] disconnected, [2] other statuses, [3] connection errors */
 } Stats;
 
@@ -209,7 +231,7 @@ static void reason(Stats *s, int which, const char *text) {
 
 static int group_of(double t) {
     if (t < t0 + warmup_s) return G_WARM;
-    if (signalled && t >= t_signal) return G_AFTER;
+    if (__atomic_load_n(&signalled, __ATOMIC_ACQUIRE) && t >= t_signal) return G_AFTER;
     return G_MEAS;
 }
 
@@ -278,6 +300,7 @@ typedef struct Conn {
     uint32_t hb_sid;
     int hb_end, in_headers;
     int broken; /* a protocol error: the connection is closed */
+    int settings_seen; /* the server's preface, a SETTINGS frame, arrived */
 } Conn;
 
 typedef struct {
@@ -285,18 +308,25 @@ typedef struct {
     Conn *conns;
     Stats stats;
     uint64_t issued;
+    double cpu_s; /* this thread's CPU time during the measured window */
     pthread_t thread;
 } Worker;
 
 static void stream_end(Worker *w, Stream *s, int outcome, const char *why) {
     Bucket *b = &w->stats.b[s->group][s->kind];
     b->out[outcome]++;
+    double t = now(), from = t0 + warmup_s, to = from + duration_s;
+    if (outcome == OK && t >= from && t < to) w->stats.ok_in_window[s->kind]++;
+    if (s->t_sent < to && t >= to) {
+        w->stats.inflight_end++;
+        if (outcome == OK && s->group == G_MEAS) w->stats.ok_late++;
+    }
     if (outcome == OK) {
         if (b->nlat == b->caplat) {
             b->caplat = b->caplat ? b->caplat * 2 : 4096;
             b->lat = xrealloc(b->lat, b->caplat * sizeof *b->lat);
         }
-        b->lat[b->nlat++] = (now() - s->t_sent) * 1e6;
+        b->lat[b->nlat++] = (t - s->t_sent) * 1e6;
     } else if (outcome == INVALID) {
         reason(&w->stats, 0, why ? why : "?");
     } else if (outcome == DISCONNECTED) {
@@ -347,6 +377,11 @@ static void conn_close(Worker *w, Conn *c, const char *why) {
     c->retry_at = 0;
 }
 
+static void connect_failed(Worker *w) {
+    w->stats.connect_failed++;
+    if (group_of(now()) == G_AFTER) w->stats.after_connect_failed++;
+}
+
 static void conn_open(Worker *w, Conn *c) {
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) die("socket: %s", strerror(errno));
@@ -360,7 +395,7 @@ static void conn_open(Worker *w, Conn *c) {
     struct epoll_event ev = {.events = c->events, .data.ptr = c};
     if (epoll_ctl(w->epfd, EPOLL_CTL_ADD, fd, &ev) < 0) die("epoll_ctl: %s", strerror(errno));
     if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0 && errno != EINPROGRESS) {
-        w->stats.connect_failed++;
+        connect_failed(w);
         epoll_ctl(w->epfd, EPOLL_CTL_DEL, fd, NULL);
         close(fd);
         c->fd = -1;
@@ -483,8 +518,16 @@ static const char *h1_parse_head(Conn *c) {
                 q = e < ve ? e + 1 : ve;
             }
         }
-        if (ieq(p, nl, "connection") && (ve - v) == 5 && strncasecmp(v, "close", 5) == 0)
-            c->close_after = 1;
+        if (ieq(p, nl, "connection")) /* a list of tokens (RFC 9110 7.6.1) */
+            for (char *q = v; q < ve;) {
+                char *e = memchr(q, ',', ve - q);
+                if (!e) e = ve;
+                char *a = q, *b = e;
+                while (a < b && (*a == ' ' || *a == '\t')) a++;
+                while (b > a && (b[-1] == ' ' || b[-1] == '\t')) b--;
+                if (ieq(a, b - a, "close")) c->close_after = 1;
+                q = e < ve ? e + 1 : ve;
+            }
         if (require_name && ieq(p, nl, require_name) && (size_t)(ve - v) == require_value_len &&
             memcmp(v, require_value, require_value_len) == 0)
             s->has_required = 1;
@@ -885,6 +928,7 @@ static void h2_connected(Conn *c) {
     c->peer_init_window = 65535;
     c->goaway = 0;
     c->broken = 0;
+    c->settings_seen = 0;
     c->rlen = 0;
     c->in_headers = 0;
     c->recv_unacked = 0;
@@ -959,6 +1003,10 @@ static void after_end(Worker *w, Conn *c, const char *what) {
     h2_fail(w, c, why);
 }
 
+/* Whether sid names an idle stream (RFC 9113 5.1): one this client has not
+ * opened; with push off, every even one. */
+static int idle_stream(Conn *c, uint32_t sid) { return !(sid & 1) || sid >= c->next_sid; }
+
 /* Whether sid names a stream this client opened that is no longer in
  * flight and that it did not reset itself. */
 static int ended_by_server(Conn *c, uint32_t sid) {
@@ -1031,6 +1079,13 @@ static uint32_t be32(const uint8_t *p) {
 
 /* Handles one frame; returns -1 once the connection is gone. */
 static int h2_frame(Worker *w, Conn *c, int type, int flags, uint32_t sid, const uint8_t *p, size_t n) {
+    if (!c->settings_seen) { /* the server's connection preface (RFC 9113 3.4) */
+        if (type != 4 || (flags & 1)) {
+            h2_fail(w, c, "a first frame other than SETTINGS");
+            return -1;
+        }
+        c->settings_seen = 1;
+    }
     if (c->in_headers && type != 9) {
         h2_fail(w, c, "a frame inside a header block");
         return -1;
@@ -1054,7 +1109,7 @@ static int h2_frame(Worker *w, Conn *c, int type, int flags, uint32_t sid, const
         }
         Stream *s = h2_stream(c, sid);
         if (!s) {
-            if (sid >= c->next_sid || !(sid & 1)) {
+            if (idle_stream(c, sid)) {
                 h2_fail(w, c, "DATA on a stream this client did not open");
                 return -1;
             }
@@ -1085,7 +1140,7 @@ static int h2_frame(Worker *w, Conn *c, int type, int flags, uint32_t sid, const
     }
     case 1: /* HEADERS */
     case 9: { /* CONTINUATION */
-        if (!sid || !(sid & 1) || sid >= c->next_sid) {
+        if (!sid || idle_stream(c, sid)) {
             h2_fail(w, c, "a header block on a stream this client did not open");
             return -1;
         }
@@ -1103,6 +1158,9 @@ static int h2_frame(Worker *w, Conn *c, int type, int flags, uint32_t sid, const
                     h2_fail(w, c, "a HEADERS frame cut short");
                     return -1;
                 }
+                Stream *s = h2_stream(c, sid);
+                if (s && (be32(p) & 0x7fffffff) == sid && !s->fail) /* RFC 9113 5.3.1 */
+                    s->fail = "a stream that depends on itself";
                 p += 5;
                 n -= 5;
             }
@@ -1131,6 +1189,10 @@ static int h2_frame(Worker *w, Conn *c, int type, int flags, uint32_t sid, const
             return -1;
         }
         Stream *s = h2_stream(c, sid);
+        if (!s && idle_stream(c, sid)) {
+            h2_fail(w, c, "RST_STREAM on an idle stream");
+            return -1;
+        }
         if (s) {
             uint32_t code = be32(p);
             char why[64];
@@ -1149,6 +1211,10 @@ static int h2_frame(Worker *w, Conn *c, int type, int flags, uint32_t sid, const
         if (flags & 1) return 0;
         for (size_t i = 0; i + 6 <= n; i += 6) {
             uint32_t id = (p[i] << 8) | p[i + 1], v = be32(p + i + 2);
+            if (id == 2 && v != 0) { /* a server may send 0 only (RFC 9113 6.5.2) */
+                h2_fail(w, c, "SETTINGS_ENABLE_PUSH other than 0");
+                return -1;
+            }
             if (id == 3) c->peer_max_streams = v;
             if (id == 4) {
                 if (v > 0x7fffffff) {
@@ -1221,6 +1287,10 @@ static int h2_frame(Worker *w, Conn *c, int type, int flags, uint32_t sid, const
             }
         } else {
             Stream *s = h2_stream(c, sid);
+            if (!s && idle_stream(c, sid)) {
+                h2_fail(w, c, "WINDOW_UPDATE on an idle stream");
+                return -1;
+            }
             if (!s) return 0; /* a closed stream: allowed, ignored */
             if (!inc) {
                 stream_error(w, c, s, "a WINDOW_UPDATE of 0 on its stream", 1);
@@ -1232,8 +1302,24 @@ static int h2_frame(Worker *w, Conn *c, int type, int flags, uint32_t sid, const
         }
         return 0;
     }
+    case 2: { /* PRIORITY: allowed on any stream but 0, idle ones included */
+        Stream *s = h2_stream(c, sid);
+        const char *bad = !sid ? "PRIORITY on stream 0"
+                          : n != 5 ? "a PRIORITY frame not 5 bytes long"
+                          : (be32(p) & 0x7fffffff) == sid ? "a stream that depends on itself"
+                                                          : NULL;
+        if (!bad) return 0;
+        if (s) { /* a stream error */
+            stream_error(w, c, s, bad, n != 5 ? 6 : 1);
+            return 0;
+        }
+        /* on stream 0, or a stream error on no stream in flight, which RFC
+         * 9113 5.4.1 lets an endpoint treat as a connection error */
+        h2_fail(w, c, bad);
+        return -1;
+    }
     default:
-        return 0; /* PRIORITY and unknown frames */
+        return 0; /* unknown frames */
     }
 }
 
@@ -1287,7 +1373,7 @@ static void on_connected(Worker *w, Conn *c) {
     socklen_t len = sizeof err;
     getsockopt(c->fd, SOL_SOCKET, SO_ERROR, &err, &len);
     if (err) {
-        w->stats.connect_failed++;
+        connect_failed(w);
         epoll_ctl(w->epfd, EPOLL_CTL_DEL, c->fd, NULL);
         close(c->fd);
         c->fd = -1;
@@ -1352,6 +1438,12 @@ static void expire(Worker *w, double t) {
     }
 }
 
+static double thread_cpu(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
 static void *run(void *arg) {
     Worker *w = arg;
     w->epfd = epoll_create1(EPOLL_CLOEXEC);
@@ -1362,11 +1454,24 @@ static void *run(void *arg) {
         if (h2) c->hblock = xrealloc(NULL, HBLOCK_MAX);
         conn_open(w, c);
     }
-    double last_expire = 0;
+    double last_expire = 0, idle_since = -1, cpu_from = -1;
+    int cpu_done = 0;
     struct epoll_event evs[256];
     for (;;) {
         double t = now();
-        if (!issuing(t) && !outstanding(w)) break;
+        if (cpu_from < 0 && t >= t0 + warmup_s) cpu_from = thread_cpu();
+        if (cpu_from >= 0 && !cpu_done && !issuing(t)) {
+            w->cpu_s = thread_cpu() - cpu_from;
+            cpu_done = 1;
+        }
+        if (!issuing(t) && !outstanding(w)) {
+            /* Linger: what the server sends after the last answer is still
+             * read and checked (stray bytes, frames after a stream's end,
+             * connection errors) until linger_s passes with nothing in
+             * flight; anything later is not seen. */
+            if (idle_since < 0) idle_since = t;
+            if (t - idle_since >= linger_s) break;
+        }
         int n = epoll_wait(w->epfd, evs, 256, 5);
         if (n < 0 && errno != EINTR) die("epoll_wait: %s", strerror(errno));
         for (int i = 0; i < n; i++) {
@@ -1493,6 +1598,51 @@ static void build(Req *r, const char *method, const char *path, const uint8_t *b
     r->body_len = body ? body_len : 0;
 }
 
+static void put_field(char *out, size_t *n, size_t cap, const char *name, const char *value) {
+    int k = snprintf(out + *n, cap - *n, "%s: %s\n", name, value);
+    if (k < 0 || (size_t)k >= cap - *n) die("--expect-fields: too long");
+    *n += k;
+}
+
+/* What bench/load's servers answer to `GET /headers` (server_muntin.mojo,
+ * `fields`) for the request this client sends: every field but Host and
+ * Cookie, in order, with its name as sent (h2c: lowercase, no Connection);
+ * then the values of four names looked up in another casing. Over h2c the
+ * two Cookie fields arrive as one, joined with "; " (RFC 9113 8.2.3). */
+static uint8_t *fields_echo(size_t *len) {
+    size_t cap = 16384, n = 0;
+    char *out = xrealloc(NULL, cap), lower[64];
+    for (int i = 0; browser && i < NBROWSER; i++) {
+        const char *name = BROWSER[i][0];
+        if (strcasecmp(name, "cookie") == 0 || (h2 && strcasecmp(name, "connection") == 0)) continue;
+        size_t k = 0;
+        for (; name[k] && k < sizeof lower - 1; k++) lower[k] = h2 && name[k] >= 'A' && name[k] <= 'Z' ? name[k] + 32 : name[k];
+        lower[k] = 0;
+        put_field(out, &n, cap, lower, BROWSER[i][1]);
+    }
+    static const char *lookups[][2] = {{"COOKIE", "cookie"}, {"Accept-Language", "accept-language"}};
+    for (int l = 0; l < 2; l++) {
+        const char *values[NBROWSER];
+        int count = 0;
+        for (int i = 0; browser && i < NBROWSER; i++)
+            if (strcasecmp(BROWSER[i][0], lookups[l][1]) == 0) values[count++] = BROWSER[i][1];
+        char joined[1024] = "";
+        if (h2 && l == 0 && count > 1) {
+            size_t j = 0;
+            for (int i = 0; i < count; i++) j += snprintf(joined + j, sizeof joined - j, "%s%s", i ? "; " : "", values[i]);
+            values[0] = joined;
+            count = 1;
+        }
+        n += snprintf(out + n, cap - n, "%s=%d\n", lookups[l][0], count);
+        for (int i = 0; i < count; i++) put_field(out, &n, cap, lookups[l][0], values[i]);
+    }
+    n += snprintf(out + n, cap - n, "HOST=1\n");
+    put_field(out, &n, cap, "HOST", "127.0.0.1");
+    n += snprintf(out + n, cap - n, "X-Absent=0\n");
+    *len = n;
+    return (uint8_t *)out;
+}
+
 static int cmp_double(const void *a, const void *b) {
     double x = *(const double *)a, y = *(const double *)b;
     return x < y ? -1 : x > y;
@@ -1508,13 +1658,14 @@ static void merge(Bucket *into, const Bucket *from) {
     }
 }
 
-static void print_bucket(const char *prefix, Bucket *b, int rate) {
+/* `per_s`: the ok answers per second to print, or below 0 for none. */
+static void print_bucket(const char *prefix, Bucket *b, double per_s) {
     if (b->nlat) qsort(b->lat, b->nlat, sizeof *b->lat, cmp_double);
     printf(" %ssent=%llu %sok=%llu %sstatus=%llu %sinvalid=%llu %sdisconnected=%llu %stimeout=%llu", prefix,
            (unsigned long long)b->sent, prefix, (unsigned long long)b->out[OK], prefix,
            (unsigned long long)b->out[STATUS], prefix, (unsigned long long)b->out[INVALID], prefix,
            (unsigned long long)b->out[DISCONNECTED], prefix, (unsigned long long)b->out[TIMEOUT]);
-    if (rate) printf(" %sok_per_s=%.0f", prefix, b->out[OK] / duration_s);
+    if (per_s >= 0) printf(" %sok_per_s=%.0f", prefix, per_s);
     if (b->nlat) {
         size_t p50 = (b->nlat - 1) * 50 / 100, p99 = (b->nlat - 1) * 99 / 100;
         printf(" %sp50_us=%.0f %sp99_us=%.0f %smax_us=%.0f", prefix, b->lat[p50], prefix, b->lat[p99], prefix,
@@ -1593,6 +1744,7 @@ static void quote_reasons(const char *key, Reason *r) {
 int main(int argc, char **argv) {
     const char *method = "GET", *path = NULL, *body_file = NULL, *expect_file = NULL, *expect_text = NULL;
     const char *slow_path = NULL, *proto = "h1", *headers = "none", *require = NULL;
+    int expect_fields = 0;
     static struct option opts[] = {
         {"port", 1, 0, 'p'},        {"proto", 1, 0, 'P'},      {"conns", 1, 0, 'c'},
         {"streams", 1, 0, 's'},     {"threads", 1, 0, 't'},    {"warmup", 1, 0, 'w'},
@@ -1600,7 +1752,8 @@ int main(int argc, char **argv) {
         {"path", 1, 0, 'u'},        {"body", 1, 0, 'b'},       {"expect", 1, 0, 'e'},
         {"expect-text", 1, 0, 'E'}, {"headers", 1, 0, 'H'},    {"require-header", 1, 0, 'R'},
         {"slow-path", 1, 0, 'S'},   {"slow-every", 1, 0, 'N'}, {"pid", 1, 0, 'k'},
-        {"term-at", 1, 0, 'K'},     {"content-type", 1, 0, 'C'}, {0, 0, 0, 0}};
+        {"term-at", 1, 0, 'K'},     {"content-type", 1, 0, 'C'}, {"linger", 1, 0, 'L'},
+        {"expect-fields", 0, 0, 'F'}, {0, 0, 0, 0}};
     int o;
     while ((o = getopt_long(argc, argv, "", opts, NULL)) != -1) {
         switch (o) {
@@ -1624,12 +1777,14 @@ int main(int argc, char **argv) {
         case 'k': srv_pid = atoi(optarg); break;
         case 'K': term_at_s = atof(optarg) / 1000.0; break;
         case 'C': content_type = optarg; break;
+        case 'L': linger_s = atof(optarg) / 1000.0; break;
+        case 'F': expect_fields = 1; break;
         default: die("unknown option");
         }
     }
     if (port <= 0 || port > 65535 || nconns <= 0 || nthreads <= 0 || nthreads > nconns || duration_s <= 0 ||
-        warmup_s < 0 || !path || (!expect_file == !expect_text) || nstreams <= 0 || nstreams > MAXS ||
-        timeout_s <= 0)
+        warmup_s < 0 || !path || (!!expect_file + !!expect_text + expect_fields != 1) || nstreams <= 0 ||
+        nstreams > MAXS || timeout_s <= 0 || linger_s < 0)
         die("usage: see the header of bench/load/load.c");
     if (strcmp(proto, "h1") == 0)
         h2 = 0;
@@ -1658,6 +1813,9 @@ int main(int argc, char **argv) {
     build(&reqs[K_MAIN], method, path, body, body_len);
     if (expect_file) {
         reqs[K_MAIN].expect = read_file(expect_file, &reqs[K_MAIN].expect_len);
+    } else if (expect_fields) {
+        if (body) die("--expect-fields is for a request without a body");
+        reqs[K_MAIN].expect = fields_echo(&reqs[K_MAIN].expect_len);
     } else {
         reqs[K_MAIN].expect = (const uint8_t *)expect_text;
         reqs[K_MAIN].expect_len = strlen(expect_text);
@@ -1694,7 +1852,7 @@ int main(int argc, char **argv) {
     if (term_at_s >= 0) {
         sleep_until(t0 + warmup_s + term_at_s);
         t_signal = now();
-        __atomic_store_n(&signalled, 1, __ATOMIC_SEQ_CST);
+        __atomic_store_n(&signalled, 1, __ATOMIC_RELEASE);
         if (have_cpu && proc_cpu(srv_pid, &cpu1) != 0) have_cpu = 0;
         rss_peak = proc_kib(srv_pid, "VmHWM");
         rss = proc_kib(srv_pid, "VmRSS");
@@ -1728,11 +1886,17 @@ int main(int argc, char **argv) {
     memset(total, 0, sizeof total);
     Stats all;
     memset(&all, 0, sizeof all);
+    double cli_thread_max = 0;
     for (int i = 0; i < nthreads; i++) {
         for (int g = 0; g < NG; g++)
             for (int k = 0; k < NK; k++) merge(&total[g][k], &ws[i].stats.b[g][k]);
         all.connects += ws[i].stats.connects;
         all.connect_failed += ws[i].stats.connect_failed;
+        all.after_connect_failed += ws[i].stats.after_connect_failed;
+        for (int k = 0; k < NK; k++) all.ok_in_window[k] += ws[i].stats.ok_in_window[k];
+        all.inflight_end += ws[i].stats.inflight_end;
+        all.ok_late += ws[i].stats.ok_late;
+        if (ws[i].cpu_s > cli_thread_max) cli_thread_max = ws[i].cpu_s;
         all.stray += ws[i].stats.stray;
         all.after_end += ws[i].stats.after_end;
         all.conn_errors += ws[i].stats.conn_errors;
@@ -1743,11 +1907,14 @@ int main(int argc, char **argv) {
             }
     }
     printf("proto=%s conns=%d streams=%d", proto, nconns, nstreams);
-    print_bucket("", &total[G_MEAS][K_MAIN], 1);
-    if (slow_path) print_bucket("slow_", &total[G_MEAS][K_SLOW], 0);
+    print_bucket("", &total[G_MEAS][K_MAIN], all.ok_in_window[K_MAIN] / duration_s);
+    printf(" inflight_end=%llu ok_late=%llu", (unsigned long long)all.inflight_end,
+           (unsigned long long)all.ok_late);
+    if (slow_path) print_bucket("slow_", &total[G_MEAS][K_SLOW], -1);
     if (term_at_s >= 0) {
         merge(&total[G_AFTER][K_MAIN], &total[G_AFTER][K_SLOW]);
-        print_bucket("after_", &total[G_AFTER][K_MAIN], 0);
+        print_bucket("after_", &total[G_AFTER][K_MAIN], -1);
+        printf(" after_connect_failed=%llu", (unsigned long long)all.after_connect_failed);
         if (exit_ms >= 0)
             printf(" exit_ms=%.0f", exit_ms);
         else
@@ -1756,14 +1923,17 @@ int main(int argc, char **argv) {
     uint64_t warm_bad = 0;
     for (int k = 0; k < NK; k++) warm_bad += total[G_WARM][k].sent - total[G_WARM][k].out[OK];
     printf(" warmup_bad=%llu", (unsigned long long)warm_bad);
-    uint64_t ok = total[G_MEAS][K_MAIN].out[OK] + total[G_MEAS][K_SLOW].out[OK];
-    if (have_cpu) {
+    /* the same window as the CPU time: the ok answers that ended in it */
+    uint64_t ok = all.ok_in_window[K_MAIN] + all.ok_in_window[K_SLOW];
+    if (have_cpu && term_at_s < 0) {
         double window = cpu1 - cpu0;
         printf(" srv_cpu_s=%.2f srv_cpu_us_per_ok=%s", window, "");
         if (ok)
             printf("%.2f", window * 1e6 / ok);
         else
             printf("-");
+    } else if (have_cpu) { /* stop: the CPU time ends at the signal */
+        printf(" srv_cpu_s=%.2f srv_cpu_us_per_ok=-", cpu1 - cpu0);
     } else {
         printf(" srv_cpu_s=- srv_cpu_us_per_ok=-");
     }
@@ -1771,8 +1941,8 @@ int main(int argc, char **argv) {
     rss_peak >= 0 ? printf("%ld", rss_peak) : printf("-");
     printf(" srv_rss_kib=");
     rss >= 0 ? printf("%ld", rss) : printf("-");
-    printf(" cli_cpu_s=%.2f connects=%llu connect_failed=%llu stray=%llu after_end=%llu conn_errors=%llu",
-           cli1 - cli0, (unsigned long long)all.connects, (unsigned long long)all.connect_failed,
+    printf(" cli_cpu_s=%.2f cli_thread_cpu_max_s=%.2f connects=%llu connect_failed=%llu stray=%llu after_end=%llu conn_errors=%llu",
+           cli1 - cli0, cli_thread_max, (unsigned long long)all.connects, (unsigned long long)all.connect_failed,
            (unsigned long long)all.stray, (unsigned long long)all.after_end, (unsigned long long)all.conn_errors);
     quote_reasons("invalid_as", all.why[0]);
     quote_reasons("disconnected_as", all.why[1]);

@@ -5,7 +5,8 @@ by CI.
     server_flare PORT WORKERS MIDDLEWARE
 
 `GET /slow/:ms` sleeps `ms` milliseconds on the serving thread and answers
-`slow`, as server_muntin.mojo's. Every `HttpServer` setting is its default;
+`slow`, as server_muntin.mojo's; `GET /headers` answers what
+server_muntin.mojo's does, from Flare's own `HeaderMap`. Every `HttpServer` setting is its default;
 Flare installs no signal handler, so SIGTERM ends the process at once. One
 worker serves through `HttpServer.serve(handler)`; more through
 `serve(handler, num_workers=n, pin_cores=False)` (one SO_REUSEPORT listener
@@ -16,7 +17,7 @@ once bound.
 from std.sys import argv
 from std.time import sleep
 
-from flare.http import Handler, HttpServer, Request, Response, Router
+from flare.http import Handler, HeaderMap, HttpServer, Request, Response, Router
 from flare.net import SocketAddr
 
 from flare_app import Tracing, router
@@ -25,6 +26,25 @@ from flare_app import Tracing, router
 def slow(req: Request) raises -> Response:
     sleep(Float64(Int(req.param("ms"))) / 1000.0)
     return Response(status=200, body=List(String("slow").as_bytes()))
+
+
+def _lookup(headers: HeaderMap, name: String, mut out: String):
+    var values = headers.get_all(name)
+    out += String(name, "=", len(values), "\n")
+    for v in values:
+        out += name + ": " + v + "\n"
+
+
+def fields(req: Request) raises -> Response:
+    var out = String()
+    for i in range(req.headers.len()):  # in order: Flare has no accessor for it
+        var name = req.headers._keys[i]
+        var lower = name.lower()
+        if lower != "host" and lower != "cookie":
+            out += name + ": " + req.headers._values[i] + "\n"
+    for name in ["COOKIE", "Accept-Language", "HOST", "X-Absent"]:
+        _lookup(req.headers, String(name), out)
+    return Response(status=200, body=List(out.as_bytes()))
 
 
 def _serve[
@@ -41,6 +61,7 @@ def main() raises:
     var workers = Int(args[2])
     var r = router()
     r.get("/slow/:ms", slow)
+    r.get("/headers", fields)
     var srv = HttpServer.bind(SocketAddr.localhost(UInt16(Int(args[1]))))
     print("ready", Int(srv.local_addr().port), flush=True)
     if Int(args[3]) != 0:

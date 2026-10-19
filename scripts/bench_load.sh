@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Muntin's Server against Flare alone under load, with every response
 # checked: the application of bench/overhead (bench/load/server_muntin.mojo,
-# server_flare.mojo, which add a blocking `GET /slow/{ms}`), both with every
-# server setting at its default, loaded by bench/load/load.c over HTTP/1.1
-# keep-alive and prior-knowledge h2c. Linux only; not run by CI.
+# server_flare.mojo, which add a blocking `GET /slow/{ms}` and `GET
+# /headers`), both with every server setting at its default, loaded by
+# bench/load/load.c over HTTP/1.1 keep-alive and prior-knowledge h2c. Linux
+# only; not run by CI.
 #
 #   ./scripts/bench_load.sh
 #
@@ -23,6 +24,9 @@
 # except `plaintext-bare`'s. Cases, each over h1 (64 connections) and h2c (8
 # connections of 8 streams) unless it says otherwise:
 # - plaintext-bare, plaintext: GET /plaintext;
+# - headers: GET /headers, whose answer is the request's fields as the
+#   handler sees them (bench/load/server_muntin.mojo), checked against the
+#   fields sent (load.c, --expect-fields);
 # - json-get: GET /json; json-post: POST /json, a 23-byte JSON body;
 # - echo-1m: POST /echo with 1 MiB (4 connections, 1 stream each);
 # - middleware: plaintext with the middleware, whose header is required;
@@ -64,7 +68,7 @@ uint DURATION "$duration"
 uint WARMUP "$warmup"
 read -r -a workers <<<"${WORKERS-1 2}"
 for w in "${workers[@]}"; do uint WORKERS "$w"; done
-all_cases=(plaintext-bare plaintext json-get json-post echo-1m middleware slow-mix overload stop)
+all_cases=(plaintext-bare plaintext headers json-get json-post echo-1m middleware slow-mix overload stop)
 read -r -a cases <<<"${CASES-${all_cases[*]}}"
 for c in "${cases[@]}"; do
     if [[ " ${all_cases[*]} " != *" $c "* ]]; then
@@ -160,6 +164,7 @@ client_args() { # CASE PROTO: the client's arguments but --port and --pid; sets 
         --warmup "$warmup" --duration "$dur" --headers "$headers")
     case $1 in
     plaintext-bare | plaintext) args+=(--path /plaintext --expect-text 'Hello, World!') ;;
+    headers) args+=(--path /headers --expect-fields) ;;
     json-get) args+=(--path /json --expect-text '{"message":"Hello, World!"}') ;;
     json-post)
         args+=(--method POST --path /json --body "$out/json-post.body" --content-type application/json
