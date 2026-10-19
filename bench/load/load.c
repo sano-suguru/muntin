@@ -55,9 +55,19 @@
  * invalid and resets it); and no DATA or HEADERS on a stream after the
  * server ended it (END_STREAM, RST_STREAM, or GOAWAY refusing it). That
  * last one cannot change the outcome already counted for that stream: it
- * is counted as `after_end` and breaks the connection, so the streams in
- * flight on it are invalid. Frames on a stream this client reset are
+ * is counted as `after_end`. Frames on a stream this client reset are
  * ignored, as RFC 9113 section 5.1 allows.
+ * Over h2c, `conn_errors` counts connection errors (RFC 9113 5.4.1): a
+ * rule above broken for the connection as a whole (frame size, HPACK
+ * decoding, PUSH_PROMISE, the connection's window or its WINDOW_UPDATE,
+ * an `after_end` frame) and a frame or header block cut short by the
+ * connection's end. It counts them whether or not a request was in
+ * flight, since an error after the last answer leaves no request to count
+ * it on. The connection is then closed and the streams in flight on it
+ * are invalid; one whose frame header arrived before the cut is invalid,
+ * not disconnected. A malformed response head or body, and a stream's own
+ * window or WINDOW_UPDATE, are stream errors: only that stream is
+ * invalid.
  * A connection that fails to open is counted (`connect_failed`), not a
  * request; it is retried after 10 ms.
  *
@@ -71,9 +81,10 @@
  * (VmHWM at its end) and `srv_rss_kib` (VmRSS); `cli_cpu_s`, this client's
  * own; `connects`, `connect_failed`, `stray` (h1 connections that sent
  * bytes with no request in flight, which this client then closed) and
- * `after_end` (above); then `invalid_as=` and `disconnected_as=` with up to
- * four reasons and their counts (warm-up included), and `status_as=` with
- * the other statuses. Exit status 0 if it ran, whatever it counted; 2 for
+ * `after_end` and `conn_errors` (above); then `invalid_as=`,
+ * `disconnected_as=` and `conn_errors_as=` with up to four reasons and
+ * their counts (warm-up included), and `status_as=` with the other
+ * statuses. Exit status 0 if it ran, whatever it counted; 2 for
  * a usage or set-up error. */
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -177,8 +188,8 @@ typedef struct {
 
 typedef struct {
     Bucket b[NG][NK];
-    uint64_t connects, connect_failed, stray, after_end;
-    Reason why[3][8]; /* [0] invalid, [1] disconnected, [2] other statuses */
+    uint64_t connects, connect_failed, stray, after_end, conn_errors;
+    Reason why[4][8]; /* [0] invalid, [1] disconnected, [2] other statuses, [3] connection errors */
 } Stats;
 
 static void reason(Stats *s, int which, const char *text) {
@@ -910,16 +921,20 @@ static void h2_issue(Worker *w, Conn *c, double t) {
 static void h2_fill(Worker *w, Conn *c, double t) {
     if (c->state != C_IDLE && c->state != C_BUSY) return;
     if (!c->goaway && issuing(t)) {
-        int limit = nstreams < (int)c->peer_max_streams ? nstreams : (int)c->peer_max_streams;
-        while (c->nactive < limit && c->next_sid < 0x7fffff00u) h2_issue(w, c, t);
+        /* SETTINGS_MAX_CONCURRENT_STREAMS is any 32-bit value */
+        uint32_t limit = (uint32_t)nstreams < c->peer_max_streams ? (uint32_t)nstreams : c->peer_max_streams;
+        while ((uint32_t)c->nactive < limit && c->next_sid < 0x7fffff00u) h2_issue(w, c, t);
     }
     c->state = c->nactive ? C_BUSY : C_IDLE;
     h2_pump(c);
     h2_flush(w, c);
 }
 
+/* A connection error (RFC 9113 5.4.1): counted with its reason whether or
+ * not a stream was in flight, and every stream in flight is invalid. */
 static void h2_fail(Worker *w, Conn *c, const char *why) {
-    /* A protocol error: every stream in flight is invalid. */
+    w->stats.conn_errors++;
+    reason(&w->stats, 3, why);
     for (int i = 0; i < MAXS; i++)
         if (c->st[i].active) stream_end(w, &c->st[i], INVALID, why);
     c->nactive = 0;
@@ -978,14 +993,15 @@ static void h2_headers_done(Worker *w, Conn *c) {
     const char *bad = hp_decode(&c->dec, c->hblock, c->hblen, &hd, &fatal);
     c->in_headers = 0;
     Stream *s = h2_stream(c, c->hb_sid);
+    if (!s && ended_by_server(c, c->hb_sid)) {
+        after_end(w, c, "HEADERS"); /* whether or not its block decodes */
+        return;
+    }
     if (fatal) {
         h2_fail(w, c, bad);
         return;
     }
-    if (!s) {
-        if (ended_by_server(c, c->hb_sid)) after_end(w, c, "HEADERS");
-        return; /* else one this client reset */
-    }
+    if (!s) return; /* one this client reset */
     if (s->headers_seen) {
         if (!s->fail) s->fail = "trailers or a second response head";
     } else {
@@ -1249,6 +1265,21 @@ static void h2_input(Worker *w, Conn *c, const uint8_t *data, size_t n) {
     }
 }
 
+/* The connection ended with part of a frame read, or between a HEADERS
+ * frame and its last CONTINUATION: a connection error. If the frame header
+ * arrived and names a stream in flight, part of that stream's response
+ * arrived, so conn_close counts it invalid. */
+static void h2_cut(Worker *w, Conn *c, const char *why) {
+    char text[96];
+    snprintf(text, sizeof text, "%s in the middle of a %s", why, c->rlen ? "frame" : "header block");
+    w->stats.conn_errors++;
+    reason(&w->stats, 3, text);
+    if (c->rlen >= 9) {
+        Stream *s = h2_stream(c, be32(c->rbuf + 5) & 0x7fffffff);
+        if (s) s->began = 1;
+    }
+}
+
 /* ---- the loop ---- */
 
 static void on_connected(Worker *w, Conn *c) {
@@ -1284,7 +1315,9 @@ static void on_readable(Worker *w, Conn *c) {
             continue;
         }
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
-        conn_close(w, c, n == 0 ? "closed" : (errno == ECONNRESET ? "reset" : "read error"));
+        const char *why = n == 0 ? "closed" : (errno == ECONNRESET ? "reset" : "read error");
+        if (h2 && (c->rlen || c->in_headers)) h2_cut(w, c, why);
+        conn_close(w, c, why);
         return;
     }
 }
@@ -1702,7 +1735,8 @@ int main(int argc, char **argv) {
         all.connect_failed += ws[i].stats.connect_failed;
         all.stray += ws[i].stats.stray;
         all.after_end += ws[i].stats.after_end;
-        for (int which = 0; which < 3; which++)
+        all.conn_errors += ws[i].stats.conn_errors;
+        for (int which = 0; which < 4; which++)
             for (int r = 0; r < 8; r++) {
                 Reason *x = &ws[i].stats.why[which][r];
                 for (uint64_t c = 0; c < x->count; c++) reason(&all, which, x->text);
@@ -1737,12 +1771,13 @@ int main(int argc, char **argv) {
     rss_peak >= 0 ? printf("%ld", rss_peak) : printf("-");
     printf(" srv_rss_kib=");
     rss >= 0 ? printf("%ld", rss) : printf("-");
-    printf(" cli_cpu_s=%.2f connects=%llu connect_failed=%llu stray=%llu after_end=%llu", cli1 - cli0,
-           (unsigned long long)all.connects, (unsigned long long)all.connect_failed,
-           (unsigned long long)all.stray, (unsigned long long)all.after_end);
+    printf(" cli_cpu_s=%.2f connects=%llu connect_failed=%llu stray=%llu after_end=%llu conn_errors=%llu",
+           cli1 - cli0, (unsigned long long)all.connects, (unsigned long long)all.connect_failed,
+           (unsigned long long)all.stray, (unsigned long long)all.after_end, (unsigned long long)all.conn_errors);
     quote_reasons("invalid_as", all.why[0]);
     quote_reasons("disconnected_as", all.why[1]);
     quote_reasons("status_as", all.why[2]);
+    quote_reasons("conn_errors_as", all.why[3]);
     printf("\n");
     return 0;
 }

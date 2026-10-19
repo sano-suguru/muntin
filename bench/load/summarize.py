@@ -9,8 +9,9 @@ the median over the rounds of the ok answers per second, their latency
 percentiles, the server's CPU time per ok answer and its peak resident
 memory. `flare/muntin` is the median of the rounds' ratios of ok answers
 per second, with the smallest and the largest. A row marked `†` had answers
-that were not ok, stray bytes or frames after a stream's end: its rate is
-not a throughput comparison, read it with the counts beside it. Stop runs get their own table: before and after the
+that were not ok, stray bytes, frames after a stream's end or h2c
+connection errors: its rate is not a throughput comparison, read it with
+the counts beside it. Stop runs get their own table: before and after the
 signal, and when the server ended."""
 
 import statistics
@@ -18,6 +19,7 @@ import sys
 from collections import defaultdict
 
 OUT = ["sent", "ok", "status", "invalid", "disconnected", "timeout"]
+ANOMALIES = ["stray", "after_end", "conn_errors"]
 
 
 def num(v):
@@ -77,7 +79,7 @@ def main():
                 if not rows:
                     continue
                 counts = [total(rows, k) for k in OUT]
-                bad = "†" if any(counts[2:]) or total(rows, "stray") or total(rows, "after_end") else ""
+                bad = "†" if any(counts[2:]) or any(total(rows, k) for k in ANOMALIES) else ""
                 print(f"| {key[1]} | {key[2]} | {impl} | " + " | ".join(f"{c:,}" for c in counts)
                       + f" | {fmt(med(rows, 'ok_per_s'))}{bad} | {fmt(med(rows, 'p50_us'), 1000, 2)}"
                       f" | {fmt(med(rows, 'p99_us'), 1000, 2)} | {fmt(med(rows, 'srv_cpu_us_per_ok'), 1, 1)}"
@@ -117,15 +119,16 @@ def main():
     warm = sum(int(r["warmup_bad"]) for r in runs)
     stray = sum(int(r["stray"]) for r in runs)
     after_end = sum(int(r["after_end"]) for r in runs)
+    conn_errors = sum(int(r["conn_errors"]) for r in runs)
     print(f"\nWarm-up requests not ok, all runs: {warm:,}. Connections with stray bytes: {stray:,}."
-          f" Frames on a stream the server had ended: {after_end:,}.")
+          f" Frames on a stream the server had ended: {after_end:,}. h2c connection errors: {conn_errors:,}.")
     reasons = defaultdict(int)
     for r in runs:
-        for key in ("invalid_as", "disconnected_as", "status_as"):
+        for key in ("invalid_as", "disconnected_as", "status_as", "conn_errors_as"):
             if r[key] != "-":
                 for item in r[key].split("|"):
                     n, _, text = item.partition(":")
-                    reasons[(r["workers"], r["case"] + " " + r["proto"], r["impl"], key.split("_")[0], text.replace("_", " "))] += int(n)
+                    reasons[(r["workers"], r["case"] + " " + r["proto"], r["impl"], key.rsplit("_", 1)[0], text.replace("_", " "))] += int(n)
     if reasons:
         print("\nWhy, all rounds (workers, case and protocol, impl, outcome, reason: count; warm-up included): "
               + "; ".join(f"{w} {c} {i} {o} {t}: {n:,}" for (w, c, i, o, t), n in sorted(reasons.items())))

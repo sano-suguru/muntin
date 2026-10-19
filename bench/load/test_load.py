@@ -168,7 +168,10 @@ class H2Server:
             try:
                 if self.read(24) != b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n":
                     return
-                self.conn.sendall(frame(4, 0, 0))
+                if self.mode == "max-streams-huge":  # MAX_CONCURRENT_STREAMS 2^32-1, which is legal
+                    self.conn.sendall(frame(4, 0, 0, struct.pack(">HI", 3, 0xFFFFFFFF)))
+                else:
+                    self.conn.sendall(frame(4, 0, 0))
                 while True:
                     head = self.read(9)
                     length = int.from_bytes(head[:3], "big")
@@ -218,7 +221,7 @@ class H2Server:
     def answer(self, sid, body):
         m, send, first = self.mode, self.conn.sendall, self.answered == 0
         ok = frame(1, 4, sid, block()) + frame(0, 1, sid, b"ok")
-        if m == "ok":
+        if m in ("ok", "max-streams-huge"):
             send(ok)
         elif m == "ok-post-echo":
             out = frame(1, 4, sid, block(length=str(len(body)).encode()))
@@ -269,6 +272,12 @@ class H2Server:
             send(ok + frame(0, 0, sid, b"CORRUPTION"))
         elif m == "headers-after-end":
             send(ok + frame(1, 4, sid, block()))
+        elif m == "bad-hpack-after-end":  # index 0 is a decoding error (RFC 7541 6.1)
+            send(ok + frame(1, 4, sid, bytes([0x80])))
+        elif m == "wu-zero-conn-after":
+            send(ok + frame(8, 0, 0, struct.pack(">I", 0)))
+        elif m == "wu-overflow-after":
+            send(ok + frame(8, 0, 0, struct.pack(">I", 0x7FFFFFFF)))
         elif m == "wu-zero-conn":
             send(frame(8, 0, 0, struct.pack(">I", 0)) + ok)
         elif m == "wu-zero-stream":
@@ -283,6 +292,15 @@ class H2Server:
             send(frame(3, 0, sid, struct.pack(">I", 2)))
         elif m == "goaway":
             send(frame(7, 0, 0, struct.pack(">II", 0, 0)))
+        elif m == "headers-cut":  # all of a HEADERS frame but its last byte, then FIN
+            send(frame(1, 4, sid, block())[:-1])
+            return False
+        elif m == "frame-header-cut":  # five bytes of a frame header: no stream named yet
+            send(frame(1, 4, sid, block())[:5])
+            return False
+        elif m == "continuation-cut":  # HEADERS without END_HEADERS, then FIN
+            send(frame(1, 0, sid, block()[:2]))
+            return False
         elif m == "close-mid-body":
             send(frame(1, 4, sid, block()) + frame(0, 0, sid, b"o"))
             return False
@@ -298,7 +316,8 @@ MUX = ["--conns", "2", "--streams", "8", "--threads", "2"]
 POST = ["--method", "POST", "--body", "BODY", "--expect", "BODY"]
 
 # (proto, mode, the outcome every measured request must have, the reason it
-# must give, extra client arguments, other fields that must hold)
+# must give, extra client arguments, the anomaly counters that must be above
+# 0, space-separated; every other one of ANOMALIES must be 0)
 CASES = [
     ("h1", "ok", "ok", None, [], None),
     ("h1", "ok-many", "ok", None, MANY, None),
@@ -338,7 +357,7 @@ CASES = [
     ("h2c", "status-404", "status", None, [], None),
     ("h2c", "wrong-body", "invalid", "a_body_other_than_the_expected_one", [], None),
     ("h2c", "length-mismatch", "invalid", "content-length_other_than_the_DATA", [], None),
-    ("h2c", "huffman", "invalid", "Huffman", [], None),
+    ("h2c", "huffman", "invalid", "Huffman", [], "conn_errors"),
     ("h2c", "uppercase-name", "invalid", "lowercase_token", [], None),
     ("h2c", "connection-field", "invalid", "connection-specific", [], None),
     ("h2c", "ctl-in-value", "invalid", "a_control_character_in_a_field_value", [], None),
@@ -346,20 +365,31 @@ CASES = [
     ("h2c", "trailers", "invalid", "trailers", [], None),
     # The answer before the extra frame is whole, so the request is ok; the
     # extra frame is counted apart, once per connection it breaks.
-    ("h2c", "data-after-end", "ok", None, [], "after_end"),
-    ("h2c", "headers-after-end", "ok", None, [], "after_end"),
-    ("h2c", "wu-zero-conn", "invalid", "a_WINDOW_UPDATE_of_0_on_the_connection", [], None),
+    ("h2c", "data-after-end", "ok", None, [], "after_end conn_errors"),
+    ("h2c", "headers-after-end", "ok", None, [], "after_end conn_errors"),
+    ("h2c", "wu-zero-conn", "invalid", "a_WINDOW_UPDATE_of_0_on_the_connection", [], "conn_errors"),
     ("h2c", "wu-zero-stream", "invalid", "a_WINDOW_UPDATE_of_0_on_its_stream", [], None),
-    ("h2c", "wu-overflow", "invalid", "a_connection_flow-control_window_over", [], None),
-    ("h2c", "push", "invalid", "PUSH_PROMISE", [], None),
-    ("h2c", "big-frame", "invalid", "a_frame_over_16384_bytes", [], None),
+    ("h2c", "wu-overflow", "invalid", "a_connection_flow-control_window_over", [], "conn_errors"),
+    ("h2c", "push", "invalid", "PUSH_PROMISE", [], "conn_errors"),
+    ("h2c", "big-frame", "invalid", "a_frame_over_16384_bytes", [], "conn_errors"),
     ("h2c", "rst", "disconnected", "RST_STREAM_2", [], None),
     ("h2c", "goaway", "disconnected", "refused_by_GOAWAY", [], None),
+    ("h2c", "bad-hpack-after-end", "ok", "HEADERS_on_a_stream_the_server_had_ended", [], "after_end conn_errors"),
+    ("h2c", "wu-zero-conn-after", "ok", "a_WINDOW_UPDATE_of_0_on_the_connection", [], "conn_errors"),
+    ("h2c", "wu-overflow-after", "ok", "a_connection_flow-control_window_over", [], "conn_errors"),
+    ("h2c", "headers-cut", "invalid", "closed_in_the_middle_of_a_frame", [], "conn_errors"),
+    ("h2c", "frame-header-cut", "disconnected", "closed_in_the_middle_of_a_frame", [], "conn_errors"),
+    ("h2c", "continuation-cut", "invalid", "closed_in_the_middle_of_a_header_block", [], "conn_errors"),
+    ("h2c", "max-streams-huge", "ok", None, MUX, None),
     ("h2c", "close-mid-body", "invalid", "in_the_middle_of_a_response", [], None),
     ("h2c", "close", "disconnected", "closed", [], None),
     ("h2c", "silent", "timeout", None, [], None),
 ]
 OUTCOMES = ["ok", "status", "invalid", "disconnected", "timeout"]
+ANOMALIES = ["stray", "after_end", "conn_errors"]
+# Cases that must also send at least this many requests in their 0.3 s: a
+# client that stops sending still puts every request it sent in one outcome.
+MIN_SENT = {"max-streams-huge": 500}
 
 
 def serve(proto, mode):
@@ -427,16 +457,18 @@ def main():
                     raise AssertionError(f"outcomes {counts} do not add up to sent={sent}")
                 if counts[want] != sent:
                     raise AssertionError(f"want every request {want}: {counts} {f['invalid_as']}")
-                reasons = f["invalid_as"] + " " + f["disconnected_as"]
+                if sent < MIN_SENT.get(mode, 1):
+                    raise AssertionError(f"want at least {MIN_SENT[mode]} requests sent: {sent}")
+                reasons = " ".join(f[k] for k in ("invalid_as", "disconnected_as", "conn_errors_as"))
                 if why and why not in reasons:
                     raise AssertionError(f"want the reason {why!r}: {reasons}")
-                anomalies = {k: int(f[k]) for k in ("stray", "after_end")}
-                if field:
-                    if anomalies[field] == 0:
-                        raise AssertionError(f"want {field} counted: {anomalies}")
-                elif any(anomalies.values()):
-                    raise AssertionError(f"want no stray bytes or late frames: {anomalies}")
-                print(f"ok   {name}: {sent} {want}" + (f", {field}={f[field]}" if field else ""))
+                anomalies = {k: int(f[k]) for k in ANOMALIES}
+                wanted = field.split() if field else []
+                missing = [k for k in wanted if not anomalies[k]]
+                extra_counted = [k for k in ANOMALIES if anomalies[k] and k not in wanted]
+                if missing or extra_counted:
+                    raise AssertionError(f"want {wanted or 'none'} of {ANOMALIES} counted: {anomalies} {f['conn_errors_as']}")
+                print(f"ok   {name}: {sent} {want}" + "".join(f", {k}={f[k]}" for k in wanted))
             except AssertionError as e:
                 failures += 1
                 print(f"FAIL {name}: {e}")
