@@ -3,11 +3,12 @@
 # requires the report below, which shows that the request reads freed memory.
 # Expected report: AddressSanitizer: heap-use-after-free
 #
-# Evidence for docs/history/deferrals.md, "Closing `State`'s `AnyOrigin` hole":
-# the pointer of tests/state_known_gaps/state_any_origin_associated_type.mojo
-# registers just as well inside a `List`, an owning container reached through a
-# pointer whose untracked origin prints `{}` like `AnyOrigin`. So a check that
-# walked a state's field types would miss it here even if it could read a
+# Evidence for docs/history/deferrals.md, "Closing `State`'s `AnyOrigin` hole"
+# (pull request #175): the pointer of
+# tests/state_known_gaps/state_any_origin_associated_type.mojo registers just
+# as well inside a `List`, an owning container reached through a pointer whose
+# untracked origin prints `{}` like `AnyOrigin`. So a check that walked a
+# state's field types by reflection would miss it here even if it could read a
 # pointer's origin. `main` asserts what a request must give once the borrow is
 # kept alive (200, "42").
 #

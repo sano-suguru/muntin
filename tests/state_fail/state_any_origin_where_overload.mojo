@@ -1,9 +1,9 @@
 # Must not build. Evidence for docs/history/deferrals.md, "Closing `State`'s
-# `AnyOrigin` hole": overloads that test the origin in a `where` clause, the
-# place `Origin.equals` is allowed
-# (tests/state_fail/state_any_origin_equals_outside_where.mojo), do not
-# select one for an untracked origin: the constraint solver can prove neither
-# that it is `AnyOrigin` nor that it is not.
+# `AnyOrigin` hole" (pull request #175): overloads that test the origin in a
+# `where` clause, the place `Origin.equals` is allowed
+# (tests/state_fail/state_any_origin_equals_outside_where.mojo), do not select
+# one for an untracked origin: the constraint solver can prove neither that it
+# is `AnyOrigin` nor that it is not.
 # Expected diagnostic (checked by scripts/check.sh): ambiguous call to 'is_any': lacking evidence to select candidate
 
 
