@@ -9,6 +9,7 @@
 > - [M3-040](m3-040-binary-request-and-response-bodies-decision.md): body bytes now pass unchanged both ways as List[UInt8].
 > - [M3-066](m3-066-request-header-conversion-decision.md): a request with more than `max_header_fields` fields is answered 431 before the conversion.
 > - [M3-073](m3-073-request-host-decision.md): an HTTP/1.1 or HTTP/2 request without `Host` is the adapter's 400, before the conversion.
+> - [M3-076](m3-076-request-host-value-decision.md): so is a `Host` value that is not `uri-host [ ":" port ]`, or an empty one over HTTP/2.
 
 ```text
 flare.http.Request -> to_muntin_request -> muntin.Request

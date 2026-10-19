@@ -49,7 +49,13 @@ decided in docs/history/architecture-decisions.md "Headers decision (M3-002)"):
   `:authority`, which Flare writes as `Host`, nor `host` is answered 400
   too (RFC 9110 section 7.2 has a client send one); this also covers a request upgraded with
   `Upgrade: h2c`, which Flare answers 101 and hands over as HTTP/2.
-  HTTP/1.0 needs none. The value is not checked.
+  HTTP/1.0 needs none. The value (M3-076, decided in
+  docs/history/architecture-decisions.md "Request Host value decision
+  (M3-076)"), on every version, must be `uri-host [ ":" port ]` (RFC 9110
+  section 7.2, RFC 3986), or the answer is 400 too (RFC 9112 section 3.2);
+  an empty value is kept over HTTP/1, where RFC 9112 has a client send one
+  for a target URI without an authority, and is 400 over HTTP/2, where
+  RFC 9113 section 8.3.1 has a client omit `:authority` instead.
 - header field count (M3-067, decided in docs/history/architecture-decisions.md
   "Request header conversion decision (M3-066)"): a request with more fields
   than the handler's `max_header_fields` (`Server.bind`'s, 100 unless set),
@@ -406,23 +412,201 @@ def _handle_owned(app: App, var request: Request) -> Response:
     return app.handle(request^)
 
 
-def _lacks_host(request: FlareRequest) -> Bool:
-    """Whether `request` is an HTTP/1.1 or HTTP/2 request without a `Host`
-    field (M3-073). Flare v0.12.0's HTTP/1 parser admits a version of the
-    form `HTTP/<digit>.<digit>` only (`HTTP/1.1` for a request line without
-    one); its HTTP/2 requests, an `Upgrade: h2c` one included, say
-    `HTTP/2`, with `:authority` written as `Host`. Its minimal parser
-    (`ServerConfig.skip_header_decode_for_short_requests`, off by default,
-    which `_server_config` keeps) stores no fields, so this would refuse
-    every HTTP/1.1 request under it."""
-    var v = request.version.as_bytes()
+def _is_hex_digit(c: Int) -> Bool:
+    return (
+        (c >= ord("0") and c <= ord("9"))
+        or (c >= ord("a") and c <= ord("f"))
+        or (c >= ord("A") and c <= ord("F"))
+    )
+
+
+def _is_digit(c: Int) -> Bool:
+    return c >= ord("0") and c <= ord("9")
+
+
+def _is_unreserved_or_sub_delim(c: Int) -> Bool:
+    """RFC 3986's `unreserved` or `sub-delims`."""
+    if (
+        _is_digit(c)
+        or (c >= ord("a") and c <= ord("z"))
+        or (c >= ord("A") and c <= ord("Z"))
+    ):
+        return True
+    var others = "-._~!$&'()*+,;=".as_bytes()
+    for i in range(len(others)):
+        if c == Int(others[i]):
+            return True
+    return False
+
+
+def _is_reg_name(s: Span[UInt8, _]) -> Bool:
+    """RFC 3986's `reg-name`, which may be empty and covers an IPv4
+    address's text."""
+    var i = 0
+    while i < len(s):
+        var c = Int(s[i])
+        if c == ord("%"):
+            if (
+                i + 2 >= len(s)
+                or not _is_hex_digit(Int(s[i + 1]))
+                or not _is_hex_digit(Int(s[i + 2]))
+            ):
+                return False
+            i += 3
+            continue
+        if not _is_unreserved_or_sub_delim(c):
+            return False
+        i += 1
+    return True
+
+
+def _is_dec_octet(s: Span[UInt8, _]) -> Bool:
+    """RFC 3986's `dec-octet`: 0 to 255, no leading zero."""
+    if len(s) == 0 or len(s) > 3:
+        return False
+    if len(s) > 1 and Int(s[0]) == ord("0"):
+        return False
+    var n = 0
+    for i in range(len(s)):
+        if not _is_digit(Int(s[i])):
+            return False
+        n = n * 10 + Int(s[i]) - ord("0")
+    return n <= 255
+
+
+def _is_ipv4(s: Span[UInt8, _]) -> Bool:
+    """RFC 3986's `IPv4address`."""
+    var parts = 0
+    var start = 0
+    for i in range(len(s) + 1):
+        if i == len(s) or Int(s[i]) == ord("."):
+            if not _is_dec_octet(s[start:i]):
+                return False
+            parts += 1
+            start = i + 1
+    return parts == 4
+
+
+def _ipv6_groups(s: Span[UInt8, _], ipv4_last: Bool) -> Int:
+    """How many 16-bit groups `s`, `h16`s separated by `:`, stands for (0
+    when empty), with an IPv4 address as the last part counting two when
+    `ipv4_last`; -1 when `s` is no such list."""
+    if len(s) == 0:
+        return 0
+    var groups = 0
+    var start = 0
+    for i in range(len(s) + 1):
+        if i == len(s) or Int(s[i]) == ord(":"):
+            var part = s[start:i]
+            if i == len(s) and ipv4_last and _is_ipv4(part):
+                groups += 2
+            elif len(part) >= 1 and len(part) <= 4:
+                for k in range(len(part)):
+                    if not _is_hex_digit(Int(part[k])):
+                        return -1
+                groups += 1
+            else:
+                return -1
+            start = i + 1
+    return groups
+
+
+def _is_ipv6(s: Span[UInt8, _]) -> Bool:
+    """RFC 3986's `IPv6address`: eight groups, or at most seven around one
+    `::`; an IPv4 address only last."""
+    var gap = -1
+    for i in range(len(s) - 1):
+        if Int(s[i]) == ord(":") and Int(s[i + 1]) == ord(":"):
+            gap = i
+            break
+    if gap < 0:
+        return _ipv6_groups(s, True) == 8
+    var before = _ipv6_groups(s[:gap], False)
+    var after = _ipv6_groups(s[gap + 2 :], True)
+    return before >= 0 and after >= 0 and before + after <= 7
+
+
+def _is_ipvfuture(s: Span[UInt8, _]) -> Bool:
+    """RFC 3986's `IPvFuture`: `v`, hex digits, `.`, then at least one
+    `unreserved`, `sub-delims` or `:`."""
+    if len(s) == 0 or (Int(s[0]) != ord("v") and Int(s[0]) != ord("V")):
+        return False
+    var i = 1
+    while i < len(s) and _is_hex_digit(Int(s[i])):
+        i += 1
+    if i == 1 or i + 1 >= len(s) or Int(s[i]) != ord("."):
+        return False
+    for k in range(i + 1, len(s)):
+        var c = Int(s[k])
+        if c != ord(":") and not _is_unreserved_or_sub_delim(c):
+            return False
+    return True
+
+
+def _is_host_value(value: Span[UInt8, _]) -> Bool:
+    """Whether `value` is `uri-host [ ":" port ]` (RFC 9110 section 7.2,
+    with RFC 3986's `host` and `port`): an IP literal in brackets or a
+    `reg-name`, which may be empty, then an optional `:` and digits (any
+    number of them, none included). Nothing else: no userinfo, path,
+    space or byte outside ASCII, and no zone identifier (RFC 6874)."""
+    var host_end = len(value)
+    if len(value) > 0 and Int(value[0]) == ord("["):
+        var close = -1
+        for i in range(len(value)):
+            if Int(value[i]) == ord("]"):
+                close = i
+                break
+        if close < 0:
+            return False
+        var inside = value[1:close]
+        if not _is_ipv6(inside) and not _is_ipvfuture(inside):
+            return False
+        host_end = close + 1
+    else:
+        for i in range(len(value)):
+            if Int(value[i]) == ord(":"):
+                host_end = i
+                break
+        if not _is_reg_name(value[:host_end]):
+            return False
+    if host_end == len(value):
+        return True
+    if Int(value[host_end]) != ord(":"):
+        return False
+    for i in range(host_end + 1, len(value)):
+        if not _is_digit(Int(value[i])):
+            return False
+    return True
+
+
+def _refuses_host(request: FlareRequest) -> Bool:
+    """Whether the adapter answers `request` 400 for its `Host` field:
+    an HTTP/1.1 or HTTP/2 request without one (M3-073); on any version, a
+    value that is not `uri-host [ ":" port ]`, and over HTTP/2 an empty
+    one (M3-076).
+
+    Flare v0.12.0's HTTP/1 parser admits a version of the form
+    `HTTP/<digit>.<digit>` only (`HTTP/1.1` for a request line without
+    one), refuses a second `Host` and trims the value; its HTTP/2 requests,
+    an `Upgrade: h2c` one included, say `HTTP/2`, with `:authority` written
+    as the one `Host` (every `host` field dropped, after a byte comparison
+    of the last one when both are non-empty; of `host` fields alone, all but
+    the first dropped; an upgrade's empty `Host` dropped too). Its minimal
+    parser (`ServerConfig.skip_header_decode_for_short_requests`, off by
+    default, which `_server_config` keeps) stores no fields, so this would
+    refuse every HTTP/1.1 request under it."""
     var http2 = request.version == "HTTP/2"
-    if not http2:
+    if not request.headers.contains("host"):
+        if http2:
+            return True
+        var v = request.version.as_bytes()
         if len(v) != 8 or not request.version.startswith("HTTP/1."):
             return False
-        if Int(v[7]) < ord("1") or Int(v[7]) > ord("9"):
-            return False  # HTTP/1.0
-    return not request.headers.contains("host")
+        return Int(v[7]) >= ord("1") and Int(v[7]) <= ord("9")  # not 1.0
+    var value = request.headers.get("host")
+    if http2 and value.byte_length() == 0:
+        return True
+    return not _is_host_value(value.as_bytes())
 
 
 def _bad_request() -> FlareResponse:
@@ -444,7 +628,7 @@ def _too_many_fields() -> FlareResponse:
 def _answer(
     app: App, request: FlareRequest, max_header_fields: Int
 ) -> FlareResponse:
-    if _lacks_host(request):
+    if _refuses_host(request):
         return _bad_request()
     if request.headers.len() > max_header_fields:
         return _too_many_fields()

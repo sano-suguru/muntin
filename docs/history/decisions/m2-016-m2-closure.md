@@ -11,6 +11,7 @@
 > - [M3-040](m3-040-binary-request-and-response-bodies-decision.md): contract reopened: Request.body and Response.body are bytes.
 > - [M3-053](m3-053-route-conflict-decision.md): contract reopened: conflicting registrations abort (evidence quoted from docs/history/m2-completion-contract.md).
 > - [M3-073](m3-073-request-host-decision.md): contract reopened: a request without Host is the adapter's 400.
+> - [M3-076](m3-076-request-host-value-decision.md): contract reopened: an invalid Host value, or an empty one over HTTP/2, is the adapter's 400.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision**; product behavior is unchanged (no change under `src/muntin` or `adapters/`, and no test or fixture changes). **M2 is complete.** The contract's guarantees are in `docs/SPEC.md` ("M2 completion contract"); its list of what M2 deliberately left out is in git history, and current limits are in `docs/ARCHITECTURE.md`. This section records how the decision was reached.
