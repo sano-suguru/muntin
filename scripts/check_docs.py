@@ -62,7 +62,8 @@ BUDGETS = [
     ("docs/reference/*.md", 28 * KB),  # past this, split the topic
     ("docs/ARCHITECTURE.md", 50 * KB),  # target 20 KB
     # #169 added the load benchmark and its client's check when the page was
-    # 7 bytes under 20 KB; trim the page before raising this again.
+    # 7 bytes under 20 KB, and #176 the JSON float oracle and benchmark; trim
+    # the page before raising this again.
     ("docs/DEVELOPMENT.md", 21 * KB),  # target 10 KB
     ("docs/SPEC.md", 14 * KB),  # target 10 KB
     ("docs/REFERENCES.md", 3 * KB),

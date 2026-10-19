@@ -1187,26 +1187,36 @@ def test_non_json_bodies_are_unchanged_and_uncapped() raises:
     _assert_fixed(client.post("/staff-notes", "fail"), 400, "Bad Request")
 
 
-def test_number_limits_on_mojo_1_1_0() raises:
-    # `float()` rejects overflow, and Mojo 1.1.0 `atof` rejects long literals
-    # (by length and magnitude, even with one significant digit): both raise
-    # (400 through a body). A pinned gap: valid JSON numbers a future `atof`
-    # may accept.
-    for s in [
-        "1e400",
-        "-1e400",
-        "123456789012345678901234",
-        "1.2345678901234567890123",
-        "100000000000000000000000",
-        "0.000000000000000000000000000001",
-    ]:
+def test_number_limits() raises:
+    # `float()` raises only past the largest finite double (400 through a
+    # body); below the smallest it is a signed zero. `int()` is exact.
+    for s in ["1e400", "-1e400", "1.7976931348623159e308", "1e999999999999"]:
         var raised = False
         try:
             _ = _parse_json(s).float()
         except:
             raised = True
         assert_true(raised, s)
-    assert_equal(_parse_json("1e-400").float(), 0.0)
+    assert_equal(_bits(_parse_json("1e-400").float()), UInt64(0))
+    assert_equal(
+        _bits(_parse_json("-1e-400").float()), UInt64(0x8000000000000000)
+    )
+    assert_equal(_bits(_parse_json("-0").float()), UInt64(0x8000000000000000))
+    assert_equal(_bits(_parse_json("0e999999999999").float()), UInt64(0))
+    # The exact halfway point past the largest double rounds to 2^1024 (even),
+    # so it raises; one unit less is the largest double.
+    var raised = False
+    try:
+        _ = _parse_json(
+            _halfway(_HALF_PAST_MAX_DIGITS, _HALF_PAST_MAX_EXPONENT)
+        ).float()
+    except:
+        raised = True
+    assert_true(raised, "halfway past the largest double")
+    _assert_reads(
+        _below(_HALF_PAST_MAX_DIGITS, _HALF_PAST_MAX_EXPONENT),
+        0x7FEFFFFFFFFFFFFF,
+    )
     assert_equal(_parse_json("9223372036854775807").int(), Int.MAX)
     assert_equal(_parse_json("-9223372036854775808").int(), Int.MIN)
 
@@ -1221,29 +1231,159 @@ def _written(value: Float64) raises -> String:
     return w^._finish()
 
 
-def test_float_rounding_gaps_on_mojo_1_1_0() raises:
-    # Pinned Mojo 1.1.0 behavior, each 1 ulp from the correctly rounded
-    # value (Python's in the comments). `float()` uses `atof`; the writer
-    # uses `String(Float64)`. A fix in the toolchain turns these red: revisit
-    # (docs/history/architecture-decisions.md, "JSON codec decision (M3-008)").
-    # Shortest-repr doubles as JS/Python clients send them: correct
-    # 0xc42dddc22f41f7cd and 0x4429c9f9333a6521.
-    assert_equal(
-        _bits(_parse_json("-2.7546748226290886e+20").float()),
-        UInt64(0xC42DDDC22F41F7CC),
+# Exact decimal halfway points between neighbouring doubles (Python's
+# `Decimal`), split for width: between the largest subnormal and the
+# smallest normal (768 significant digits, the most any has), between the
+# two largest subnormals, between zero and the smallest subnormal (2^-1075),
+# and between the largest double and 2^1024.
+comptime _HALF_TO_NORMAL_DIGITS = (
+    "2.22507385850720113605740979670913197593481954635164564802342610"
+    "9724822222021076945516529523908135087914149158913039621106870086"
+    "4386945946455276572074078206217433799881410632673292535522868813"
+    "7214901298112245145188984905722230728525513315575501591439747639"
+    "7983411801999323962548289017107081850690630666655994938275772572"
+    "0157630626906633326475653000092458883164330377797918696120494973"
+    "9037782970490505108060994073026293712895895000358379996720725430"
+    "4360284078895771796150945516748243471030702609144621572289880258"
+    "1825451803257070188608721131280795122334262883686223215037756666"
+    "2250398253433597456888442390026549819838548794829220689472168983"
+    "1099698365846814022854243330660339850886445804001034933970427567"
+    "1864433837704860378616227717385456230658746790140867233276367187"
+    "5"
+)
+comptime _HALF_TO_NORMAL_EXPONENT = "e-308"
+
+comptime _HALF_SUBNORMAL_DIGITS = (
+    "2.22507385850720064199176395546258779936602667813027328296362349"
+    "5400057796435394444841022253699383222614312797277047241310305390"
+    "9929768637188709468514680242229685839773591851410285403619754768"
+    "4430319581327346934820113042116530855453208314936760676083249201"
+    "0670938404726154347408257301721683776564392101064823911617215885"
+    "2475760231303527077156200284177534329871275812353907421319197873"
+    "9083589771549597066404661620550578925994422322342444472859570416"
+    "9556757585423752417124134805999073137808018133811049489046686648"
+    "9442558344889010082597214961471042043991985565356975310055231935"
+    "4486638980954850896040660352681852824502078615102443513620912377"
+    "5979785215357703877750457056843614755302706830641135567489433450"
+    "7658731200614581135848683152156368691976240370422601699829101562"
+    "5"
+)
+comptime _HALF_SUBNORMAL_EXPONENT = "e-308"
+
+comptime _HALF_TO_ZERO_DIGITS = (
+    "2.47032822920623272088284396434110686182529901307162382212792841"
+    "2503377536351043759326499181808179961898982823477228588654633283"
+    "5517796989819938739800539093906315035659515570226392290858392449"
+    "1051844359318028499365361525003193704576782492193656236698636584"
+    "8075700158576926990370631192827955855133292783433840935197801553"
+    "1246597263579574622766465272827220056374006485499977096599470454"
+    "0208281662262378573934507363390079677619305775067401763246736009"
+    "6895134053553745851666113422376667860416215968046191446729184030"
+    "0530057530849048765391711386591646239524912623653881879636239373"
+    "2804238910186723484976682350898633885879256283027559956575244555"
+    "0725518931369083625477918694866799496832404970582102851318545139"
+    "6213837722826145437693412532098591327667236328125"
+)
+comptime _HALF_TO_ZERO_EXPONENT = "e-324"
+
+comptime _HALF_PAST_MAX_DIGITS = (
+    "1.79769313486231580793728971405303415079934132710037826936173778"
+    "9804449682927647509466490179775872070963302864166928879109465555"
+    "4785194040263065748867150582068190890200070838367627385484581771"
+    "1531764475730270069855571366959622842914819860834936475292719074"
+    "168444365510704342711559699508093042880177904174497792"
+)
+comptime _HALF_PAST_MAX_EXPONENT = "e+308"
+
+
+def _halfway(digits: String, exponent: String) -> String:
+    return digits + exponent
+
+
+def _below(digits: String, exponent: String) -> String:
+    """One unit less in the last digit, which is never 0."""
+    var n = digits.byte_length()
+    var last = chr(ord(String(digits[byte = n - 1 : n])) - 1)
+    return String(digits[byte = 0 : n - 1]) + last + exponent
+
+
+def _past_kept(digits: String, exponent: String) -> String:
+    """The halfway point plus a 1 past the 800 significant digits kept."""
+    return digits + "0" * (805 - digits.byte_length()) + "1" + exponent
+
+
+def _assert_reads(text: String, expected: UInt64) raises:
+    assert_equal(_bits(_parse_json(text).float()), expected, text)
+
+
+def test_float_is_correctly_rounded() raises:
+    # Each literal reads as the nearest double, ties to even; the bits are
+    # Python's `float()`. The first seven came back 1 ulp off or raised
+    # through Mojo 1.1.0's `atof`.
+    _assert_reads("-2.7546748226290886e+20", 0xC42DDDC22F41F7CD)
+    _assert_reads("2.3786116091973052e+20", 0x4429C9F9333A6521)
+    _assert_reads("123456789012345678", 0x437B69B4BA630F35)
+    _assert_reads("123456789012345678901234", 0x44BA249B1F10A06D)
+    _assert_reads("1.2345678901234567890123", 0x3FF3C0CA428C59FB)
+    _assert_reads("100000000000000000000000", 0x44B52D02C7E14AF6)
+    _assert_reads("0.000000000000000000000000000001", 0x39B4484BFEEBC2A0)
+    _assert_reads("0.1", 0x3FB999999999999A)
+    _assert_reads("1e23", 0x44B52D02C7E14AF6)
+    _assert_reads("9007199254740993", 0x4340000000000000)
+    _assert_reads("8.98846567431158e307", 0x7FE0000000000000)
+    _assert_reads("1.7976931348623158e308", 0x7FEFFFFFFFFFFFFF)
+    _assert_reads("2.2250738585072011e-308", 0x000FFFFFFFFFFFFF)
+    _assert_reads("2.2250738585072012e-308", 0x0010000000000000)
+    _assert_reads("4.9406564584124654e-324", 0x0000000000000001)
+    _assert_reads("2.4703282292062328e-324", 0x0000000000000001)
+    _assert_reads("2.4703282292062327e-324", 0)
+    _assert_reads(String("1") + "0" * 308, 0x7FE1CCF385EBC8A0)
+    _assert_reads(String("0.") + "0" * 5000 + "1", 0)
+    # Exact ties, 1 + 2^-53 and 1 + 3 * 2^-53, go to the even neighbour;
+    # a nonzero digit past the 800 kept ones still breaks a tie upward.
+    var tie = String("1.00000000000000011102230246251565404236316680908203125")
+    _assert_reads(tie, 0x3FF0000000000000)
+    _assert_reads(
+        "1.00000000000000033306690738754696212708950042724609375",
+        0x3FF0000000000002,
     )
-    assert_equal(
-        _bits(_parse_json("2.3786116091973052e+20").float()),
-        UInt64(0x4429C9F9333A6520),
+    _assert_reads(tie + "0" * 900, 0x3FF0000000000000)
+    _assert_reads(tie + "0" * 900 + "1", 0x3FF0000000000001)
+    # The 768-digit halfway point between the largest subnormal and the
+    # smallest normal ties to the even one, the normal; one unit less is the
+    # subnormal. Between two subnormals the tie goes down to the even one,
+    # and a 1 past the kept digits breaks it upward. 2^-1075 ties to zero.
+    _assert_reads(
+        _halfway(_HALF_TO_NORMAL_DIGITS, _HALF_TO_NORMAL_EXPONENT),
+        0x0010000000000000,
     )
-    # A long integer literal read as a float: correct 0x437b69b4ba630f35
-    # (`int()` is exact).
-    assert_equal(
-        _bits(_parse_json("123456789012345678").float()),
-        UInt64(0x437B69B4BA630F34),
+    _assert_reads(
+        _below(_HALF_TO_NORMAL_DIGITS, _HALF_TO_NORMAL_EXPONENT),
+        0x000FFFFFFFFFFFFF,
     )
-    assert_equal(_parse_json("123456789012345678").int(), 123456789012345678)
-    # The writer's text does not always read back to the same double.
+    _assert_reads(
+        _halfway(_HALF_SUBNORMAL_DIGITS, _HALF_SUBNORMAL_EXPONENT),
+        0x000FFFFFFFFFFFFE,
+    )
+    _assert_reads(
+        _past_kept(_HALF_SUBNORMAL_DIGITS, _HALF_SUBNORMAL_EXPONENT),
+        0x000FFFFFFFFFFFFF,
+    )
+    _assert_reads(_halfway(_HALF_TO_ZERO_DIGITS, _HALF_TO_ZERO_EXPONENT), 0)
+    _assert_reads(
+        _past_kept(_HALF_TO_ZERO_DIGITS, _HALF_TO_ZERO_EXPONENT),
+        0x0000000000000001,
+    )
+    # Long, signed and scaled down.
+    _assert_reads(String("-") + tie + "0" * 900 + "1e-2", 0xBF847AE147AE147C)
+
+
+def test_float_writer_gap_on_mojo_1_1_0() raises:
+    # Pinned Mojo 1.1.0 behavior: the writer uses `String(Float64)`, whose
+    # text does not always read back to the same double (Python writes
+    # -3.7609587960547416e+16). A fix in the toolchain turns this red:
+    # revisit (docs/history/architecture-decisions.md, "JSON codec decision
+    # (M3-008)").
     var text = _written(bitcast[DType.float64](UInt64(0xC360B3B71251310B)))
     assert_equal(text, "-3.760958796054742e+16")
     assert_equal(_bits(_parse_json(text).float()), UInt64(0xC360B3B71251310C))

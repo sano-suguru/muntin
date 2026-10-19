@@ -121,6 +121,9 @@ for i in "${!lib_pids[@]}"; do
     echo "ok"
 done
 
+step "JSON float reading against Python's float()"
+python3 -I scripts/check_json_float.py
+
 # Every fixture below is built by scripts/build_one.sh, one job per CPU, and
 # its report is printed in file order.
 fixtures=()
