@@ -57,6 +57,7 @@ step "documents"
 
 step "benchmark response checks"
 python3 -I bench/hol/test_hol_client.py
+python3 -I bench/load/test_load.py | tail -n 1
 
 step "build package"
 mkdir -p build
