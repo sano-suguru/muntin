@@ -93,7 +93,9 @@
  * `exit_ms` when PID ended after it (or `-`); `warmup_bad`, the warm-up
  * requests that were not ok; `srv_cpu_s` (PID's user and system CPU during the window, or up
  * to SIGTERM), `srv_cpu_us_per_ok` (that CPU time per ok answer that ended
- * in the window; `-` with SIGTERM), `srv_rss_peak_kib` (VmHWM at its end)
+ * in the window; `-` with SIGTERM), `srv_thread_cpu_s` (that CPU time per
+ * thread of PID, busiest first, each thread that used at least 0.01 s; with
+ * workers it shows how many of them served the run), `srv_rss_peak_kib` (VmHWM at its end)
  * and `srv_rss_kib` (VmRSS); `cli_cpu_s`, this client's own, and
  * `cli_thread_cpu_max_s`, the most of one of its threads; `connects`,
  * `connect_failed`, `stray` (h1 connections that sent
@@ -105,6 +107,7 @@
  * a usage or set-up error. */
 #define _GNU_SOURCE
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -1675,9 +1678,8 @@ static void print_bucket(const char *prefix, Bucket *b, double per_s) {
     }
 }
 
-static int proc_cpu(pid_t pid, double *s) {
-    char path[64], buf[2048];
-    snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+static int stat_cpu(const char *path, double *s) {
+    char buf[2048];
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     size_t n = fread(buf, 1, sizeof buf - 1, f);
@@ -1693,6 +1695,60 @@ static int proc_cpu(pid_t pid, double *s) {
     if (state == 'Z' || state == 'X') return -1;
     *s = (utime + stime) / (double)sysconf(_SC_CLK_TCK);
     return 0;
+}
+
+static int proc_cpu(pid_t pid, double *s) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+    return stat_cpu(path, s);
+}
+
+#define MAX_TASKS 1024
+typedef struct {
+    long tid;
+    double s;
+} TaskCpu;
+
+/* Each thread of PID and its CPU time so far, up to max; how many. */
+static int proc_tasks(pid_t pid, TaskCpu *out, int max) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/task", (int)pid);
+    DIR *d = opendir(path);
+    if (!d) return 0;
+    int n = 0;
+    struct dirent *e;
+    while (n < max && (e = readdir(d))) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        long tid = strtol(e->d_name, NULL, 10);
+        char stat[96];
+        snprintf(stat, sizeof stat, "/proc/%d/task/%ld/stat", (int)pid, tid);
+        if (stat_cpu(stat, &out[n].s) == 0) out[n++].tid = tid;
+    }
+    closedir(d);
+    return n;
+}
+
+static int by_cpu_desc(const void *a, const void *b) {
+    double x = *(const double *)a, y = *(const double *)b;
+    return (x < y) - (x > y);
+}
+
+/* ` srv_thread_cpu_s=`: each thread's CPU time from before to after, busiest
+ * first, those under 0.01 s left out; a thread that began between them counts
+ * from 0. */
+static void print_task_cpu(const TaskCpu *before, int nb, const TaskCpu *after, int na) {
+    double d[MAX_TASKS];
+    int n = 0;
+    for (int i = 0; i < na; i++) {
+        double s0 = 0;
+        for (int j = 0; j < nb; j++)
+            if (before[j].tid == after[i].tid) s0 = before[j].s;
+        if (after[i].s - s0 >= 0.01) d[n++] = after[i].s - s0;
+    }
+    qsort(d, n, sizeof d[0], by_cpu_desc);
+    printf(" srv_thread_cpu_s=");
+    if (!n) printf("-");
+    for (int i = 0; i < n; i++) printf(i ? ",%.2f" : "%.2f", d[i]);
 }
 
 static long proc_kib(pid_t pid, const char *field) {
@@ -1845,14 +1901,18 @@ int main(int argc, char **argv) {
     }
     double cpu0 = 0, cpu1 = 0, cli0, cli1, exit_ms = -1;
     int have_cpu = 0;
+    static TaskCpu tasks0[MAX_TASKS], tasks1[MAX_TASKS];
+    int ntasks0 = 0, ntasks1 = 0;
     sleep_until(t0 + warmup_s);
     cli0 = cpu_self();
     if (srv_pid && proc_cpu(srv_pid, &cpu0) == 0) have_cpu = 1;
+    if (have_cpu) ntasks0 = proc_tasks(srv_pid, tasks0, MAX_TASKS);
     long rss_peak = -1, rss = -1;
     if (term_at_s >= 0) {
         sleep_until(t0 + warmup_s + term_at_s);
         t_signal = now();
         __atomic_store_n(&signalled, 1, __ATOMIC_RELEASE);
+        if (have_cpu) ntasks1 = proc_tasks(srv_pid, tasks1, MAX_TASKS);
         if (have_cpu && proc_cpu(srv_pid, &cpu1) != 0) have_cpu = 0;
         rss_peak = proc_kib(srv_pid, "VmHWM");
         rss = proc_kib(srv_pid, "VmRSS");
@@ -1869,6 +1929,7 @@ int main(int argc, char **argv) {
         }
     } else {
         sleep_until(t0 + warmup_s + duration_s);
+        if (have_cpu) ntasks1 = proc_tasks(srv_pid, tasks1, MAX_TASKS);
         if (have_cpu && proc_cpu(srv_pid, &cpu1) != 0) have_cpu = 0;
         if (srv_pid) {
             rss_peak = proc_kib(srv_pid, "VmHWM");
@@ -1937,6 +1998,10 @@ int main(int argc, char **argv) {
     } else {
         printf(" srv_cpu_s=- srv_cpu_us_per_ok=-");
     }
+    if (have_cpu)
+        print_task_cpu(tasks0, ntasks0, tasks1, ntasks1);
+    else
+        printf(" srv_thread_cpu_s=-");
     printf(" srv_rss_peak_kib=");
     rss_peak >= 0 ? printf("%ld", rss_peak) : printf("-");
     printf(" srv_rss_kib=");

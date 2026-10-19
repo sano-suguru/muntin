@@ -41,6 +41,13 @@
 # CPUs: the allowed CPUs (at least 4) are split in two; the first half runs
 # the servers, the second the client, one thread per CPU but no more than its connections.
 #
+# Workers: Muntin's share one listener, and whichever accepts first takes a
+# connection (docs/reference/serving.md, Workers); Flare alone's bind one
+# SO_REUSEPORT listener each, and the kernel hashes each connection to one.
+# So a run with few connections (h2c, echo-1m) can have them all on one
+# worker, Muntin's more often than Flare's (issue #178); `srv_thread_cpu_s`
+# shows it, and summarize.py lists those runs.
+#
 # Settings, from the environment:
 #   ROUNDS    rounds (default 3)
 #   DURATION  measured seconds of each run (default 5; stop runs 8)

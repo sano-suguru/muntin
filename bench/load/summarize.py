@@ -15,7 +15,9 @@ that were not ok, stray bytes, frames after a stream's end or h2c
 connection errors: its rate is not a throughput comparison, read it with
 the counts beside it. Stop runs get their own table: before and after the
 signal, and when the server ended. Last, the most CPU time one client
-thread used in any run's window."""
+thread used in any run's window, and, with more than one worker, the runs
+in which one server thread used at least 90% of the server's CPU time in
+the window: one worker served every connection (`srv_thread_cpu_s`)."""
 
 import statistics
 import sys
@@ -127,6 +129,18 @@ def main():
     print(f"\nWarm-up requests not ok, all runs: {warm:,}. Connections with stray bytes: {stray:,}."
           f" Frames on a stream the server had ended: {after_end:,}. h2c connection errors: {conn_errors:,}."
           f" Most CPU time of one client thread in a window: {thread_cpu:.2f} s.")
+    one = defaultdict(lambda: [0, 0])
+    for r in runs:
+        threads = r.get("srv_thread_cpu_s", "-")
+        if int(r["workers"]) > 1 and threads != "-" and num(r["srv_cpu_s"]):
+            k = (int(r["workers"]), r["case"] + " " + r["proto"], r["impl"])
+            one[k][1] += 1
+            one[k][0] += float(threads.split(",")[0]) >= 0.9 * float(r["srv_cpu_s"])
+    if one:
+        hit = [f"{w} {c} {i}: {n} of {t}" for (w, c, i), (n, t) in sorted(one.items()) if n]
+        print("\nRuns with more than one worker in which one server thread used at least 90% of the server's CPU"
+              " time (workers, case and protocol, impl: such runs of all): "
+              + ("; ".join(hit) if hit else "none") + ".")
     reasons = defaultdict(int)
     for r in runs:
         for key in ("invalid_as", "disconnected_as", "status_as", "conn_errors_as"):
