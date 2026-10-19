@@ -31,9 +31,10 @@ def _may_borrow[S: AnyType]() -> Bool:
     (tests/state_fail/state_function_parameter_*.mojo). `AnyOrigin` behind
     a trait's associated type escapes the name
     (tests/state_known_gaps/state_any_origin_associated_type.mojo), a
-    toolchain-wide hole. The format is undocumented; the fixtures under
-    tests/state_fail that refuse a borrowing state fail if it stops showing
-    origins.
+    toolchain-wide hole; no check found on Mojo 1.1.0 refuses it and still
+    admits owned states (docs/history/deferrals.md, "Closing `State`'s
+    `AnyOrigin` hole"). The format is undocumented; the fixtures under tests/state_fail that refuse
+    a borrowing state fail if it stops showing origins.
     """
     comptime name = reflect[S].name()
     return name.find("{}") >= 0

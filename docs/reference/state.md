@@ -73,7 +73,7 @@ The rule reads the type's full name, not who owns the data: it refuses `State(va
 | A closure that captures by reference | no | `tests/state_fail/state_origin_closure.mojo` |
 | A pack as the whole state, even an owned one: `Tuple(1, String("a"))` | no | `tests/state_fail/state_pack_tuple.mojo` |
 | A struct value with no fields as a parameter (`Config[Flag()]`, printed `Config[{}]`) | no | `tests/state_fail/state_empty_struct_parameter.mojo` |
-| A pointer built with `AnyOrigin` behind a trait's associated type | **yes, and it reads freed memory** | `tests/state_known_gaps/state_any_origin_associated_type.mojo` |
+| A pointer built with `AnyOrigin` behind a trait's associated type, alone or inside an `Optional`, a `List` or a `Tuple` field | **yes, and it reads freed memory** | `tests/state_known_gaps/state_any_origin_*.mojo` |
 
 So the migration for a refused owned value is a field whose type is written out in a non-generic struct of the application's own (`Pair`), not a generic wrapper (`Box[Tuple[...]]`).
 
