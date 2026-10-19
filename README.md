@@ -16,8 +16,8 @@ Muntin is a typed application layer for building web services in Mojo. Your hand
   - `State` judges whether a type may borrow by reading its name: it refuses some owned types (`Tuple`, `Variant`), and a type hiding `AnyOrigin` behind an associated type passes, letting a handler read freed memory in safe code ([state](docs/reference/state.md)).
   - Not built: streaming, cancellation, OpenAPI, CORS preflight, logging, metrics, tracing ([candidates](docs/SPEC.md#remaining-candidates)).
   - Flare is the only network backend. Application code is kept apart from it, but a move to another backend is untested, and serving (`Server`, its settings, workers, stop) would be rewritten ([backend seam](docs/reference/testing.md#the-backend-seam)).
-  - No performance figures for the current code: what Muntin adds over Flare was measured on earlier revisions (pull requests #114, #125 and #136).
-- **Verified with** Mojo 1.1.0 (8189361e) and Flare v0.12.0, on Linux and macOS, by CI on each pull request that changes code (tests, the transport boundary, unsafe confinement, compile errors, the adapter over loopback). CI does not run the AddressSanitizer check of Muntin's unsafe storage ([verification](docs/DEVELOPMENT.md#3-verify-with-the-strongest-available-oracle)). To reproduce CI's checks after installing [pixi](https://pixi.sh):
+  - With a browser's request fields, a handler doing nothing serves 25–38% fewer HTTP/1.1 requests per second than on Flare alone ([M3-079](docs/history/decisions/m3-079-comparison-with-flare-alone-decision.md)).
+- **Verified with** Mojo 1.1.0 (8189361e) and Flare v0.12.0, on Linux and macOS, by CI on each pull request that changes code (tests, the transport boundary, unsafe confinement, compile errors, the adapter over loopback, the unsafe storage under AddressSanitizer on Linux) ([verification](docs/DEVELOPMENT.md#3-verify-with-the-strongest-available-oracle)). To reproduce CI's checks after installing [pixi](https://pixi.sh):
 
 ```sh
 pixi install
