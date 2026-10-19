@@ -30,7 +30,8 @@ Later items changed the contract. An amendment adds to it; a reopen changes what
 - M3-053 reopened it (a registration that overlaps an earlier route of its method which is not more specific, a repeated path included, aborts): [Route conflict decision (M3-053)](decisions/m3-053-route-conflict-decision.md);
 - M3-055 amended it (an application type conforming to `FromRouteValue` is a route value; one that is also a body is rejected): [Application route-value types decision (M3-054)](decisions/m3-054-application-route-value-types-decision.md);
 - M3-059 amended it (the fixed 500 carries a report of the dropped error, `Response.failure()`, which no backend sends): [Dropped error report decision (M3-058)](decisions/m3-058-dropped-error-report-decision.md);
-- M3-073 reopened it (an HTTP/1.1 or HTTP/2 request without `Host` is the adapter's 400): [Request Host decision (M3-073)](decisions/m3-073-request-host-decision.md).
+- M3-073 reopened it (an HTTP/1.1 or HTTP/2 request without `Host` is the adapter's 400): [Request Host decision (M3-073)](decisions/m3-073-request-host-decision.md);
+- M3-076 reopened it (a `Host` value that is not `uri-host [ ":" port ]`, or an empty one over HTTP/2, is the adapter's 400): [Request Host value decision (M3-076)](decisions/m3-076-request-host-value-decision.md).
 
 Every guarantee is decided in `App.handle` and the registration overloads, so both backends inherit it, except one: the contract's opening sentence holds for `HEAD`'s answer but not for its content. The in-memory response to `HEAD` keeps the body, and keeping it off the wire, with the length, is each network backend's obligation ([HEAD decision (M3-026)](decisions/m3-026-head-decision.md)). What Muntin does not provide today is in [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#current-limits), "Current limits"; when M2 reopens is below.
 
