@@ -1,6 +1,8 @@
 # Request Host decision (M3-073)
 
 > **Current.** Now described in [headers reference, "Through the Flare adapter"](../../reference/headers.md#through-the-flare-adapter) and [ARCHITECTURE, "Flare adapter"](../../ARCHITECTURE.md#flare-adapter).
+> Changed in part since:
+> - [M3-076](m3-076-request-host-value-decision.md): the value is checked (400 unless `uri-host [ ":" port ]`), and an empty value over HTTP/2 is 400; `_refuses_host` replaced `_lacks_host`.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision and production** (M3-073, pull request #130; `src/muntin` unchanged). The Flare reading, the RFC text and the tests' observations are in the pull request. It changes what the Flare adapter answers for one class of requests, so it reopens M2 under [M2-016](m2-016-m2-closure.md), as [M3-039](m3-039-request-target-and-method-bytes-decision.md) did.

@@ -1,7 +1,7 @@
 """Socket-free contract tests for the Flare adapter (M1-002; headers M3-005;
 `HEAD` M3-027; 405 M3-031; request and response body bytes M3-040, which
-replaced M3-038; request target and method bytes M3-039; `Host` M3-073; the
-request header field limit M3-067).
+replaced M3-038; request target and method bytes M3-039; `Host` M3-073 and
+its value M3-076; the request header field limit M3-067).
 
 Runs only in the `flare` pixi environment (see scripts/check_flare.sh). Every
 dispatch goes through `MuntinHandler.serve`, a Flare handler entry point that
@@ -258,15 +258,18 @@ def test_request_without_host_answers_400_before_app_handle() raises:
         assert_equal(head.status, 400, version)
         assert_equal(len(head.body), 0, version)
         assert_equal(_wire(head), "Content-Length: 11\r\n", version)
-    # Any casing, and an empty value, which RFC 9112 allows.
+    # Any casing, and over HTTP/1.1 an empty value, which RFC 9112 allows
+    # (over HTTP/2 an empty one is 400, M3-076: below).
     var hosts: List[Tuple[String, String]] = [
         (String("Host"), String("test")),
         (String("hOsT"), String("test")),
-        (String("Host"), String("")),
         (String("host"), String("test")),
     ]
     for version in ["HTTP/1.1", "HTTP/2"]:
-        for host in hosts:
+        var with_empty = hosts.copy()
+        if version == "HTTP/1.1":
+            with_empty.append((String("Host"), String("")))
+        for host in with_empty:
             var req = FlareRequest("GET", "/hello", version=version)
             req.headers.append(host[0], host[1])
             var out = handler.serve(req)
@@ -277,6 +280,127 @@ def test_request_without_host_answers_400_before_app_handle() raises:
     var old = handler.serve(FlareRequest("GET", "/hello", version="HTTP/1.0"))
     assert_equal(old.text(), "hello")
     assert_equal(_wire(old), "X-Seen: 1\r\n")
+
+
+def _valid_host_values() -> List[String]:
+    """`Host` values that are `uri-host [ ":" port ]` (RFC 9110 section
+    7.2, RFC 3986), the empty one aside."""
+    return [
+        "test",
+        "Example.COM",
+        "example.com:8080",
+        "example.com:",
+        "example.com:0123456789012",
+        ":80",
+        "127.0.0.1",
+        "127.0.0.1:80",
+        "999.1.1.1",
+        "a-b_c~d.e",
+        "%41%7a",
+        "!$&'()*+,;=",
+        "[::1]",
+        "[::1]:8080",
+        "[::]",
+        "[2001:DB8::1]",
+        "[1:2:3:4:5:6:7:8]",
+        "[1:2:3:4:5:6:7::]",
+        "[::2:3:4:5:6:7:8]",
+        "[::ffff:192.0.2.1]",
+        "[1:2:3:4:5:6:192.0.2.1]",
+        "[1:2:3:4:5::192.0.2.1]",
+        "[v1.x:y]",
+        "[VaF.~]:1",
+    ]
+
+
+def _invalid_host_values() -> List[String]:
+    """`Host` values that are not `uri-host [ ":" port ]`."""
+    return [
+        "exa mple.com",
+        "example.com/",
+        "example.com/path",
+        "user@example.com",
+        "user:pass@example.com",
+        "example.com?q",
+        "example.com#f",
+        'exa"mple',
+        "a<b",
+        "a\\b",
+        "a\tb",
+        "café.example",
+        "%4",
+        "%zz.example",
+        "example.com:8o",
+        "example.com:80:80",
+        "example.com: 80",
+        "::1",
+        "[::1",
+        "::1]",
+        "[::1]x",
+        "[::1]:80x",
+        "[]",
+        "[example.com]",
+        "[192.0.2.1]",
+        "[1:2:3:4:5:6:7:8:9]",
+        "[1:2:3:4:5:6:7]",
+        "[1:2:3:4:5:6:7:8::]",
+        "[1::2::3]",
+        "[:1::]",
+        "[::1:]",
+        "[12345::]",
+        "[g::]",
+        "[::1.2.3.256]",
+        "[::01.2.3.4]",
+        "[::1.2.3]",
+        "[1.2.3.4::]",
+        "[1:2:3:4:5:6:7:192.0.2.1]",
+        "[fe80::1%25eth0]",
+        "[v1]",
+        "[v1.]",
+        "[v.x]",
+        "[vg.x]",
+        "[v1.x/y]",
+    ]
+
+
+def test_host_value_is_checked_on_every_version() raises:
+    # M3-076: a `Host` value that is not `uri-host [ ":" port ]` is the
+    # adapter's 400 before the middleware and `App.handle` (RFC 9112 section
+    # 3.2), on HTTP/1.0 too; over HTTP/2 (`:authority` as Flare writes it,
+    # or `host`) an empty value is 400 as well. Valid values reach the
+    # handler, in any casing of the field name.
+    var handler = MuntinHandler(body_app())
+    for version in ["HTTP/1.0", "HTTP/1.1", "HTTP/1.9", "HTTP/2"]:
+        for value in _invalid_host_values():
+            var at = String(version, " Host: ", value)
+            var req = FlareRequest("GET", "/hello", version=version)
+            req.headers.append("Host", value)
+            var out = handler.serve(req)
+            assert_equal(out.status, 400, at)
+            assert_equal(out.text(), "Bad Request", at)
+            assert_equal(_wire(out), "", at)
+            # `HEAD`: the adapter's 400 under the `HEAD` rule (M3-027).
+            var head_req = FlareRequest("HEAD", "/hello", version=version)
+            head_req.headers.append("host", value)
+            var head = handler.serve(head_req)
+            assert_equal(head.status, 400, at)
+            assert_equal(len(head.body), 0, at)
+            assert_equal(_wire(head), "Content-Length: 11\r\n", at)
+        var valid = _valid_host_values()
+        if version != "HTTP/2":
+            valid.append("")
+        for value in valid:
+            var at = String(version, " Host: ", value)
+            var req = FlareRequest("GET", "/hello", version=version)
+            req.headers.append("hOsT", value)
+            var out = handler.serve(req)
+            assert_equal(out.text(), "hello", at)
+            assert_equal(_wire(out), "X-Seen: 1\r\n", at)
+    var empty = FlareRequest("GET", "/hello", version="HTTP/2")
+    empty.headers.append("host", "")
+    var out = handler.serve(empty)
+    assert_equal(out.status, 400)
+    assert_equal(_wire(out), "")
 
 
 def test_typed_text_body_that_is_not_utf8_is_400_in_app_handle() raises:
@@ -662,11 +786,16 @@ def test_more_fields_than_the_limit_answer_431_before_app_handle() raises:
     assert_equal(head.status, 431)
     assert_equal(len(head.body), 0)
     assert_equal(_wire(head), "Content-Length: 31\r\n")
-    # The `Host` rule comes first (M3-073): without `Host`, 400.
+    # The `Host` rule comes first (M3-073): without `Host`, 400; so does
+    # its value's (M3-076): an invalid one, 400.
     var hostless = FlareRequest("GET", "/fields")
+    var invalid = FlareRequest("GET", "/fields")
+    invalid.headers.append("Host", "a b")
     for i in range(101):
         hostless.headers.append(String("X-F", i), "v")
+        invalid.headers.append(String("X-F", i), "v")
     assert_equal(handler.serve(hostless).status, 400)
+    assert_equal(handler.serve(invalid).status, 400)
 
 
 def test_a_raised_field_limit_converts_every_field() raises:

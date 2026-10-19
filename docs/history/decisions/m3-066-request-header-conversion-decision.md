@@ -3,6 +3,7 @@
 > **Current.** Now described in [serving reference, "Request header field limit"](../../reference/serving.md#request-header-field-limit), [headers reference, "Through the Flare adapter"](../../reference/headers.md#through-the-flare-adapter) and [ARCHITECTURE, "Flare adapter"](../../ARCHITECTURE.md#flare-adapter).
 > Changed in part since:
 > - [M3-073](m3-073-request-host-decision.md): a request without Host is now answered 400 before the 431 check.
+> - [M3-076](m3-076-request-host-value-decision.md): so is one with an invalid Host value.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision** (M3-066, pull request #119, which holds the measurements, the Flare reading, the other servers' limits, the reviews and the drafted proposal to Flare). This item changes no adapter code: until M3-067 merges, the current conversion's unbounded cost stays in every `Server`.
