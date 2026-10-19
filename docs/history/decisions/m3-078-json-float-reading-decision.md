@@ -15,7 +15,7 @@ Status: **decision and production** (M3-078, pull request #176; it holds the com
 
 **Revisit when:**
 - Mojo's `atof` becomes correctly rounded and accepts long literals: compare cost, and drop the converter if `atof` is no slower.
-- A `Json[T]` route reading every number of a 1 MiB body with `float()` takes more than 2.5 times what `atof` took for the same body, for the slowest kind of literal (p50, #176's measurement), or more memory: make the slow path faster first (Eisel–Lemire).
+- `scripts/bench_json_float.py` (a `Json[T]` route reading every number of a 1 MiB body with `float()`) shows, against `atof`, a p50 more than 2.5 times as long for some kind of literal, or a peak RSS more than 10 % higher: make the slow path faster first (Eisel–Lemire).
 - The writer: `String(Float64)` still prints some doubles as text that reads back as a neighbour (`test_float_writer_gap_on_mojo_1_1_0`); that stays M3-008's revisit condition.
 
 **Next production slice:** none; this pull request is the production.

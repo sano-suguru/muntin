@@ -44,6 +44,7 @@ The measurements below are not checks, and CI does not run them. Each script's h
 |---|---|
 | `./scripts/bench_routing.sh` | routing cost by route count, Muntin against Flare alone |
 | `./scripts/bench_headers.sh` | the adapter's request header conversion by header shape, in process and over loopback |
+| `python3 -I scripts/bench_json_float.py` | `float()` through a `Json[T]` route against `atof` (M3-078's revisit condition) |
 | `./scripts/compare_dx.sh` | one small API written with Muntin and against Flare alone: code size, answers, planted mistakes |
 | `python3 -I scripts/compare_notes.py` | the same for an application with stored data, users, a failing journal, start-up settings and one change |
 | `./scripts/bench_overhead.sh` | what Muntin costs on top of Flare: time, allocations, throughput, latency, memory |
