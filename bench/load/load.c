@@ -33,8 +33,8 @@
  * fewer, and a request is due when it is sent. Open loop, with --rate R:
  * requests are due every 1/R seconds from the start, whatever the answers
  * (each thread takes every T-th), and each is sent when it is due on a free
- * connection or stream; the C connections or C*S streams are the most in
- * flight. One due with none free waits (`queued`) and goes first when one
+ * connection or stream, the connections taken in turn; the C connections
+ * or C*S streams are the most in flight. One due with none free waits (`queued`) and goes first when one
  * frees, if that is before the window's end; one due in the window and not
  * sent by its end is `unsent`, not a request. Warm-up, window and SIGTERM
  * split requests by due time: one due in the window is measured whenever
@@ -346,6 +346,7 @@ typedef struct {
     /* open loop: this thread's next request in the schedule (sched), and
      * the first one that was not yet due with no connection or stream free */
     uint64_t next, blocked;
+    int rr; /* open loop: the connection to offer the next request first */
     double cpu_s; /* this thread's CPU time during the measured window */
     pthread_t thread;
 } Worker;
@@ -1568,8 +1569,15 @@ static void *run(void *arg) {
             expire(w, t);
             last_expire = t;
         }
-        for (int i = 0; i < w->nconn; i++) {
+        /* Open loop: the scan starts after the connection that took the
+         * last request, so that below capacity every connection takes its
+         * turn instead of the first ones taking all and the others idling
+         * until the server's idle timeout closes them. */
+        int from = w->rr;
+        for (int k = 0; k < w->nconn; k++) {
+            int i = (from + k) % w->nconn;
             Conn *c = &w->conns[i];
+            uint64_t next = w->next;
             if (c->state == C_DOWN) {
                 if (issuing(t) && t >= c->retry_at) conn_open(w, c);
                 continue;
@@ -1584,6 +1592,7 @@ static void *run(void *arg) {
                 double due;
                 if (take(w, t, &due)) h1_issue(w, c, t, due);
             }
+            if (w->next != next) w->rr = (i + 1) % w->nconn;
         }
         wait = 0.005;
         if (rate && issuing(t)) {

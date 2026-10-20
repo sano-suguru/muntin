@@ -83,13 +83,14 @@ def main():
     rounds = max(int(r["round"]) for r in runs)
     print(f"Rounds: {rounds}. Counts are sums over the rounds; rates, latencies, CPU and memory are medians.")
     for workers in sorted({k[0] for k in order}, key=int):
-        print(f"\n### {workers} worker(s)\n")
-        print("| case | proto | impl | sent | ok | status | invalid | disconnected | timeout | in flight at end | ok/s "
-              "| p50 ms | p99 ms | server CPU µs/ok | peak RSS MiB | flare/muntin |")
-        print("|---|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
-        for key in order:
-            if key[0] != workers or key[1] == "stop" or open_loop(groups[key]):
-                continue
+        print(f"\n### {workers} worker(s)")
+        closed = [k for k in order if k[0] == workers and k[1] != "stop" and not open_loop(groups[k])]
+        if closed:
+            print()
+            print("| case | proto | impl | sent | ok | status | invalid | disconnected | timeout | in flight at end | ok/s "
+                  "| p50 ms | p99 ms | server CPU µs/ok | peak RSS MiB | flare/muntin |")
+            print("|---|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+        for key in closed:
             by_impl = groups[key]
             for impl in IMPLS:
                 rows = by_impl.get(impl, [])

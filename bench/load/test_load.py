@@ -99,11 +99,17 @@ H1 = {
     "late-stray": lambda conn: conn.sendall(response(b"ok")),
     "open-ok": lambda conn: conn.sendall(response(b"ok")),
     "open-slow": lambda conn: [time.sleep(OPEN_SLOW), conn.sendall(response(b"ok"))],
+    "open-spread": lambda conn: conn.sendall(response(b"ok")),
 }
 
 # `open-slow` answers each request OPEN_SLOW seconds after reading it, on one
 # connection, while the client's schedule (--rate) wants one every 10 ms.
 OPEN_SLOW = 0.05
+# `open-spread` closes a connection that has been idle OPEN_IDLE seconds, as
+# a server's idle timeout does; at 100 requests per second over 4
+# connections, each one's turn comes every 40 ms if the client takes them in
+# turn, so it never reconnects.
+OPEN_IDLE = 0.1
 
 
 # `delay` runs a DELAY_WINDOW-second window. The client reads its clock for
@@ -118,6 +124,8 @@ def h1_serve(conn, mode):
     first_read = None
     with conn:
         while True:
+            if mode == "open-spread" and not select.select([conn], [], [], OPEN_IDLE)[0]:
+                return
             if mode == "late-stray" and not select.select([conn], [], [], 0.1)[0]:
                 # No request for 0.1 s: the client sent its last; a stray
                 # byte now is one it reads only if it lingers.
@@ -413,6 +421,7 @@ CASES = [
     ("h1", "delay", "ok", None, ["--duration", str(DELAY_WINDOW), "--timeout", "3000"], None),
     ("h1", "open-ok", "ok", None, MANY + ["--rate", "1000"], None),
     ("h1", "open-slow", "ok", None, ["--rate", "100"], None),
+    ("h1", "open-spread", "ok", None, ["--conns", "4", "--rate", "100"], None),
     ("h2c", "ok", "ok", None, [], None),
     ("h2c", "ok-interleaved", "ok", None, MUX, None),
     ("h2c", "ok-post-echo", "ok", None, MUX + POST, None),
@@ -478,7 +487,7 @@ MIN_SENT = {"max-streams-huge": 500}
 # first is inside if the client connects, sends, reads the answer and sends
 # again within DELAY_WINDOW, a few milliseconds' work. The second answer
 # takes about DELAY_WINDOW, hence the case's longer --timeout.
-FIELDS = {"delay": {"ok_per_s": "2", "inflight_end": "1", "ok_late": "1"}}
+FIELDS = {"delay": {"ok_per_s": "2", "inflight_end": "1", "ok_late": "1"}, "open-spread": {"connects": "4"}}
 
 
 def open_loop(f, unsent, queued, max_us=0):
@@ -507,6 +516,7 @@ def open_loop(f, unsent, queued, max_us=0):
 OPEN = {
     "open-ok": lambda f: open_loop(f, unsent=0, queued=None),
     "open-slow": lambda f: open_loop(f, unsent="some", queued="some", max_us=150_000),
+    "open-spread": lambda f: open_loop(f, unsent=0, queued=0),
 }
 
 
