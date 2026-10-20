@@ -93,8 +93,16 @@
  * `exit_ms` when PID ended after it (or `-`); `warmup_bad`, the warm-up
  * requests that were not ok; `srv_cpu_s` (PID's user and system CPU during the window, or up
  * to SIGTERM), `srv_cpu_us_per_ok` (that CPU time per ok answer that ended
- * in the window; `-` with SIGTERM), `srv_rss_peak_kib` (VmHWM at its end)
- * and `srv_rss_kib` (VmRSS); `cli_cpu_s`, this client's own, and
+ * in the window; `-` with SIGTERM), `srv_thread_cpu_s` (that CPU time per
+ * thread of PID, busiest first, each thread that used at least 0.01 s: how
+ * the CPU time spread, not where the connections were, since a handler
+ * that waits uses none), `srv_rss_peak_kib` (VmHWM at its end)
+ * and `srv_rss_kib` (VmRSS); `srv_conns_by_poller`, where PID's connections
+ * were as the window began: for each of its epoll instances watching a
+ * listening socket on P (one per worker's reactor, in Flare), the
+ * established connections on P it watched, most first (`-` if none was
+ * found; a connection the client opened after that moment, as h1 does after
+ * a close, is not in it); `cli_cpu_s`, this client's own, and
  * `cli_thread_cpu_max_s`, the most of one of its threads; `connects`,
  * `connect_failed`, `stray` (h1 connections that sent
  * bytes with no request in flight, which this client then closed) and
@@ -105,6 +113,7 @@
  * a usage or set-up error. */
 #define _GNU_SOURCE
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -1675,9 +1684,8 @@ static void print_bucket(const char *prefix, Bucket *b, double per_s) {
     }
 }
 
-static int proc_cpu(pid_t pid, double *s) {
-    char path[64], buf[2048];
-    snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+static int stat_ticks(const char *path, unsigned long long *t) {
+    char buf[2048];
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     size_t n = fread(buf, 1, sizeof buf - 1, f);
@@ -1691,8 +1699,146 @@ static int proc_cpu(pid_t pid, double *s) {
     if (sscanf(p + 2, "%c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &state, &utime, &stime) != 3)
         return -1;
     if (state == 'Z' || state == 'X') return -1;
-    *s = (utime + stime) / (double)sysconf(_SC_CLK_TCK);
+    *t = utime + stime;
     return 0;
+}
+
+static int proc_cpu(pid_t pid, double *s) {
+    char path[64];
+    unsigned long long t;
+    snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+    if (stat_ticks(path, &t) != 0) return -1;
+    *s = t / (double)sysconf(_SC_CLK_TCK);
+    return 0;
+}
+
+#define MAX_TASKS 1024
+typedef struct {
+    long tid;
+    unsigned long long ticks;
+} TaskCpu;
+
+/* Each thread of PID and its CPU time so far in clock ticks, up to max; how many. */
+static int proc_tasks(pid_t pid, TaskCpu *out, int max) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/task", (int)pid);
+    DIR *d = opendir(path);
+    if (!d) return 0;
+    int n = 0;
+    struct dirent *e;
+    while (n < max && (e = readdir(d))) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        long tid = strtol(e->d_name, NULL, 10);
+        char stat[96];
+        snprintf(stat, sizeof stat, "/proc/%d/task/%ld/stat", (int)pid, tid);
+        if (stat_ticks(stat, &out[n].ticks) == 0) out[n++].tid = tid;
+    }
+    closedir(d);
+    return n;
+}
+
+static int by_ticks_desc(const void *a, const void *b) {
+    unsigned long long x = *(const unsigned long long *)a, y = *(const unsigned long long *)b;
+    return (x < y) - (x > y);
+}
+
+/* ` srv_thread_cpu_s=`: each thread's CPU time from before to after, busiest
+ * first, those under 0.01 s left out (compared in whole ticks); a thread that
+ * began between them counts from 0. */
+static void print_task_cpu(const TaskCpu *before, int nb, const TaskCpu *after, int na) {
+    unsigned long long d[MAX_TASKS], tick = (unsigned long long)sysconf(_SC_CLK_TCK);
+    int n = 0;
+    for (int i = 0; i < na; i++) {
+        unsigned long long t0 = 0;
+        for (int j = 0; j < nb; j++)
+            if (before[j].tid == after[i].tid) t0 = before[j].ticks;
+        if (after[i].ticks >= t0 && (after[i].ticks - t0) * 100 >= tick) d[n++] = after[i].ticks - t0;
+    }
+    qsort(d, n, sizeof d[0], by_ticks_desc);
+    printf(" srv_thread_cpu_s=");
+    if (!n) printf("-");
+    for (int i = 0; i < n; i++) printf(i ? ",%.2f" : "%.2f", d[i] / (double)tick);
+}
+
+#define MAX_SOCKS 16384
+#define MAX_POLLERS 512
+static unsigned long listen_ino[MAX_SOCKS], est_ino[MAX_SOCKS];
+static int nlisten, nest;
+
+/* The inodes of the listening and the established TCP sockets whose local port is P. */
+static void tcp_inodes(int p) {
+    const char *files[] = {"/proc/net/tcp", "/proc/net/tcp6"};
+    char line[512];
+    nlisten = nest = 0;
+    for (int i = 0; i < 2; i++) {
+        FILE *f = fopen(files[i], "r");
+        if (!f) continue;
+        while (fgets(line, sizeof line, f)) {
+            unsigned lport, st;
+            unsigned long ino;
+            /* sl local rem st tx:rx tr:when retrnsmt uid timeout inode */
+            if (sscanf(line, " %*d: %*[0-9A-Fa-f]:%x %*[0-9A-Fa-f]:%*x %x %*x:%*x %*x:%*x %*x %*u %*u %lu", &lport,
+                       &st, &ino) != 3 ||
+                (int)lport != p || !ino)
+                continue;
+            if (st == 0x0A && nlisten < MAX_SOCKS) listen_ino[nlisten++] = ino;
+            if (st == 0x01 && nest < MAX_SOCKS) est_ino[nest++] = ino;
+        }
+        fclose(f);
+    }
+}
+
+static int has_ino(const unsigned long *set, int n, unsigned long ino) {
+    for (int i = 0; i < n; i++)
+        if (set[i] == ino) return 1;
+    return 0;
+}
+
+static int by_int_desc(const void *a, const void *b) {
+    int x = *(const int *)a, y = *(const int *)b;
+    return (x < y) - (x > y);
+}
+
+/* For each epoll instance of PID that watches a listening socket on port P
+ * (one per worker's reactor), how many established connections on P it
+ * watches, most first, into out; how many such instances (-1 if PID's
+ * descriptors could not be read). A connection is on the worker whose
+ * reactor watches it. */
+static int proc_pollers(pid_t pid, int p, int *out) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/fd", (int)pid);
+    DIR *d = opendir(path);
+    if (!d) return -1;
+    tcp_inodes(p);
+    int n = 0;
+    struct dirent *e;
+    while (n < MAX_POLLERS && (e = readdir(d))) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        long fd = strtol(e->d_name, NULL, 10);
+        char link[96], target[64];
+        snprintf(link, sizeof link, "/proc/%d/fd/%ld", (int)pid, fd);
+        ssize_t len = readlink(link, target, sizeof target - 1);
+        if (len < 0) continue;
+        target[len] = 0;
+        if (strcmp(target, "anon_inode:[eventpoll]") != 0) continue;
+        snprintf(link, sizeof link, "/proc/%d/fdinfo/%ld", (int)pid, fd);
+        FILE *f = fopen(link, "r");
+        if (!f) continue;
+        char line[256];
+        int listens = 0, conns = 0;
+        while (fgets(line, sizeof line, f)) {
+            char *at = strstr(line, " ino:");
+            if (strncmp(line, "tfd:", 4) != 0 || !at) continue;
+            unsigned long ino = strtoul(at + 5, NULL, 16);
+            if (has_ino(listen_ino, nlisten, ino)) listens = 1;
+            if (has_ino(est_ino, nest, ino)) conns++;
+        }
+        fclose(f);
+        if (listens) out[n++] = conns;
+    }
+    closedir(d);
+    qsort(out, n, sizeof out[0], by_int_desc);
+    return n;
 }
 
 static long proc_kib(pid_t pid, const char *field) {
@@ -1845,14 +1991,20 @@ int main(int argc, char **argv) {
     }
     double cpu0 = 0, cpu1 = 0, cli0, cli1, exit_ms = -1;
     int have_cpu = 0;
+    static TaskCpu tasks0[MAX_TASKS], tasks1[MAX_TASKS];
+    int ntasks0 = 0, ntasks1 = 0;
     sleep_until(t0 + warmup_s);
     cli0 = cpu_self();
     if (srv_pid && proc_cpu(srv_pid, &cpu0) == 0) have_cpu = 1;
+    if (have_cpu) ntasks0 = proc_tasks(srv_pid, tasks0, MAX_TASKS);
+    static int pollers[MAX_POLLERS];
+    int npollers = srv_pid ? proc_pollers(srv_pid, port, pollers) : -1;
     long rss_peak = -1, rss = -1;
     if (term_at_s >= 0) {
         sleep_until(t0 + warmup_s + term_at_s);
         t_signal = now();
         __atomic_store_n(&signalled, 1, __ATOMIC_RELEASE);
+        if (have_cpu) ntasks1 = proc_tasks(srv_pid, tasks1, MAX_TASKS);
         if (have_cpu && proc_cpu(srv_pid, &cpu1) != 0) have_cpu = 0;
         rss_peak = proc_kib(srv_pid, "VmHWM");
         rss = proc_kib(srv_pid, "VmRSS");
@@ -1869,6 +2021,7 @@ int main(int argc, char **argv) {
         }
     } else {
         sleep_until(t0 + warmup_s + duration_s);
+        if (have_cpu) ntasks1 = proc_tasks(srv_pid, tasks1, MAX_TASKS);
         if (have_cpu && proc_cpu(srv_pid, &cpu1) != 0) have_cpu = 0;
         if (srv_pid) {
             rss_peak = proc_kib(srv_pid, "VmHWM");
@@ -1937,6 +2090,13 @@ int main(int argc, char **argv) {
     } else {
         printf(" srv_cpu_s=- srv_cpu_us_per_ok=-");
     }
+    if (have_cpu)
+        print_task_cpu(tasks0, ntasks0, tasks1, ntasks1);
+    else
+        printf(" srv_thread_cpu_s=-");
+    printf(" srv_conns_by_poller=");
+    if (npollers <= 0) printf("-");
+    for (int i = 0; i < npollers; i++) printf(i ? ",%d" : "%d", pollers[i]);
     printf(" srv_rss_peak_kib=");
     rss_peak >= 0 ? printf("%ld", rss_peak) : printf("-");
     printf(" srv_rss_kib=");
