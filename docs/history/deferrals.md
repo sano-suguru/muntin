@@ -6,7 +6,7 @@ A decision to build nothing now, with no decision record (`docs/DEVELOPMENT.md` 
 
 Issue [#140](https://github.com/sano-suguru/muntin/issues/140); measured in [pull request #110](https://github.com/sano-suguru/muntin/pull/110).
 
-The adapter's check of the fields it rebuilds costs fields × distinct names comparisons inside Flare, bounded since M3-067 by `Server.bind`'s `max_header_fields` (100 unless set; [M3-066](decisions/m3-066-request-header-conversion-decision.md)). A conversion through an ordered field accessor on Flare's `HeaderMap`, which would make raising the limit cheap, waits on Flare (pull request #119 drafts the proposal) and then a pin change.
+The adapter's check of the fields it rebuilds costs fields × distinct names comparisons inside Flare, bounded since M3-067 by `Server.bind`'s `max_header_fields` (100 unless set; [M3-066](decisions/m3-066-request-header-conversion-decision.md)). A conversion through an ordered field accessor on Flare's `HeaderMap`, which would make raising the limit cheap, waits on Flare (asked in [ehsanmok/flare#39](https://github.com/ehsanmok/flare/issues/39); pull request #119 drafted it) and then a pin change.
 
 ## Spreading kept-open connections over workers (M3-069)
 
