@@ -17,8 +17,8 @@ the counts beside it. Open-loop runs (RATES) get their own table, one row
 per rate: also the requests that waited for a free connection (`queued`)
 or were never sent (`unsent`), the slowest answer, and how late the
 client sent them (p99), all latencies from when a request was due. Stop
-runs get their own table: before and after the signal, and when the server
-ended. Last, the most CPU time one client
+runs, open-loop ones with their rate, get their own table: before and
+after the signal, and when the server ended. Last, the most CPU time one client
 thread used in any run's window, and, with more than one worker, the runs
 in which one worker's reactor watched every connection as the window began
 (`srv_conns_by_poller`), counted only where every connection the client
@@ -62,8 +62,9 @@ def ratio(by_impl):
     return f"{statistics.median(values):.2f} ({min(values):.2f}–{max(values):.2f})"
 
 
-def open_loop(by_impl):
-    return any("rate" in r for rows in by_impl.values() for r in rows)
+def label(key):
+    """The case of a (workers, case, proto, rate) key, with its rate if open loop."""
+    return key[1] + (f" @{key[3]}/s" if key[3] else "")
 
 
 def main():
@@ -75,8 +76,7 @@ def main():
     groups = defaultdict(lambda: defaultdict(list))
     order = []
     for r in runs:
-        case = r["case"] + (f" @{r['rate']}/s" if "rate" in r else "")
-        key = (r["workers"], case, r["proto"])
+        key = (r["workers"], r["case"], r["proto"], r.get("rate", ""))
         if key not in groups:
             order.append(key)
         groups[key][r["impl"]].append(r)
@@ -84,7 +84,7 @@ def main():
     print(f"Rounds: {rounds}. Counts are sums over the rounds; rates, latencies, CPU and memory are medians.")
     for workers in sorted({k[0] for k in order}, key=int):
         print(f"\n### {workers} worker(s)")
-        closed = [k for k in order if k[0] == workers and k[1] != "stop" and not open_loop(groups[k])]
+        closed = [k for k in order if k[0] == workers and k[1] != "stop" and not k[3]]
         if closed:
             print()
             print("| case | proto | impl | sent | ok | status | invalid | disconnected | timeout | in flight at end | ok/s "
@@ -102,7 +102,7 @@ def main():
                       + f" | {total(rows, 'inflight_end'):,} | {fmt(med(rows, 'ok_per_s'))}{bad} | {fmt(med(rows, 'p50_us'), 1000, 2)}"
                       f" | {fmt(med(rows, 'p99_us'), 1000, 2)} | {fmt(med(rows, 'srv_cpu_us_per_ok'), 1, 1)}"
                       f" | {fmt(med(rows, 'srv_rss_peak_kib'), 1024, 1)} | {ratio(by_impl) if impl == 'flare' else ''} |")
-        opened = [k for k in order if k[0] == workers and open_loop(groups[k])]
+        opened = [k for k in order if k[0] == workers and k[1] != "stop" and k[3]]
         if opened:
             print("\nOpen loop: requests due at a fixed rate, latency from when each was due\n")
             print("| case | proto | impl | due/s | sent | ok | not ok | queued | unsent | ok/s | p50 ms | p99 ms | max ms "
@@ -115,7 +115,7 @@ def main():
                         continue
                     sent, ok = total(rows, "sent"), total(rows, "ok")
                     bad = "†" if sent - ok or any(total(rows, k) for k in ANOMALIES) else ""
-                    print(f"| {key[1].split(' @')[0]} | {key[2]} | {impl} | {int(rows[0]['rate']):,} | {sent:,} | {ok:,}"
+                    print(f"| {key[1]} | {key[2]} | {impl} | {int(key[3]):,} | {sent:,} | {ok:,}"
                           f" | {sent - ok:,} | {total(rows, 'queued'):,} | {total(rows, 'unsent'):,}"
                           f" | {fmt(med(rows, 'ok_per_s'))}{bad} | {fmt(med(rows, 'p50_us'), 1000, 2)}"
                           f" | {fmt(med(rows, 'p99_us'), 1000, 2)} | {fmt(med(rows, 'max_us'), 1000, 1)}"
@@ -131,15 +131,15 @@ def main():
                     if not rows:
                         continue
                     sent, ok = total(rows, "slow_sent"), total(rows, "slow_ok")
-                    print(f"| {key[1]} | {key[2]} | {impl} | {sent:,} | {ok:,} | {sent - ok:,}"
+                    print(f"| {label(key)} | {key[2]} | {impl} | {sent:,} | {ok:,} | {sent - ok:,}"
                           f" | {fmt(med(rows, 'slow_p50_us'), 1000, 1)} | {fmt(med(rows, 'slow_p99_us'), 1000, 1)} |")
         stops = [k for k in order if k[0] == workers and k[1] == "stop"]
         if stops:
-            print("\nStop (SIGTERM 1 s into the window): requests sent before the signal and from it on, and the"
-                  " server's end\n")
-            print("| proto | impl | before: sent | ok | not ok | after: sent | ok | invalid | disconnected | timeout "
-                  "| connections refused | exit ms |")
-            print("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+            print("\nStop (SIGTERM 1 s into the window): requests sent (open loop: due) before the signal and"
+                  " from it on, and the server's end\n")
+            print("| proto | due/s | impl | before: sent | ok | not ok | after: sent | ok | invalid | disconnected "
+                  "| timeout | connections refused | exit ms |")
+            print("|---|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
             for key in stops:
                 for impl in IMPLS:
                     rows = groups[key].get(impl, [])
@@ -148,7 +148,8 @@ def main():
                     sent = total(rows, "sent") + total(rows, "slow_sent")
                     ok = total(rows, "ok") + total(rows, "slow_ok")
                     exits = sorted(r["exit_ms"] for r in rows)
-                    print(f"| {key[2]} | {impl} | {sent:,} | {ok:,} | {sent - ok:,} | {total(rows, 'after_sent'):,}"
+                    print(f"| {key[2]} | {f'{int(key[3]):,}' if key[3] else 'closed loop'} | {impl} | {sent:,} | {ok:,}"
+                          f" | {sent - ok:,} | {total(rows, 'after_sent'):,}"
                           f" | {total(rows, 'after_ok'):,} | {total(rows, 'after_invalid'):,}"
                           f" | {total(rows, 'after_disconnected'):,} | {total(rows, 'after_timeout'):,}"
                           f" | {total(rows, 'after_connect_failed'):,} | {', '.join(exits)} |")

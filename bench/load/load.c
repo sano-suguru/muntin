@@ -30,17 +30,17 @@
  *
  * Closed loop, the default: each connection (h1) or stream (h2c) sends its
  * next request as soon as the last one ended, so a slower server is sent
- * fewer, and a request is due when it is sent. Open loop, with --rate R:
- * requests are due every 1/R seconds from the start, whatever the answers
- * (each thread takes every T-th), and each is sent when it is due on a free
- * connection or stream, the connections taken in turn; the C connections
- * or C*S streams are the most in flight. One due with none free waits (`queued`) and goes first when one
- * frees, if that is before the window's end; one due in the window and not
- * sent by its end is `unsent`, not a request. Warm-up, window and SIGTERM
- * split requests by due time: one due in the window is measured whenever
- * it was sent. Either way a request's latency counts from when it was due,
- * so in open loop it includes the wait for a free connection (no
- * coordinated omission).
+ * fewer, and a request is due when it is sent. Open loop, with --rate R
+ * (above 0, at most 10^7): requests are due every 1/R seconds from the
+ * start, whatever the answers (each thread takes every T-th), and each is
+ * sent when it is due on a free connection or stream, the connections taken
+ * in turn; the C connections or C*S streams are the most in flight. One due
+ * with none free waits (`queued`) and goes first when one frees, if that is
+ * before the window's end; one due in the window and not sent by its end is
+ * `unsent`, not a request. Warm-up, window and SIGTERM split requests by
+ * due time: one due in the window is measured whenever it was sent. Either
+ * way a request's latency counts from when it was due, so in open loop it
+ * includes the wait for a free connection (no coordinated omission).
  *
  * Each request sent (this client began to write it) ends in exactly one
  * outcome:
@@ -177,6 +177,10 @@ enum { NBROWSER = sizeof BROWSER / sizeof BROWSER[0] };
 static int port, h2, nconns, nstreams = 1, nthreads = 1, slow_every, browser;
 static double warmup_s, duration_s, timeout_s = 10.0, term_at_s = -1;
 static double rate; /* --rate: requests per second, open loop; 0: closed loop */
+/* The most --rate accepts: far above what this client can send, yet low
+ * enough that walking the schedule (sched) one request at a time stays
+ * cheap; a rate of inf would make every request due at once. */
+#define MAX_RATE 1e7
 static pid_t srv_pid;
 static const char *require_name, *require_value, *content_type = "application/octet-stream";
 static size_t require_name_len, require_value_len;
@@ -2015,13 +2019,19 @@ int main(int argc, char **argv) {
         case 'C': content_type = optarg; break;
         case 'L': linger_s = atof(optarg) / 1000.0; break;
         case 'F': expect_fields = 1; break;
-        case 'r': rate = atof(optarg); break;
+        case 'r': {
+            char *end;
+            rate = strtod(optarg, &end);
+            if (end == optarg || *end || !(rate > 0 && rate <= MAX_RATE))
+                die("--rate is a number above 0 and at most %g", MAX_RATE);
+            break;
+        }
         default: die("unknown option");
         }
     }
     if (port <= 0 || port > 65535 || nconns <= 0 || nthreads <= 0 || nthreads > nconns || duration_s <= 0 ||
         warmup_s < 0 || !path || (!!expect_file + !!expect_text + expect_fields != 1) || nstreams <= 0 ||
-        nstreams > MAXS || timeout_s <= 0 || linger_s < 0 || rate < 0)
+        nstreams > MAXS || timeout_s <= 0 || linger_s < 0)
         die("usage: see the header of bench/load/load.c");
     if (strcmp(proto, "h1") == 0)
         h2 = 0;

@@ -6,11 +6,11 @@ connections, threads and h2c streams at once, with answers interleaved, and
 POST a 300 KiB body that the server echoes, so that h2c flow control in both
 directions is exercised. Open-loop cases (--rate) also check how many
 requests were due, queued and never sent, and that latency counts from
-when a request was due. A last case checks `srv_conns_by_poller` against
-connections this process places on its own epoll instances. Python standard
-library only; Linux only, like the
-client. scripts/bench_load.sh runs it before measuring, so a client that
-stops seeing a broken answer stops the run.
+when a request was due. Two last cases check `srv_conns_by_poller` against
+connections this process places on its own epoll instances, and that
+--rate refuses what is not a finite rate in range. Python standard library
+only; Linux only, like the client. scripts/bench_load.sh runs it before
+measuring, so a client that stops seeing a broken answer stops the run.
 
     python3 bench/load/test_load.py [LOAD_BINARY]
 
@@ -639,7 +639,20 @@ def main():
         finally:
             for ep in (a, b, c, d):
                 ep.close()
-        print(f"test_load.py: {len(CASES) + 1 - failures} passed, {failures} failed")
+        # --rate must be a finite number in (0, 10^7]: with inf every request
+        # is due at once and the client never ends.
+        try:
+            for value in ("inf", "1e309", "nan", "0", "-1", "5x", "", "1e8"):
+                out = subprocess.run([load, "--port", "1", "--conns", "1", "--duration", "0.1", "--path", "/",
+                                      "--expect-text", "ok", "--rate", value], capture_output=True, text=True,
+                                     timeout=10)
+                if out.returncode != 2 or "--rate" not in out.stderr:
+                    raise AssertionError(f"want --rate {value!r} refused (exit 2): exit {out.returncode} {out.stderr!r}")
+            print("ok   --rate refused unless finite, above 0 and at most 10^7")
+        except (AssertionError, subprocess.TimeoutExpired) as e:
+            failures += 1
+            print(f"FAIL --rate refused: {e}")
+        print(f"test_load.py: {len(CASES) + 2 - failures} passed, {failures} failed")
         return 1 if failures else 0
 
 
