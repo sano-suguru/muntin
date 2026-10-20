@@ -95,12 +95,19 @@ H1 = {
     "connection-list-close": lambda conn: [conn.sendall(response(b"ok", extra=b"Connection: keep-alive, close\r\n")),
                                            conn.shutdown(socket.SHUT_WR)],
     "late-stray": lambda conn: conn.sendall(response(b"ok")),
-    "delay": lambda conn: [time.sleep(0.2), conn.sendall(response(b"ok"))],
 }
+
+
+# `delay` runs a DELAY_WINDOW-second window. The client reads its clock for
+# the window's start before it connects, so the window has ended by
+# DELAY_WINDOW after the server read the first request: the first answer
+# goes at once, every later one at that moment.
+DELAY_WINDOW = 0.5
 
 
 def h1_serve(conn, mode):
     data = b""
+    first_read = None
     with conn:
         while True:
             if mode == "late-stray" and not select.select([conn], [], [], 0.1)[0]:
@@ -116,6 +123,14 @@ def h1_serve(conn, mode):
                 return
             if mode == "ok-post-echo":
                 conn.sendall(response(body))
+                continue
+            if mode == "delay":
+                if first_read is None:
+                    first_read = time.monotonic()
+                else:
+                    while (left := first_read + DELAY_WINDOW - time.monotonic()) > 0:
+                        time.sleep(left)
+                conn.sendall(response(b"ok"))
                 continue
             H1[mode](conn)
             if mode in ("close", "reset", "short-body", "reset-mid-body", "no-length", "connection-list-close"):
@@ -387,7 +402,7 @@ CASES = [
     ("h1", "no-required", "invalid", "without_the_required_header", ["--require-header", "x-need: 1"], None),
     ("h1", "connection-list-close", "ok", None, [], None),
     ("h1", "late-stray", "ok", None, [], "stray"),
-    ("h1", "delay", "ok", None, [], None),
+    ("h1", "delay", "ok", None, ["--duration", str(DELAY_WINDOW), "--timeout", "3000"], None),
     ("h2c", "ok", "ok", None, [], None),
     ("h2c", "ok-interleaved", "ok", None, MUX, None),
     ("h2c", "ok-post-echo", "ok", None, MUX + POST, None),
@@ -445,11 +460,14 @@ ANOMALIES = ["stray", "after_end", "conn_errors"]
 # Cases that must also send at least this many requests in their 0.3 s: a
 # client that stops sending still puts every request it sent in one outcome.
 MIN_SENT = {"max-streams-huge": 500}
-# Further fields a case's run must show. `delay` answers 0.2 s after each
-# request in a 0.3 s window: the first answer ends inside it, the second
-# after it, so 1 answer per 0.3 s is the rate and 1 request was in flight at
-# the window's end.
-FIELDS = {"delay": {"ok_per_s": "3", "inflight_end": "1", "ok_late": "1"}}
+# Further fields a case's run must show. `delay` (above h1_serve) answers
+# the first request inside the window and the second only after it, so 1
+# answer per DELAY_WINDOW is the rate and 1 request was in flight at the
+# window's end. The second answer is late whatever the scheduling; the
+# first is inside if the client connects, sends, reads the answer and sends
+# again within DELAY_WINDOW, a few milliseconds' work. The second answer
+# takes about DELAY_WINDOW, hence the case's longer --timeout.
+FIELDS = {"delay": {"ok_per_s": "2", "inflight_end": "1", "ok_late": "1"}}
 
 
 def serve(proto, mode, placement=None):
@@ -484,7 +502,11 @@ def serve(proto, mode, placement=None):
 def run(load, proto, mode, extra, body_file, placement=None):
     listener = serve(proto, mode, placement)
     args = [load, "--port", str(listener.getsockname()[1]), "--proto", proto, "--warmup", "0",
-            "--duration", "0.3", "--timeout", "300", "--linger", "200", "--path", "/"]
+            "--linger", "200", "--path", "/"]
+    if "--duration" not in extra:
+        args += ["--duration", "0.3"]
+    if "--timeout" not in extra:
+        args += ["--timeout", "300"]
     if "--conns" not in extra:
         args += ["--conns", "1"]
     if "--expect" not in extra:
