@@ -33,5 +33,5 @@ app.mount(notes^)
 
 **Next production slice (M3-081): guarded groups.**
 - Code: `app.mojo` as prototyped, one shared helper per arity replacing each overload's second branch, a message naming `C` where it is not first; exports `Group`.
-- Tests via `TestClient` under `SANITIZE=address`, counting live `C` and states: the pull request's cases, each of the eight guarded adapters, a guard state unlike the handlers', a failed conversion without `C`, a guard that makes `C` then raises; a must-not-build fixture per refusal; the whole-output fixture comparison.
+- Tests via `TestClient` under `SANITIZE=address`, counting live `C` and states: the pull request's cases, each of the eight guarded adapters with and without `C`, route-value records, a guard state unlike the handlers', a failed conversion without `C`, a guard that makes `C` then raises; a must-not-build fixture per refusal; the whole-output fixture comparison.
 - Docs: a reference section, the guide's authentication case, `docs/ARCHITECTURE.md`, `docs/SPEC.md`.
