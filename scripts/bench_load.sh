@@ -11,14 +11,14 @@
 # It first runs bench/load/test_load.py, which checks that the client counts
 # a broken answer as broken; a failure there ends the script before anything
 # is measured. Then, for each case below and worker count, ROUNDS times, it
-# starts a fresh server of each implementation (in odd rounds muntin first,
-# in even ones flare first), runs the client against it and kills it, and
-# prints the client's line (bench/load/load.c says what each field means)
-# prefixed with `round= workers= case= impl=`. The lines also go to
-# build/bench_load/runs.txt, and bench/load/summarize.py prints them as
-# tables: counts summed over the rounds, rates and percentiles as the
-# median of the rounds, and `flare/muntin`, the ratio of the median ok
-# answers per second.
+# starts a fresh server of each implementation (in odd rounds in IMPLS's
+# order, muntin first by default, in even ones in reverse), runs the client
+# against it and kills it, and prints the client's line (bench/load/load.c
+# says what each field means) prefixed with `round= workers= case= impl=`.
+# The lines also go to build/bench_load/runs.txt, and
+# bench/load/summarize.py prints them as tables: counts summed over the
+# rounds, rates and percentiles as the median of the rounds, and
+# `flare/muntin`, the ratio of the median ok answers per second.
 #
 # Every request carries a browser's navigation fields (load.c, BROWSER)
 # except `plaintext-bare`'s. Cases, each over h1 (64 connections) and h2c (8
@@ -45,8 +45,10 @@
 # connection (docs/reference/serving.md, Workers); Flare alone's bind one
 # SO_REUSEPORT listener each, and the kernel hashes each connection to one.
 # So a run with few connections (h2c, echo-1m) can have them all on one
-# worker, Muntin's more often than Flare's (issue #178); `srv_thread_cpu_s`
-# shows it, and summarize.py lists those runs.
+# worker, Muntin's more often than Flare's (issue #178).
+# `srv_conns_by_poller` shows where they were, and summarize.py lists those
+# runs. IMPLS="muntin flare flare-shared" adds Flare alone with one shared
+# listener (FLARE_REUSEPORT_WORKERS=0), Muntin's way, for comparison.
 #
 # Settings, from the environment:
 #   ROUNDS    rounds (default 3)
@@ -54,6 +56,7 @@
 #   WARMUP    warm-up seconds before it (default 1)
 #   WORKERS   worker counts (default "1 2")
 #   CASES     the cases to run (default: all, in the order above)
+#   IMPLS     the servers to run (default "muntin flare"; also flare-shared)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -77,6 +80,13 @@ read -r -a workers <<<"${WORKERS-1 2}"
 for w in "${workers[@]}"; do uint WORKERS "$w"; done
 all_cases=(plaintext-bare plaintext headers json-get json-post echo-1m middleware slow-mix overload stop)
 read -r -a cases <<<"${CASES-${all_cases[*]}}"
+read -r -a all_impls <<<"${IMPLS-muntin flare}"
+for i in "${all_impls[@]}"; do
+    if [[ " muntin flare flare-shared " != *" $i "* ]]; then
+        echo "error: unknown impl: $i" >&2
+        exit 1
+    fi
+done
 for c in "${cases[@]}"; do
     if [[ " ${all_cases[*]} " != *" $c "* ]]; then
         echo "error: unknown case: $c" >&2
@@ -128,9 +138,10 @@ python3 -I -c 'import sys; sys.stdout.buffer.write(bytes((i * 7 + i // 251) % 25
 
 pid=
 start_server() { # IMPL WORKERS MIDDLEWARE: sets pid and port
-    local log="$out/$1.log"
+    local log="$out/$1.log" bin=$1 env=()
+    [[ $1 == flare-shared ]] && bin=flare env=(FLARE_REUSEPORT_WORKERS=0)
     : >"$log"
-    "${srv_pin[@]}" "./$out/server_$1" 0 "$2" "$3" >"$log" 2>&1 &
+    "${srv_pin[@]}" env "${env[@]}" "./$out/server_$bin" 0 "$2" "$3" >"$log" 2>&1 &
     pid=$!
     port=
     for _ in $(seq 100); do
@@ -192,8 +203,11 @@ client_args() { # CASE PROTO: the client's arguments but --port and --pid; sets 
 
 : >"$out/runs.txt"
 for ((r = 1; r <= rounds; r++)); do
-    impls=(muntin flare)
-    ((r % 2 == 0)) && impls=(flare muntin)
+    impls=("${all_impls[@]}")
+    if ((r % 2 == 0)); then
+        impls=()
+        for ((i = ${#all_impls[@]} - 1; i >= 0; i--)); do impls+=("${all_impls[i]}"); done
+    fi
     for w in "${workers[@]}"; do
         for c in "${cases[@]}"; do
             for proto in h1 h2c; do

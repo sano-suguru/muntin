@@ -4,7 +4,9 @@ client must put every measured request in the outcome the case names (and,
 for the broken ones, give the reason it names). Some cases run several
 connections, threads and h2c streams at once, with answers interleaved, and
 POST a 300 KiB body that the server echoes, so that h2c flow control in both
-directions is exercised. Python standard library only; Linux only, like the
+directions is exercised. A last case checks `srv_conns_by_poller` against
+connections this process places on its own epoll instances. Python standard
+library only; Linux only, like the
 client. scripts/bench_load.sh runs it before measuring, so a client that
 stops seeing a broken answer stops the run.
 
@@ -450,11 +452,17 @@ MIN_SENT = {"max-streams-huge": 500}
 FIELDS = {"delay": {"ok_per_s": "3", "inflight_end": "1", "ok_late": "1"}}
 
 
-def serve(proto, mode):
+def serve(proto, mode, placement=None):
+    """With placement, (listening, conns): registers the listener in each
+    epoll object of listening and the n-th accepted connection in each of
+    conns[min(n, len(conns) - 1)], as workers' reactors would."""
     listener = socket.socket()
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", 0))
     listener.listen(64)
+    for ep in placement[0] if placement else []:
+        ep.register(listener.fileno(), select.EPOLLIN)
+    accepted = []
 
     def accept():
         while True:
@@ -462,6 +470,10 @@ def serve(proto, mode):
                 conn, _ = listener.accept()
             except OSError:
                 return
+            if placement:
+                for ep in placement[1][min(len(accepted), len(placement[1]) - 1)]:
+                    ep.register(conn.fileno(), select.EPOLLIN)
+                accepted.append(conn)
             target = h1_serve if proto == "h1" else (lambda c, m: H2Server(c, m).serve())
             threading.Thread(target=target, args=(conn, mode), daemon=True).start()
 
@@ -469,8 +481,8 @@ def serve(proto, mode):
     return listener
 
 
-def run(load, proto, mode, extra, body_file):
-    listener = serve(proto, mode)
+def run(load, proto, mode, extra, body_file, placement=None):
+    listener = serve(proto, mode, placement)
     args = [load, "--port", str(listener.getsockname()[1]), "--proto", proto, "--warmup", "0",
             "--duration", "0.3", "--timeout", "300", "--linger", "200", "--path", "/"]
     if "--conns" not in extra:
@@ -533,7 +545,25 @@ def main():
             except AssertionError as e:
                 failures += 1
                 print(f"FAIL {name}: {e}")
-        print(f"test_load.py: {len(CASES) - failures} passed, {failures} failed")
+        # Placement: this process stands for the server, epoll instances a, b
+        # and c for three workers' reactors (each watches the listener; c no
+        # connection), and d for one that watches a connection but not the
+        # listener, which must not count. 4 connections, opened before the
+        # window begins: the first 3 on a, the 4th on b.
+        a, b, c, d = (select.epoll() for _ in range(4))
+        try:
+            f = run(load, "h1", "ok", ["--conns", "4", "--warmup", "0.2", "--pid", str(os.getpid())], body_file,
+                    ([a, b, c], [[a, d], [a], [a], [b]]))
+            if f["srv_conns_by_poller"] != "3,1,0":
+                raise AssertionError(f"want srv_conns_by_poller=3,1,0: {f['srv_conns_by_poller']}")
+            print("ok   h1 placement: srv_conns_by_poller=3,1,0")
+        except AssertionError as e:
+            failures += 1
+            print(f"FAIL h1 placement: {e}")
+        finally:
+            for ep in (a, b, c, d):
+                ep.close()
+        print(f"test_load.py: {len(CASES) + 1 - failures} passed, {failures} failed")
         return 1 if failures else 0
 
 

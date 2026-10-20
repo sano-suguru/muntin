@@ -16,8 +16,10 @@ connection errors: its rate is not a throughput comparison, read it with
 the counts beside it. Stop runs get their own table: before and after the
 signal, and when the server ended. Last, the most CPU time one client
 thread used in any run's window, and, with more than one worker, the runs
-in which one server thread used at least 90% of the server's CPU time in
-the window: one worker served every connection (`srv_thread_cpu_s`)."""
+in which one worker's reactor watched every connection as the window began
+(`srv_conns_by_poller`), counted only where every connection the client
+keeps was open then: h1 connections the server closes and the client
+reopens can be missing from it."""
 
 import statistics
 import sys
@@ -25,6 +27,7 @@ from collections import defaultdict
 
 OUT = ["sent", "ok", "status", "invalid", "disconnected", "timeout"]
 ANOMALIES = ["stray", "after_end", "conn_errors"]
+IMPLS = ("muntin", "flare", "flare-shared")
 
 
 def num(v):
@@ -79,7 +82,7 @@ def main():
             if key[0] != workers or key[1] == "stop":
                 continue
             by_impl = groups[key]
-            for impl in ("muntin", "flare"):
+            for impl in IMPLS:
                 rows = by_impl.get(impl, [])
                 if not rows:
                     continue
@@ -95,7 +98,7 @@ def main():
             print("| case | proto | impl | slow sent | slow ok | not ok | slow p50 ms | slow p99 ms |")
             print("|---|---|---|--:|--:|--:|--:|--:|")
             for key in slow:
-                for impl in ("muntin", "flare"):
+                for impl in IMPLS:
                     rows = groups[key].get(impl, [])
                     if not rows:
                         continue
@@ -110,7 +113,7 @@ def main():
                   "| connections refused | exit ms |")
             print("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
             for key in stops:
-                for impl in ("muntin", "flare"):
+                for impl in IMPLS:
                     rows = groups[key].get(impl, [])
                     if not rows:
                         continue
@@ -129,17 +132,22 @@ def main():
     print(f"\nWarm-up requests not ok, all runs: {warm:,}. Connections with stray bytes: {stray:,}."
           f" Frames on a stream the server had ended: {after_end:,}. h2c connection errors: {conn_errors:,}."
           f" Most CPU time of one client thread in a window: {thread_cpu:.2f} s.")
-    one = defaultdict(lambda: [0, 0])
+    one = defaultdict(lambda: [0, 0, 0])
     for r in runs:
-        threads = r.get("srv_thread_cpu_s", "-")
-        if int(r["workers"]) > 1 and threads != "-" and num(r["srv_cpu_s"]):
+        pollers = r.get("srv_conns_by_poller", "-")
+        if int(r["workers"]) > 1 and pollers != "-":
             k = (int(r["workers"]), r["case"] + " " + r["proto"], r["impl"])
+            conns = [int(n) for n in pollers.split(",")]
+            if sum(conns) != int(r["conns"]):
+                one[k][2] += 1  # some connections closed or not yet opened as the window began
+                continue
             one[k][1] += 1
-            one[k][0] += float(threads.split(",")[0]) >= 0.9 * float(r["srv_cpu_s"])
+            one[k][0] += sum(1 for n in conns if n) == 1
     if one:
-        hit = [f"{w} {c} {i}: {n} of {t}" for (w, c, i), (n, t) in sorted(one.items()) if n]
-        print("\nRuns with more than one worker in which one server thread used at least 90% of the server's CPU"
-              " time (workers, case and protocol, impl: such runs of all): "
+        hit = [f"{w} {c} {i}: {n} of {t}" + (f" ({u} not counted)" if u else "")
+               for (w, c, i), (n, t, u) in sorted(one.items()) if n]
+        print("\nRuns with more than one worker whose connections were all on one worker as the window began"
+              " (workers, case and protocol, impl: such runs of the runs whose every connection was open then): "
               + ("; ".join(hit) if hit else "none") + ".")
     reasons = defaultdict(int)
     for r in runs:
