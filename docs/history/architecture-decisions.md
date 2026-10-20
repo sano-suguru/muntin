@@ -90,6 +90,7 @@ Earlier records include production records written before that rule; they stay a
 | <a id="json-writer-members-decision-m3-075"></a>[JSON writer members decision (M3-075)](decisions/m3-075-json-writer-members-decision.md) | Current | [responses reference, "Writing a `ToJson` type"](../reference/responses.md#writing-a-tojson-type) |
 | <a id="request-host-value-decision-m3-076"></a>[Request Host value decision (M3-076)](decisions/m3-076-request-host-value-decision.md) | Current | [headers reference, "Through the Flare adapter"](../reference/headers.md#through-the-flare-adapter) |
 | <a id="json-float-reading-decision-m3-078"></a>[JSON float reading decision (M3-078)](decisions/m3-078-json-float-reading-decision.md) | Current | [bodies reference, "JSON (`Json[T]`)"](../reference/bodies.md#json-jsont) |
+| <a id="comparison-with-flare-alone-decision-m3-079"></a>[Comparison with Flare alone decision (M3-079)](decisions/m3-079-comparison-with-flare-alone-decision.md) | Current | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
 
 ## Documents older records cite
 

@@ -10,7 +10,6 @@
 GET	/notes/x	-	-	-
 POST	/notes	-	{"text":	application/json
 POST	/notes	Bearer t-ada	{"text":"x"}	-
-GET	/notes	bearer t-ada	-	-
 GET	/notes	Bearer	-	-
 GET	/notes/1	Basic dC1hZGE6	-	-
 POST	/notes	Bearer t-ada	{"text":"buy milk","extra":1}	application/json
