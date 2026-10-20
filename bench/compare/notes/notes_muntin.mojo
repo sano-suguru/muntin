@@ -84,8 +84,8 @@ struct NewNote(FromJson):
 
 def authenticate(svc: Service, headers: Headers) raises ApiError -> String:
     var field = headers.get("authorization").or_else("")
-    if field.startswith("Bearer "):
-        var user = svc.accounts.user(String(field.removeprefix("Bearer ")))
+    if field.lower().startswith("bearer "):  # RFC 9110 §11.1: any case
+        var user = svc.accounts.user(String(field[byte=7:]))
         if user:
             return user.value()
     raise ApiError(401, "Unauthorized")

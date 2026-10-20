@@ -26,6 +26,8 @@ req	GET	/notes/1	Bearer t-bo	-	404	no note 1
 req	GET	/notes/9	Bearer t-ada	-	404	no note 9
 req	GET	/notes/x	Bearer t-ada	-	400	Bad Request
 req	GET	/notes	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk"}]
+# The scheme is case-insensitive (RFC 9110, section 11.1).
+req	GET	/notes	bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk"}]
 req	POST	/notes	Bearer t-ada	{"txt":"x"}	400	Bad Request
 req	POST	/notes	Bearer t-ada	{"text":"this text is longer than forty bytes long"}	422	text too long
 # A failed write answers 503, keeps nothing and says why on standard error.
