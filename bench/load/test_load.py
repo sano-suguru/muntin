@@ -4,7 +4,9 @@ client must put every measured request in the outcome the case names (and,
 for the broken ones, give the reason it names). Some cases run several
 connections, threads and h2c streams at once, with answers interleaved, and
 POST a 300 KiB body that the server echoes, so that h2c flow control in both
-directions is exercised. A last case checks `srv_conns_by_poller` against
+directions is exercised. Open-loop cases (--rate) also check how many
+requests were due, queued and never sent, and that latency counts from
+when a request was due. A last case checks `srv_conns_by_poller` against
 connections this process places on its own epoll instances. Python standard
 library only; Linux only, like the
 client. scripts/bench_load.sh runs it before measuring, so a client that
@@ -95,7 +97,13 @@ H1 = {
     "connection-list-close": lambda conn: [conn.sendall(response(b"ok", extra=b"Connection: keep-alive, close\r\n")),
                                            conn.shutdown(socket.SHUT_WR)],
     "late-stray": lambda conn: conn.sendall(response(b"ok")),
+    "open-ok": lambda conn: conn.sendall(response(b"ok")),
+    "open-slow": lambda conn: [time.sleep(OPEN_SLOW), conn.sendall(response(b"ok"))],
 }
+
+# `open-slow` answers each request OPEN_SLOW seconds after reading it, on one
+# connection, while the client's schedule (--rate) wants one every 10 ms.
+OPEN_SLOW = 0.05
 
 
 # `delay` runs a DELAY_WINDOW-second window. The client reads its clock for
@@ -259,7 +267,7 @@ class H2Server:
     def answer(self, sid, body):
         m, send, first = self.mode, self.conn.sendall, self.answered == 0
         ok = frame(1, 4, sid, block()) + frame(0, 1, sid, b"ok")
-        if m in ("ok", "max-streams-huge", "enable-push-0", "enable-push-1", "enable-push-2", "preface-ping"):
+        if m in ("ok", "open-ok", "max-streams-huge", "enable-push-0", "enable-push-1", "enable-push-2", "preface-ping"):
             send(ok)
         elif m == "late-after-idle":
             send(ok)
@@ -403,6 +411,8 @@ CASES = [
     ("h1", "connection-list-close", "ok", None, [], None),
     ("h1", "late-stray", "ok", None, [], "stray"),
     ("h1", "delay", "ok", None, ["--duration", str(DELAY_WINDOW), "--timeout", "3000"], None),
+    ("h1", "open-ok", "ok", None, MANY + ["--rate", "1000"], None),
+    ("h1", "open-slow", "ok", None, ["--rate", "100"], None),
     ("h2c", "ok", "ok", None, [], None),
     ("h2c", "ok-interleaved", "ok", None, MUX, None),
     ("h2c", "ok-post-echo", "ok", None, MUX + POST, None),
@@ -454,6 +464,7 @@ CASES = [
     ("h2c", "close-mid-body", "invalid", "in_the_middle_of_a_response", [], None),
     ("h2c", "close", "disconnected", "closed", [], None),
     ("h2c", "silent", "timeout", None, [], None),
+    ("h2c", "open-ok", "ok", None, MUX + ["--rate", "1000"], None),
 ]
 OUTCOMES = ["ok", "status", "invalid", "disconnected", "timeout"]
 ANOMALIES = ["stray", "after_end", "conn_errors"]
@@ -468,6 +479,35 @@ MIN_SENT = {"max-streams-huge": 500}
 # again within DELAY_WINDOW, a few milliseconds' work. The second answer
 # takes about DELAY_WINDOW, hence the case's longer --timeout.
 FIELDS = {"delay": {"ok_per_s": "2", "inflight_end": "1", "ok_late": "1"}}
+
+
+def open_loop(f, unsent, queued, max_us=0):
+    """The checks of an open-loop case (--rate): the 0.3 s window schedules
+    300 requests at 1000/s, 30 at 100/s, each either sent or unsent (one
+    more or fewer where the window's edge falls on a request's due time);
+    the unsent and queued counts are 0, above 0 for "some", or anything for
+    None; and the
+    slowest ok answer took at least max_us from when it was due."""
+    want = round(0.3 * float(f["rate"]))
+    total = int(f["sent"]) + int(f["unsent"])
+    if abs(total - want) > 1:
+        return f"want sent + unsent = {want}: {f['sent']} + {f['unsent']}"
+    for key, value in (("unsent", unsent), ("queued", queued)):
+        if value is not None and (value == "some") != (int(f[key]) > 0):
+            return f"want {key} {'above 0' if value == 'some' else '0'}: {f[key]}"
+    if int(f["max_us"]) < max_us:
+        return f"want max_us of at least {max_us}: {f['max_us']}"
+    return None
+
+
+# `open-slow` answers about 6 of the 30 requests due in the window, so most
+# are never sent, and the ones it answers waited for the one connection. The
+# 6th was due at 50 ms and answered at about 300 ms: its latency counts
+# from when it was due, not from when it could be sent.
+OPEN = {
+    "open-ok": lambda f: open_loop(f, unsent=0, queued=None),
+    "open-slow": lambda f: open_loop(f, unsent="some", queued="some", max_us=150_000),
+}
 
 
 def serve(proto, mode, placement=None):
@@ -551,6 +591,10 @@ def main():
                     raise AssertionError(f"want every request {want}: {counts} {f['invalid_as']}")
                 if sent < MIN_SENT.get(mode, 1):
                     raise AssertionError(f"want at least {MIN_SENT[mode]} requests sent: {sent}")
+                if ("--rate" in extra) != ("rate" in f):
+                    raise AssertionError("want the open-loop fields with --rate only")
+                if mode in OPEN and (bad := OPEN[mode](f)):
+                    raise AssertionError(bad)
                 for k, v in FIELDS.get(mode, {}).items():
                     if f[k] != v:
                         raise AssertionError(f"want {k}={v}: {f[k]}")

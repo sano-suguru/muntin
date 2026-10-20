@@ -13,8 +13,12 @@ ended in it, and its peak resident memory. `flare/muntin` is the median of the r
 per second, with the smallest and the largest. A row marked `†` had answers
 that were not ok, stray bytes, frames after a stream's end or h2c
 connection errors: its rate is not a throughput comparison, read it with
-the counts beside it. Stop runs get their own table: before and after the
-signal, and when the server ended. Last, the most CPU time one client
+the counts beside it. Open-loop runs (RATES) get their own table, one row
+per rate: also the requests that waited for a free connection (`queued`)
+or were never sent (`unsent`), the slowest answer, and how late the
+client sent them (p99), all latencies from when a request was due. Stop
+runs get their own table: before and after the signal, and when the server
+ended. Last, the most CPU time one client
 thread used in any run's window, and, with more than one worker, the runs
 in which one worker's reactor watched every connection as the window began
 (`srv_conns_by_poller`), counted only where every connection the client
@@ -58,6 +62,10 @@ def ratio(by_impl):
     return f"{statistics.median(values):.2f} ({min(values):.2f}–{max(values):.2f})"
 
 
+def open_loop(by_impl):
+    return any("rate" in r for rows in by_impl.values() for r in rows)
+
+
 def main():
     runs = []
     with open(sys.argv[1]) as f:
@@ -67,7 +75,8 @@ def main():
     groups = defaultdict(lambda: defaultdict(list))
     order = []
     for r in runs:
-        key = (r["workers"], r["case"], r["proto"])
+        case = r["case"] + (f" @{r['rate']}/s" if "rate" in r else "")
+        key = (r["workers"], case, r["proto"])
         if key not in groups:
             order.append(key)
         groups[key][r["impl"]].append(r)
@@ -79,7 +88,7 @@ def main():
               "| p50 ms | p99 ms | server CPU µs/ok | peak RSS MiB | flare/muntin |")
         print("|---|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
         for key in order:
-            if key[0] != workers or key[1] == "stop":
+            if key[0] != workers or key[1] == "stop" or open_loop(groups[key]):
                 continue
             by_impl = groups[key]
             for impl in IMPLS:
@@ -92,6 +101,24 @@ def main():
                       + f" | {total(rows, 'inflight_end'):,} | {fmt(med(rows, 'ok_per_s'))}{bad} | {fmt(med(rows, 'p50_us'), 1000, 2)}"
                       f" | {fmt(med(rows, 'p99_us'), 1000, 2)} | {fmt(med(rows, 'srv_cpu_us_per_ok'), 1, 1)}"
                       f" | {fmt(med(rows, 'srv_rss_peak_kib'), 1024, 1)} | {ratio(by_impl) if impl == 'flare' else ''} |")
+        opened = [k for k in order if k[0] == workers and open_loop(groups[k])]
+        if opened:
+            print("\nOpen loop: requests due at a fixed rate, latency from when each was due\n")
+            print("| case | proto | impl | due/s | sent | ok | not ok | queued | unsent | ok/s | p50 ms | p99 ms | max ms "
+                  "| send lag p99 ms | server CPU µs/ok |")
+            print("|---|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+            for key in opened:
+                for impl in IMPLS:
+                    rows = groups[key].get(impl, [])
+                    if not rows:
+                        continue
+                    sent, ok = total(rows, "sent"), total(rows, "ok")
+                    bad = "†" if sent - ok or any(total(rows, k) for k in ANOMALIES) else ""
+                    print(f"| {key[1].split(' @')[0]} | {key[2]} | {impl} | {int(rows[0]['rate']):,} | {sent:,} | {ok:,}"
+                          f" | {sent - ok:,} | {total(rows, 'queued'):,} | {total(rows, 'unsent'):,}"
+                          f" | {fmt(med(rows, 'ok_per_s'))}{bad} | {fmt(med(rows, 'p50_us'), 1000, 2)}"
+                          f" | {fmt(med(rows, 'p99_us'), 1000, 2)} | {fmt(med(rows, 'max_us'), 1000, 1)}"
+                          f" | {fmt(med(rows, 'send_lag_p99_us'), 1000, 2)} | {fmt(med(rows, 'srv_cpu_us_per_ok'), 1, 1)} |")
         slow = [k for k in order if k[0] == workers and any("slow_sent" in r for rs in groups[k].values() for r in rs)]
         if slow:
             print("\nThe slow requests of the runs above and below that send them (`GET /slow/20`):\n")
