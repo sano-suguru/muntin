@@ -5,6 +5,7 @@
 > - [M3-004](m3-004-state-storage-decision.md): the ArcPointer representation (and the M3-003 slice built on it) was replaced by a sealed `_Shared[S]`; public API frozen.
 > - [M3-014](m3-014-registration-structure-decision.md): the ten stateful overloads became the stateful generic-arity family with a fixed leading State[S].
 > - [M3-074](m3-074-state-borrowing-decision.md): State refuses at compile time an S that may borrow.
+> - [M3-080](m3-080-guarded-routes-and-request-context-decision.md): `App` names the guardless instantiation of a generic type that guarded groups share, so it stays concrete for backends.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision** (M3-001; production is unchanged in it). This section decides how a handler reaches long-lived application data (a repository, a connection, configuration). Muntin must still tell route values, the body and framework-injected state apart at compile time, without parameter names, runtime type identity or backend objects, and without changing the M2 contract.
