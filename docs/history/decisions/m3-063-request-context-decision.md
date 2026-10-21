@@ -1,6 +1,6 @@
 # Request context decision (M3-063)
 
-> **Withdrawn** by [M3-065](m3-065-request-context-storage-decision.md). Its other part, the owning `App.handle` (M3-064), shipped and holds. Now described in [deferrals, "Request context over a closed type (M3-065)"](../deferrals.md#request-context-over-a-closed-type-m3-065), [testing reference, "The backend seam"](../../reference/testing.md#the-backend-seam) and [ARCHITECTURE, "Backend seam"](../../ARCHITECTURE.md#backend-seam).
+> **Withdrawn** by [M3-065](m3-065-request-context-storage-decision.md). Its other part, the owning `App.handle` (M3-064), shipped and holds. The context over a closed type is [M3-080](m3-080-guarded-routes-and-request-context-decision.md)'s guarded groups. Now described in [testing reference, "The backend seam"](../../reference/testing.md#the-backend-seam) and [ARCHITECTURE, "Backend seam"](../../ARCHITECTURE.md#backend-seam).
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision** (M3-063, pull request #113; `src/muntin` unchanged). The prototype, probes, reviews and measurements are in the pull request.

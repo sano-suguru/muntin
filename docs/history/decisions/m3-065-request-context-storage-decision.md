@@ -1,6 +1,6 @@
 # Request context storage decision (M3-065)
 
-> **Current.** Now described in [ARCHITECTURE, "Storage and ownership"](../../ARCHITECTURE.md#storage-and-ownership) and [deferrals, "Request context over a closed type (M3-065)"](../deferrals.md#request-context-over-a-closed-type-m3-065).
+> **Current.** Now described in [ARCHITECTURE, "Storage and ownership"](../../ARCHITECTURE.md#storage-and-ownership) and [M3-080](m3-080-guarded-routes-and-request-context-decision.md), which chose the closed type's shape.
 > Changed in part since:
 > - [M3-074](m3-074-state-borrowing-decision.md): `State` no longer has the gap this record names: it refuses at compile time a value that may borrow (`tests/state_fail/state_origin_*`).
 

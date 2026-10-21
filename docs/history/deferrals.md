@@ -20,12 +20,6 @@ Issue [#156](https://github.com/sano-suguru/muntin/issues/156); [pull request #1
 
 A connection cap for `Server` (`max_connections`, counted for the whole `Server`) is deferred by pull request #131, which built it on Flare v0.12.0's per-reactor `max_connections` and measured that while a connection waits over the cap each full reactor spins a CPU core (its level-triggered poll keeps returning the readable listener), so the cap, a load control, would exhaust CPU in normal use; fixed per-worker shares also leave a free slot on one worker unusable by another. Revisit when Flare (a pin change, decided separately) stops polling the listener at its cap and accepts again once a slot frees, shown with no spin while connections wait, waiting connections accepted on several workers on Linux and macOS, and the graceful stop and TLS handshakes unchanged; fixed shares against a shared counter are compared then.
 
-## Request context over a closed type (M3-065)
-
-Issue [#151](https://github.com/sano-suguru/muntin/issues/151).
-
-[M3-065](decisions/m3-065-request-context-storage-decision.md) found no sound storage for [M3-063](decisions/m3-063-request-context-decision.md)'s open `set(value^)` on Mojo 1.1.0 and withdrew it: a context value's type is a type parameter that its writer and its readers share. A decision item chooses the shape and decides the API again: `App[Ctx]` (reopens [M3-001](decisions/m3-001-application-state-decision.md)), or a typed group of routes and middleware moved into the `App` (with per-group middleware). The group is a candidate only if one of these holds, since otherwise the `App` erases it and a group type that borrows a local would read freed memory, as a `State` did before [M3-074](decisions/m3-074-state-borrowing-decision.md): the group's origins are part of the `App`'s type; the compiler keeps a group that borrows from being stored; or only group types that borrow nothing are accepted, enforced at compile time (M3-074's rule is one such check). Whichever shape is chosen, that its context is sound is a premise the decision verifies along the whole path, under AddressSanitizer: the `App` owning the context, a middleware writing it, `Next` passing it on, the handler reading it, and the drop order at the end. No `Context` ships before it.
-
 ## Closing `State`'s `AnyOrigin` hole
 
 Issue [#173](https://github.com/sano-suguru/muntin/issues/173); [pull request #175](https://github.com/sano-suguru/muntin/pull/175).
