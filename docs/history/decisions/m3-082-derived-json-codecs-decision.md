@@ -1,0 +1,7 @@
+# Derived JSON codecs decision (M3-082)
+
+> **Draft.** Only the question is written; the choice follows the evidence and the owner's decision on its pull request.
+
+Status: **decision** (M3-082, its pull request; issue [#141](https://github.com/sano-suguru/muntin/issues/141)). The probes, prototype, sanitizer runs and review are in the pull request.
+
+**Question and what settles it.** A DTO's members are mapped by hand twice, in `from_json` and `write_json`, so a new field compiles and is silently left out (#167's `tag`). [M3-008](m3-008-json-codec-decision.md) deferred derived codecs on Mojo 1.1.0: `List[<struct>]` was not reachable without `__extension`, an unsupported field failed only deep in instantiation, and decoding had no constructor. Can Muntin, on the pinned Mojo 1.1.0 with documented features, derive both directions from a struct's fields for scalars, `String`, `Optional`, `List` and nested DTOs, refuse an unsupported field with a message at registration, keep hand-written `FromJson`/`ToJson` ([M3-075](m3-075-json-writer-members-decision.md)) for special representations, and answer a top-level `List` result? Settled by probes of each of M3-008's three blockers; a scratch copy of production with the derived codec passing `check.sh` and `test.sh` unchanged, its decoding failures under AddressSanitizer with leak detection, and the unsupported-field diagnostic measured against the registration rules'; and a fresh-context review. Code generation is the alternative compared. If a blocker stands, the item records a deferral instead.
