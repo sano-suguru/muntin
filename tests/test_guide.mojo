@@ -186,6 +186,32 @@ def show_user(users: State[Users], id: Int) raises NotFound -> Json[User]:
 # fmt: on
 
 
+# Guarded routes.
+
+
+# fmt: off
+# example: guarded-routes
+from muntin import Group
+
+
+@fieldwise_init
+struct Caller(Movable):                    # what the guard hands a handler; owns its data
+    var name: String
+
+
+def authenticate(users: State[Users], headers: Headers) raises Unauthorized -> Caller:
+    var token = headers.get("authorization")
+    if not token or token.value() != "t1":    # application code decides
+        raise Unauthorized()
+    return Caller(users[].names[0])
+
+
+def whoami(caller: Caller) -> String:       # first: the guard's value
+    return "you are " + caller.name
+# example: end
+# fmt: on
+
+
 # Middleware.
 
 
@@ -340,6 +366,35 @@ def test_application_state() raises:
     r = client.get("/users/5")
     assert_equal(r.status, 404)
     assert_equal(r.text(), "no user 5")
+
+
+def test_guarded_routes() raises:
+    var app = App()
+    # fmt: off
+    # example: guarded-routes
+    var names: List[String] = ["ada", "bo"]
+    var users = State(Users(names^))
+    var signed_in = Group(authenticate, users)       # one guard, with start-up values
+    signed_in.get["/whoami"](whoami)
+    signed_in.get["/users/{id}"](show_user, users)  # guarded, without the caller
+    app.mount(signed_in^)
+    # GET /whoami  Authorization: t1  -> 200 "you are ada"
+    # GET /whoami, GET /users/x      -> 401 "Unauthorized"  (before the 400)
+    # example: end
+    # fmt: on
+    var client = TestClient(app)
+    var headers = Headers()
+    headers.add("Authorization", "t1")
+    var r = client.get("/whoami", headers=headers.copy())
+    assert_equal(r.status, 200)
+    assert_equal(r.text(), "you are ada")
+    r = client.get("/users/1", headers=headers.copy())
+    assert_equal(r.text(), '{"id":1,"name":"bo"}')
+    assert_equal(client.get("/users/x", headers=headers^).status, 400)
+    for path in ["/whoami", "/users/x"]:
+        r = client.get(path)
+        assert_equal(r.status, 401)
+        assert_equal(r.text(), "Unauthorized")
 
 
 def test_middleware() raises:

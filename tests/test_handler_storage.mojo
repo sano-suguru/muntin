@@ -172,17 +172,18 @@ def test_app_routes_hold_erased_handlers() raises:
     # Variant), and each box carries the adapter for its own shape.
     var app = _app()
     assert_equal(
-        app._routes[0].handler.invoke([], List[UInt8]()).text(), "hello"
+        app._core._routes[0].handler.invoke([], List[UInt8]()).text(), "hello"
     )
     assert_equal(
-        app._routes[1].handler.invoke(["042"], List[UInt8]()).text(), "42"
+        app._core._routes[1].handler.invoke(["042"], List[UInt8]()).text(), "42"
     )
     assert_equal(
-        app._routes[2].handler.invoke(["-3"], List[UInt8]()).text(), "items -3"
+        app._core._routes[2].handler.invoke(["-3"], List[UInt8]()).text(),
+        "items -3",
     )
     # A bad value is answered 400 by the adapter itself (M2-011): no
     # adapter raises out of `invoke`.
-    var bad = app._routes[1].handler.invoke(["4_2"], List[UInt8]())
+    var bad = app._core._routes[1].handler.invoke(["4_2"], List[UInt8]())
     assert_equal(bad.status, 400)
     assert_equal(bad.text(), "Bad Request")
 

@@ -18,7 +18,7 @@ def main() raises:
     var app = App()
     app.get["/hello"](hello)
     var fake = alloc(Layout[_Header].single()).into_thin()
-    swap(app._routes[0].handler._header, fake)
+    swap(app._core._routes[0].handler._header, fake)
     var sink: _Erased
     sink._header = fake^
     print(app.handle(Request("GET", "/hello")).body)
