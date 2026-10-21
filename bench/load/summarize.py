@@ -18,7 +18,8 @@ per rate: also the requests that waited for a free connection (`queued`)
 or were never sent (`unsent`), the slowest answer, and how late the
 client sent them (p99), all latencies from when a request was due. Stop
 runs, open-loop ones with their rate, get their own table: before and
-after the signal, and when the server ended. Last, the most CPU time one client
+after the signal (open loop: with the queued and unsent requests due
+before it), and when the server ended. Last, the most CPU time one client
 thread used in any run's window, and, with more than one worker, the runs
 in which one worker's reactor watched every connection as the window began
 (`srv_conns_by_poller`), counted only where every connection the client
@@ -62,9 +63,15 @@ def ratio(by_impl):
     return f"{statistics.median(values):.2f} ({min(values):.2f}–{max(values):.2f})"
 
 
+def per_s(rate):
+    """load.c's `rate` field (%g: 100, 0.5, 1e+07) as a table cell."""
+    x = float(rate)
+    return f"{x:,.0f}" if x.is_integer() else f"{x:g}"
+
+
 def label(key):
     """The case of a (workers, case, proto, rate) key, with its rate if open loop."""
-    return key[1] + (f" @{key[3]}/s" if key[3] else "")
+    return key[1] + (f" @{per_s(key[3])}/s" if key[3] else "")
 
 
 def main():
@@ -115,7 +122,7 @@ def main():
                         continue
                     sent, ok = total(rows, "sent"), total(rows, "ok")
                     bad = "†" if sent - ok or any(total(rows, k) for k in ANOMALIES) else ""
-                    print(f"| {key[1]} | {key[2]} | {impl} | {int(key[3]):,} | {sent:,} | {ok:,}"
+                    print(f"| {key[1]} | {key[2]} | {impl} | {per_s(key[3])} | {sent:,} | {ok:,}"
                           f" | {sent - ok:,} | {total(rows, 'queued'):,} | {total(rows, 'unsent'):,}"
                           f" | {fmt(med(rows, 'ok_per_s'))}{bad} | {fmt(med(rows, 'p50_us'), 1000, 2)}"
                           f" | {fmt(med(rows, 'p99_us'), 1000, 2)} | {fmt(med(rows, 'max_us'), 1000, 1)}"
@@ -137,9 +144,9 @@ def main():
         if stops:
             print("\nStop (SIGTERM 1 s into the window): requests sent (open loop: due) before the signal and"
                   " from it on, and the server's end\n")
-            print("| proto | due/s | impl | before: sent | ok | not ok | after: sent | ok | invalid | disconnected "
-                  "| timeout | connections refused | exit ms |")
-            print("|---|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+            print("| proto | due/s | impl | before: sent | ok | not ok | queued | unsent | after: sent | ok | invalid "
+                  "| disconnected | timeout | connections refused | exit ms |")
+            print("|---|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
             for key in stops:
                 for impl in IMPLS:
                     rows = groups[key].get(impl, [])
@@ -148,8 +155,9 @@ def main():
                     sent = total(rows, "sent") + total(rows, "slow_sent")
                     ok = total(rows, "ok") + total(rows, "slow_ok")
                     exits = sorted(r["exit_ms"] for r in rows)
-                    print(f"| {key[2]} | {f'{int(key[3]):,}' if key[3] else 'closed loop'} | {impl} | {sent:,} | {ok:,}"
-                          f" | {sent - ok:,} | {total(rows, 'after_sent'):,}"
+                    waited = f"{total(rows, 'queued'):,} | {total(rows, 'unsent'):,}" if key[3] else "- | -"
+                    print(f"| {key[2]} | {per_s(key[3]) if key[3] else 'closed loop'} | {impl} | {sent:,} | {ok:,}"
+                          f" | {sent - ok:,} | {waited} | {total(rows, 'after_sent'):,}"
                           f" | {total(rows, 'after_ok'):,} | {total(rows, 'after_invalid'):,}"
                           f" | {total(rows, 'after_disconnected'):,} | {total(rows, 'after_timeout'):,}"
                           f" | {total(rows, 'after_connect_failed'):,} | {', '.join(exits)} |")
