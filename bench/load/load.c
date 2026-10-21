@@ -1,6 +1,6 @@
-/* The load client of scripts/bench_load.sh: a closed-loop HTTP/1.1
- * keep-alive or prior-knowledge h2c load generator that checks every
- * response it reads. Not part of Muntin and not run by CI; Linux only
+/* The load client of scripts/bench_load.sh: a closed-loop or open-loop
+ * HTTP/1.1 keep-alive or prior-knowledge h2c load generator that checks
+ * every response it reads. Not part of Muntin and not run by CI; Linux only
  * (epoll). bench/load/test_load.py checks that it counts what a broken
  * server sends.
  *
@@ -10,7 +10,7 @@
  *        (--expect FILE | --expect-text TEXT | --expect-fields)
  *        [--headers none|browser] [--require-header 'name: value']
  *        [--content-type TYPE] [--slow-path PATH --slow-every N]
- *        [--pid PID] [--term-at MS]
+ *        [--pid PID] [--term-at MS] [--rate R]
  *
  * C connections to 127.0.0.1:P each keep one request in flight (h1) or S
  * streams (h2c), from T threads. Every request is METHOD PATH with BODY;
@@ -27,6 +27,20 @@
  * checking what the server sends. With --term-at MS the client sends
  * SIGTERM to PID MS milliseconds into the window and goes on sending:
  * requests sent from then on are counted apart (`after_`).
+ *
+ * Closed loop, the default: each connection (h1) or stream (h2c) sends its
+ * next request as soon as the last one ended, so a slower server is sent
+ * fewer, and a request is due when it is sent. Open loop, with --rate R
+ * (above 0, at most 10^7): requests are due every 1/R seconds from the
+ * start, whatever the answers (each thread takes every T-th), and each is
+ * sent when it is due on a free connection or stream, the connections taken
+ * in turn; the C connections or C*S streams are the most in flight. One due
+ * with none free waits (`queued`) and goes first when one frees, if that is
+ * before the window's end; one due in the window and not sent by its end is
+ * `unsent`, not a request. Warm-up, window and SIGTERM split requests by
+ * due time: one due in the window is measured whenever it was sent. Either
+ * way a request's latency counts from when it was due, so in open loop it
+ * includes the wait for a free connection (no coordinated omission).
  *
  * Each request sent (this client began to write it) ends in exactly one
  * outcome:
@@ -84,10 +98,14 @@
  * Prints one line of `key=value` fields: for the measured requests `sent`,
  * `ok`, `status`, `invalid`, `disconnected`, `timeout`; `ok_per_s`, the ok
  * answers that ended in the window (whenever sent) per second; the
- * measured ok answers' latency from sending `p50_us`, `p99_us`, `max_us`;
- * `inflight_end`, the requests sent before the window's end that ended
- * after it (their outcomes are counted, their ok answers are not in
- * `ok_per_s`), and `ok_late`, the measured ones of them that were ok; the
+ * measured ok answers' latency from when they were due `p50_us`, `p99_us`,
+ * `max_us`; `inflight_end`, the requests sent before the window's end that
+ * ended after it (their outcomes are counted, their ok answers are not in
+ * `ok_per_s`), and `ok_late`, the measured ones of them that were ok; with
+ * --rate, `rate`, then `queued` and `unsent` (above) of the measured
+ * requests, and how long after it was due each measured request was sent,
+ * `send_lag_p99_us` and `send_lag_max_us` (lag without `queued` is this
+ * client's own delay); the
  * counts and latencies again for the slow requests with `slow_`, and for
  * those sent after SIGTERM with `after_`, then `after_connect_failed` and
  * `exit_ms` when PID ended after it (or `-`); `warmup_bad`, the warm-up
@@ -158,6 +176,11 @@ enum { NBROWSER = sizeof BROWSER / sizeof BROWSER[0] };
 
 static int port, h2, nconns, nstreams = 1, nthreads = 1, slow_every, browser;
 static double warmup_s, duration_s, timeout_s = 10.0, term_at_s = -1;
+static double rate; /* --rate: requests per second, open loop; 0: closed loop */
+/* The most --rate accepts: far above what this client can send, yet low
+ * enough that walking the schedule (sched) one request at a time stays
+ * cheap; a rate of inf would make every request due at once. */
+#define MAX_RATE 1e7
 static pid_t srv_pid;
 static const char *require_name, *require_value, *content_type = "application/octet-stream";
 static size_t require_name_len, require_value_len;
@@ -220,6 +243,12 @@ typedef struct {
      * kind); requests sent before the window ended that ended after it, and
      * the measured ones of those that were ok */
     uint64_t ok_in_window[NK], inflight_end, ok_late;
+    /* open loop: measured requests that waited for a free connection or
+     * stream, and those due in the window that were never sent; how late
+     * each measured request was sent (microseconds) */
+    uint64_t queued, unsent;
+    double *lag;
+    size_t nlag, caplag;
     Reason why[4][8]; /* [0] invalid, [1] disconnected, [2] other statuses, [3] connection errors */
 } Stats;
 
@@ -252,6 +281,7 @@ typedef struct {
     int active, kind, group, began, head_done, failed, status, ok_body, has_required;
     uint32_t sid;
     double t_sent;
+    double t_due; /* when it was due: t_sent in closed loop, its slot in the schedule in open loop */
     long clen; /* -1: none given */
     size_t got;
     size_t body_off;  /* h2c: request body bytes sent */
@@ -317,6 +347,10 @@ typedef struct {
     Conn *conns;
     Stats stats;
     uint64_t issued;
+    /* open loop: this thread's next request in the schedule (sched), and
+     * the first one that was not yet due with no connection or stream free */
+    uint64_t next, blocked;
+    int rr; /* open loop: the connection to offer the next request first */
     double cpu_s; /* this thread's CPU time during the measured window */
     pthread_t thread;
 } Worker;
@@ -335,7 +369,7 @@ static void stream_end(Worker *w, Stream *s, int outcome, const char *why) {
             b->caplat = b->caplat ? b->caplat * 2 : 4096;
             b->lat = xrealloc(b->lat, b->caplat * sizeof *b->lat);
         }
-        b->lat[b->nlat++] = (t - s->t_sent) * 1e6;
+        b->lat[b->nlat++] = (t - s->t_due) * 1e6;
     } else if (outcome == INVALID) {
         reason(&w->stats, 0, why ? why : "?");
     } else if (outcome == DISCONNECTED) {
@@ -361,6 +395,27 @@ static void stream_cut(Worker *w, Stream *s, const char *why) {
 }
 
 static int issuing(double t) { return t < t0 + warmup_s + duration_s; }
+
+/* Open loop: when this thread's i-th request is due. The threads' requests
+ * interleave, so together they are due every 1/rate seconds from t0. */
+static double sched(const Worker *w, uint64_t i) { return t0 + (double)(i * nthreads + w->id) / rate; }
+
+/* Whether a request may be sent now, on a connection or stream that is
+ * free, and when it was due. Closed loop: whenever the window is open, due
+ * now. Open loop: this thread's next request, if it is due. */
+static int take(Worker *w, double t, double *due) {
+    if (!issuing(t)) return 0;
+    if (!rate) {
+        *due = t;
+        return 1;
+    }
+    double d = sched(w, w->next);
+    if (d > t) return 0;
+    if (w->next < w->blocked && group_of(d) == G_MEAS) w->stats.queued++;
+    w->next++;
+    *due = d;
+    return 1;
+}
 
 static void watch(Worker *w, Conn *c, uint32_t events) {
     if (c->events == events) return;
@@ -413,12 +468,21 @@ static void conn_open(Worker *w, Conn *c) {
     }
 }
 
-static void start_stream(Worker *w, Stream *s, double t) {
+static void start_stream(Worker *w, Stream *s, double t, double due) {
     memset(s, 0, sizeof *s);
     s->active = 1;
     s->kind = (slow_every && ++w->issued % (uint64_t)slow_every == 0) ? K_SLOW : K_MAIN;
-    s->group = group_of(t);
+    s->group = group_of(due);
     s->t_sent = t;
+    s->t_due = due;
+    if (rate && s->group == G_MEAS) {
+        Stats *st = &w->stats;
+        if (st->nlag == st->caplag) {
+            st->caplag = st->caplag ? st->caplag * 2 : 4096;
+            st->lag = xrealloc(st->lag, st->caplag * sizeof *st->lag);
+        }
+        st->lag[st->nlag++] = (t - due) * 1e6;
+    }
     s->clen = -1;
     s->ok_body = 1;
     w->stats.b[s->group][s->kind].sent++;
@@ -452,8 +516,8 @@ static void h1_flush(Worker *w, Conn *c) {
     watch(w, c, EPOLLIN | EPOLLRDHUP);
 }
 
-static void h1_issue(Worker *w, Conn *c, double t) {
-    start_stream(w, &c->s, t);
+static void h1_issue(Worker *w, Conn *c, double t, double due) {
+    start_stream(w, &c->s, t, due);
     c->hlen = 0;
     c->close_after = 0;
     c->wsrc = reqs[c->s.kind].h1;
@@ -952,15 +1016,17 @@ static void h2_connected(Conn *c) {
     c->dec.max_size = 4096;
 }
 
-static void h2_issue(Worker *w, Conn *c, double t) {
+/* Sends a request on a free stream if take allows; returns whether it did. */
+static int h2_issue(Worker *w, Conn *c, double t) {
     Stream *s = NULL;
     for (int i = 0; i < MAXS; i++)
         if (!c->st[i].active) {
             s = &c->st[i];
             break;
         }
-    if (!s) return;
-    start_stream(w, s, t);
+    double due;
+    if (!s || !take(w, t, &due)) return 0;
+    start_stream(w, s, t, due);
     s->sid = c->next_sid;
     c->next_sid += 2;
     s->send_window = c->peer_init_window;
@@ -968,15 +1034,16 @@ static void h2_issue(Worker *w, Conn *c, double t) {
     const Req *r = &reqs[s->kind];
     frame(c, 1, r->body_len ? 4 : 5, s->sid, r->block, r->block_len); /* END_HEADERS (| END_STREAM) */
     c->nactive++;
-    (void)w;
+    return 1;
 }
 
 static void h2_fill(Worker *w, Conn *c, double t) {
     if (c->state != C_IDLE && c->state != C_BUSY) return;
-    if (!c->goaway && issuing(t)) {
+    if (!c->goaway) {
         /* SETTINGS_MAX_CONCURRENT_STREAMS is any 32-bit value */
         uint32_t limit = (uint32_t)nstreams < c->peer_max_streams ? (uint32_t)nstreams : c->peer_max_streams;
-        while ((uint32_t)c->nactive < limit && c->next_sid < 0x7fffff00u) h2_issue(w, c, t);
+        while ((uint32_t)c->nactive < limit && c->next_sid < 0x7fffff00u && h2_issue(w, c, t)) {
+        }
     }
     c->state = c->nactive ? C_BUSY : C_IDLE;
     h2_pump(c);
@@ -1463,7 +1530,7 @@ static void *run(void *arg) {
         if (h2) c->hblock = xrealloc(NULL, HBLOCK_MAX);
         conn_open(w, c);
     }
-    double last_expire = 0, idle_since = -1, cpu_from = -1;
+    double last_expire = 0, idle_since = -1, cpu_from = -1, wait = 0.005;
     int cpu_done = 0;
     struct epoll_event evs[256];
     for (;;) {
@@ -1481,7 +1548,8 @@ static void *run(void *arg) {
             if (idle_since < 0) idle_since = t;
             if (t - idle_since >= linger_s) break;
         }
-        int n = epoll_wait(w->epfd, evs, 256, 5);
+        struct timespec ts = {0, (long)(wait * 1e9)};
+        int n = epoll_pwait2(w->epfd, evs, 256, &ts, NULL);
         if (n < 0 && errno != EINTR) die("epoll_wait: %s", strerror(errno));
         for (int i = 0; i < n; i++) {
             Conn *c = evs[i].data.ptr;
@@ -1505,8 +1573,15 @@ static void *run(void *arg) {
             expire(w, t);
             last_expire = t;
         }
-        for (int i = 0; i < w->nconn; i++) {
+        /* Open loop: the scan starts after the connection that took the
+         * last request, so that below capacity every connection takes its
+         * turn instead of the first ones taking all and the others idling
+         * until the server's idle timeout closes them. */
+        int from = w->rr;
+        for (int k = 0; k < w->nconn; k++) {
+            int i = (from + k) % w->nconn;
             Conn *c = &w->conns[i];
+            uint64_t next = w->next;
             if (c->state == C_DOWN) {
                 if (issuing(t) && t >= c->retry_at) conn_open(w, c);
                 continue;
@@ -1517,11 +1592,30 @@ static void *run(void *arg) {
                     continue;
                 }
                 if (c->fd >= 0) h2_fill(w, c, t);
-            } else if (c->state == C_IDLE && issuing(t)) {
-                h1_issue(w, c, t);
+            } else if (c->state == C_IDLE) {
+                double due;
+                if (take(w, t, &due)) h1_issue(w, c, t, due);
             }
+            if (w->next != next) w->rr = (i + 1) % w->nconn;
+        }
+        wait = 0.005;
+        if (rate && issuing(t)) {
+            /* Every request due by now that is still unsent found no free
+             * connection or stream: it is queued. Then wait for an event,
+             * or until the next one is due. */
+            if (w->blocked < w->next) w->blocked = w->next;
+            while (sched(w, w->blocked) <= t) w->blocked++;
+            wait = w->blocked > w->next ? 0.005 : sched(w, w->next) - now();
+            if (wait > 0.005) wait = 0.005;
+            if (wait < 0) wait = 0;
         }
     }
+    if (rate) /* what the window left unsent when it closed */
+        for (uint64_t i = w->next;; i++) {
+            double d = sched(w, i);
+            if (!issuing(d)) break;
+            if (group_of(d) == G_MEAS) w->stats.unsent++;
+        }
     for (int i = 0; i < w->nconn; i++)
         if (w->conns[i].fd >= 0) close(w->conns[i].fd);
     return NULL;
@@ -1899,7 +1993,7 @@ int main(int argc, char **argv) {
         {"expect-text", 1, 0, 'E'}, {"headers", 1, 0, 'H'},    {"require-header", 1, 0, 'R'},
         {"slow-path", 1, 0, 'S'},   {"slow-every", 1, 0, 'N'}, {"pid", 1, 0, 'k'},
         {"term-at", 1, 0, 'K'},     {"content-type", 1, 0, 'C'}, {"linger", 1, 0, 'L'},
-        {"expect-fields", 0, 0, 'F'}, {0, 0, 0, 0}};
+        {"expect-fields", 0, 0, 'F'}, {"rate", 1, 0, 'r'},    {0, 0, 0, 0}};
     int o;
     while ((o = getopt_long(argc, argv, "", opts, NULL)) != -1) {
         switch (o) {
@@ -1925,6 +2019,13 @@ int main(int argc, char **argv) {
         case 'C': content_type = optarg; break;
         case 'L': linger_s = atof(optarg) / 1000.0; break;
         case 'F': expect_fields = 1; break;
+        case 'r': {
+            char *end;
+            rate = strtod(optarg, &end);
+            if (end == optarg || *end || !(rate > 0 && rate <= MAX_RATE))
+                die("--rate is a number above 0 and at most %g", MAX_RATE);
+            break;
+        }
         default: die("unknown option");
         }
     }
@@ -2049,6 +2150,13 @@ int main(int argc, char **argv) {
         for (int k = 0; k < NK; k++) all.ok_in_window[k] += ws[i].stats.ok_in_window[k];
         all.inflight_end += ws[i].stats.inflight_end;
         all.ok_late += ws[i].stats.ok_late;
+        all.queued += ws[i].stats.queued;
+        all.unsent += ws[i].stats.unsent;
+        if (ws[i].stats.nlag) {
+            all.lag = xrealloc(all.lag, (all.nlag + ws[i].stats.nlag) * sizeof *all.lag);
+            memcpy(all.lag + all.nlag, ws[i].stats.lag, ws[i].stats.nlag * sizeof *all.lag);
+            all.nlag += ws[i].stats.nlag;
+        }
         if (ws[i].cpu_s > cli_thread_max) cli_thread_max = ws[i].cpu_s;
         all.stray += ws[i].stats.stray;
         all.after_end += ws[i].stats.after_end;
@@ -2063,6 +2171,17 @@ int main(int argc, char **argv) {
     print_bucket("", &total[G_MEAS][K_MAIN], all.ok_in_window[K_MAIN] / duration_s);
     printf(" inflight_end=%llu ok_late=%llu", (unsigned long long)all.inflight_end,
            (unsigned long long)all.ok_late);
+    if (rate) {
+        printf(" rate=%g queued=%llu unsent=%llu", rate, (unsigned long long)all.queued,
+               (unsigned long long)all.unsent);
+        if (all.nlag) {
+            qsort(all.lag, all.nlag, sizeof *all.lag, cmp_double);
+            printf(" send_lag_p99_us=%.0f send_lag_max_us=%.0f", all.lag[(all.nlag - 1) * 99 / 100],
+                   all.lag[all.nlag - 1]);
+        } else {
+            printf(" send_lag_p99_us=- send_lag_max_us=-");
+        }
+    }
     if (slow_path) print_bucket("slow_", &total[G_MEAS][K_SLOW], -1);
     if (term_at_s >= 0) {
         merge(&total[G_AFTER][K_MAIN], &total[G_AFTER][K_SLOW]);
