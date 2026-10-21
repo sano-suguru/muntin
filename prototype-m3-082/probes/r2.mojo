@@ -1,6 +1,8 @@
 # Probe r2 (M3-082, Mojo 1.1.0). Builds and runs (raises "x" by design):
 # forwarding the refined E to a bounded helper works; json.mojo uses this
 # (_read_list).
+# Expect: exit 1
+# Expect-output: Unhandled exception caught during execution: x
 def mk[E: Movable & Deinitable](n: Int) raises -> E:
     raise Error("x")
 

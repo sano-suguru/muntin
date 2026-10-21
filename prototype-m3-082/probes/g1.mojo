@@ -1,6 +1,7 @@
 # Probe g1 (M3-082, Mojo 1.1.0). Builds: a free write_fields default with an
 # unsupported Dict field is accepted while unused (late diagnostic, blocker 2
 # of M3-008).
+# Expect: exit 0
 from muntin import JsonWriter, ToJson
 
 

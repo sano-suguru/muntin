@@ -1,5 +1,7 @@
 # Probe s1 (M3-082, Mojo 1.1.0). Does not build: a struct-scope `comptime
 # assert` is refused ("must be inside a function").
+# Expect: build fails
+# Expect-output: 'comptime assert' must be inside a function
 def _ok[T: AnyType]() -> Bool:
     comptime types = reflect[T].field_types()
     comptime for i in range(reflect[T].field_count()):

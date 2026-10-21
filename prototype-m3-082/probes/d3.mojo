@@ -2,6 +2,8 @@
 # `__init__(out self)` assigning through field_ref destroys the uninitialized
 # old value first ("del <garbage>" before each "assign"); the rejected
 # decoding candidate.
+# Expect: exit 0
+# Expect-output: assign 0\ndel \d+\nassign 1\ndel \d+\nbuilt 50 51
 @fieldwise_init
 struct Noisy(Movable):
     var tag: Int

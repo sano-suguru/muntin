@@ -1,24 +1,48 @@
 #!/usr/bin/env bash
 # Reproduces the M3-082 prototype's evidence from the repository root of
-# this commit. Needs pixi with the locked default environment (Mojo 1.1.0).
+# this commit. Needs pixi with the locked default environment (Mojo 1.1.0)
+# on Linux (leak detection under SANITIZE=address). Runs every step, then
+# exits 1 if any step failed, naming each failed step.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.pixi/bin:$PATH"
-step() { printf '\n== %s\n' "$*"; }
-step "check.sh, unchanged (includes the new check_unsafe.sh and the derived_* fixtures)"
-./scripts/check.sh 2>&1 | tail -n 3
-step "test.sh (includes tests/test_spike_derived_json.mojo)"
-./scripts/test.sh 2>&1 | grep -E '^== |Summary|error' | tail -n 6
-step "SANITIZE=address test.sh (leak detection on Linux)"
-SANITIZE=address ./scripts/test.sh 2>&1 | grep -E 'sanitizer_controls|Summary|ERROR|error' | tail -n 6
-step "check_unsafe.sh catches each planted boundary violation"
-./prototype-m3-082/check_unsafe_mutations.sh
-step "probes (expected outcome in each file's first comment)"
-for p in prototype-m3-082/probes/*.mojo; do
-    printf -- '-- %s: ' "$p"
-    if pixi run --frozen mojo build -I src "$p" -o /tmp/m3082_probe >/tmp/m3082_probe.log 2>&1; then
-        echo "builds"; /tmp/m3082_probe 2>&1 | head -n 3
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+failed=()
+# step NAME COMMAND...: runs COMMAND, prints the tail of its output and
+# records NAME as failed when COMMAND exits non-zero.
+step() {
+    local name=$1 code
+    shift
+    printf '\n== %s\n' "$name"
+    "$@" >"$log" 2>&1
+    code=$?
+    # Totals from the whole log: check.sh prints "ok: tests/..." per fixture,
+    # test.sh one "Summary" line per test file.
+    grep -E '^ok: tests/|^ *Summary ' "$log" | awk '
+        /^ok: tests\// { fixtures++ }
+        /Summary \[/ { files++; for (i = 1; i <= NF; i++) {
+            if ($(i + 1) == "passed") passed += $i
+            if ($(i + 1) == "failed") bad += $i } }
+        END { if (fixtures) print "totals: " fixtures " fixtures ok"
+              if (files) print "totals: " files " test files, " passed " passed, " bad + 0 " failed" }'
+    if ((code == 0)); then
+        tail -n 4 "$log"
+        echo "PASS: $name"
     else
-        echo "does not build: $(grep -m1 -E 'constraint failed|error:' /tmp/m3082_probe.log | grep -v 'function instantiation' | cut -c1-160)"
+        tail -n 25 "$log"
+        echo "FAIL (exit $code): $name"
+        failed+=("$name")
     fi
-done
+}
+step "check.sh, unchanged (with the new check_unsafe.sh and the derived_* fixtures)" ./scripts/check.sh
+step "test.sh (with tests/test_spike_derived_json.mojo)" ./scripts/test.sh
+step "SANITIZE=address test.sh" env SANITIZE=address ./scripts/test.sh
+step "check_unsafe.sh catches each planted boundary violation" ./prototype-m3-082/check_unsafe_mutations.sh
+step "each probe behaves as its Expect lines say" ./prototype-m3-082/check_probes.sh
+echo
+if ((${#failed[@]})); then
+    printf 'FAILED: %s\n' "${failed[@]}"
+    exit 1
+fi
+echo "ok: all 5 steps passed"

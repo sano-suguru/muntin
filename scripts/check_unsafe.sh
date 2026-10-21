@@ -5,9 +5,10 @@
 # fields; if a module imports anything but `_Erased`, `_Shared` or
 # `_build_record` from it;
 # if the package root exports it; if the module imports anything but the
-# standard library, `.http` and the `_FieldBuilt` trait, or `_FieldBuilt` is
-# refined by anything but `RouteValues` and `JsonFields` (so `_build_record`
-# can build no other type, M3-062, M3-082); or if it names request or body
+# standard library, `.http` and the `_FieldBuilt` trait, or a line naming
+# `_FieldBuilt` is not on a fixed list (so only `RouteValues` and
+# `JsonFields` refine it and `_build_record` can build no other type, M3-062,
+# M3-082); or if it names request or body
 # data (M2-006) or result/error conversion (M2-013); or if a rebind appears
 # anywhere but the two guarded helpers in `_rebind.mojo`, or `downcast`
 # anywhere (M3-015, M3-082, below). A confinement guard, not a safety proof:
@@ -65,17 +66,29 @@ if grep -nE '^[[:space:]]*(from|import)[[:space:]]' "$storage" |
     status=1
 fi
 
-# `_FieldBuilt` is the consent that `_build_record` may skip `__init__`: it
-# is defined in its own module and refined only by `RouteValues`
-# (route_value.mojo) and `JsonFields` (json.mojo), and named nowhere else
-# but the storage module's bound (M3-082).
+# `_FieldBuilt` is the consent that `_build_record` may skip `__init__`, so
+# it is refined only by `RouteValues` (route_value.mojo) and `JsonFields`
+# (json.mojo) (M3-082). Every line in src/muntin that names it, in its own
+# module and the storage module too, must be one of the lines below, each
+# exactly once: a third refinement, an alias or a refinement split over
+# lines, anywhere, adds a line not listed.
 fb=$dir/_field_built.mojo
-if grep -rnE --include='*.mojo' '_FieldBuilt' "$dir" |
-    grep -vE "^$fb:" | grep -vE "^$storage:" |
-    grep -vE "^$dir/(route_value|json)\.mojo:[0-9]+:from \._field_built import _FieldBuilt$" |
-    grep -vE "^$dir/route_value\.mojo:[0-9]+:trait RouteValues\(_FieldBuilt\):$" |
-    grep -vE "^$dir/json\.mojo:[0-9]+:trait JsonFields\(_FieldBuilt\):$"; then
-    echo "error: only RouteValues and JsonFields may refine _FieldBuilt" >&2
+fb_expected="$(LC_ALL=C sort <<'LINES'
+src/muntin/_field_built.mojo:"""`_FieldBuilt`: the types the storage module may build field by field
+src/muntin/_field_built.mojo:trait _FieldBuilt(Deinitable, Movable):
+src/muntin/_handler_storage.mojo:from ._field_built import _FieldBuilt
+src/muntin/_handler_storage.mojo:    T: _FieldBuilt,
+src/muntin/_handler_storage.mojo:    refinements of `_FieldBuilt`, so no other type can be built this way;
+src/muntin/route_value.mojo:from ._field_built import _FieldBuilt
+src/muntin/route_value.mojo:trait RouteValues(_FieldBuilt):
+src/muntin/json.mojo:from ._field_built import _FieldBuilt
+src/muntin/json.mojo:trait JsonFields(_FieldBuilt):
+LINES
+)"
+fb_found="$(grep -rE --include='*.mojo' '_FieldBuilt' "$dir" | LC_ALL=C sort || true)"
+if [[ "$fb_found" != "$fb_expected" ]]; then
+    diff <(printf '%s\n' "$fb_expected") <(printf '%s\n' "$fb_found") || true
+    echo "error: only RouteValues and JsonFields may refine _FieldBuilt: the lines naming it differ from the list (< listed, > found)" >&2
     status=1
 fi
 if grep -nE '^[[:space:]]*(from|import)[[:space:]]' "$fb"; then

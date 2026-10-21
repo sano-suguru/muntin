@@ -1,6 +1,8 @@
 # Probe e3 (M3-082, Mojo 1.1.0). Builds and runs: a reflection encoder writes
 # List[<struct>], Optional[<struct>], Optional[List[Int]] and
 # List[List[String]] without __extension (blocker 1 of M3-008).
+# Expect: exit 0
+# Expect-output: \{"a":\[\{"zip":1\},\{"zip":2\}\],"b":\[3,4\],"c":null,"d":\[5\],"e":\[\["x"\],\[\]\]\}
 from muntin import JsonWriter, ToJson
 
 

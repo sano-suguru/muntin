@@ -1,5 +1,7 @@
 # Probe g2 (M3-082, Mojo 1.1.0). Does not build: the same struct used as a
 # Json result fails only at first use, about 90 lines deep, message last.
+# Expect: build fails
+# Expect-output: constraint failed: derived JSON: field 'by_name' has unsupported type
 from muntin import JsonWriter, ToJson
 
 

@@ -1,6 +1,8 @@
 # Probe e4 (M3-082, Mojo 1.1.0). Builds and runs: the element type of
 # List[MoveOnly], Optional[MoveOnly] and Dict[String, Int]; `F == List[E]` is
 # true for List, false for Dict and for a user struct named List.
+# Expect: exit 0
+# Expect-output: List\[e4\.MoveOnly\] iterable, element e4\.MoveOnly List\n.*equals std List\[E\]: True\n.*Optional\[e4\.MoveOnly\] iterable, element e4\.MoveOnly Optional\n.*Dict\[.*iterable, element String Dict\n  equals std List\[E\]: False\nnot iterable e4\.List
 @fieldwise_init
 struct MoveOnly(Movable):
     var x: Int

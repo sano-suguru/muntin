@@ -1,7 +1,8 @@
 # M3-082 prototype (evidence for pull request #187, not for merging)
 
-Base: `66dd883` (main when #187 was opened). This commit is the prototype the
-decision record's "Next production slice" calls "as prototyped".
+Base: `66dd883` (main when #187 was opened). The prototype that the decision
+record's "Next production slice" calls "as prototyped" is the commit of this
+branch that the record names.
 
 What changed against the base:
 
@@ -21,8 +22,11 @@ What changed against the base:
 - `scripts/check_unsafe.sh`: the boundary above enforced (see its comments).
 - `tests/test_spike_derived_json.mojo`: the spike (8 tests).
 - `tests/json_api_fail/derived_*.mojo`: the 8 refusals, checked by `check.sh`.
-- `prototype-m3-082/`: this file, `run.sh` (reproduces everything below),
-  `check_unsafe_mutations.sh` (plants 9 violations, each must be caught) and
-  `probes/` (the Mojo 1.1.0 behaviors the decision rests on).
+- `prototype-m3-082/`: this file; `run.sh`, which runs every step below and
+  exits 1 naming each failed one; `check_unsafe_mutations.sh`, which plants
+  16 boundary violations and requires each to fail `check_unsafe.sh` with its
+  rule's error; and `check_probes.sh`, which builds each of `probes/` (the
+  Mojo 1.1.0 behaviors the decision rests on) and compares the outcome with
+  its `# Expect:` and `# Expect-output:` lines.
 
-Reproduce: `./prototype-m3-082/run.sh` from the repository root.
+Reproduce: `./prototype-m3-082/run.sh` from the repository root (Linux, pixi).
