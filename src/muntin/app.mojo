@@ -1,12 +1,12 @@
 """Muntin application: route registration and request dispatch."""
 
-from std.builtin.rebind import rebind_var
 from std.collections import Dict
 from std.os import abort
 from std.reflection import reflect
 
 from ._handler_storage import _Erased
 from ._handler_storage import _build_record
+from ._rebind import _as
 from ._registration_rules import (
     _BODY,
     _HEADERS,
@@ -101,11 +101,10 @@ from .state import State
 # `Headers` slot.
 # `comptime if A == Int` does not refine `A` on Mojo 1.1.0, so a parsed
 # `Int`, a `String` route value, a rebuilt `Request` or `Headers` and a text
-# result reach their generic type through the one rebind helper `_as`, which
-# asserts type equality first (the rebind alone accepts a different type of
-# the same layout: tests/registration_known_gaps/rebind_var_layout_twins.mojo),
-# and the confinement step of `scripts/check.sh` fails on any other
-# `rebind_var`.
+# result reach their generic type through the rebind helper `_as`
+# (`_rebind.mojo`), which asserts type equality first (the rebind alone
+# accepts a different type of the same layout; its pin is named there), and
+# the confinement step of `scripts/check.sh` fails on any other rebind.
 # The handler and its adapter are stored together in an `_Erased` box
 # (`_handler_storage.mojo`), so dispatch is one call whatever the shape.
 # Where a route value comes from (path segment or query key) is route data,
@@ -792,25 +791,6 @@ def _header_slot(args: List[String], at: Int) raises -> Headers:
         headers.add(args[i], args[i + 1])
         i += 2
     return headers^
-
-
-def _as[T: Movable, A: Movable](var value: T) -> A:
-    """`value` as `A`, which must equal `T`: the one `rebind_var` in
-    `src/muntin`.
-
-    `comptime if A == Int` does not refine `A` on Mojo 1.1.0
-    (tests/header_access_fail/generic_slot_does_not_refine.mojo), so a
-    generic slot or result reaches its type through a rebind, and the rebind
-    alone also accepts a different type with the same layout
-    (tests/registration_known_gaps/rebind_var_layout_twins.mojo). The
-    equality asserted here is exact for origin-free types (`Int`,
-    `String`, their `Optional`s, `Request`, `Headers`); generic `==`
-    ignores which origin a slice has, so for a `StaticString` result
-    exactness comes from the overloads' `where` clause. The confinement
-    step of `scripts/check.sh` requires the `rebind_var` on the line after
-    this assert and nowhere else."""
-    comptime assert A == T, "rebind requires generic type equality"
-    return rebind_var[A](value^)
 
 
 @fieldwise_init

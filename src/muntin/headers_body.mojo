@@ -97,6 +97,9 @@ struct WithHeaders[B: _FromBodyOrBytes](
     (M3-041).
     """
 
+    comptime _read_refusal: String = _carried_refusal[Self.B, True]()
+    comptime _write_refusal: String = _carried_refusal[Self.B, False]()
+
     var headers: Headers
     """The request's header fields."""
     var body: Self.B
@@ -141,3 +144,11 @@ struct WithHeaders[B: _FromBodyOrBytes](
     @staticmethod
     def _carries_record() -> Bool:
         return conforms_to(Self.B, RouteValues)
+
+
+def _carried_refusal[B: AnyType, read: Bool]() -> String:
+    comptime if conforms_to(B, _JsonBody):
+        comptime if read:
+            return B._read_refusal
+        return B._write_refusal
+    return ""

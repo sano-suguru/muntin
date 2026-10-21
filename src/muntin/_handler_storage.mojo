@@ -92,7 +92,7 @@ from std.memory.alloc import ThinAllocation
 from std.reflection import reflect
 
 from .http import Response
-from .route_value import RouteValues
+from ._field_built import _FieldBuilt
 
 comptime _Box = MutOpaquePointer[MutUntrackedOrigin]
 
@@ -221,18 +221,23 @@ struct _Shared[S: Movable & Deinitable](Copyable, Movable):
 
 
 def _build_record[
-    T: RouteValues,
+    S1: AnyType,
+    S2: AnyType,
+    //,
+    T: _FieldBuilt,
     E: Movable & Deinitable,
-    convert: def[F: Movable & Deinitable, i: Int](
-        List[String], List[UInt8]
-    ) thin raises E -> F,
+    convert: def[F: Movable & Deinitable, i: Int](S1, S2) thin raises E -> F,
     at: Int,
-](args: List[String], bytes: List[UInt8]) raises E -> T:
+](args: S1, bytes: S2) raises E -> T:
     """Builds a `T` field by field without calling any of its initializers:
     field `i`, of type `F`, is `convert[F, at + i](args, bytes)`, in field
-    order. `T` is a route-value record (M3-061), so no other type can be
-    built this way; `app.mojo` calls it only for a record the registration
-    rules accepted, whose fields they restrict to route values.
+    order, from two borrowed sources it passes through unread. `T` is a
+    route-value record (M3-061) or a `JsonFields` struct (M3-082), the only
+    refinements of `_FieldBuilt`, so no other type can be built this way;
+    `app.mojo` calls it only for a record the registration rules accepted,
+    whose fields they restrict to route values, and `json.mojo` only for a
+    struct whose every field is a JSON kind. A struct with no field is
+    built with nothing written.
 
     Invariant, which the compiler does not check (`MaybeUninit` does not
     track which fields are initialized):
@@ -254,7 +259,6 @@ def _build_record[
     comptime r = reflect[T]
     comptime count = r.field_count()
     comptime types = r.field_types()
-    comptime assert count > 0, "a record has at least one field"
     var storage = MaybeUninit[T]()
     var base = storage.unsafe_ptr().unsafe_bitcast[UInt8]()
     comptime for i in range(count):

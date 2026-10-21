@@ -28,6 +28,7 @@ from std.reflection import reflect
 from .body import FromBody, FromBytes
 from .headers_body import _HeaderCarrier
 from .http import Headers, Request, Response
+from .json import _JsonBody
 from .route_value import FromRouteValue, Param, RouteValues, _NamedValue
 from .state import _InjectedState
 
@@ -791,7 +792,21 @@ def _admits[
     C: AnyType,
 ]() -> Bool:
     """`_check` as one Bool: the guard of the adapter's instantiation."""
-    return _rule[method, stateful, path, R, A, B, C]() == _OK
+    return (
+        _rule[method, stateful, path, R, A, B, C]() == _OK
+        and _json_ok[R, False]()
+        and _json_ok[A, True]()
+        and _json_ok[B, True]()
+        and _json_ok[C, True]()
+    )
+
+
+def _json_ok[X: AnyType, reading: Bool]() -> Bool:
+    comptime if conforms_to(X, _JsonBody):
+        comptime if reading:
+            return X._read_refusal == ""
+        return X._write_refusal == ""
+    return True
 
 
 def _check[
@@ -982,3 +997,17 @@ def _check[
     comptime assert rule != _RECORD_NAME, record_message
     comptime assert rule != _RECORD_OPTIONAL_AT_PATH, record_message
     comptime assert rule == _OK, "internal: a registration rule has no message"
+    _check_json[R, False]()
+    _check_json[A, True]()
+    _check_json[B, True]()
+    _check_json[C, True]()
+
+
+def _check_json[X: AnyType, reading: Bool]():
+    """M3-082 prototype: a derived `Json[T]` that cannot be read (a slot)
+    or written (the result) is refused here, naming the field."""
+    comptime if conforms_to(X, _JsonBody):
+        comptime if reading:
+            comptime assert X._read_refusal == "", X._read_refusal
+        else:
+            comptime assert X._write_refusal == "", X._write_refusal

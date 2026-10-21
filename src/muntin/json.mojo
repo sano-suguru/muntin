@@ -18,7 +18,12 @@ or replace the document another copy reads.
 
 from std.collections import Optional
 
+from std.reflection import reflect
+
+from ._field_built import _FieldBuilt
 from ._handler_storage import _Shared
+from ._handler_storage import _build_record
+from ._rebind import _as, _view
 from .body import FromBody
 from .http import Failure, Headers, Response, ToResponse, _failed
 
@@ -1133,14 +1138,23 @@ trait _JsonBody:
     before `from_body` (as `_InjectedState` marks `State`). Private; it adds
     nothing to `Json`."""
 
-    pass
+    comptime _read_refusal: String
+    comptime _write_refusal: String
 
 
 struct Json[T: Movable & Deinitable](
     Deinitable,
-    FromBody where conforms_to(T, FromJson),
+    FromBody where (
+        conforms_to(T, FromJson)
+        or conforms_to(T, JsonFields)
+        or conforms_to(T, Iterable)
+    ),
     Movable,
-    ToResponse where conforms_to(T, ToJson),
+    ToResponse where (
+        conforms_to(T, ToJson)
+        or conforms_to(T, JsonFields)
+        or conforms_to(T, Iterable)
+    ),
     _JsonBody,
 ):
     """A JSON request body or response body around an application value.
@@ -1157,6 +1171,9 @@ struct Json[T: Movable & Deinitable](
     works. A handler may borrow the body (`body: Json[T]`, read
     `body.value`) or own it (`var body`).
     """
+
+    comptime _read_refusal: String = _refusal[Self.T, True]()
+    comptime _write_refusal: String = _refusal[Self.T, False]()
 
     var value: Self.T
     # The result's status, read once by `to_response`. A body built by
@@ -1177,24 +1194,38 @@ struct Json[T: Movable & Deinitable](
     @staticmethod
     def from_body(
         body: String,
-    ) raises -> Self where conforms_to(Self.T, FromJson):
+    ) raises -> Self where (
+        conforms_to(Self.T, FromJson)
+        or conforms_to(Self.T, JsonFields)
+        or conforms_to(Self.T, Iterable)
+    ):
         """Parses `body` and builds the value with `T.from_json`. Raises on
         malformed JSON, a body over 1 MiB, or a `from_json` raise. A typed
         route answers the `Content-Type` and size steps before calling it;
         a raw handler may call it directly, and its error model applies to
         the raise."""
-        return Self(Self.T.from_json(_parse_json(body)))
+        comptime assert _refusal[Self.T, True]() == "", _refusal[Self.T, True]()
+        return Self(_read_value[Self.T](_parse_json(body)))
 
-    def to_response(var self) -> Response where conforms_to(Self.T, ToJson):
+    def to_response(
+        var self,
+    ) -> Response where (
+        conforms_to(Self.T, ToJson)
+        or conforms_to(Self.T, JsonFields)
+        or conforms_to(Self.T, Iterable)
+    ):
         """The chosen status (200 by default) with the written body and
         exactly `Content-Type: application/json`. A raising or unbalanced
         `write_json`, or a non-finite number, answers the fixed 500
         (`Internal Server Error`, no fields) instead, whatever the status,
         carrying a `Failure.RESPONSE` report of the error's text (M3-058);
         no partial body is sent."""
+        comptime assert _refusal[Self.T, False]() == "", _refusal[
+            Self.T, False
+        ]()
         var out = JsonWriter()
         try:
-            self.value.write_json(out)
+            _write_value(out, self.value)
             var r = Response(self._status, out^._finish())
             r.headers.set("Content-Type", "application/json")
             return r^
@@ -1232,3 +1263,224 @@ def _json_content_type(headers: Headers) -> Bool:
         if c != Int(want[k]):
             return False
     return True
+
+
+# Prototype: derived codecs (decision item M3-082, issue #141).
+
+
+trait JsonFields(_FieldBuilt):
+    """Marks an application struct whose JSON form is an object with one
+    member per field, named after the field. Conforming consents to Muntin
+    building the value field by field without running its initializers
+    (as for `RouteValues`); a hand-written `FromJson` or `ToJson` on the same
+    type takes that direction over."""
+
+    pass
+
+
+def _scalar[F: AnyType]() -> Bool:
+    return F == Int or F == Float64 or F == Bool or F == String
+
+
+def _kind_ok[F: AnyType, reading: Bool]() -> Bool:
+    """Whether a derived codec reads (`read`) or writes `F`."""
+    comptime if _scalar[F]():
+        return True
+    elif reading and conforms_to(F, FromJson):
+        return True
+    elif not reading and conforms_to(F, ToJson):
+        return True
+    elif conforms_to(F, JsonFields):
+        return _fields_ok[F, reading]()
+    elif conforms_to(F, Iterable):
+        comptime E = F.IteratorType[ImmutAnyOrigin].Element
+        comptime if conforms_to(E, Movable & Deinitable):
+            comptime if F == List[E]:
+                return _kind_ok[E, reading]()
+            elif F == Optional[E]:
+                # `Optional[Optional[X]]` would write some-none as `null`,
+                # which reads back as none.
+                comptime if _is_optional[E]():
+                    return False
+                return _kind_ok[E, reading]()
+        return False
+    else:
+        return False
+
+
+def _is_optional[T: AnyType]() -> Bool:
+    comptime if conforms_to(T, Iterable):
+        comptime E = T.IteratorType[ImmutAnyOrigin].Element
+        comptime if conforms_to(E, Movable & Deinitable):
+            return T == Optional[E]
+    return False
+
+
+def _fields_ok[T: AnyType, reading: Bool]() -> Bool:
+    comptime r = reflect[T]
+    comptime types = r.field_types()
+    comptime for i in range(r.field_count()):
+        comptime if not _kind_ok[types[i], reading]():
+            return False
+    return True
+
+
+def _refusal[T: AnyType, reading: Bool]() -> String:
+    """Empty when `Json[T]` can be read (`read`) or written; else the
+    registration message, naming the first field that cannot."""
+    comptime if reading and conforms_to(T, FromJson):
+        return ""
+    elif not reading and conforms_to(T, ToJson):
+        return ""
+    elif conforms_to(T, JsonFields):
+        comptime r = reflect[T]
+        comptime names = r.field_names()
+        comptime types = r.field_types()
+        comptime for i in range(r.field_count()):
+            comptime if not _kind_ok[types[i], reading]():
+                return (
+                    "field "
+                    + String(materialize[names[i]]())
+                    + " of the JsonFields struct "
+                    + String(r.name())
+                    + " has type "
+                    + String(reflect[types[i]].name())
+                    + ", which cannot be "
+                    + ("read" if reading else "written")
+                    + ": a derived field is an Int, Float64, Bool, String, a "
+                    + ("FromJson" if reading else "ToJson")
+                    + " type, a JsonFields struct, or a List or Optional of one"
+                )
+        return ""
+    elif _kind_ok[T, reading]():
+        return ""
+    else:
+        return (
+            "Json["
+            + String(reflect[T].name())
+            + "] cannot be "
+            + ("read" if reading else "written")
+        )
+
+
+def _write_value[F: AnyType](mut out: JsonWriter, ref f: F) raises:
+    comptime if F == Int:
+        out.int(_view[Int](f))
+    elif F == Float64:
+        out.float(_view[Float64](f))
+    elif F == Bool:
+        out.bool(_view[Bool](f))
+    elif F == String:
+        out.string(_view[String](f))
+    elif conforms_to(F, ToJson):
+        f.write_json(out)
+    elif conforms_to(F, JsonFields):
+        comptime r = reflect[F]
+        comptime names = r.field_names()
+        comptime types = r.field_types()
+        out.begin_object()
+        comptime for i in range(r.field_count()):
+            out.name(String(materialize[names[i]]()))
+            _write_value[types[i]](out, r.field_ref[i](f))
+        out.end_object()
+    elif conforms_to(F, Iterable):
+        comptime E = F.IteratorType[ImmutAnyOrigin].Element
+        comptime if conforms_to(E, Movable & Deinitable):
+            comptime if F == List[E]:
+                ref l = _view[List[E]](f)
+                out.begin_array()
+                for i in range(len(l)):
+                    _write_value[E](out, l[i])
+                out.end_array()
+            elif F == Optional[E]:
+                ref o = _view[Optional[E]](f)
+                if o:
+                    _write_value[E](out, o.value())
+                else:
+                    out.null()
+            else:
+                comptime assert False, "not a JSON kind"
+        else:
+            comptime assert False, "not a JSON kind"
+    else:
+        comptime assert False, "not a JSON kind"
+
+
+def _read_member[
+    F: Movable & Deinitable, i: Int
+](value: JsonValue, names: List[String]) raises -> F:
+    """Field `i`: an absent or `null` member is an empty `Optional`; any
+    other field requires its member."""
+    var m = value.get(names[i])
+    comptime if conforms_to(F, Iterable):
+        comptime E = F.IteratorType[ImmutAnyOrigin].Element
+        comptime if conforms_to(E, Movable & Deinitable):
+            comptime if F == Optional[E]:
+                if not m or m.value().is_null():
+                    return _as[Optional[E], F](Optional[E]())
+    if not m:
+        raise Error("JSON member is missing")
+    return _read_value[F](m.value())
+
+
+def _read_list[E: Movable & Deinitable](v: JsonValue) raises -> List[E]:
+    # Bounded here, not refined where it is called: a refined `E` does not
+    # make `List[E]` `Deinitable` there.
+    if v._kind() != _ARRAY:
+        raise Error("JSON value is not an array")
+    var l = List[E](capacity=len(v))
+    for i in range(len(v)):
+        l.append(_read_value[E](v[i]))
+    return l^
+
+
+def _read_value[F: Movable & Deinitable](v: JsonValue) raises -> F:
+    comptime if F == Int:
+        return _as[Int, F](v.int())
+    elif F == Float64:
+        return _as[Float64, F](v.float())
+    elif F == Bool:
+        return _as[Bool, F](v.bool())
+    elif F == String:
+        return _as[String, F](v.string())
+    elif conforms_to(F, FromJson):
+        return F.from_json(v)
+    elif conforms_to(F, JsonFields):
+        comptime r = reflect[F]
+        comptime names = r.field_names()
+        if v._kind() != _OBJECT:
+            raise Error("JSON value is not an object")
+        var ns = List[String](capacity=r.field_count())
+        comptime for i in range(r.field_count()):
+            ns.append(String(materialize[names[i]]()))
+        return _build_record[F, Error, _read_member, 0](v, ns)
+    elif conforms_to(F, Iterable):
+        comptime E = F.IteratorType[ImmutAnyOrigin].Element
+        comptime if conforms_to(E, Movable & Deinitable):
+            comptime if F == List[E]:
+                return _as_list[E, F](_read_list[E](v))
+            else:
+                comptime assert F == Optional[E], "not a JSON kind"
+                return _as_optional[E, F](v)
+        else:
+            comptime assert conforms_to(
+                E, Movable & Deinitable
+            ), "not a JSON kind"
+            raise Error("not a JSON kind")
+    else:
+        comptime assert conforms_to(F, Iterable), "not a JSON kind"
+        raise Error("not a JSON kind")
+
+
+def _as_list[
+    E: Movable & Deinitable, F: Movable & Deinitable
+](var l: List[E]) -> F:
+    return _as[List[E], F](l^)
+
+
+def _as_optional[
+    E: Movable & Deinitable, F: Movable & Deinitable
+](v: JsonValue) raises -> F:
+    if v.is_null():
+        return _as[Optional[E], F](Optional[E]())
+    return _as[Optional[E], F](Optional(_read_value[E](v)))
