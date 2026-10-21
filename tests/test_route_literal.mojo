@@ -164,8 +164,8 @@ def test_optional_key_is_indexed_after_the_path_values() raises:
     # `paths` from `_path_params`; the key is the one `_Route` split out.
     var app = App()
     app.get["/u/{id}?{q}"](_value_and_optional)
-    assert_equal(app._routes[0].query_keys, ["q"])
-    assert_equal(app._routes[0].query_optional, [True])
+    assert_equal(app._core._routes[0].query_keys, ["q"])
+    assert_equal(app._core._routes[0].query_optional, [True])
     assert_equal(app.handle(Request("GET", "/u/4")).text(), "4 -1")
     assert_equal(app.handle(Request("GET", "/u/4?q=9")).text(), "4 9")
 

@@ -549,7 +549,7 @@ def test_raise_out_of_invoke_is_500_never_400() raises:
     # fault: `App.handle` answers 500, not 400.
     var app = App()
     var broken: def() thin -> String = hello
-    app._routes.append(
+    app._core._routes.append(
         _Route("GET", "/broken", _Erased.__init__[call=_broken_adapter](broken))
     )
     _reset()
