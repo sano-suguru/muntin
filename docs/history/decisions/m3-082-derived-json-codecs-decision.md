@@ -31,7 +31,7 @@ def list_notes() -> Json[List[Note]]: ...
 
 **Revisit when** Mojo gains a reflective constructor, `where` clauses can call functions, or the element type stops resolving; or applications need renamed or defaulted members, or a bare DTO body.
 
-**Next production slice (M3-083), after M3-081 merges (both edit `app.mojo` and `_registration_rules.mojo`):** the prototype at `e6b2474` (branch `claude/project-thread-h9ut1m-prototype`, its `prototype-m3-082/README.md`), which passes `check.sh` unchanged.
+**Next production slice (M3-083), after M3-081 merges (both edit `app.mojo` and `_registration_rules.mojo`):** the prototype at `3d1e4be` (branch `claude/project-thread-h9ut1m-prototype`, its `prototype-m3-082/README.md`), which passes `check.sh` unchanged.
 - Code: as prototyped, and `json.mojo`'s docstring. `_build_record` takes any `_FieldBuilt`, which only `RouteValues` and `JsonFields` refine; the rebinds move to `_rebind.mojo`; `check_unsafe.sh` enforces both, and M3-015's text follows. Exports `JsonFields`.
 - Tests: the prototype's spike under `SANITIZE=address` and its `json_api_fail/derived_*`, each naming the innermost field; the whole-output diagnostic comparison; build times; a loopback request.
 - Docs: references, guide, `docs/ARCHITECTURE.md`, `docs/SPEC.md`.
