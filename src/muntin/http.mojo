@@ -298,7 +298,7 @@ struct Rejection(Copyable, Movable, Writable):
 
     `step` is the conversion that failed, one of `Rejection.PATH` (a path
     route value's decoding or `Int` parse), `Rejection.QUERY` (a query
-    value missing, repeated, or its decoding or `Int` parse),
+    value missing, repeated, empty, or its decoding or `Int` parse),
     `Rejection.FROM_ROUTE_VALUE`, `Rejection.UTF8` (a text body that is not
     UTF-8), `Rejection.JSON` (a `Json[T]` body that is not one JSON value),
     `Rejection.FROM_BODY`, `Rejection.FROM_BYTES` and `Rejection.FROM_JSON`
@@ -367,9 +367,10 @@ struct Response(Copyable, Movable, ToResponse):
     (docs/history/architecture-decisions.md, "Headers decision (M3-002)").
 
     `failure()` is the report of what Muntin dropped when it made this
-    response as the fixed 500 (M3-058), else `None`. No public initializer
-    sets it; copies and edits of the status, body or fields keep it, and no
-    backend sends it.
+    response as the fixed 500 (M3-058), and `rejection()` the report of why
+    Muntin answered 400 before the handler (M3-084); each is `None` on any
+    other response. No public initializer sets them; copies and edits of the
+    status, body or fields keep them, and no backend sends them.
     """
 
     var status: Int

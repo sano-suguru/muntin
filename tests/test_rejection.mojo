@@ -237,6 +237,25 @@ def check_key(keys: State[Keys], headers: Headers) raises Denied -> Who:
     return Who("ada")
 
 
+def exact_fields(keys: State[Keys], headers: Headers) raises Denied -> Who:
+    """Admits only a request whose fields it receives are exactly `X-Key: k`
+    then `X-B: 2`: a deferred 400's `Rejection` is not among them."""
+    var seen = String()
+    for i in range(len(headers)):
+        seen += headers.name(i) + "=" + headers.value(i) + ";"
+    if seen != "X-Key=k;X-B=2;":
+        raise Denied()
+    return Who(seen)
+
+
+def seen_by_the_guard(who: Who, id: Int) -> String:
+    return who.name
+
+
+def guarded_value(id: Int) -> String:
+    return String(id)
+
+
 def guarded_with_context(who: Who, id: Int) -> String:
     return who.name + " " + String(id)
 
@@ -283,6 +302,10 @@ def make_app() -> App:
     g.get["/held/{id}"](guarded_with_headers)
     g.post["/guarded-notes/{id}"](guarded_body)
     app.mount(g^)
+    var exact = Group(exact_fields, State(Keys("k")))
+    exact.get["/seen/{id}"](seen_by_the_guard)
+    exact.get["/seen-plain/{id}"](guarded_value)
+    app.mount(exact^)
     return app^
 
 
@@ -351,6 +374,12 @@ def test_query_values() raises:
     expect(c.get("/pages/1?page=x"), Rejection.QUERY, "page", "not an integer")
     expect(c.get("/pages/1"), Rejection.QUERY, "page", "missing")
     expect(c.get("/pages/x?page=1"), Rejection.PATH, "id", "not an integer")
+    # docs/reference/routing.md, "Order of checks": the path values are
+    # decoded before the query keys are looked for, each query key is
+    # missing or decoded in order, and a repeat is found before either.
+    expect(c.get("/pages/%zz"), Rejection.PATH, "id", "bad percent escape")
+    expect(c.get("/pair?a=%zz"), Rejection.QUERY, "a", "bad percent escape")
+    expect(c.get("/pair?a=%zz&b=1&b=2"), Rejection.QUERY, "b", "repeated")
     expect(c.get("/items?limit=x"), Rejection.QUERY, "limit", "not an integer")
     assert_equal(c.get("/items?limit=").text(), "20")
 
@@ -537,6 +566,24 @@ def test_guarded_routes() raises:
     assert_equal(c.get("/guarded/7", headers=key()).text(), "ada 7")
     assert_equal(c.get("/plain/7?page=2", headers=key()).text(), "7 2")
     assert_equal(c.get("/held/7", headers=key()).text(), "7 1")
+
+
+def test_the_guard_sees_only_the_fields_on_a_deferred_400() raises:
+    """With and without a context slot."""
+    var app = make_app()
+    var c = TestClient(app)
+    var h = key()
+    h.add("X-B", "2")
+    for target in ["/seen/%zz", "/seen-plain/%zz"]:
+        expect(
+            c.get(target, headers=h.copy()),
+            Rejection.PATH,
+            "id",
+            "bad percent escape",
+        )
+    assert_equal(c.get("/seen/7", headers=h.copy()).text(), "X-Key=k;X-B=2;")
+    assert_equal(c.get("/seen-plain/7", headers=h.copy()).text(), "7")
+    assert_equal(c.get("/seen/%zz").status, 401)
 
 
 def test_none_elsewhere() raises:

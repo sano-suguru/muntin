@@ -251,10 +251,11 @@ from .state import State, _may_borrow
 # M3-074) and is no slot kind, so no overload is added for it. For a
 # guarded route, `_dispatch` appends every header field and then a verdict
 # (`"1"`, or `"0"` when gathering or decoding the route values failed, with
-# the arguments cleared) after the arguments an unguarded route of the same
-# slots receives. The guarded adapter's `_run_guard` rebuilds the fields,
-# calls the guard (a raise is `_handler_error`, a fault in the rebuild the
-# fixed 500), then answers a deferred 400, and passes on only the arguments
+# the arguments replaced by the `Rejection`'s step, name and message, M3-084)
+# after the arguments an unguarded route of the same slots receives. The
+# guarded adapter's `_run_guard` rebuilds the fields, calls the guard (a
+# raise is `_handler_error`, a fault in the rebuild the fixed 500), then
+# answers a deferred 400, and passes on only the arguments
 # the unguarded adapter would read; `_ctx_first` moves the guard's value
 # into a first slot of type `Ctx`, or drops it and converts that slot as
 # usual. Order on a guarded route: 404 or 405, route-value decoding, guard,

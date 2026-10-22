@@ -869,16 +869,6 @@ def test_get_hello_over_localhost_matches_test_client() raises:
         waitpid(pid)
 
 
-def _field_names(head: String) -> List[String]:
-    """The lowercased names of `h1_exchange`'s header lines, in order."""
-    var names = List[String]()
-    for line in head.split("\r\n"):
-        var colon = line.find(":")
-        if colon > 0:
-            names.append(String(line[byte=:colon]).lower())
-    return names^
-
-
 def _same_allow(wire: List[String], local: Response, at: String) raises:
     """The `Allow` values on the wire equal `App.handle`'s, in order: one
     for a 405, none otherwise."""
@@ -1003,8 +993,7 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             assert_false(secret in wire[1], secret)
 
         # M3-085: `App.handle`'s 400 for /users/abc carries a `Rejection`;
-        # on the wire it is the 400 it was, its fields named as those of the
-        # 404, which carries no report, and holding none of the report.
+        # on the wire it is the 400 it was, with only the adapter's fields.
         assert_equal(
             String(in_memory.get("/users/abc").rejection().value()),
             "path id: not an integer",
@@ -1016,21 +1005,12 @@ def test_typed_route_over_localhost_matches_test_client() raises:
             List[Tuple[String, String]](),
             List[UInt8](),
         )
-        var unreported = h1_exchange(
-            child.port,
-            "GET",
-            "/missing",
-            List[Tuple[String, String]](),
-            List[UInt8](),
-        )
         print("observed GET /users/abc:", rejected[0], repr(rejected[1]))
-        assert_true(rejected[0].startswith("HTTP/1.1 400"), rejected[0])
+        assert_equal(rejected[0], "HTTP/1.1 400 Bad Request")
+        assert_equal(rejected[1], "Content-Length: 11;Connection: close;")
         assert_equal(String(from_utf8=Span(rejected[2])), "Bad Request")
-        assert_equal(_field_names(rejected[1]), _field_names(unreported[1]))
-        for part in ["path id", "not an integer"]:
-            assert_false(part in rejected[1].lower(), part)
 
-        # M2-006:"created Ada" only if Muntin converted the body; the raw
+        # M2-006: "created Ada" only if Muntin converted the body; the raw
         # body is "name=Ada". GET /users above is the wrong method (405).
         # Each 405 below has `Allow: GET, HEAD`.
         var posts = [
