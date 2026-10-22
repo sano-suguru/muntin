@@ -274,7 +274,7 @@ On a typed route each step runs only if the previous one passed:
 10. The handler: a raise is its error type's response or the fixed 500 ([errors](errors.md)).
 11. The result, converted once ([responses](responses.md)).
 
-A raw route runs only step 1, then the handler ([raw handlers](raw.md)).
+A raw route runs only step 1, then the handler ([raw handlers](raw.md)). A route of a [guarded group](groups.md) runs its guard after step 3 (after step 1 for a raw route), and a 400 from steps 2 and 3 only once the guard has passed.
 
 ## Compile-time diagnostics
 

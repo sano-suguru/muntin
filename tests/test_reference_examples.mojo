@@ -199,6 +199,113 @@ def header_fields_example() raises:                                   # building
 # fmt: on
 
 
+# groups.md, the notes example.
+
+
+# fmt: off
+# example: groups-notes
+from muntin import App, Group, Headers, Response, State, ToErrorResponse
+
+
+struct Accounts(Movable):                 # built once, at start-up
+    var tokens: Dict[String, String]      # token -> user name
+
+    def __init__(out self, var tokens: Dict[String, String]):
+        self.tokens = tokens^
+
+
+@fieldwise_init
+struct Member(Movable):                   # the context type: owns its data
+    var name: String
+
+
+@fieldwise_init
+struct Unauthorized(ToErrorResponse):
+    def to_error_response(deinit self) -> Response:
+        var response = Response.text("Unauthorized", status=401)
+        try:
+            response.headers.add("WWW-Authenticate", "Bearer")
+        except:
+            pass
+        return response^
+
+
+def authenticate(
+    accounts: State[Accounts], headers: Headers
+) raises Unauthorized -> Member:
+    var field = headers.get("authorization").or_else("")
+    if field.startswith("Bearer "):
+        var name = accounts[].tokens.get(String(field[byte=7:]))
+        if name:
+            return Member(name.value())
+    raise Unauthorized()
+
+
+def me(member: Member) -> String:                   # the context first
+    return "me " + member.name
+
+
+def note(member: Member, id: Int) -> String:        # then the usual parameters
+    return member.name + "'s note " + String(id)
+
+
+def count(accounts: State[Accounts]) -> String:     # guarded, without the context
+    return String(len(accounts[].tokens))
+
+
+def version() -> String:
+    return "1.0"
+
+
+def groups_app() -> App:
+    var tokens = Dict[String, String]()
+    tokens["t1"] = "ada"
+    var accounts = State(Accounts(tokens^))
+    var app = App()
+    app.get["/version"](version)                     # not guarded
+    var members = Group(authenticate, accounts)      # the guard and its state
+    members.get["/me"](me)
+    members.get["/notes/{id}"](note)
+    members.get["/count"](count, accounts)
+    app.mount(members^)
+    return app^
+# GET /version                              -> 200 "1.0"  (authenticate not called)
+# GET /me        Authorization: Bearer t1   -> 200 "me ada"
+# GET /me                                   -> 401 "Unauthorized", WWW-Authenticate: Bearer
+# GET /notes/7   Authorization: Bearer t1   -> 200 "ada's note 7"
+# GET /notes/x   Authorization: Bearer t1   -> 400 "Bad Request"  (note not called)
+# GET /notes/x                              -> 401  (the guard answers first)
+# GET /count     Authorization: Bearer t1   -> 200 "1"
+# example: end
+# fmt: on
+
+
+def _bearer(token: String) raises -> Headers:
+    var headers = Headers()
+    headers.add("Authorization", "Bearer " + token)
+    return headers^
+
+
+def test_groups_notes() raises:
+    var app = groups_app()
+    var client = TestClient(app)
+    assert_equal(client.get("/version").text(), "1.0")
+    assert_equal(client.get("/me", headers=_bearer("t1")).text(), "me ada")
+    var r = client.get("/me")
+    assert_equal(r.status, 401)
+    assert_equal(r.text(), "Unauthorized")
+    assert_equal(r.headers.get("WWW-Authenticate").or_else(""), "Bearer")
+    r = client.get("/notes/7", headers=_bearer("t1"))
+    assert_equal(r.status, 200)
+    assert_equal(r.text(), "ada's note 7")
+    r = client.get("/notes/x", headers=_bearer("t1"))
+    assert_equal(r.status, 400)
+    assert_equal(r.text(), "Bad Request")
+    assert_equal(client.get("/notes/x").status, 401)
+    assert_equal(client.get("/me", headers=_bearer("t2")).status, 401)
+    assert_equal(client.get("/count", headers=_bearer("t1")).text(), "1")
+
+
 def test_responses_to_response() raises:
     # fmt: off
     # example: responses-to-response

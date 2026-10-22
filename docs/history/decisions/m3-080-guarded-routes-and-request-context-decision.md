@@ -1,6 +1,6 @@
 # Guarded routes and request context decision (M3-080)
 
-> **Current.** Not built yet: its "Next production slice" is M3-081.
+> **Current.** Built by M3-081. Now described in [groups reference](../../reference/groups.md) and [ARCHITECTURE, "Registration surface"](../../ARCHITECTURE.md#registration-surface).
 
 Status: **decision** (M3-080, #183, issue [#151](https://github.com/sano-suguru/muntin/issues/151)). Evidence and review: the pull request.
 

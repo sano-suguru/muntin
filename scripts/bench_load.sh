@@ -38,6 +38,13 @@
 #   `after_` fields count the requests sent from the signal on, `exit_ms`
 #   when the server ended.
 #
+# Closed loop by default: each connection or stream sends its next request
+# when the last one ended. With RATES, every case runs open loop instead,
+# once per rate (load.c, --rate): requests due at that fixed rate whatever
+# the answers, over the same connections and streams, latency counted from
+# when each was due, and the ones that waited for a free connection or
+# were never sent counted (`queued`, `unsent`).
+#
 # CPUs: the allowed CPUs (at least 4) are split in two; the first half runs
 # the servers, the second the client, one thread per CPU but no more than its connections.
 #
@@ -57,6 +64,7 @@
 #   WORKERS   worker counts (default "1 2")
 #   CASES     the cases to run (default: all, in the order above)
 #   IMPLS     the servers to run (default "muntin flare"; also flare-shared)
+#   RATES     open-loop rates, requests per second (default: none, closed loop)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -78,6 +86,9 @@ uint DURATION "$duration"
 uint WARMUP "$warmup"
 read -r -a workers <<<"${WORKERS-1 2}"
 for w in "${workers[@]}"; do uint WORKERS "$w"; done
+read -r -a rates <<<"${RATES-}"
+for x in "${rates[@]}"; do uint RATES "$x"; done
+((${#rates[@]})) || rates=(closed)
 all_cases=(plaintext-bare plaintext headers json-get json-post echo-1m middleware slow-mix overload stop)
 read -r -a cases <<<"${CASES-${all_cases[*]}}"
 read -r -a all_impls <<<"${IMPLS-muntin flare}"
@@ -211,12 +222,15 @@ for ((r = 1; r <= rounds; r++)); do
     for w in "${workers[@]}"; do
         for c in "${cases[@]}"; do
             for proto in h1 h2c; do
-                client_args "$c" "$proto"
-                for impl in "${impls[@]}"; do
-                    start_server "$impl" "$w" "$mw"
-                    line="$("${cli_pin[@]}" "./$out/load" --port "$port" --pid "$pid" "${args[@]}")"
-                    stop_server
-                    echo "round=$r workers=$w case=$c impl=$impl $line" | tee -a "$out/runs.txt"
+                for rate in "${rates[@]}"; do
+                    client_args "$c" "$proto"
+                    [[ $rate == closed ]] || args+=(--rate "$rate")
+                    for impl in "${impls[@]}"; do
+                        start_server "$impl" "$w" "$mw"
+                        line="$("${cli_pin[@]}" "./$out/load" --port "$port" --pid "$pid" "${args[@]}")"
+                        stop_server
+                        echo "round=$r workers=$w case=$c impl=$impl $line" | tee -a "$out/runs.txt"
+                    done
                 done
             done
         done

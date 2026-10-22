@@ -324,7 +324,7 @@ app.put["/objects/{key}"](put_object)
 
 Run by `tests/test_bytes_headers_body.mojo` (`test_dx_example`), with `Upload`, this `Unauthorized` and `put_object` as written; its requests without `X-Signature` go to `/objects/a`.
 
-**A field the handler checks is read after the conversion.** `from_bytes` runs on every request the route selects, signed or not. When the conversion is costly or must not see unauthenticated input, check the field in middleware, which answers before routing and conversion (scope it by `request.path` and `request.method`, since it also answers ahead of 404 and 405), or in a raw handler.
+**A field the handler checks is read after the conversion.** `from_bytes` runs on every request the route selects, signed or not. When the conversion is costly or must not see unauthenticated input, check the field in a [guarded group](groups.md)'s guard, which runs after routing and before the conversion, in middleware, which answers before routing and conversion (scope it by `request.path` and `request.method`, since it also answers ahead of 404 and 405), or in a raw handler.
 
 ### Body size limits (`max_bytes`)
 

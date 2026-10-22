@@ -15,4 +15,4 @@ def hello() -> String:
 def main():
     var app = App()
     app.get["/hello"](hello)
-    app._routes[0].handler._drop = _unsafe_drop_box[Int]
+    app._core._routes[0].handler._drop = _unsafe_drop_box[Int]

@@ -14,4 +14,4 @@ def main():
     var b = App()
     a.get["/hello"](hello)
     b.get["/hello"](hello)
-    a._routes[0].handler._header = b._routes[0].handler._header
+    a._core._routes[0].handler._header = b._core._routes[0].handler._header

@@ -83,7 +83,7 @@ def _accepted() -> App:
 
 def _refusal(app: App, method: String, path: String) raises -> String:
     """The registration's answer, checked against `_conflict`."""
-    ref index = app._route_index
+    ref index = app._core._route_index
     var answer = index.refusal(method, path)
     assert_equal(answer, _conflict(index.methods, index.paths, method, path))
     return answer

@@ -2,7 +2,7 @@
 
 How to write a Muntin application today, on Mojo 1.1.0 (8189361e). Each section shows the common case and links to the [reference](#reference) for every rule, status and error message. Setup is in the [README](../README.md#try-it).
 
-The examples build on each other: `User` and `CreateUser` come from "Request bodies", `NotFound` from "Results and errors". `tests/test_guide.mojo` registers every example as written (each example is that file's text, which `scripts/check_doc_examples.py` compares), each on its own `App` with only the routes its comments rely on, and checks those answers; the serving example is `examples/hello_server.mojo`, which CI builds.
+The examples build on each other: `User` and `CreateUser` come from "Request bodies", `NotFound` from "Results and errors", `Unauthorized` from "Header fields", `Users` and `show_user` from "Application state". `tests/test_guide.mojo` registers every example as written (each example is that file's text, which `scripts/check_doc_examples.py` compares), each on its own `App` with only the routes its comments rely on, and checks those answers; the serving example is `examples/hello_server.mojo`, which CI builds.
 
 Muntin is pre-alpha: the API still changes, and the Flare adapter's `Server` is not production-ready. Read [Before you deploy](#before-you-deploy) first.
 
@@ -220,6 +220,47 @@ app.get["/users/{id}"](show_user, users)  # the state is the registration's seco
 
 Reference: [state](reference/state.md).
 
+## Guarded routes
+
+A `Group` puts routes behind one guard, which reads start-up values, can refuse the request and hands each handler a typed value, such as the caller:
+
+<!-- example: tests/test_guide.mojo#guarded-routes -->
+```mojo
+from muntin import Group
+
+
+@fieldwise_init
+struct Caller(Movable):                    # what the guard hands a handler; owns its data
+    var name: String
+
+
+def authenticate(users: State[Users], headers: Headers) raises Unauthorized -> Caller:
+    var token = headers.get("authorization")
+    if not token or token.value() != "t1":    # application code decides
+        raise Unauthorized()
+    return Caller(users[].names[0])
+
+
+def whoami(caller: Caller) -> String:       # first: the guard's value
+    return "you are " + caller.name
+
+
+var names: List[String] = ["ada", "bo"]
+var users = State(Users(names^))
+var signed_in = Group(authenticate, users)       # one guard, with start-up values
+signed_in.get["/whoami"](whoami)
+signed_in.get["/users/{id}"](show_user, users)  # guarded, without the caller
+app.mount(signed_in^)
+# GET /whoami  Authorization: t1  -> 200 "you are ada"
+# GET /whoami, GET /users/x      -> 401 "Unauthorized"  (before the 400)
+```
+
+- The guard sees the header fields only. It runs after 404 and 405, before any conversion or the body; a raise answers as a handler's would.
+- A handler receives the value as its first request parameter (after `State`); one without it is still guarded.
+- A group takes no middleware and does not nest; middleware on the `App` wraps its routes.
+
+Reference: [guarded groups](reference/groups.md).
+
 ## Middleware
 
 Middleware is a function that may answer, or run the rest with `next^.run(request^)` and change the response:
@@ -241,7 +282,7 @@ app.get["/users/{id}"](get_user)  # the first application's handler
 ```
 
 - It runs on every request `App.handle` receives, 404 and 405 included, in registration order, outermost first.
-- Configuration is compile-time only (`app.use(tagged["v1"])`); runtime-configured middleware, per-route middleware and request-scoped context are not supported.
+- Configuration is compile-time only (`app.use(tagged["v1"])`); runtime-configured and per-route middleware are not supported. For start-up values and a typed value per request, use a guarded group (above).
 - A middleware registered first can log the reports of dropped errors; the reference has a complete logger that escapes what it writes.
 
 Reference: [middleware](reference/middleware.md).
@@ -322,7 +363,7 @@ Reference: [serving](reference/serving.md).
 - [Route values](reference/route-values.md): `Int`, `String`, decoding, query values, `Param`, `Optional`, `FromRouteValue`, `RouteValues`.
 - [Request bodies](reference/bodies.md): `FromBody`, `Json[T]`, `WithHeaders[B]`, `FromBytes` and `max_bytes`.
 - [Responses](reference/responses.md) and [errors](reference/errors.md): results, JSON status, `ToErrorResponse`, reports of dropped errors.
-- [Headers](reference/headers.md), [raw handlers](reference/raw.md), [middleware](reference/middleware.md), [state](reference/state.md).
+- [Headers](reference/headers.md), [raw handlers](reference/raw.md), [middleware](reference/middleware.md), [state](reference/state.md), [guarded groups](reference/groups.md).
 - [Testing and the backend seam](reference/testing.md).
 - [Serving](reference/serving.md): `Server`, settings, workers, HTTPS, stopping.
 
