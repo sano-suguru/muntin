@@ -69,6 +69,9 @@ BUDGETS = [
     ("docs/DEVELOPMENT.md", 21 * KB),  # target 10 KB
     ("docs/SPEC.md", 14 * KB),  # target 10 KB
     ("docs/REFERENCES.md", 3 * KB),
+    # M3-082's body was 4,082 bytes when it merged (#187), leaving no room
+    # for the opening lines of the records that change it, M3-084 first.
+    ("docs/history/decisions/m3-082-derived-json-codecs-decision.md", 5 * KB),
     # A record is 1-3 KB (docs/DEVELOPMENT.md section 2); the rest is room
     # for its opening lines, which grow as later records change it.
     ("docs/history/decisions/*.md", 4 * KB),
