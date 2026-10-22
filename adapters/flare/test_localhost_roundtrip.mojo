@@ -2054,7 +2054,9 @@ struct DerivedGreeting(Copyable, JsonFields):
 def greet_derived(
     body: Json[DerivedGreeting],
 ) -> Json[List[DerivedGreeting]]:
-    return Json([body.value.copy(), DerivedGreeting("again")])
+    return Json(
+        List[DerivedGreeting]([body.value.copy(), DerivedGreeting("again")])
+    )
 
 
 @fieldwise_init
