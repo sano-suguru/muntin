@@ -119,8 +119,9 @@ fi
 # the line after `comptime assert A == T`; only `_rebind.mojo` imports from
 # `std.builtin.rebind`, as exactly `from std.builtin.rebind import
 # rebind_var`, and it imports nothing else; only app.mojo (`_as`) and
-# json.mojo (`_as`, `_view`) import it. `downcast`, which Mojo 1.1.0 does not
-# check, appears nowhere (M3-061).
+# json.mojo (`_as`, `_view`) import it. A space before the `[` (which the
+# formatter removes, except in `# fmt: off` code) is matched too. `downcast`,
+# which Mojo 1.1.0 does not check, appears nowhere (M3-061).
 rb=$dir/_rebind.mojo
 one_after_assert() {
     local pattern=$1 label=$2 hits file rest line
@@ -141,8 +142,8 @@ one_after_assert() {
         status=1
     fi
 }
-one_after_assert 'rebind_var\[' 'rebind_var['
-one_after_assert '(^|[^[:alnum:]_])rebind\[' 'rebind['
+one_after_assert 'rebind_var[[:space:]]*\[' 'rebind_var['
+one_after_assert '(^|[^[:alnum:]_])rebind[[:space:]]*\[' 'rebind['
 if grep -rnE --include='*.mojo' 'rebind_var|builtin\.rebind' "$dir" | grep -v "^$rb:"; then
     echo "error: only $rb may import or name rebind_var" >&2
     status=1

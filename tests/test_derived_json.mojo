@@ -334,6 +334,48 @@ def test_ownership_on_success_and_each_failure() raises:
         assert_equal(_count(OUTER_DROPPED), 0, String(i))
 
 
+struct Wallet(JsonFields):
+    """A nested struct holding a counted token and a heap string, failing at
+    its last field: each built field is dropped once, inside and out."""
+
+    var owner: String
+    var token: Token
+    var count: Int
+
+
+struct Pocket(JsonFields):
+    var label: String
+    var wallet: Wallet
+    var after: Int
+
+
+def test_ownership_on_a_nested_failure() raises:
+    var long = String("y") * 64  # heap-allocated
+    _reset()
+    var raised = String()
+    try:
+        _ = Json[Pocket].from_body(
+            '{"label":"'
+            + long
+            + '","wallet":{"owner":"'
+            + long
+            + '","token":"t","count":"x"},"after":1}'
+        )
+    except e:
+        raised = String(e)
+    assert_equal(raised, "wallet.count: JSON value is not a number")
+    assert_equal(_count(MADE), 1)
+    assert_equal(_count(DROPPED), 1)
+    _reset()
+    var ok = Json[Pocket].from_body(
+        '{"label":"a","wallet":{"owner":"b","token":"t","count":2},"after":1}'
+    )
+    assert_equal(ok.value.wallet.count, 2)
+    _ = ok^
+    assert_equal(_count(MADE), 1)
+    assert_equal(_count(DROPPED), 1)
+
+
 @fieldwise_init
 struct Shown(Copyable, JsonFields, ToJson):
     """Read from its fields, written by hand."""
