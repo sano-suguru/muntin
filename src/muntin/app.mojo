@@ -25,18 +25,16 @@ from ._registration_rules import (
     _path_part,
     _query_items,
 )
-from .body import FromBody, FromBytes, _BodyFault, _NOT_UTF8, _body_text
-from .headers_body import _HeaderCarrier, _convert_body
+from .body import FromBody, FromBytes, _body_text
+from .headers_body import _HeaderCarrier
 from .http import (
     Failure,
     Headers,
-    Rejection,
     Request,
     Response,
     ToErrorResponse,
     ToResponse,
     _failed,
-    _rejected_by,
 )
 from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
 from .route_value import FromRouteValue, RouteValues, _NamedValue
@@ -529,10 +527,6 @@ def _conflict(
     return String()
 
 
-comptime _NOT_AN_INTEGER = "not an integer"
-comptime _OUT_OF_RANGE = "out of Int range"
-
-
 def _parse_int(segment: String) raises -> Int:
     """Converts a route value's decoded text to `Int`: an optional `-`
     followed by one or more ASCII digits, within `Int` range. Anything else
@@ -544,15 +538,11 @@ def _parse_int(segment: String) raises -> Int:
     var b = segment.as_bytes()
     var start = 1 if len(b) > 0 and Int(b[0]) == ord("-") else 0
     if len(b) == start:
-        raise Error(_NOT_AN_INTEGER)
+        raise Error("not an integer")
     for i in range(start, len(b)):
         if Int(b[i]) < ord("0") or Int(b[i]) > ord("9"):
-            raise Error(_NOT_AN_INTEGER)
-    try:
-        return Int(segment)
-    except:
-        # `Int`'s own message quotes the text, which the client sent.
-        raise Error(_OUT_OF_RANGE)
+            raise Error("not an integer")
+    return Int(segment)
 
 
 def _query_value(query: String, key: String) raises -> Optional[String]:
@@ -655,7 +645,7 @@ def _decode_value(raw: String, query: Bool) raises -> String:
     """
     var src = raw.as_bytes()
     if len(src) == 0:
-        raise Error("empty")
+        raise Error("empty route value")
     var out = List[Byte](capacity=len(src))
     var i = 0
     while i < len(src):
@@ -675,14 +665,7 @@ def _decode_value(raw: String, query: Bool) raises -> String:
         else:
             out.append(b)
             i += 1
-    try:
-        return String(from_utf8=Span(out))
-    except:
-        raise Error(_NOT_UTF8)
-
-
-comptime _MISSING = "missing"
-comptime _REPEATED = "repeated"
+    return String(from_utf8=Span(out))
 
 
 def _bad_request() -> Response:
@@ -856,36 +839,19 @@ def _as[T: Movable, A: Movable](var value: T) -> A:
     return rebind_var[A](value^)
 
 
+@fieldwise_init
 struct _Reject(Movable):
-    """A request-side failure: the status answered before the handler runs
-    (400, 413, 415, or 500 for a rebuild failure) and, for a 400, its
-    `Rejection` step, the route value's position (`at`, -1 for the body) and
-    message (M3-084)."""
+    """A slot's request-side failure: the status answered before the
+    handler runs (400, 413, 415, or 500 for a rebuild failure)."""
 
     var status: Int
-    var step: String
-    var at: Int
-    var message: String
-
-    def __init__(
-        out self,
-        status: Int,
-        step: String = "",
-        at: Int = -1,
-        message: String = "",
-    ):
-        self.status = status
-        self.step = step
-        self.at = at
-        self.message = message
 
 
 def _rejected(r: _Reject) -> Response:
-    """The response for a `_Reject`: a 400 carries its `Rejection`, named by
-    `App.handle` from `at` (M3-084); a 500 a `Failure.MUNTIN` report naming
-    the rebuild (M3-058)."""
+    """The response for a `_Reject`; a 500 carries a `Failure.MUNTIN`
+    report naming the rebuild (M3-058)."""
     if r.status == 400:
-        return _rejected_by(r.step, "", r.message, r.at)
+        return _bad_request()
     if r.status == 500:
         return _failed(Failure.MUNTIN, _REBUILD_FAILED)
     return _body_rejection_answer(r.status)
@@ -940,8 +906,8 @@ def _slot[
     elif A == Int:
         try:
             return _as[Int, A](_parse_int(args[at]))
-        except e:
-            raise _Reject(400, Rejection.PATH, at, String(e))
+        except:
+            raise _Reject(400)
     elif A == String:
         return _as[String, A](args[at].copy())
     elif A == Optional[Int]:
@@ -949,8 +915,8 @@ def _slot[
             return _as[Optional[Int], A](None)
         try:
             return _as[Optional[Int], A](_parse_int(args[at]))
-        except e:
-            raise _Reject(400, Rejection.PATH, at, String(e))
+        except:
+            raise _Reject(400)
     elif A == Optional[String]:
         if args[at].byte_length() == 0:
             return _as[Optional[String], A](None)
@@ -958,8 +924,8 @@ def _slot[
     elif conforms_to(A, FromRouteValue):
         try:
             return A.from_route_value(args[at])
-        except e:
-            raise _Reject(400, Rejection.FROM_ROUTE_VALUE, at, String(e))
+        except:
+            raise _Reject(400)
     elif A == Request:
         try:
             return _as[Request, A](_raw_request(args, body))
@@ -976,9 +942,9 @@ def _slot[
         if len(body) > A.max_bytes:
             raise _Reject(413)
         try:
-            return _convert_body[A](body)
-        except f:
-            raise _Reject(400, f.step, -1, f.message)
+            return A.from_bytes(body)
+        except:
+            raise _Reject(400)
     else:
         comptime assert conforms_to(A, FromBody) or conforms_to(
             A, _HeaderCarrier
@@ -999,14 +965,14 @@ def _slot[
                 raise _Reject(500)  # only the `_fields` gap gets here
             try:
                 return A._from_parts(body, fields^)
-            except f:
-                raise _Reject(400, f.step, -1, f.message)
+            except:
+                raise _Reject(400)
         else:
             comptime assert conforms_to(A, FromBody)
             try:
-                return _convert_body[A](body)
-            except f:
-                raise _Reject(400, f.step, -1, f.message)
+                return A.from_body(_body_text(body))
+            except:
+                raise _Reject(400)
 
 
 def _record_field[
@@ -1354,16 +1320,15 @@ def _run_guard[
     deferred route-value 400; fills `inner` with the arguments the handler's
     slots read, as an unguarded route would receive them."""
     var ok = args[len(args) - 1] == "1"
-    # A deferred 400's `Rejection` (step, name, message) comes first.
     # The route's arguments are those of the slots after a context slot.
     comptime ctx_first = A == Ctx
     var at: Int
     var keeps: Bool
     comptime if ctx_first:
-        at = _guarded_at[B, C, _NoSlot]() if ok else 3
+        at = _guarded_at[B, C, _NoSlot]() if ok else 0
         keeps = _keeps_fields[B, C, _NoSlot]()
     else:
-        at = _guarded_at[A, B, C]() if ok else 3
+        at = _guarded_at[A, B, C]() if ok else 0
         keeps = _keeps_fields[A, B, C]()
     var fields: Headers
     try:
@@ -1376,7 +1341,7 @@ def _run_guard[
     except e:
         raise _Answer(_handler_error(e^))
     if not ok:
-        raise _Answer(_rejected_by(args[0], args[1], args[2]))
+        raise _Answer(_bad_request())
     var end = len(args) - 1 if keeps else at
     for i in range(end):
         inner.append(args[i])
@@ -1886,23 +1851,43 @@ struct _Core(Movable):
                 if route.guarded:
                     args.append("1")
             else:
-                # The route values, decoded once here at capture (M3-018);
-                # a failure names its value (M3-084).
+                # The route values, decoded once here at capture (M3-018):
+                # the path captures in place, then each query value as
+                # gathered, in the literal's order (M3-022). An optional
+                # value's absent key or empty value is passed on as `""`,
+                # which no decoded value is (M3-025).
                 try:
-                    _route_values(route, request, args)
-                except r:
-                    var step = r.step
-                    var name = _value_name(route, r.at, step)
+                    for j in range(len(args)):
+                        args[j] = _decode_value(args[j], query=False)
+                    # One pass finds every value without copying any; they
+                    # are copied in key order after it, so a missing key
+                    # answers 400 before any later value is copied.
+                    var spans = _query_spans(
+                        request.query, route.query_keys, route.query_index
+                    )
+                    for k in range(len(route.query_keys)):
+                        var start = spans[2 * k]
+                        var end = spans[2 * k + 1]
+                        if route.query_optional[k] and (
+                            start < 0 or start == end
+                        ):
+                            args.append("")
+                        elif start < 0:
+                            raise Error("missing query key")
+                        else:
+                            args.append(
+                                _decode_value(
+                                    String(request.query[byte=start:end]),
+                                    query=True,
+                                )
+                            )
+                except:
                     # A guarded route answers its guard first, so its 400
-                    # waits in the verdict below (M3-080), its `Rejection`
-                    # first in the arguments.
+                    # waits in the verdict below (M3-080).
                     if not route.guarded:
-                        return _rejected_by(step, name, r.message)
+                        return _bad_request()
                     deferred = True
                     args.clear()
-                    args.append(step)
-                    args.append(name)
-                    args.append(r.message)
                 if route.json and not deferred:
                     args.append(
                         "1" if _json_content_type(request.headers) else ""
@@ -1916,13 +1901,10 @@ struct _Core(Movable):
             # No adapter raises: each answers its own 400s and turns a
             # handler error into a response. A raise here is a server fault,
             # never a client error.
-            var response: Response
             try:
-                response = route.handler.invoke(args, request.body)
+                return route.handler.invoke(args, request.body)
             except e:
                 return _failed(Failure.MUNTIN, String(e))
-            _name_rejected_value(response, route)
-            return response^
         # No route selected: 405 when some route matches the path (M3-030).
         var allowed = _allowed(self._routes, request.path)
         if len(allowed) == 0:
@@ -1933,83 +1915,6 @@ struct _Core(Movable):
         except e:
             return _failed(Failure.MUNTIN, String(e))
         return response^
-
-
-def _route_values(
-    route: _Route, request: Request, mut args: List[String]
-) raises _Reject:
-    """Decodes the path captures in `args` in place, then appends each query
-    value as gathered, in the literal's order (M3-018, M3-022). An optional
-    value's absent key or empty value is passed on as `""`, which no decoded
-    value is (M3-025). A failure raises its `Rejection` step, the value's
-    position among the route values and Muntin's fixed message (M3-084)."""
-    var paths = len(args)
-    for j in range(paths):
-        try:
-            args[j] = _decode_value(args[j], query=False)
-        except e:
-            raise _Reject(400, Rejection.PATH, j, String(e))
-    # One pass finds every value without copying any; they are copied in
-    # key order after it, so a missing key answers 400 before any later
-    # value is copied.
-    var spans: List[Int]
-    try:
-        spans = _query_spans(request.query, route.query_keys, route.query_index)
-    except:
-        # Which key repeats, found only on this 400 (M3-084).
-        var k = 0
-        while k + 1 < len(route.query_keys):
-            try:
-                _ = _query_value(request.query, route.query_keys[k])
-            except:
-                break
-            k += 1
-        raise _Reject(400, Rejection.QUERY, paths + k, _REPEATED)
-    for k in range(len(route.query_keys)):
-        var start = spans[2 * k]
-        var end = spans[2 * k + 1]
-        if route.query_optional[k] and (start < 0 or start == end):
-            args.append("")
-        elif start < 0:
-            raise _Reject(400, Rejection.QUERY, paths + k, _MISSING)
-        else:
-            try:
-                args.append(
-                    _decode_value(
-                        String(request.query[byte=start:end]), query=True
-                    )
-                )
-            except e:
-                raise _Reject(400, Rejection.QUERY, paths + k, String(e))
-
-
-def _value_name(route: _Route, at: Int, mut step: String) -> String:
-    """The placeholder name of the route value at position `at` (the path
-    captures, then the query keys), or `""` for `at < 0`; a `PATH` step at
-    a query value becomes `QUERY` (M3-084)."""
-    if at < 0:
-        return ""
-    var j = 0
-    for segment in route.path.split("/"):
-        if segment.startswith("{"):
-            if j == at:
-                return String(segment[byte = 1 : segment.byte_length() - 1])
-            j += 1
-    if step == Rejection.PATH:
-        step = Rejection.QUERY
-    return route.query_keys[at - j].copy()
-
-
-def _name_rejected_value(mut response: Response, route: _Route):
-    """Names the route value a slot rejected (`_Reject.at`), which only the
-    route knows (M3-084)."""
-    if not response._report or response._report[0].at < 0:
-        return
-    ref report = response._report[0]
-    var step = report.rejection[0].step
-    report.rejection[0].name = _value_name(route, report.at, step)
-    report.rejection[0].step = step
-    report.at = -1
 
 
 comptime App = _App[_NoGuardState, Never, _NoContext]
