@@ -97,7 +97,64 @@ The route values convert first; an invalid one is 400 and the body is not conver
 
 ## JSON (`Json[T]`)
 
-The application declares `FromJson`/`ToJson` on its own types and wraps them in `Json[T]`, which is a body and a [result](responses.md#json-results); registration is unchanged:
+The application wraps its own type in `Json[T]`, which is a body and a [result](responses.md#json-results); registration is unchanged. A struct that conforms to `JsonFields` is read and written from its fields:
+
+<!-- example: tests/test_json_dx.mojo#bodies-json-derived -->
+```mojo
+from muntin import App, Json, JsonFields
+
+
+@fieldwise_init
+struct NewNote(JsonFields):       # a JSON object, one member per field, named after it
+    var text: String
+    var tags: List[String]
+    var due: Optional[Int]        # may be absent or null; every other member is required
+
+
+@fieldwise_init
+struct Note(JsonFields):
+    var id: Int
+    var text: String
+    var tags: List[String]
+    var due: Optional[Int]        # an empty Optional is written as null
+
+
+def create_note(body: Json[NewNote]) -> Json[Note]:
+    ref n = body.value
+    return Json(Note(1, n.text, n.tags.copy(), n.due), status=201)
+
+
+def import_notes(body: Json[List[NewNote]]) -> Json[List[Note]]:   # a top-level List
+    var notes = List[Note]()
+    for i in range(len(body.value)):
+        ref n = body.value[i]
+        notes.append(Note(i + 1, n.text, n.tags.copy(), n.due))
+    return Json(notes^)
+
+
+app.post["/notes"](create_note)
+app.post["/notes/import"](import_notes)
+# POST /notes  Content-Type: application/json  {"text":"hi","tags":["a"]}
+#   -> 201, Content-Type: application/json, {"id":1,"text":"hi","tags":["a"],"due":null}
+# POST /notes/import  [{"text":"a","tags":[]},{"text":"b","tags":[],"due":3}]
+#   -> 200, [{"id":1,"text":"a","tags":[],"due":null},{"id":2,"text":"b","tags":[],"due":3}]
+# {"tags":[]} -> 400 "Bad Request"; its Rejection: from_json: text: JSON member is missing
+# [{"text":"a","tags":[1]}] -> 400; its Rejection: from_json: [0].tags[0]: JSON value is not a string
+```
+
+Run by `tests/test_json_dx.mojo` (`test_derived_json_example`), as written; it also posts a `null` `due`, read as empty. Every kind, ownership, a hand-written direction and each failure's report on a bare, carried, guarded and stateful body: `tests/test_derived_json.mojo`.
+
+- A field is an `Int`, `Float64`, `Bool`, `String`, a `FromJson` type (read) or `ToJson` type (written), a `JsonFields` struct, or a `List` or `Optional` (not of an `Optional`) of one. Its member is named after it (`` var `created-at`: Int `` is `created-at`); there is no renaming or default.
+- Reading: an `Optional` member may be absent or `null`; every other member is required; unknown members are ignored. Writing: every member in field order, an empty `Optional` as `null`. A struct with no field reads any object and writes `{}`.
+- `Json[T]` also takes a top-level `List` or `Optional` of any of these, as a body and as a result (`Json[Optional[Note]]` reads and writes `null` as empty).
+- **Muntin builds the struct without running any of its initializers**: conforming consents to that, as for [`RouteValues`](route-values.md#route-value-records). What `__init__` would check is not checked; check it in the handler, or write `from_json`. A failure part-way destroys each field already read, once; the struct's destructor does not run.
+- A hand-written `FromJson` or `ToJson` on the struct takes that direction over.
+- A field that cannot be read (a body) or written (a result) is refused at the registration, naming the innermost one: `constraint failed: field zip of the JsonFields struct <module>.Place has type SIMD[DType.uint8, 1], which cannot be read: a derived field is an Int, Float64, Bool, String, a FromJson type, a JsonFields struct, or a List or Optional of one`; a raw handler's `Json[T].from_body` is refused alike where it is called. Another top-level type is `Json[<type>] cannot be read` (or `written`). Not supported: `Dict`, other widths (`Int64`, `Float32`), `Optional[Optional[T]]`, and a struct holding a `List` of itself (Mojo 1.1.0 rejects the struct).
+- A body that does not read is 400, and its [report](errors.md#reports-of-rejected-requests)'s message starts with the member path (`notes[2].text: JSON value is not a string`, `[0].tags[0]: ...`); a top-level value of the wrong kind has none. `Json[T].from_body` raises the same text.
+
+### Hand-written codecs (`FromJson`, `ToJson`)
+
+For another representation (renamed or defaulted members, a check while reading), the application declares `FromJson`/`ToJson` on its own type:
 
 <!-- example: tests/test_json_dx.mojo#bodies-json -->
 ```mojo
@@ -153,14 +210,17 @@ app.post["/users/{id}"](replace_user)    # route value, then body
 
 Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), with these types and handlers as written; its app also registers `GET /create` (the media-type example of [responses](responses.md#json-results)), and it also posts `{"name":"Bo","age":1,"nickname":null}` to `/users/4` (`{"id":4,"name":"Bo"}`). It does not check that 415 is answered before 413.
 
+- `value[name]` raises naming the missing member (`JSON member "name" is missing`); `int()` and `float()` do not quote the literal.
+
+### Rules for every JSON body
+
 - `Content-Type`: exactly one field whose media type (before any `;`, trimmed) is `application/json`, ASCII case-insensitively; parameters are ignored. Missing, repeated, other and `+json` types are 415.
 - Size: at most 1,048,576 bytes; one more is 413 (fixed). `Json[T].from_body` also raises above it in a raw handler.
 - Grammar: RFC 8259, strictly. Comments, trailing commas, leading zeros, `NaN`, duplicate member names, a byte order mark, lone surrogates and nesting deeper than 64 are 400. Extra members are ignored.
 - Numbers: `int()` is exact for integer literals that fit `Int`. `float()` rounds a literal of any length to the nearest `Float64`, ties to even. It raises (400) only when that rounding gives infinity, at a magnitude of 2^1024 − 2^970 or more, so `1.7976931348623158e308` reads as the largest double; a magnitude of 2^-1075 or less rounds to a zero of the literal's sign, so `2.4703282292062328e-324` reads as the smallest subnormal.
-- `value[name]` raises naming the missing member (`JSON member "name" is missing`); `int()` and `float()` do not quote the literal.
-- Fields are mapped by hand in `from_json`; there is no derived codec. A `FromJson` type is not a body by itself (`def create_user(body: CreateUser)` gets the `FromBody or FromBytes` message).
+- A `FromJson` or `JsonFields` type is not a body by itself (`def create_user(body: CreateUser)` gets the `FromBody or FromBytes` message).
 - Ownership: borrow (`body.value`) or own and move out (`var body`, `body^.take()`); `body.value^` does not compile.
-- Cost: parsing is linear apart from a sort of each object's member names; reading k fields of an m-member object costs O(k·m). At the cap a parse adds up to about 29 MB of memory (1 MiB of `[0,0,...]`), about 5 MB for typical records. `float()` converts the literal on every call, so its cost follows the calls, not the body: about a microsecond for a short literal near either end of the range, more for hundreds of digits ([#176](https://github.com/sano-suguru/muntin/pull/176) measures it).
+- Cost: parsing is linear apart from a sort of each object's member names; reading k fields of an m-member object costs O(k·m), by hand or derived. At the cap a parse adds up to about 29 MB of memory (1 MiB of `[0,0,...]`), about 5 MB for typical records. `float()` converts the literal on every call, so its cost follows the calls, not the body: about a microsecond for a short literal near either end of the range, more for hundreds of digits ([#176](https://github.com/sano-suguru/muntin/pull/176) measures it).
 - `TestClient.post(target, body)` sends no fields, so it gets 415; send `headers=` with the `Content-Type` ([testing](testing.md)).
 
 ## Header fields with a body (`WithHeaders[B]`)

@@ -68,34 +68,20 @@ A `post`, `put` or `patch` handler takes one body, last. For JSON, wrap an appli
 
 <!-- example: tests/test_guide.mojo#request-bodies -->
 ```mojo
-from muntin import App, FromJson, Json, JsonValue, JsonWriter, ToJson
+from muntin import App, Json, JsonFields
 
 
 @fieldwise_init
-struct CreateUser(FromJson):
+struct CreateUser(JsonFields):     # a JSON object, one member per field, named after it
     var name: String
     var age: Int
-    var nickname: Optional[String]
-
-    @staticmethod
-    def from_json(value: JsonValue) raises -> Self:   # raise -> 400, handler not called
-        var nick = Optional[String]()
-        var n = value.get("nickname")                  # None when absent
-        if n and not n.value().is_null():
-            nick = n.value().string()
-        return Self(value["name"].string(), value["age"].int(), nick^)
+    var nickname: Optional[String]  # may be absent or null; the other members are required
 
 
 @fieldwise_init
-struct User(ToJson):
+struct User(JsonFields):
     var id: Int
     var name: String
-
-    def write_json(self, mut out: JsonWriter) raises:  # raise -> fixed 500, not the handler's error
-        out.begin_object()
-        out.field("id", self.id)
-        out.field("name", self.name)
-        out.end_object()
 
 
 def create_user(body: Json[CreateUser]) -> Json[User]:    # borrow and read body.value
@@ -105,10 +91,11 @@ def create_user(body: Json[CreateUser]) -> Json[User]:    # borrow and read body
 app.post["/users"](create_user)
 # POST /users  Content-Type: application/json  {"name":"Ada","age":36}
 #   -> 200, Content-Type: application/json, {"id":1,"name":"Ada"}
-# Content-Type missing -> 415; a body over 1 MiB -> 413; malformed JSON -> 400
+# Content-Type missing -> 415; a body over 1 MiB -> 413
+# malformed JSON, a missing member, a wrong kind -> 400 (create_user not called)
 ```
 
-- Fields are mapped by hand in `from_json` and `write_json` (`out.field`: [writing a `ToJson` type](reference/responses.md#writing-a-tojson-type)); there is no derived codec.
+- A `JsonFields` struct's codec is derived from its fields: `Int`, `Float64`, `Bool`, `String`, another `JsonFields` struct, or a `List` or `Optional` of one; a field of another type is refused at the registration, naming it. `Json[List[User]]` is a body or result too. **Muntin builds the struct without running its initializers**, so check what `__init__` would in the handler. For another representation, write `FromJson` and `ToJson` by hand ([bodies](reference/bodies.md#json-jsont)).
 - Other bodies: a `FromBody` type parses text itself, with no Muntin size limit (`Json[T]` keeps its 1 MiB one); a `FromBytes` type receives the bytes, and its `comptime max_bytes` is its size limit (a longer body is 413), required unless a refining trait gives a default.
 - A handler that also needs header fields takes `WithHeaders[B]` instead of `B`. **Muntin gives header fields no meaning**: a missing field is `None`, and the handler decides the status. Only a `Json[T]` body's `Content-Type` (415) is checked before the handler.
 - A handler with only route values, and at most one `Headers` last, on `post`, `put` or `patch` is bodyless: the body is not read.
@@ -146,11 +133,11 @@ app.get["/users/{id}"](find_user)
 # GET /users/abc -> 400 "Bad Request"        (find_user not called)
 ```
 
-`User` conforms only to `ToJson`, so the handler returns it as `Json[User]`; returning a bare `User` needs `User` to conform to `ToResponse` ([responses](reference/responses.md)).
+`User` conforms only to `JsonFields`, so the handler returns it as `Json[User]`; returning a bare `User` needs `User` to conform to `ToResponse` ([responses](reference/responses.md)).
 
 - Bare `raises` never maps by message: it is always the fixed 500.
 - The fixed 500 carries a report of the dropped error (`response.failure()`) for middleware to log. **Its message is not safe log text**: it may hold secrets and client input.
-- Muntin's 400 carries a report of why (`response.rejection()`): the step, the route value and the message, such as `from_json: JSON member "txet" is missing` for a misspelled member ([errors](reference/errors.md#reports-of-rejected-requests)).
+- Muntin's 400 carries a report of why (`response.rejection()`): the step, the route value and the message, such as `from_json: age: JSON member is missing` for a body without `age` ([errors](reference/errors.md#reports-of-rejected-requests)).
 
 Reference: [responses](reference/responses.md), [errors](reference/errors.md).
 

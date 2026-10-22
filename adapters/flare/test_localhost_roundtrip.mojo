@@ -116,7 +116,10 @@ M3-009 serves `json_app()`: the JSON body route `POST /greet` ->
 413, and malformed JSON is 400; each status, body and `Content-Type` equals
 `App.handle` with the same fields. The adapter is unchanged. M3-029 adds
 `POST /greet-created` (`Json(..., status=201)`): 201 with the same body and
-`Content-Type` on the wire, 415 without the field.
+`Content-Type` on the wire, 415 without the field. M3-083 adds
+`POST /greet-derived`, whose body is a derived `JsonFields` struct and whose
+result a top-level `List` of it: 200 with the derived array, 400 for a
+missing member and 415 without the field, each equal to `App.handle`.
 
 M3-013 registers the stateful carrier route `POST /signed-greet` ->
 `signed_greet(gate: State[Gate], input: WithHeaders[Json[Greeting]])
@@ -344,6 +347,7 @@ from muntin import (
     FromBytes,
     FromJson,
     Json,
+    JsonFields,
     JsonValue,
     JsonWriter,
     Next,
@@ -2043,6 +2047,17 @@ def greet_created(var body: Json[Greeting]) -> Json[Greeting]:
 
 
 @fieldwise_init
+struct DerivedGreeting(Copyable, JsonFields):
+    var name: String
+
+
+def greet_derived(
+    body: Json[DerivedGreeting],
+) -> Json[List[DerivedGreeting]]:
+    return Json([body.value.copy(), DerivedGreeting("again")])
+
+
+@fieldwise_init
 struct Greeter(Movable):
     var title: String
 
@@ -2090,6 +2105,7 @@ def json_app() -> App:
     var app = App()
     app.post["/greet"](greet)
     app.post["/greet-created"](greet_created)
+    app.post["/greet-derived"](greet_derived)
     app.post["/greet/{id}"](greet_staff, State(Greeter("Dr. ")))
     app.post["/signed-greet"](signed_greet, State(Gate("t0k")))
     return app^
@@ -2137,6 +2153,15 @@ def test_json_over_localhost_matches_app_handle() raises:
             (String("/x"), big, String("text/plain"), 400, False),
             (String("-created"), good, String("application/json"), 201, True),
             (String("-created"), good, String(""), 415, False),
+            (String("-derived"), good, String("application/json"), 200, True),
+            (
+                String("-derived"),
+                String('{"nam":"x"}'),
+                String("application/json"),
+                400,
+                False,
+            ),
+            (String("-derived"), good, String(""), 415, False),
         ]
         for c in cases:
             var path = "/greet" + c[0]
@@ -2168,6 +2193,12 @@ def test_json_over_localhost_matches_app_handle() raises:
                 _json_request(base + "/greet", good, "application/json")
             ).text(),
             '{"hello":"Adé \\"x\\""}',
+        )
+        assert_equal(
+            client.send(
+                _json_request(base + "/greet-derived", good, "application/json")
+            ).text(),
+            '[{"name":"Adé \\"x\\""},{"name":"again"}]',
         )
         assert_equal(big.byte_length(), 1_048_577)
     finally:

@@ -7,6 +7,7 @@
 > - [M3-020](m3-020-http-methods-decision.md): the same overload structure copied to three more method names.
 > - [M3-022](m3-022-several-route-values-decision.md): slot arity 3 added (eight overloads per name, not six); two `at most one` get messages retired.
 > - [M3-048](m3-048-bodyless-typed-post-put-and-patch-handlers-decision.md): bodyless post shapes go to `_get_rule`; two post messages listed here removed.
+> - [M3-082](m3-082-derived-json-codecs-decision.md), built by M3-083: the one rebind moved from `app.mojo` to `_rebind.mojo`, beside a second, of a reference (`_view`); `check_unsafe.sh` requires each there after its assert and nowhere else.
 
 Status: **production**, the M3-014 slice with one decision amendment. The decision, rejected candidates, invariants and revisit conditions are "Registration structure decision (M3-014)" above, and the fourth accepted-set edge is "Registration structure amendment: generic forwarding (M3-015)"; this section records what production does and the measured diagnostics. It reopens M2 as that record decided (the overload declarations, the diagnostics of rejected calls and three edges of the accepted set) and as the amendment added (a fourth edge).
 

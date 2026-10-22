@@ -1,6 +1,6 @@
 # Derived JSON codecs decision (M3-082)
 
-> **Current.** Not built yet: its "Next production slice" is M3-083.
+> **Current.** Built by M3-083. Now described in [bodies reference, "JSON (`Json[T]`)"](../../reference/bodies.md#json-jsont), [responses reference, "JSON results"](../../reference/responses.md#json-results) and [ARCHITECTURE, "JSON"](../../ARCHITECTURE.md#json).
 > Changed in part since:
 > - [M3-084](m3-084-request-rejection-report-decision.md): a derived decoder's failure message names the member path, which the 400's `Rejection` reports.
 

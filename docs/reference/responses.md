@@ -47,7 +47,7 @@ Run by `tests/test_reference_examples.mojo` (`test_responses_to_response`), as w
 
 ## JSON results
 
-A handler returns `Json[T]` with `T: ToJson` ([bodies](bodies.md#json-jsont) for `FromJson`/`ToJson`). The response is status 200 with exactly one field, `Content-Type: application/json`. `Json(value, status=201)` chooses another status. `CreateUser` (`FromJson`, with an optional `nickname`) and `User` (`ToJson`, written as `{"id":...,"name":...}`) are the types of [bodies](bodies.md#json-jsont), not the `UserText` above:
+A handler returns `Json[T]` with `T` a `JsonFields` struct, a `ToJson` type, or a `List` or `Optional` of one ([bodies](bodies.md#json-jsont)). The response is status 200 with exactly one field, `Content-Type: application/json`. `Json(value, status=201)` chooses another status. `CreateUser` (`FromJson`, with an optional `nickname`) and `User` (`ToJson`, written as `{"id":...,"name":...}`) are the types of [bodies](bodies.md#json-jsont), not the `UserText` above:
 
 <!-- example: tests/test_json_dx.mojo#responses-json -->
 ```mojo
@@ -77,9 +77,9 @@ def create() raises -> Response:
 
 Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), as written, registered at `GET /create`: 201, `{"id":7,"name":"Ada"}`, `Content-Type: application/problem+json`. `User` is the `ToJson` type of [bodies](bodies.md#json-jsont).
 
-- If `write_json` raises (NaN and infinity included) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`, whatever status was chosen, carrying a `Failure.RESPONSE` report ([errors](errors.md#reports-of-dropped-errors)); the handler's `ToErrorResponse` is not called. **An edit after `to_response()` applies to that 500 too**: a status set there (`r.status = 201`) would turn the failure into a success with the body `Internal Server Error`, so choose the status with `status=` ([why](../history/decisions/m3-028-json-response-status-decision.md)).
+- If `write_json` raises (NaN and infinity included, in a derived codec too) or leaves the writer unbalanced, the answer is the fixed 500 without a `Content-Type`, whatever status was chosen, carrying a `Failure.RESPONSE` report ([errors](errors.md#reports-of-dropped-errors)); the handler's `ToErrorResponse` is not called. **An edit after `to_response()` applies to that 500 too**: a status set there (`r.status = 201`) would turn the failure into a success with the body `Internal Server Error`, so choose the status with `status=` ([why](../history/decisions/m3-028-json-response-status-decision.md)).
 - The writer prints a `Float64` with `String(Float64)`, which does not always read back to the same double (Mojo 1.1.0).
-- A top-level list is not a result: `List[User]` conforms to neither trait; return an application type that does, whose `write_json` writes the array (`out.value(self.users)`, below).
+- A top-level `List` is a result (`Json[List[User]]` writes an array), and so is an `Optional` (empty is `null`). Another type, such as `Json[Dict[String, Int]]`, is refused at the registration: `Json[<type>] cannot be written`.
 
 ### Writing a `ToJson` type
 

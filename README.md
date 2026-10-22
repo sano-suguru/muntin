@@ -12,7 +12,7 @@ Muntin is a typed application layer for building web services in Mojo. Your hand
 - **Serious limits:**
   - A stop does not cancel or notify running handlers; if the server has not stopped one second after its grace window, the process ends without cleanup ([stopping](docs/reference/serving.md#stopping)).
   - Middleware is compile-time configured and runs on each request; a handler gets a typed value such as the user only from a guard, which sees only headers ([groups](docs/reference/groups.md)).
-  - JSON fields are mapped by hand, so a misspelled key compiles; a `Float64` written may not read back the same ([JSON](docs/reference/bodies.md#json-jsont)). Route values bind by position; names are checked only through `Param` and `RouteValues` ([route values](docs/reference/route-values.md)).
+  - Derived JSON (`JsonFields`) builds a struct without `__init__`; a `Float64` written may not read back the same ([JSON](docs/reference/bodies.md#json-jsont)). Route values bind by position; names are checked only through `Param` and `RouteValues` ([route values](docs/reference/route-values.md)).
   - `State` judges whether a type may borrow by reading its name: it refuses some owned types (`Tuple`, `Variant`), and a type hiding `AnyOrigin` behind an associated type passes, letting a handler read freed memory in safe code ([state](docs/reference/state.md)).
   - Not built: streaming, cancellation, OpenAPI, CORS preflight, logging, metrics, tracing ([candidates](docs/SPEC.md#remaining-candidates)).
   - Flare is the only network backend. Application code is kept apart from it, but a move to another backend is untested, and serving (`Server`, its settings, workers, stop) would be rewritten ([backend seam](docs/reference/testing.md#the-backend-seam)).
