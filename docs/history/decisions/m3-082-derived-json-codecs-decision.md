@@ -1,6 +1,8 @@
 # Derived JSON codecs decision (M3-082)
 
 > **Current.** Not built yet: its "Next production slice" is M3-083.
+> Changed in part since:
+> - [M3-084](m3-084-request-rejection-report-decision.md): a derived decoder's failure message names the member path, which the 400's `Rejection` reports.
 
 Status: **decision** (M3-082, #187, issue [#141](https://github.com/sano-suguru/muntin/issues/141)). Evidence: the pull request.
 

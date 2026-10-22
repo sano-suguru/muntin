@@ -1,6 +1,8 @@
 # Dropped error report amendment (M3-059)
 
 > **Current.** Now described in [errors reference, "Reports of dropped errors"](../../reference/errors.md#reports-of-dropped-errors), [middleware reference, "Logging dropped errors"](../../reference/middleware.md#logging-dropped-errors) and [ARCHITECTURE, "Request handling"](../../ARCHITECTURE.md#request-handling).
+> Changed in part since:
+> - [M3-084](m3-084-request-rejection-report-decision.md), from its slice M3-085: the one report slot also holds a 400's `Rejection`, added only by `_rejected_by`; the invariant becomes at most one report, a `Failure` added only by `_failed` or a `Rejection` only by `_rejected_by`. Its revisit condition on a server-side 400 is answered there, without a typed signal.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **amendment** to "Dropped error report decision (M3-058)", made in its slice M3-059 (pull request #116, which holds the measurements and the review that prompted it). M3-058's choice stands: each fixed 500 `src/muntin` makes carries a `Failure` that middleware reads, and no public API changes.
