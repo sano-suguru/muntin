@@ -18,14 +18,14 @@ Status: **decision** (M3-084, issue [#170](https://github.com/sano-suguru/muntin
 - New `Failure` sources: every M3-059 logger would start writing client-triggered lines unasked.
 - Muntin's text only: #167's cause is the decoder's own error.
 - Quoting the offending value: client bytes in logs, M3-058's reason.
-- A typed conversion error (`comptime Fault: Deinitable = Error` in the four traits; compiles, existing conformers unchanged): no conversion in the repository fails for a server reason; four public traits, the carriers and M3-083 change. Deferred by the owner.
+- A typed conversion error (a `Fault` type defaulting to `Error` in the four traits compiles): no conversion in the repository fails for a server reason; four public traits, the carriers and M3-083 change. Deferred by the owner.
 - An `App` hook, or printing by default: as M3-058.
 - A second report list: `Response` 104 bytes.
 
 **Revisit when** a server-side conversion fault must be told from bad input without reading its message, or answered other than 400 (the typed error above); an application needs the offending value, or a report on a backend's 400, 413 or 415.
 
-**Next production slice (M3-085):** the prototype at `f01527c` (its `prototype-m3-084/README.md`).
+**Next production slice (M3-085):** the prototype at `fef9ee9` (its `prototype-m3-084/README.md`).
 - Code: as prototyped; exports `Rejection`.
-- Tests: `tests/test_rejection.mojo` through `TestClient`: every step and fixed message, each name source (`Param` in a module of its own), a deferred and an in-slot 400 on guarded routes, carriers, `None` elsewhere, copies and `HEAD`, a middleware reading it, the size; a loopback 400 whose body and fields are unchanged; the whole-output fixture comparison (`Json` and `_from_parts` change).
+- Tests: `tests/test_rejection.mojo` through `TestClient`: every step and fixed message, a repeated key found in the query's one pass, each name source (`Param` in a module of its own), a deferred and an in-slot 400 on guarded routes, carriers, `None` elsewhere, copies and `HEAD`, a middleware reading it, the size; a loopback 400 whose body and fields are unchanged; the whole-output fixture comparison (`Json` and `_from_parts` change).
 - Docs: errors, middleware, route-values and bodies references, `docs/ARCHITECTURE.md`, `docs/SPEC.md`.
 - Not in the slice: a typed conversion error, the offending value, a logger.
