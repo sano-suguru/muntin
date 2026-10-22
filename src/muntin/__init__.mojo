@@ -10,6 +10,7 @@ from .headers_body import WithHeaders
 from .http import (
     Failure,
     Headers,
+    Rejection,
     Request,
     Response,
     ToErrorResponse,
