@@ -291,6 +291,68 @@ struct Failure(Copyable, Movable, Writable):
         writer.write(self.source, ": ", self.message)
 
 
+struct Rejection(Copyable, Movable, Writable):
+    """Why Muntin answered a request 400 `Bad Request` before the handler
+    (docs/history/architecture-decisions.md, "Request rejection report
+    decision (M3-084)").
+
+    `step` is the conversion that failed, one of `Rejection.PATH` (a path
+    route value's decoding or `Int` parse), `Rejection.QUERY` (a query
+    value missing, repeated, or its decoding or `Int` parse),
+    `Rejection.FROM_ROUTE_VALUE`, `Rejection.UTF8` (a text body that is not
+    UTF-8), `Rejection.JSON` (a `Json[T]` body that is not one JSON value),
+    `Rejection.FROM_BODY`, `Rejection.FROM_BYTES` and `Rejection.FROM_JSON`
+    (a conversion raised). `name` is the route value's
+    placeholder name for the first three, else empty. `message` is Muntin's
+    own fixed text for `PATH`, `QUERY`, `UTF8` and `JSON`, which never
+    holds a byte of the request, and the raised error's text for the
+    `FROM_` steps, which may: a standard-library conversion such as
+    `Int(text)` quotes its input. Escaping and masking it in a log are the
+    application's. Nothing tells a conversion's server-side fault from bad
+    input but its message.
+    Written as `step name: message`, or `step: message` without a name.
+
+    Its initializer takes only `_`-prefixed keyword arguments; only Muntin
+    builds one, and a `Response` built by the application carries none.
+    """
+
+    comptime PATH = "path"
+    comptime QUERY = "query"
+    comptime FROM_ROUTE_VALUE = "from_route_value"
+    comptime UTF8 = "utf-8"
+    comptime JSON = "json"
+    comptime FROM_BODY = "from_body"
+    comptime FROM_BYTES = "from_bytes"
+    comptime FROM_JSON = "from_json"
+
+    var step: String
+    var name: String
+    var message: String
+
+    def __init__(out self, *, _step: String, _name: String, _message: String):
+        self.step = _step
+        self.name = _name
+        self.message = _message
+
+    def write_to(self, mut writer: Some[Writer]):
+        writer.write(self.step)
+        if self.name.byte_length() > 0:
+            writer.write(" ", self.name)
+        writer.write(": ", self.message)
+
+
+@fieldwise_init
+struct _Report(Copyable, Movable):
+    """A response's report: a `Failure` (the fixed 500) or a `Rejection`
+    (Muntin's 400), one list element so `Response` keeps its size."""
+
+    var failure: List[Failure]
+    var rejection: List[Rejection]
+    var at: Int
+    """A rejected route value's position among the route values, -1 once
+    `App.handle` has named it (or for any other step)."""
+
+
 struct Response(Copyable, Movable, ToResponse):
     """An application-level HTTP response, independent of any transport.
 
@@ -313,10 +375,11 @@ struct Response(Copyable, Movable, ToResponse):
     var status: Int
     var body: List[UInt8]
     var headers: Headers
-    # The report, or empty; at most one, added only by `_failed`
-    # (docs/history/architecture-decisions.md, "Dropped error report
-    # amendment (M3-059)").
-    var _failure: List[Failure]
+    # The report, or empty; at most one, added only by `_failed` or
+    # `_rejected_by` (docs/history/architecture-decisions.md, "Dropped error
+    # report amendment (M3-059)", "Request rejection report decision
+    # (M3-084)").
+    var _report: List[_Report]
 
     def __init__(out self, status: Int, body: String):
         """A response whose body is the bytes of the text `body`."""
@@ -328,7 +391,7 @@ struct Response(Copyable, Movable, ToResponse):
         self.status = status
         self.body = body^
         self.headers = Headers()
-        self._failure = List[Failure]()
+        self._report = List[_Report]()
 
     @staticmethod
     def text(body: String, status: Int = 200) -> Response:
@@ -344,8 +407,16 @@ struct Response(Copyable, Movable, ToResponse):
         """A copy of the report of what Muntin dropped when it made this
         response as the fixed 500 (M3-058); `None` on any other response,
         and on one the application builds."""
-        if self._failure:
-            return self._failure[0].copy()
+        if self._report and self._report[0].failure:
+            return self._report[0].failure[0].copy()
+        return None
+
+    def rejection(self) -> Optional[Rejection]:
+        """A copy of the report of why Muntin answered this response as its
+        400 before the handler (M3-084); `None` on any other response, and
+        on one the application builds."""
+        if self._report and self._report[0].rejection:
+            return self._report[0].rejection[0].copy()
         return None
 
     def to_response(var self) -> Response:
@@ -359,5 +430,29 @@ def _failed(source: StaticString, message: String) -> Response:
     `Failure` of `source` and `message` (M3-058). The message never reaches
     the body or a field."""
     var response = Response.text("Internal Server Error", status=500)
-    response._failure.append(Failure(_source=source, _message=message))
+    response._report.append(
+        _Report(
+            failure=[Failure(_source=source, _message=message)],
+            rejection=[],
+            at=-1,
+        )
+    )
+    return response^
+
+
+def _rejected_by(
+    step: String, name: String, message: String, at: Int = -1
+) -> Response:
+    """Muntin's 400, `Bad Request` with no fields, carrying a `Rejection` of
+    `step`, `name` and `message` (M3-084); `at` is a route value's position
+    that `App.handle` turns into its name. Nothing of it reaches the body or
+    a field."""
+    var response = Response.text("Bad Request", status=400)
+    response._report.append(
+        _Report(
+            failure=[],
+            rejection=[Rejection(_step=step, _name=name, _message=message)],
+            at=at,
+        )
+    )
     return response^
