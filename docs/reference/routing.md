@@ -263,8 +263,8 @@ Run by `tests/test_method_not_allowed.mojo` (`test_dx_example`), which defines t
 On a typed route each step runs only if the previous one passed:
 
 1. Method and path: 404, or 405 with `Allow`. Nothing decoded.
-2. Query values: a duplicated key, or a required key missing, 400.
-3. Route values, in order, decoded: a required value empty, a bad escape or bytes that are not UTF-8, 400.
+2. Path values, in order, decoded: a bad escape or bytes that are not UTF-8, 400.
+3. Query values: one of the route's keys repeated anywhere in the query, 400; then each in order, a required key missing or its value empty, a bad escape or bytes that are not UTF-8, 400.
 4. Route values converted, in order (an `Int` that does not parse, a `from_route_value` raise): 400. The first invalid value stops the rest.
 5. `Json[T]` bodies: `Content-Type` 415, then the 1 MiB cap 413.
 6. `FromBytes` bodies, bare or carried: the type's `max_bytes`, 413.

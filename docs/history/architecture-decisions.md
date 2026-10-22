@@ -93,7 +93,7 @@ Earlier records include production records written before that rule; they stay a
 | <a id="comparison-with-flare-alone-decision-m3-079"></a>[Comparison with Flare alone decision (M3-079)](decisions/m3-079-comparison-with-flare-alone-decision.md) | Current | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
 | <a id="guarded-routes-and-request-context-decision-m3-080"></a>[Guarded routes and request context decision (M3-080)](decisions/m3-080-guarded-routes-and-request-context-decision.md) | Current | [groups reference](../reference/groups.md) |
 | <a id="derived-json-codecs-decision-m3-082"></a>[Derived JSON codecs decision (M3-082)](decisions/m3-082-derived-json-codecs-decision.md) | Current; changed in part by [M3-084](decisions/m3-084-request-rejection-report-decision.md); not built yet (M3-083) | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
-| <a id="request-rejection-report-decision-m3-084"></a>[Request rejection report decision (M3-084)](decisions/m3-084-request-rejection-report-decision.md) | Current; not built yet (M3-085) | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
+| <a id="request-rejection-report-decision-m3-084"></a>[Request rejection report decision (M3-084)](decisions/m3-084-request-rejection-report-decision.md) | Current | [errors reference, "Reports of rejected requests"](../reference/errors.md#reports-of-rejected-requests) |
 
 ## Documents older records cite
 

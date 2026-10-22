@@ -7,7 +7,7 @@ A typed `post`, `put` or `patch` handler takes one body, as its last parameter, 
 - a `FromBytes` type: the body's bytes, with a declared size limit;
 - `WithHeaders[B]` around one of these: the body and the request's header fields.
 
-The body comes from the request body only, never from the path or query, byte for byte. A conversion that raises is 400 `Bad Request` and the handler is not called. The order of checks is in [routing](routing.md#order-of-checks). A handler without a body on these methods is bodyless ([routing](routing.md#bodyless-post-put-and-patch)); a raw handler reads any body itself ([raw handlers](raw.md)).
+The body comes from the request body only, never from the path or query, byte for byte. A conversion that raises is 400 `Bad Request` and the handler is not called; the error's text is not sent, only kept in the 400's report, which tells a body that is not UTF-8 or, for `Json[T]`, not JSON from a conversion's raise ([errors](errors.md#reports-of-rejected-requests)). The order of checks is in [routing](routing.md#order-of-checks). A handler without a body on these methods is bodyless ([routing](routing.md#bodyless-post-put-and-patch)); a raw handler reads any body itself ([raw handlers](raw.md)).
 
 Each example below is its own `App` (named `app`, created with `var app = App()`), so the same route or type name (`POST /users`, `create_user`, `CreateUser`, `Unauthorized`) means that example's own; the line after it names the test that runs it and what that test adds or changes.
 
@@ -157,6 +157,7 @@ Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), with these types and
 - Size: at most 1,048,576 bytes; one more is 413 (fixed). `Json[T].from_body` also raises above it in a raw handler.
 - Grammar: RFC 8259, strictly. Comments, trailing commas, leading zeros, `NaN`, duplicate member names, a byte order mark, lone surrogates and nesting deeper than 64 are 400. Extra members are ignored.
 - Numbers: `int()` is exact for integer literals that fit `Int`. `float()` rounds a literal of any length to the nearest `Float64`, ties to even. It raises (400) only when that rounding gives infinity, at a magnitude of 2^1024 − 2^970 or more, so `1.7976931348623158e308` reads as the largest double; a magnitude of 2^-1075 or less rounds to a zero of the literal's sign, so `2.4703282292062328e-324` reads as the smallest subnormal.
+- `value[name]` raises naming the missing member (`JSON member "name" is missing`); `int()` and `float()` do not quote the literal.
 - Fields are mapped by hand in `from_json`; there is no derived codec. A `FromJson` type is not a body by itself (`def create_user(body: CreateUser)` gets the `FromBody or FromBytes` message).
 - Ownership: borrow (`body.value`) or own and move out (`var body`, `body^.take()`); `body.value^` does not compile.
 - Cost: parsing is linear apart from a sort of each object's member names; reading k fields of an m-member object costs O(k·m). At the cap a parse adds up to about 29 MB of memory (1 MiB of `[0,0,...]`), about 5 MB for typical records. `float()` converts the literal on every call, so its cost follows the calls, not the body: about a microsecond for a short literal near either end of the range, more for hundreds of digits ([#176](https://github.com/sano-suguru/muntin/pull/176) measures it).

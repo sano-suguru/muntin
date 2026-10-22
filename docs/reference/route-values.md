@@ -1,6 +1,6 @@
 # Route values
 
-A route value is a handler parameter filled from a `{name}` path segment or a `{key}` query item of the route literal ([routing](routing.md#route-literals)). Binding is positional: the path placeholders left to right, then the query placeholders left to right, fill the route-value parameters in order. Names are compared only through `Param` and `RouteValues` records (below). Every invalid value is 400 `Bad Request` before the handler; the order of checks is in [routing](routing.md#order-of-checks). Each example below is its own `App`, except that the query-value example adds to the `Int` example's; the line after each names the test that runs it and what that test adds or changes.
+A route value is a handler parameter filled from a `{name}` path segment or a `{key}` query item of the route literal ([routing](routing.md#route-literals)). Binding is positional: the path placeholders left to right, then the query placeholders left to right, fill the route-value parameters in order. Names are compared only through `Param` and `RouteValues` records (below). Every invalid value is 400 `Bad Request` before the handler, whose report names the value and why ([errors](errors.md#reports-of-rejected-requests)); the order of checks is in [routing](routing.md#order-of-checks). Each example below is its own `App`, except that the query-value example adds to the `Int` example's; the line after each names the test that runs it and what that test adds or changes.
 
 ## `Int` values
 
@@ -355,7 +355,7 @@ def make_app() raises -> App:
 
 Run by `tests/test_app_route_values.mojo` (`test_dx_example`), which imports `UserId`, `Order`, `get_user`, `list_posts` and `make_app` from `tests/app_route_value_handlers.mojo`, where they are written as here; `GET /users/%7542` is checked by `test_value_is_decoded_once_and_never_empty`.
 
-- `from_route_value` receives the text a `String` value would: decoded, never empty. **Any raise is 400 with the error's text dropped**, whatever raised, so keep it to reading the text; do work that can fail for other reasons (a lookup) in the handler, where a raise is a 500 or the error's own response.
+- `from_route_value` receives the text a `String` value would: decoded, never empty. **Any raise is 400**, whatever raised; the error's text is not sent, only kept in the 400's report ([errors](errors.md#reports-of-rejected-requests)). So keep it to reading the text; do work that can fail for other reasons (a lookup) in the handler, where a raise is a 500 or the error's own response.
 - It goes wherever a required `String` value goes: once or twice, on every method, stateless or stateful, in a `Param`, as a record field. Values convert left to right, then the body; a raise stops the rest.
 - The type conforms in its own module and may be move-only.
 - A type is a route value or a body, not both: one that also conforms to `FromBody` or `FromBytes` is `a parameter's type conforms to FromRouteValue and to FromBody or FromBytes; a type is a route value or a body, not both`.

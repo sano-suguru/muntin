@@ -19,8 +19,8 @@ or replace the document another copy reads.
 from std.collections import Optional
 
 from ._handler_storage import _Shared
-from .body import FromBody
-from .http import Failure, Headers, Response, ToResponse, _failed
+from .body import FromBody, _BodyFault
+from .http import Failure, Headers, Rejection, Response, ToResponse, _failed
 
 comptime _MAX_DEPTH = 64
 """Nesting cap for untrusted input: an array or object nested deeper than
@@ -713,7 +713,11 @@ struct JsonValue(Copyable, Movable, Sized):
         var t = self._literal()
         if t.find(".") >= 0 or t.find("e") >= 0 or t.find("E") >= 0:
             raise Error("JSON number is not an integer")
-        return Int(t)
+        try:
+            return Int(t)
+        except:
+            # `Int`'s own message quotes the literal, which the client sent.
+            raise Error("JSON number is out of Int range")
 
     def float(self) raises -> Float64:
         """A number literal of any length, rounded to the nearest `Float64`
@@ -774,11 +778,11 @@ struct JsonValue(Copyable, Movable, Sized):
         return None
 
     def __getitem__(self, name: String) raises -> JsonValue:
-        """The member `name` of an object; raises when it is absent or the
-        value is not an object."""
+        """The member `name` of an object; raises when it is absent (the
+        error names it, M3-084) or the value is not an object."""
         var found = self.get(name)
         if not found:
-            raise Error("JSON member is missing")
+            raise Error('JSON member "', name, '" is missing')
         return found.take()
 
 
@@ -1136,12 +1140,24 @@ trait _JsonBody:
     pass
 
 
+trait _JsonText:
+    """`Json`'s body conversion in its two steps (M3-084), so a typed route
+    reports a body that is not JSON (`Rejection.JSON`) apart from a
+    `from_json` raise (`Rejection.FROM_JSON`). Private; a carrier does not
+    conform, and converts its `Json[T]` through it."""
+
+    @staticmethod
+    def _from_text(text: String) raises _BodyFault -> Self:
+        ...
+
+
 struct Json[T: Movable & Deinitable](
     Deinitable,
     FromBody where conforms_to(T, FromJson),
     Movable,
     ToResponse where conforms_to(T, ToJson),
     _JsonBody,
+    _JsonText,
 ):
     """A JSON request body or response body around an application value.
 
@@ -1184,6 +1200,21 @@ struct Json[T: Movable & Deinitable](
         a raw handler may call it directly, and its error model applies to
         the raise."""
         return Self(Self.T.from_json(_parse_json(body)))
+
+    @staticmethod
+    def _from_text(text: String) raises _BodyFault -> Self:
+        """`from_body` on a typed route: the parse and the conversion raise
+        `Rejection.JSON` and `Rejection.FROM_JSON` (M3-084)."""
+        comptime assert conforms_to(Self.T, FromJson)
+        var value: JsonValue
+        try:
+            value = _parse_json(text)
+        except e:
+            raise _BodyFault(Rejection.JSON, String(e))
+        try:
+            return Self(Self.T.from_json(value))
+        except e:
+            raise _BodyFault(Rejection.FROM_JSON, String(e))
 
     def to_response(var self) -> Response where conforms_to(Self.T, ToJson):
         """The chosen status (200 by default) with the written body and

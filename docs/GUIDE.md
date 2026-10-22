@@ -150,6 +150,7 @@ app.get["/users/{id}"](find_user)
 
 - Bare `raises` never maps by message: it is always the fixed 500.
 - The fixed 500 carries a report of the dropped error (`response.failure()`) for middleware to log. **Its message is not safe log text**: it may hold secrets and client input.
+- Muntin's 400 carries a report of why (`response.rejection()`): the step, the route value and the message, such as `from_json: JSON member "txet" is missing` for a misspelled member ([errors](reference/errors.md#reports-of-rejected-requests)).
 
 Reference: [responses](reference/responses.md), [errors](reference/errors.md).
 
