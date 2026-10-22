@@ -72,6 +72,9 @@ BUDGETS = [
     # M3-082's body was 4,082 bytes when it merged (#187), leaving no room
     # for the opening lines of the records that change it, M3-084 first.
     ("docs/history/decisions/m3-082-derived-json-codecs-decision.md", 5 * KB),
+    # M3-084 was 4,083 bytes when it merged (#190), leaving no room for the
+    # opening line that names where its behavior is now described (M3-085).
+    ("docs/history/decisions/m3-084-request-rejection-report-decision.md", 5 * KB),
     # A record is 1-3 KB (docs/DEVELOPMENT.md section 2); the rest is room
     # for its opening lines, which grow as later records change it.
     ("docs/history/decisions/*.md", 4 * KB),

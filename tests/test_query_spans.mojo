@@ -7,8 +7,10 @@
 # holding `=`, empty pairs, unrelated keys and values with multibyte UTF-8,
 # many unrelated pairs) gives each key the value `_query_value` gives it,
 # sliced at `_query_spans`' byte offsets, and raises exactly when one of the
-# keys is duplicated. Through `App.handle`: tests/test_route_values.mojo and
-# tests/test_route_records.mojo.
+# keys is duplicated, `_query_spans_at` naming the key whose second
+# occurrence comes first in the query (M3-085). Through `App.handle`:
+# tests/test_route_values.mojo, tests/test_route_records.mojo and
+# tests/test_rejection.mojo.
 
 from std.collections import Dict
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
@@ -17,6 +19,7 @@ from muntin.app import (
     _LINEAR_QUERY_KEYS,
     _query_index,
     _query_spans,
+    _query_spans_at,
     _query_value,
 )
 
@@ -76,6 +79,21 @@ def _queries(keys: List[String]) -> List[String]:
     return queries^
 
 
+def _first_repeated(query: String, keys: List[String]) -> Int:
+    """The position in `keys` of the key whose second occurrence comes first
+    in `query`, read pair by pair; -1 when none repeats."""
+    var seen = List[Bool](length=len(keys), fill=False)
+    for pair in query.split("&"):
+        var eq = pair.find("=")
+        var name = String(pair[byte=:eq]) if eq >= 0 else String(pair)
+        for k in range(len(keys)):
+            if keys[k] == name:
+                if seen[k]:
+                    return k
+                seen[k] = True
+    return -1
+
+
 def _check(query: String, keys: List[String]) raises:
     var expected = List[Optional[String]]()
     var duplicated = False
@@ -86,11 +104,14 @@ def _check(query: String, keys: List[String]) raises:
             duplicated = True
             expected.append(None)
     var spans: List[Int]
+    var repeated = -1
     try:
-        spans = _query_spans(query, keys, _query_index(keys))
+        spans = _query_spans_at(query, keys, _query_index(keys), repeated)
     except:
         assert_true(duplicated, "raised without a duplicate: " + query)
+        assert_equal(repeated, _first_repeated(query, keys), query)
         return
+    assert_equal(repeated, -1, query)
     assert_false(duplicated, "a duplicate did not raise: " + query)
     for k in range(len(keys)):
         var start = spans[2 * k]
@@ -112,6 +133,29 @@ def test_spans_read_every_query_as_the_one_key_reader() raises:
         var keys = _keys(n)
         for query in _queries(keys):
             _check(query, keys)
+
+
+def test_the_repeated_key_is_the_first_to_occur_twice() raises:
+    """Not the first declared: a search key by key would name `k0`."""
+    for n in [2, _LINEAR_QUERY_KEYS + 1]:
+        var keys = _keys(n)
+        var query = String("k1=a&k0=b&k1=c&k0=d")
+        var repeated = -1
+        var raised = False
+        try:
+            _ = _query_spans_at(query, keys, _query_index(keys), repeated)
+        except:
+            raised = True
+        assert_true(raised, String(n))
+        assert_equal(repeated, 1, String(n))
+    # `_query_spans` raises as before.
+    var keys = _keys(2)
+    var raised = False
+    try:
+        _ = _query_spans("k0=1&k0=2", keys, _query_index(keys))
+    except:
+        raised = True
+    assert_true(raised, "a duplicate did not raise")
 
 
 def test_only_routes_above_the_limit_keep_an_index() raises:

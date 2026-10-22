@@ -84,6 +84,7 @@ What each capability does for an application: the [guide](GUIDE.md) and the [ref
 | HTTPS for `Server` (`tls=Tls(cert_file=..., key_file=...)`) | [M3-051](history/decisions/m3-051-server-tls-decision.md) | shipped |
 | HTTPS on several workers (`serve[make](workers=n)` on a `Server` bound with `tls`) | [M3-060](history/decisions/m3-060-tls-with-workers-decision.md) | shipped |
 | reports of the errors behind the fixed 500, read by middleware (`Response.failure()`, `Failure`) | [M3-058](history/decisions/m3-058-dropped-error-report-decision.md) | shipped |
+| reports of why Muntin answered 400 before a handler, read by middleware (`Response.rejection()`, `Rejection`) | [M3-084](history/decisions/m3-084-request-rejection-report-decision.md) | shipped |
 | routes behind one guard that hands handlers a typed context (`Group`, `app.mount`) | [M3-080](history/decisions/m3-080-guarded-routes-and-request-context-decision.md) | shipped |
 
 ### Remaining candidates
@@ -93,28 +94,27 @@ After the comparison with Flare alone, which showed a static-checking advantage 
 In priority order: the first entry is the next item unless the user asks for another. Each becomes its own item, a decision item first where it opens a design question. An entry here is only what it solves and when to start. A revisit condition, or any other condition that binds later items, lives in the linked decision record or in [`history/deferrals.md`](history/deferrals.md); the issue holds the details, design targets and discussion.
 
 1. **Linear request header conversion** ([#140](https://github.com/sano-suguru/muntin/issues/140)). Solves: the adapter's field check costs fields × distinct names comparisons inside Flare, which keeps `max_header_fields` low ([M3-066](history/decisions/m3-066-request-header-conversion-decision.md)). Start: when Flare ships an ordered field accessor on `HeaderMap` (asked in [ehsanmok/flare#39](https://github.com/ehsanmok/flare/issues/39)), then a pin change ([deferral](history/deferrals.md#linear-request-header-conversion)).
-2. **Request conversion failure diagnosis** ([#170](https://github.com/sano-suguru/muntin/issues/170)). Solves: Muntin's 400s keep no cause, so finding one means reading Muntin's code. Start: now (entry 1 waits on Flare): the production slice M3-085 of [M3-084](history/decisions/m3-084-request-rejection-report-decision.md).
-3. **Derived JSON codecs** ([#141](https://github.com/sano-suguru/muntin/issues/141)). Solves: a DTO's members are mapped by hand twice, so a new field can be missed. Start: after the entry above: the production slice M3-083 of [M3-082](history/decisions/m3-082-derived-json-codecs-decision.md).
-4. **Comparison by authors new to Muntin** ([#171](https://github.com/sano-suguru/muntin/issues/171)). Solves: whether Muntin reduces what an author must remember, on real tasks. Start: once entries 2 and 3 have each shipped or been decided against.
+2. **Derived JSON codecs** ([#141](https://github.com/sano-suguru/muntin/issues/141)). Solves: a DTO's members are mapped by hand twice, so a new field can be missed. Start: now (entry 1 waits on Flare): the production slice M3-083 of [M3-082](history/decisions/m3-082-derived-json-codecs-decision.md).
+3. **Comparison by authors new to Muntin** ([#171](https://github.com/sano-suguru/muntin/issues/171)). Solves: whether Muntin reduces what an author must remember, on real tasks. Start: once entry 2 has shipped or been decided against.
 
-Then, in priority order, each with its issue, after the owner's decision on entry 4 ([deferral](history/deferrals.md#candidates-after-the-comparison-by-new-authors)):
+Then, in priority order, each with its issue, after the owner's decision on entry 3 ([deferral](history/deferrals.md#candidates-after-the-comparison-by-new-authors)):
 
-5. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
-6. body limits beyond `FromBytes` ([#143](https://github.com/sano-suguru/muntin/issues/143));
-7. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
-8. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
-9. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
-10. more body shapes: text type, optional, multiple, streaming, multipart ([#147](https://github.com/sano-suguru/muntin/issues/147));
-11. fallible response conversions ([#148](https://github.com/sano-suguru/muntin/issues/148));
-12. broader raw handlers ([#149](https://github.com/sano-suguru/muntin/issues/149));
-13. more middleware: per-route, error types ([#150](https://github.com/sano-suguru/muntin/issues/150));
-14. structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
-15. observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
-16. streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
-17. serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
-18. a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
-19. handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
-20. performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
+4. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
+5. body limits beyond `FromBytes` ([#143](https://github.com/sano-suguru/muntin/issues/143));
+6. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
+7. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
+8. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
+9. more body shapes: text type, optional, multiple, streaming, multipart ([#147](https://github.com/sano-suguru/muntin/issues/147));
+10. fallible response conversions ([#148](https://github.com/sano-suguru/muntin/issues/148));
+11. broader raw handlers ([#149](https://github.com/sano-suguru/muntin/issues/149));
+12. more middleware: per-route, error types ([#150](https://github.com/sano-suguru/muntin/issues/150));
+13. structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
+14. observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
+15. streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
+16. serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
+17. a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
+18. handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
+19. performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
 
 ## Long-term success criterion
 

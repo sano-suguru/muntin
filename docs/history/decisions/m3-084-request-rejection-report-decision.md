@@ -1,6 +1,6 @@
 # Request rejection report decision (M3-084)
 
-> **Current.** Not built yet: its "Next production slice" is M3-085.
+> **Current.** Built by M3-085. Now described in [errors reference, "Reports of rejected requests"](../../reference/errors.md#reports-of-rejected-requests), [middleware reference, "Logging rejected requests"](../../reference/middleware.md#logging-rejected-requests) and [ARCHITECTURE, "Request handling"](../../ARCHITECTURE.md#request-handling).
 
 Status: **decision** (M3-084, issue [#170](https://github.com/sano-suguru/muntin/issues/170)). Evidence: the pull request. Changes part of M3-058, M3-059 and M3-082's slice (below).
 

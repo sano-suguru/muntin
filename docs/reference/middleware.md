@@ -112,3 +112,29 @@ app.get["/orders/{id}"](find_order)  # find_order from errors.md
 - Register it first: a middleware outside it that raises makes a report it never sees.
 - A request ID a client sends is client input: it correlates log lines and is not trusted. Muntin has no request ID, timing, metrics or tracing.
 - Escaping and masking are the application's. `quoted` writes every byte outside printable ASCII, `"` and `\` as `\xNN`, so nothing can end the line, move the cursor or reorder its text; it masks nothing. `repr` is not enough: it leaves C1 controls and other non-ASCII characters as they are.
+
+## Logging rejected requests
+
+A middleware registered first reads, the same way, why Muntin answered a request 400 before the handler, its `Rejection` ([errors](errors.md#reports-of-rejected-requests)):
+
+<!-- example: tests/test_rejection.mojo#middleware-rejections -->
+```mojo
+def log_rejections(var request: Request, var next: Next) raises -> Response:
+    var path = request.path  # kept: `next` takes the request
+    var response = next^.run(request^)
+    var rejection = response.rejection()
+    if rejection:
+        print(quoted(path), quoted(String(rejection.value())), file=stderr)
+    return response^
+
+
+var app = App()
+app.use(log_rejections)
+app.post["/notes"](add_note)  # add_note from errors.md
+# POST /notes '{"text": "hi"}', application/json -> 400 "Bad Request"; standard error:
+#   "/notes" "from_json: JSON member \x22txet\x22 is missing"
+```
+
+`quoted` is the one above and `add_note` the handler of [errors](errors.md#reports-of-rejected-requests). Run by `tests/test_rejection.mojo` (`test_middleware_rejections_example`), as written; it checks the 400, its report and the quoted text, not the standard-error line.
+
+- The client's request decides what is rejected, so a logger of every 400 writes a line per bad request; `failure()` stays `None` on a 400, so a logger of failures alone writes none.

@@ -1,5 +1,7 @@
 """Request-body conversion contracts: text (M2-006) and bytes (M3-041)."""
 
+from .http import Rejection
+
 
 trait _FromBodyOrBytes(Deinitable, Movable):
     """What `FromBody` and `FromBytes` share, and nothing more: the bound of
@@ -84,6 +86,21 @@ trait FromBytes(_FromBodyOrBytes):
         `body.copy()`). Raising rejects the request with 400 `Bad Request`
         without calling the handler."""
         ...
+
+
+@fieldwise_init
+struct _BodyFault(Movable):
+    """A body conversion's failure (M3-084): the `Rejection` step that
+    failed and its message, Muntin's own text for `Rejection.UTF8` and
+    `Rejection.JSON`, the raised error's text for a `FROM_` step."""
+
+    var step: String
+    var message: String
+
+
+comptime _NOT_UTF8 = "not UTF-8"
+"""The message of a `Rejection.UTF8`, and of a route value whose decoded
+bytes are not UTF-8."""
 
 
 def _body_text(body: List[UInt8]) raises -> String:

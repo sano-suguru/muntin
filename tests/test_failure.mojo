@@ -577,9 +577,11 @@ def test_logger_reads_only_the_last_of_two_failures() raises:
     )
 
 
-def test_server_side_body_conversion_failure_is_an_unreported_400() raises:
+def test_server_side_body_conversion_failure_is_a_400_without_a_failure() raises:
     """A limit docs/reference/errors.md states: Muntin cannot tell a
-    conversion's own failure from bad input."""
+    conversion's own failure from bad input. It is a 400 whose `Rejection`
+    holds the conversion's message (M3-084), and a `Failure` logger writes
+    nothing."""
     var app = App()
     app.use(logged)
     _routes(app)
@@ -587,6 +589,9 @@ def test_server_side_body_conversion_failure_is_an_unreported_400() raises:
     assert_equal(r.status, 400)
     assert_false(r.failure())
     assert_false(r.headers.get("X-Log"))
+    assert_equal(
+        String(r.rejection().value()), "from_body: no parser configured"
+    )
 
 
 def test_errors_report_example() raises:

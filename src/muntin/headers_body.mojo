@@ -11,10 +11,45 @@ the request's fields. A carrier's body is a `FromBody` or, since M3-042, a
 type is.
 """
 
-from .body import FromBody, FromBytes, _FromBodyOrBytes, _body_text
-from .http import Headers
-from .json import _JsonBody
+from .body import (
+    FromBody,
+    FromBytes,
+    _BodyFault,
+    _FromBodyOrBytes,
+    _NOT_UTF8,
+    _body_text,
+)
+from .http import Headers, Rejection
+from .json import _JsonBody, _JsonText
 from .route_value import FromRouteValue, RouteValues
+
+
+def _convert_body[
+    B: Movable & Deinitable
+](body: List[UInt8]) raises _BodyFault -> B:
+    """The bare body `B` from the request's bytes, borrowed (M3-041,
+    M3-084): `from_bytes` on them unread for a `FromBytes`; for a `FromBody`
+    their text (`_body_text`), then `from_body`, or for a `Json[T]` the
+    parse and `from_json`. Each failure raises its `Rejection` step."""
+    comptime if conforms_to(B, FromBytes):
+        try:
+            return B.from_bytes(body)
+        except e:
+            raise _BodyFault(Rejection.FROM_BYTES, String(e))
+    else:
+        comptime assert conforms_to(B, FromBody)
+        var text: String
+        try:
+            text = _body_text(body)
+        except:
+            raise _BodyFault(Rejection.UTF8, _NOT_UTF8)
+        comptime if conforms_to(B, _JsonText):
+            return B._from_text(text)
+        else:
+            try:
+                return B.from_body(text)
+            except e:
+                raise _BodyFault(Rejection.FROM_BODY, String(e))
 
 
 trait _HeaderCarrier(Deinitable, Movable):
@@ -23,12 +58,14 @@ trait _HeaderCarrier(Deinitable, Movable):
     Private; it adds nothing to `WithHeaders`'s public surface."""
 
     @staticmethod
-    def _from_parts(body: List[UInt8], var headers: Headers) raises -> Self:
+    def _from_parts(
+        body: List[UInt8], var headers: Headers
+    ) raises _BodyFault -> Self:
         """Builds the carrier from the request's body bytes, borrowed, and
         the rebuilt fields, converting the bytes as a bare body of the
-        carried type: `from_bytes` on them unread and uncopied, or
-        `from_body` on their text (M3-042). Raises when that conversion
-        raises or, for a text body, when the bytes are not UTF-8."""
+        carried type (`_convert_body`): `from_bytes` on them unread and
+        uncopied, or `from_body` on their text (M3-042). Raises the step that
+        failed (M3-084)."""
         ...
 
     @staticmethod
@@ -113,13 +150,10 @@ struct WithHeaders[B: _FromBodyOrBytes](
         return self.body^
 
     @staticmethod
-    def _from_parts(body: List[UInt8], var headers: Headers) raises -> Self:
-        comptime if conforms_to(Self.B, FromBytes):
-            # The bytes as received, borrowed: no UTF-8 read, no copy.
-            return Self(Self.B.from_bytes(body), headers^)
-        else:
-            comptime assert conforms_to(Self.B, FromBody)
-            return Self(Self.B.from_body(_body_text(body)), headers^)
+    def _from_parts(
+        body: List[UInt8], var headers: Headers
+    ) raises _BodyFault -> Self:
+        return Self(_convert_body[Self.B](body), headers^)
 
     @staticmethod
     def _max_bytes() -> Int:

@@ -19,7 +19,7 @@ app.get["/users/{id}"](get_user)              # unchanged registration
 
 `UserText` is the `ToResponse` type of [responses](responses.md#toresponse). Run by `tests/test_reference_examples.mojo` (`test_errors_fixed_500`), with `get_user` named `get_user_or_500`. `tests/test_error.mojo` (`test_raising_handlers_that_raise_answer_a_fixed_500`, `test_request_failures_are_400_before_a_raising_handler`) checks the same on every handler shape.
 
-- Request failures are decided before the handler: an invalid route value, a missing, duplicated or invalid query value, or a body a conversion rejects is 400; a path no route matches is 404; a path only other methods match is 405.
+- Request failures are decided before the handler: an invalid route value, a missing, duplicated or invalid query value, or a body a conversion rejects is 400, with a report of why ([below](#reports-of-rejected-requests)); a path no route matches is 404; a path only other methods match is 405.
 - **Anything the handler raises is a fixed 500 `Internal Server Error`, whatever the error says**, unless its declared type opts in (below). The error value is dropped; its text (or, for a type that is not `Writable`, its type name, `<module.Type>`) is kept on the response for middleware (below), never sent.
 - Returning and raising differ: a returned value is converted with `to_response`; a raised one is a handler error, even if its type conforms to `ToResponse`.
 - An error type must be `Deinitable`: a linear error type is rejected at registration.
@@ -94,9 +94,66 @@ Run by `tests/test_failure.mojo` (`test_errors_report_example`), as written; it 
   - `Failure.RESPONSE` (`"response"`): a `Json[T]` result's `write_json` failed ([responses](responses.md#json-results)), also when a handler called `to_response()` itself;
   - `Failure.MUNTIN` (`"muntin"`): an internal failure; the only reachable one is the rebuild of a header field an in-memory `Headers` holds invalidly, with the fixed message `the request's header fields could not be rebuilt`.
 - `Failure.message` is the error's text when its type is `Writable`, else `<module.Type>`. A `Failure` writes itself as `source: message`. There is no stack trace.
-- Only Muntin's fixed 500 carries a report. The application's own responses (its own 500 included), converted errors, 400, 404, 405, 413 and 415 have `None`. **A 400 is not always the client's fault**: a request-side conversion that fails for a server-side reason (a missing configuration in `from_body`) is a 400 with no report.
+- Only Muntin's fixed 500 carries a `Failure`. The application's own responses (its own 500 included), converted errors, 400, 404, 405, 413 and 415 have `None`; Muntin's 400 has a `Rejection` instead ([below](#reports-of-rejected-requests)).
 - The report stays with the response through copies, `HEAD` and edits; a response built anew has none.
 - No backend sends it: the error's text reaches the client only if the application writes it. Muntin has no logger.
 - **`message` is not safe log text**: it may hold secrets, control characters and client input. So may the request's method, path and fields. Escaping and masking are the application's.
-- A middleware reads the report on the response it receives. Not read by any middleware: a raise out of the outermost middleware (only the caller of `App.handle` sees it), a report an inner middleware drops by answering a new response, and a report replaced by a later failure. Not reported at all: the Flare adapter's own 500 for an invalid outgoing field, and the 400s.
+- A middleware reads the report on the response it receives. Not read by any middleware: a raise out of the outermost middleware (only the caller of `App.handle` sees it), a report an inner middleware drops by answering a new response, and a report replaced by a later failure. Not reported at all: the Flare adapter's own 500 for an invalid outgoing field.
 - An application does not build a `Failure` (its initializer takes only `_`-prefixed keywords).
+
+## Reports of rejected requests
+
+When Muntin answers 400 before the handler, the `Response` carries a `Rejection`: which step refused the request, the route value's name and why. The client receives exactly the same 400 `Bad Request`, with no fields ([M3-084](../history/decisions/m3-084-request-rejection-report-decision.md)).
+
+<!-- example: tests/test_rejection.mojo#errors-rejection -->
+```mojo
+from muntin import App, FromJson, Json, JsonValue, Rejection
+
+
+@fieldwise_init
+struct Note(FromJson, Movable):
+    var text: String
+
+    @staticmethod
+    def from_json(value: JsonValue) raises -> Self:
+        return Self(value["txet"].string())  # misspelled: every body is 400
+
+
+def add_note(body: Json[Note]) -> String:
+    return body.value.text
+
+
+def show_user(id: Int) -> String:
+    return "user " + String(id)
+
+
+var app = App()
+app.get["/users/{id}"](show_user)
+app.post["/notes"](add_note)
+# GET /users/abc -> 400 "Bad Request", no fields; on that response
+# (as App.handle returns it, or a middleware outside the route receives it):
+#   response.rejection().value().step    == Rejection.PATH  ("path")
+#   response.rejection().value().name    == "id"
+#   response.rejection().value().message == "not an integer"
+#   String(response.rejection().value()) == "path id: not an integer"
+# POST /notes '{"text": "hi"}', application/json -> 400 "Bad Request";
+#   String(response.rejection().value()) == 'from_json: JSON member "txet" is missing'
+# POST /notes '{', application/json -> 400 "Bad Request";
+#   String(response.rejection().value()) == "json: invalid JSON: expected member name"
+# GET /users/1 -> 200 "user 1"; response.rejection() is None
+```
+
+Run by `tests/test_rejection.mojo` (`test_errors_rejection_example`), as written; it reads the report on `TestClient`'s response and on `App.handle`'s. The other tests there check every step and message below; a middleware reading this report is in [middleware](middleware.md#logging-rejected-requests).
+
+- `Response.rejection() -> Optional[Rejection]` returns a copy. `Rejection.step` is the step that refused the request; `name` is the route value's placeholder name for the first three, else empty:
+  - `Rejection.PATH` (`"path"`): a path value's decoding or `Int` parse;
+  - `Rejection.QUERY` (`"query"`): a query value missing, repeated, empty, or its decoding or `Int` parse; of a repeated key, the first whose second occurrence the query reaches;
+  - `Rejection.FROM_ROUTE_VALUE` (`"from_route_value"`): that conversion raised;
+  - `Rejection.UTF8` (`"utf-8"`): a text or `Json[T]` body that is not UTF-8;
+  - `Rejection.JSON` (`"json"`): a `Json[T]` body that is not one JSON value;
+  - `Rejection.FROM_BODY`, `Rejection.FROM_BYTES`, `Rejection.FROM_JSON` (`"from_body"`, `"from_bytes"`, `"from_json"`): that conversion raised.
+- `message` is Muntin's own fixed text for `PATH`, `QUERY`, `UTF8` and `JSON`, and never holds a byte of the request: `missing`, `repeated`, `empty`, `bad percent escape`, `truncated percent escape`, `not UTF-8`, `not an integer`, `out of Int range`, or the JSON parser's message. For a `FROM_` step it is the raised error's text, which may hold client input: Mojo's `Int(text)` quotes its text. `JsonValue`'s own errors quote none, and `value[name]` names the missing member. A `Rejection` writes itself as `step name: message`, or `step: message` without a name.
+- **A 400 is not always the client's fault**: a conversion that fails for a server-side reason (a missing configuration in `from_body`) is a 400 whose `Rejection` holds its message, and only that message tells it from bad input. `failure()` is `None` on every 400.
+- A [guarded group](groups.md)'s route answers its guard first: a refused request has the guard's response and no `Rejection`; an admitted one gets its 400 with the report. A `WithHeaders[B]` body reports the steps of `B`.
+- `None` on 404, 405, 413, 415, a backend's own 400 and the application's own responses. The report stays with the response through copies, `HEAD` and edits; a response built anew has none. No backend sends it.
+- **`message` is not safe log text** for a `FROM_` step, as for a `Failure`; escaping and masking are the application's. An application does not build a `Rejection` (its initializer takes only `_`-prefixed keywords).
