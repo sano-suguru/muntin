@@ -6,6 +6,7 @@
 > - [M3-030](m3-030-method-not-allowed-decision.md): the JSON route order now starts with 404, or 405 with Allow.
 > - [M3-040](m3-040-binary-request-and-response-bodies-decision.md): Request.body is bytes; the body slot rejects invalid UTF-8 (400) before from_body, so the codec never sees a replaced byte.
 > - [M3-078](m3-078-json-float-reading-decision.md): float() is Muntin's own correctly rounded conversion, of any length; atof's 1-ulp errors and long-literal 400s are gone.
+> - [M3-082](m3-082-derived-json-codecs-decision.md): derived codecs are decided (`JsonFields`): `List[<struct>]` is reachable through `Iterable`'s element type, an unsupported field is refused at registration, and decoding builds field by field as route-value records do.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision** (M3-008; production and adapters are unchanged in it; production since M3-009, "JSON in production (M3-009)" below). It decides Muntin's first JSON API, who owns the codec, the request and response `Content-Type` rules, where JSON failures go in the error model, and the production slice that follows.
