@@ -18,8 +18,8 @@ safe std types. The parsed document lives in M3-004's sealed `_Shared` box,
 so no copy of a `JsonValue` can clear or replace the document another copy
 reads. A derived reader builds a `JsonFields` struct through the storage
 module's `_build_record` (its `__init__` never runs) and reaches a generic
-field's type through `_rebind.mojo`'s guarded helpers, as `app.mojo` does
-for route values.
+field's type through the guarded rebind helpers `_as` and `_view`, as
+`app.mojo` does for route values.
 """
 
 from std.collections import Optional
