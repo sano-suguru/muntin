@@ -2457,7 +2457,7 @@ def h1_exchange(
 ) raises -> Tuple[String, String, List[UInt8]]:
     """One HTTP/1.1 request with `Content-Length`, `Connection: close`,
     `fields` and `body`: the response's status line, its header lines
-    (`\\r\\n`-separated, `Date` removed) and every byte after the blank
+    (each followed by `;`, `Date` removed) and every byte after the blank
     line. With `chunked`, the body goes out with `Transfer-Encoding:
     chunked` instead, in two chunks (the first half, then the rest; one
     chunk for a single byte, none when empty)."""
