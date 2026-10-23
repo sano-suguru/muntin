@@ -475,7 +475,7 @@ PLACES_CASES = [
     ("diff -u a.mojo b.mojo", ["a.mojo", "b.mojo"]),
     ("for f in a b; do cat x.md; done", ["x.md"]),
     ("if true; then grep -n y API.md; fi", ["API.md"]),
-    ("D=/w/docs && cat $D/GUIDE.md ${D}/README.md", ["docs/GUIDE.md", "docs/README.md"]),
+    ("D=/w/d && cat $D/a.md ${D}/b.md", ["d/a.md", "d/b.md"]),
 ]
 
 
