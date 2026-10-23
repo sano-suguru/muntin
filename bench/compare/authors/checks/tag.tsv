@@ -1,0 +1,25 @@
+# The hidden checks of tasks/tag.md, on store.mojo with tag_store.diff applied:
+# bench/compare/notes/scenario_v2.tsv without its ?tag= filter.
+start	40
+req	GET	/notes	-	-	401	Unauthorized
+field	WWW-Authenticate	Bearer
+req	POST	/notes	Bearer t-ada	{"text":"buy milk","tag":"home"}	201	{"id":1,"owner":"ada","text":"buy milk","tag":"home"}
+req	POST	/notes	Bearer t-ada	{"text":"fix bug","tag":"work"}	201	{"id":2,"owner":"ada","text":"fix bug","tag":"work"}
+req	POST	/notes	Bearer t-bo	{"text":"call Ada","tag":"home"}	201	{"id":3,"owner":"bo","text":"call Ada","tag":"home"}
+req	POST	/notes	Bearer t-ada	{"text":"no tag"}	400	Bad Request
+req	POST	/notes	Bearer t-ada	{"text":"this text is longer than forty bytes long","tag":"home"}	422	text too long
+req	GET	/notes	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk","tag":"home"},{"id":2,"owner":"ada","text":"fix bug","tag":"work"}]
+req	GET	/notes/1	Bearer t-ada	-	200	{"id":1,"owner":"ada","text":"buy milk","tag":"home"}
+req	GET	/notes/3	Bearer t-ada	-	404	no note 3
+break
+req	POST	/notes	Bearer t-ada	{"text":"lost","tag":"home"}	503	storage unavailable
+log	Is a directory
+req	GET	/notes	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk","tag":"home"},{"id":2,"owner":"ada","text":"fix bug","tag":"work"}]
+req	GET	/notes/4	Bearer t-ada	-	404	no note 4
+restore
+req	POST	/notes	Bearer t-ada	{"text":"walk","tag":"home"}	201	{"id":4,"owner":"ada","text":"walk","tag":"home"}
+start	10
+req	GET	/notes	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk","tag":"home"},{"id":2,"owner":"ada","text":"fix bug","tag":"work"},{"id":4,"owner":"ada","text":"walk","tag":"home"}]
+req	GET	/notes/3	Bearer t-bo	-	200	{"id":3,"owner":"bo","text":"call Ada","tag":"home"}
+req	POST	/notes	Bearer t-ada	{"text":"buy oat milk","tag":"home"}	422	text too long
+req	POST	/notes	Bearer t-ada	{"text":"ten bytes!","tag":"work"}	201	{"id":5,"owner":"ada","text":"ten bytes!","tag":"work"}

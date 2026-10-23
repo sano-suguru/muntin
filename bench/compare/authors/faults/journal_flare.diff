@@ -1,0 +1,14 @@
+--- a/notes_flare.mojo
++++ b/notes_flare.mojo
+@@ -129,9 +129,8 @@
+         var note: Note
+         try:
+             note = svc.store.add(self.user.name, note_text)
+-        except e:
+-            print("storage:", e, file=stderr)
+-            return text(503, "Service Unavailable", "storage unavailable")
++        except:
++            note = Note(0, self.user.name, note_text)
+         var resp = ok_json(serialize_json(note))
+         resp.status = 201
+         resp.reason = "Created"

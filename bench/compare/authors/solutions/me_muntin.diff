@@ -1,0 +1,27 @@
+--- a/notes_muntin.mojo
++++ b/notes_muntin.mojo
+@@ -123,6 +123,16 @@
+     return Json(note_json(stored(svc[], user.name, text)), status=201)
+ 
+ 
++@fieldwise_init
++struct Me(JsonFields):
++    var user: String
++    var notes: Int
++
++
++def me(svc: State[Service], user: User) -> Json[Me]:
++    return Json(Me(user.name, len(svc[].store.owned_by(user.name))))
++
++
+ def main() raises:
+     var config = Config.from_args()
+     var svc = State(
+@@ -138,6 +148,7 @@
+     users.get["/notes"](list_notes, svc)
+     users.get["/notes/{id}"](get_note, svc)
+     users.post["/notes"](create_note, svc)
++    users.get["/me"](me, svc)
+     app.mount(users^)
+     var server = Server.bind("127.0.0.1", config.port)
+     server.serve(app)

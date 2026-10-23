@@ -1,0 +1,38 @@
+--- a/notes_flare.mojo
++++ b/notes_flare.mojo
+@@ -138,6 +138,28 @@
+         return resp^
+ 
+ 
++@fieldwise_init
++struct MeJson(Copyable, Defaultable):
++    var user: String
++    var notes: Int
++
++    def __init__(out self):
++        self = Self("", 0)
++
++
++@fieldwise_init
++struct GetMe(Copyable, Defaultable, Handler):
++    var svc: State[Service]
++    var user: CurrentUser
++
++    def __init__(out self):
++        self = Self(State[Service](), CurrentUser())
++
++    def serve(self, req: Request) raises -> Response:
++        var notes = len(self.svc.value.store.owned_by(self.user.name))
++        return ok_json(serialize_json(MeJson(self.user.name, notes)))
++
++
+ def main() raises:
+     var config = Config.from_args()
+     var svc = State(
+@@ -158,5 +180,6 @@
+         "/notes",
+         Extracted(CreateNote(svc.copy(), user.copy(), JsonAs[NewNote]())),
+     )
++    r.get("/me", Extracted(GetMe(svc.copy(), user.copy())))
+     var srv = HttpServer.bind(SocketAddr.localhost(UInt16(config.port)))
+     srv.serve(r^)

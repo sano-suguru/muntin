@@ -1,0 +1,20 @@
+--- a/notes_muntin.mojo
++++ b/notes_muntin.mojo
+@@ -69,7 +69,7 @@
+ 
+ @fieldwise_init
+ struct NewNote(JsonFields):
+-    var text: String
++    var content: String
+ 
+ 
+ def authenticate(svc: State[Service], headers: Headers) raises ApiError -> User:
+@@ -117,7 +117,7 @@
+ def create_note(
+     svc: State[Service], user: User, body: Json[NewNote]
+ ) raises ApiError -> Json[NoteJson]:
+-    ref text = body.value.text
++    ref text = body.value.content
+     if text.byte_length() > svc[].max_text:
+         raise ApiError(422, "text too long")
+     return Json(note_json(stored(svc[], user.name, text)), status=201)

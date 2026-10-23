@@ -1,0 +1,20 @@
+--- a/notes_flare.mojo
++++ b/notes_flare.mojo
+@@ -74,7 +74,7 @@
+ 
+ @fieldwise_init
+ struct NewNote(Copyable, Defaultable, FromJson):
+-    var text: String
++    var content: String
+ 
+     def __init__(out self):
+         self = Self("")
+@@ -123,7 +123,7 @@
+ 
+     def serve(self, req: Request) raises -> Response:
+         ref svc = self.svc.value
+-        ref note_text = self.body.value.text
++        ref note_text = self.body.value.content
+         if note_text.byte_length() > svc.max_text:
+             return text(422, "Unprocessable Content", "text too long")
+         var note: Note

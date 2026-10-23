@@ -47,6 +47,7 @@ The measurements below are not checks, and CI does not run them. Each script's h
 | `python3 -I scripts/bench_json_float.py` | `float()` through a `Json[T]` route against `atof` (M3-078's revisit condition) |
 | `./scripts/compare_dx.sh` | one small API written with Muntin and against Flare alone: code size, answers, planted mistakes |
 | `python3 -I scripts/compare_notes.py` | the same for an application with stored data, users, a failing journal, start-up settings and one change |
+| `python3 -I scripts/compare_authors.py` | the kit of the comparison by new authors (M3-086): each task's workspace, and its hidden checks on what an author delivers |
 | `./scripts/bench_overhead.sh` | what Muntin costs on top of Flare: time, allocations, throughput, latency, memory |
 | `./scripts/bench_load.sh` | Muntin against Flare alone under load, all answers checked (Linux) |
 | `./scripts/bench_hol.sh`, `bench/hol/spread/run_spread.sh` | what one blocking handler does to the other requests; how kept-open connections spread over workers (Linux) |
