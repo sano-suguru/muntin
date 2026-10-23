@@ -73,18 +73,20 @@ fi
 # exactly once: a third refinement, an alias or a refinement split over
 # lines, anywhere, adds a line not listed.
 fb=$dir/_field_built.mojo
-fb_expected="$(LC_ALL=C sort <<'LINES'
-src/muntin/_field_built.mojo:"""`_FieldBuilt`: the types the storage module may build field by field
-src/muntin/_field_built.mojo:trait _FieldBuilt(Deinitable, Movable):
-src/muntin/_handler_storage.mojo:from ._field_built import _FieldBuilt
-src/muntin/_handler_storage.mojo:    T: _FieldBuilt,
-src/muntin/_handler_storage.mojo:    refinements of `_FieldBuilt`, so no other type can be built this way;
-src/muntin/route_value.mojo:from ._field_built import _FieldBuilt
-src/muntin/route_value.mojo:trait RouteValues(_FieldBuilt):
-src/muntin/json.mojo:from ._field_built import _FieldBuilt
-src/muntin/json.mojo:trait JsonFields(_FieldBuilt):
-LINES
-)"
+# An array, not a here-document inside `$(...)`: bash 3.2 (macOS) parses
+# the quotes and backquotes of such a here-document as shell code.
+fb_lines=(
+    'src/muntin/_field_built.mojo:"""`_FieldBuilt`: the types the storage module may build field by field'
+    'src/muntin/_field_built.mojo:trait _FieldBuilt(Deinitable, Movable):'
+    'src/muntin/_handler_storage.mojo:from ._field_built import _FieldBuilt'
+    'src/muntin/_handler_storage.mojo:    T: _FieldBuilt,'
+    'src/muntin/_handler_storage.mojo:    refinements of `_FieldBuilt`, so no other type can be built this way;'
+    'src/muntin/route_value.mojo:from ._field_built import _FieldBuilt'
+    'src/muntin/route_value.mojo:trait RouteValues(_FieldBuilt):'
+    'src/muntin/json.mojo:from ._field_built import _FieldBuilt'
+    'src/muntin/json.mojo:trait JsonFields(_FieldBuilt):'
+)
+fb_expected="$(printf '%s\n' "${fb_lines[@]}" | LC_ALL=C sort)"
 fb_found="$(grep -rE --include='*.mojo' '_FieldBuilt' "$dir" | LC_ALL=C sort || true)"
 if [[ "$fb_found" != "$fb_expected" ]]; then
     diff <(printf '%s\n' "$fb_expected") <(printf '%s\n' "$fb_found") || true
