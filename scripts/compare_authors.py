@@ -6,7 +6,8 @@ delivers against hidden checks the author never sees. Not run by CI.
     python3 -I scripts/compare_authors.py prepare TASK PROGRAM DIR
     python3 -I scripts/compare_authors.py check TASK PROGRAM DIR
     python3 -I scripts/compare_authors.py selftest
-    python3 -I scripts/compare_authors.py places TRANSCRIPT DIR
+    python3 -I scripts/compare_authors.py selftest places
+    python3 -I scripts/compare_authors.py places TRANSCRIPT DIR [LISTING]
 
 TASK is one of tasks/*.md under bench/compare/authors (me, tag, journal,
 bad-request); PROGRAM is muntin or flare: the notes application of
@@ -41,18 +42,26 @@ Exits 1 otherwise.
 `places` reads an author's transcript (Claude Code's JSONL) of a run in
 workspace DIR and prints, as JSON, the run's wall-clock seconds, assistant
 turns, tool calls and builds, and its places looked: the distinct paths
-under DIR, each an existing file or directory or a glob pattern, that a
-Read, Grep or Glob call or a reading command (cat, grep, ls, sed, find and
-the like, after any cd) names, a grep's or sed's pattern excepted; which of
-them are the framework's (docs/, lib/, flare-src/, examples/, README.md);
-and the existing paths outside DIR that a reading command named, other than
-temporary ones (/tmp, /dev, /proc). DIR must still hold the run's files.
+under DIR that a Read, Grep or Glob call or a reading command (cat, grep,
+ls, sed, find and the like) names, each a path of the workspace or a glob
+pattern matching one, and which of them are the framework's (docs/, lib/,
+flare-src/, examples/, README.md); and the existing paths outside DIR that
+one named, other than temporary ones (/tmp, /dev, /proc). A Bash call is
+split as the shell splits it (quotes, operators, redirections, the call's
+own variables) and starts in the directory the transcript gives it; a
+command's patterns, scripts and option values are not paths; a recursive
+grep, rg, ls or find with no path reads its directory. Reads by other
+programs (python3, a loop's variable) are not seen. The workspace's paths
+are LISTING's, one per line relative to DIR, when given, else DIR's on disk.
+`selftest places` checks the splitting on PLACES_CASES alone; `selftest`
+runs it first.
 
 Needs pixi, patch, git and Python 3.9 or later, standard library only.
 """
 
 import contextlib
 import datetime
+import fnmatch
 import glob
 import io
 import json
@@ -227,8 +236,23 @@ def selftest():
     return ok
 
 
-READERS = {"cat", "head", "tail", "sed", "grep", "rg", "less", "more", "awk", "ls",
-           "find", "wc", "nl", "diff", "tree", "file", "egrep"}
+READERS = {"cat", "head", "tail", "sed", "grep", "egrep", "rg", "less", "more", "awk",
+           "ls", "find", "wc", "nl", "diff", "tree", "file", "stat"}
+# The options of a reading command that take the next word as their value.
+VALUED = {
+    "grep": {"-e", "-f", "-A", "-B", "-C", "-m", "--include", "--exclude", "--exclude-dir",
+             "--regexp", "--file", "--max-count", "--context"},
+    "rg": {"-e", "-f", "-A", "-B", "-C", "-m", "-g", "-t", "-T", "--glob", "--type",
+           "--type-not", "--regexp", "--file", "--max-count", "--context"},
+    "sed": {"-e", "-f", "--expression", "--file"},
+    "awk": {"-f", "-v", "-F"},
+    "head": {"-n", "-c"},
+    "tail": {"-n", "-c"},
+    "ls": {"-I", "--ignore"},
+    "tree": {"-L", "-I", "-P"},
+}
+VALUED["egrep"] = VALUED["grep"]
+OPERATORS = {";", "&", "&&", "|", "||", "(", ")", "\n", ";;", "|&"}
 FRAMEWORK = ("docs", "lib", "flare-src", "examples", "README.md")
 TEMP = ("/tmp", "/dev", "/proc")
 
@@ -246,59 +270,142 @@ def without_heredocs(cmd):
     return "\n".join(out)
 
 
-def read_arguments(words):
-    """The arguments of a reading command that name paths."""
-    args = words[1:]
-    if words[0] not in ("grep", "rg", "egrep", "awk", "sed"):
-        return args
-    # the first argument that is not an option is the pattern or the script
-    rest, pattern_seen, skip = [], False, False
-    for a in args:
-        if skip:
-            skip = False
-        elif a in ("-e", "-f", "-A", "-B", "-C", "-m", "--include", "--exclude"):
-            skip = True
-        elif a.startswith("-"):
-            pass
-        elif not pattern_seen:
-            pattern_seen = True
+def commands(cmd):
+    """The simple commands of a shell command line, each a list of words, as
+    the shell splits them: quotes kept together, operators and newlines
+    between commands, redirections apart (the word after `<` is kept as
+    ("<", word), the word after `>` or `>>` dropped)."""
+    lexer = shlex.shlex(without_heredocs(cmd), posix=True, punctuation_chars=";&|()<>\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    try:
+        tokens = list(lexer)
+    except ValueError:  # an unclosed quote: the shell would not run it either
+        return []
+    out, words, redirect = [], [], None
+    for t in tokens:
+        if redirect:
+            if redirect.startswith("<") and not t.isdigit():
+                words.append(("<", t))
+            redirect = None
+        elif t in OPERATORS or (t and set(t) <= set(";&|\n")):
+            if words:
+                out.append(words)
+            words = []
+        elif t and set(t) <= set("<>&"):
+            redirect = ">" if t.startswith("<<") else t  # a here-document's word is no file
+            # `2>&1`: the shell's descriptor before it and after it are not words
+            if words and isinstance(words[-1], str) and words[-1].isdigit():
+                words.pop()
         else:
-            rest.append(a)
-    if words[0] != "awk" and words[0] != "sed" and not rest and "-r" in " ".join(words):
-        rest = ["."]
-    return rest
+            words.append(t)
+    if words:
+        out.append(words)
+    return out
 
 
-def places(transcript, workspace):
-    ws = str(pathlib.Path(workspace).resolve())
+def read_arguments(words):
+    """The arguments of a reading command that name the paths it reads."""
+    name, valued = words[0], VALUED.get(words[0], set())
+    paths, operands, expect_value, expression = [], [], False, False
+    pattern_given = False
+    for w in words[1:]:
+        if isinstance(w, tuple):  # `< file`
+            paths.append(w[1])
+            continue
+        if expect_value:
+            expect_value = False
+            continue
+        if name == "find" and (expression or w.startswith("-") or w in ("(", "!")):
+            expression = True
+            continue
+        if w == "--":
+            continue
+        if w.startswith("--"):
+            if w.split("=", 1)[0] in ("--regexp", "--file", "--expression"):
+                pattern_given = True
+            expect_value = w in valued
+            continue
+        if w.startswith("-") and len(w) > 1:
+            flag = w[:2]
+            if flag in ("-e", "-f") and name in ("grep", "egrep", "rg", "sed"):
+                pattern_given = True
+            if name == "awk" and flag == "-f":
+                pattern_given = True
+            expect_value = flag in valued and len(w) == 2
+            continue
+        operands.append(w)
+    if name in ("grep", "egrep", "rg", "sed", "awk") and not pattern_given:
+        operands = operands[1:]
+    paths += operands
+    recursive = name == "rg" or (name in ("grep", "egrep") and any(
+        w in ("--recursive", "--dereference-recursive")
+        or (isinstance(w, str) and re.fullmatch(r"-[a-zA-Z]*[rR][a-zA-Z]*", w)) for w in words[1:]))
+    if not paths and (recursive or name in ("ls", "tree", "find")):
+        paths = ["."]
+    return paths
+
+
+def resolve_cd(cwd, words):
+    target = next((w for w in words[1:] if isinstance(w, str) and not w.startswith("-")), None)
+    if target is None or target == "~":
+        return str(pathlib.Path.home())
+    return os.path.normpath(os.path.join(cwd, os.path.expanduser(target)))
+
+
+KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{", "}", "time"}
+
+
+def expanded(word, env):
+    if isinstance(word, tuple):
+        return (word[0], expanded(word[1], env))
+    return re.sub(r"\$(\w+)|\$\{(\w+)\}",
+                  lambda m: env.get(m.group(1) or m.group(2), m.group(0)), word)
+
+
+def bash_places(cmd, cwd):
+    """The paths a Bash call's reading commands read, run from CWD, with the
+    variables the call itself sets expanded."""
+    found, env = [], {}
+    for words in commands(cmd):
+        while words and isinstance(words[0], str) and words[0] in KEYWORDS:
+            words = words[1:]
+        while words and isinstance(words[0], str) and re.fullmatch(r"\w+=.*", words[0]):
+            name, value = words[0].split("=", 1)
+            if len(words) == 1:
+                env[name] = expanded(value, env)
+            words = words[1:]  # `X=1` alone sets X; `LC_ALL=C grep ...` runs grep
+        if not words or not isinstance(words[0], str):
+            continue
+        words = [expanded(w, env) for w in words]
+        if words[0] in ("cd", "pushd"):
+            cwd = resolve_cd(cwd, words)
+        elif os.path.basename(words[0]) in READERS:
+            words = [os.path.basename(words[0])] + words[1:]
+            found += [os.path.normpath(os.path.join(cwd, a)) for a in read_arguments(words)]
+    return found
+
+
+def places(transcript, workspace, listing=None):
+    ws = os.path.normpath(workspace)
+    if listing:
+        present = {os.path.normpath(l.strip()) for l in open(listing) if l.strip()}
+    else:
+        present = {os.path.relpath(os.path.join(d, n), ws)
+                   for d, dirs, files in os.walk(ws) for n in dirs + files}
+    present.add(".")
     times, turns, calls, builds = [], 0, 0, 0
     seen, outside = set(), set()
 
-    def add(arg, cwd):
-        if not arg or arg.startswith("-") or arg in ("|", ">", "<"):
-            return
-        p = os.path.normpath(arg if arg.startswith("/") else os.path.join(cwd, arg))
+    def add(p):
         if p == ws or p.startswith(ws + "/"):
             rel = os.path.relpath(p, ws)
-            if any(ch in rel for ch in "*?[") or os.path.exists(p) or glob.glob(p):
+            if rel in present or (any(ch in rel for ch in "*?[")
+                                  and any(fnmatch.fnmatch(q, rel) for q in present)):
                 seen.add(rel)
         elif not p.startswith(TEMP) and (os.path.exists(p) or glob.glob(p)):
             outside.add(p)
-
-    def bash(cmd):
-        cwd = ws
-        for seg in re.split(r"&&|\|\||;|\||\n|\(|\)", without_heredocs(cmd)):
-            try:
-                words = shlex.split(seg, comments=True)
-            except ValueError:
-                words = seg.split()
-            if not words:
-                continue
-            if words[0] == "cd" and len(words) > 1:
-                cwd = os.path.normpath(os.path.join(cwd, words[1]))
-            elif words[0] in READERS:
-                for a in read_arguments(words):
-                    add(a, cwd)
 
     for line in open(transcript):
         try:
@@ -310,18 +417,20 @@ def places(transcript, workspace):
         if e.get("type") != "assistant":
             continue
         turns += 1
+        cwd = e.get("cwd") or ws  # where each Bash call starts
         for c in e.get("message", {}).get("content", []):
             if not isinstance(c, dict) or c.get("type") != "tool_use":
                 continue
             calls += 1
             name, inp = c.get("name"), c.get("input", {})
             if name == "Read":
-                add(inp.get("file_path", ""), ws)
+                add(os.path.normpath(inp.get("file_path", "")))
             elif name in ("Grep", "Glob"):
-                add(inp.get("path", ws), ws)
+                add(os.path.normpath(inp.get("path") or cwd))
             elif name == "Bash":
                 builds += len(re.findall(r"build\.sh", inp.get("command", "")))
-                bash(inp.get("command", ""))
+                for p in bash_places(inp.get("command", ""), cwd):
+                    add(p)
     framework = sorted(p for p in seen if p.split("/")[0] in FRAMEWORK)
     print(json.dumps({
         "seconds": round((max(times) - min(times)).total_seconds()) if times else None,
@@ -336,16 +445,63 @@ def places(transcript, workspace):
     }, indent=1))
 
 
+# Shell command lines and the paths `places` must take them to read, from /w.
+PLACES_CASES = [
+    ("grep -r 'open' flare-src/flare", ["flare-src/flare"]),
+    ("grep -r 'open|write' flare-src/flare", ["flare-src/flare"]),
+    ("grep -r -e open flare-src/flare", ["flare-src/flare"]),
+    ("grep -rn -e 'a;b' -e c docs lib", ["docs", "lib"]),
+    ("grep -A 3 'x' API.md", ["API.md"]),
+    ("grep --include='*.md' -rn tag .", ["."]),
+    ("grep -rn tag", ["."]),
+    ("grep tag", []),
+    ("rg open", ["."]),
+    ("rg -g '*.mojo' 'a|b' lib", ["lib"]),
+    ("cat API.md | grep -n 'POST|GET'", ["API.md"]),
+    ("sed -n '1,20p;30p' notes.mojo", ["notes.mojo"]),
+    ("sed -e 's/a/b/' -n x.md", ["x.md"]),
+    ("awk -F'\\t' '{print $1}' journal.log", ["journal.log"]),
+    ("head -n 20 docs/GUIDE.md && tail -5 store.mojo", ["docs/GUIDE.md", "store.mojo"]),
+    ("ls", ["."]),
+    ("ls -la docs/reference/ 2>/dev/null; echo done", ["docs/reference"]),
+    ("find lib -name '*.mojo' -type f", ["lib"]),
+    ("find . -name 'a b'", ["."]),
+    ("cd docs && cat 'reference/groups.md'", ["docs/reference/groups.md"]),
+    ("cd /w/lib\ncat muntin/app.mojo # a comment > x", ["lib/muntin/app.mojo"]),
+    ("wc -l < API.md", ["API.md"]),
+    ("cat > out.txt <<'EOF'\ncat secret\nEOF\ncat a.md", ["a.md"]),
+    ("echo 'cat x' | sh", []),
+    ("LC_ALL=C grep -c x a.md 2>&1", ["a.md"]),
+    ("diff -u a.mojo b.mojo", ["a.mojo", "b.mojo"]),
+    ("for f in a b; do cat x.md; done", ["x.md"]),
+    ("if true; then grep -n y API.md; fi", ["API.md"]),
+    ("D=/w/docs && cat $D/GUIDE.md ${D}/README.md", ["docs/GUIDE.md", "docs/README.md"]),
+]
+
+
+def places_selftest():
+    ok = True
+    for cmd, want in PLACES_CASES:
+        got = [os.path.relpath(p, "/w") for p in bash_places(cmd, "/w")]
+        if got != want:
+            print(f"FAIL\tplaces of {cmd!r}: {got}, expected {want}")
+            ok = False
+    print(f"places: {len(PLACES_CASES)} command lines" + ("" if ok else ", some FAILED"))
+    return ok
+
+
 def main():
     args = sys.argv[1:]
     if args[:1] == ["prepare"] and len(args) == 4:
         prepare(*args[1:])
     elif args[:1] == ["check"] and len(args) == 4:
         check(*args[1:])
-    elif args[:1] == ["places"] and len(args) == 3:
+    elif args[:1] == ["places"] and len(args) in (3, 4):
         places(*args[1:])
     elif args == ["selftest"]:
-        sys.exit(0 if selftest() else 1)
+        sys.exit(0 if places_selftest() and selftest() else 1)
+    elif args == ["selftest", "places"]:
+        sys.exit(0 if places_selftest() else 1)
     else:
         fail(__doc__.split("\n\n")[1].strip())
 
