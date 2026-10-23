@@ -121,9 +121,10 @@ fi
 # the line after `comptime assert A == T`; only `_rebind.mojo` imports from
 # `std.builtin.rebind`, as exactly `from std.builtin.rebind import
 # rebind_var`, and it imports nothing else; only app.mojo (`_as`) and
-# json.mojo (`_as`, `_view`) import it. A space before the `[` (which the
-# formatter removes, except in `# fmt: off` code) is matched too. `downcast`,
-# which Mojo 1.1.0 does not check, appears nowhere (M3-061).
+# json.mojo (`_as`, `_view`) import it. `downcast`, which Mojo 1.1.0 does
+# not check, appears nowhere (M3-061). A space before the `[` (which the
+# formatter removes, except in `# fmt: off` code) is matched too.
+# scripts/test_check_unsafe.sh plants each violation.
 rb=$dir/_rebind.mojo
 one_after_assert() {
     local pattern=$1 label=$2 hits file rest line
@@ -162,7 +163,7 @@ if grep -rnE --include='*.mojo' '_rebind\b' "$dir" | grep -v "^$rb:" |
     echo "error: only app.mojo (_as) and json.mojo (_as, _view) may import $rb" >&2
     status=1
 fi
-if grep -rnE --include='*.mojo' 'downcast\[' "$dir"; then
+if grep -rnE --include='*.mojo' 'downcast[[:space:]]*\[' "$dir"; then
     echo "error: downcast is unchecked on Mojo 1.1.0; refine with conforms_to" >&2
     status=1
 fi

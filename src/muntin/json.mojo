@@ -1326,9 +1326,12 @@ trait JsonFields(_FieldBuilt):
     `Optional` (not of an `Optional`) of one. An `Optional` member may be
     absent or `null`; every other member is required; unknown members are
     ignored. Conforming consents to Muntin building the value field by field
-    without running any of its initializers (as for `RouteValues`); a
-    hand-written `FromJson` or `ToJson` on the same type takes that
-    direction over."""
+    without running any of its initializers (as for `RouteValues`), so a
+    conforming struct is a receiving DTO: any combination of field values
+    must be valid to hold, use and destroy. A type with an invariant is
+    built from a checked DTO by its own constructor, or read by a
+    hand-written `from_json`. A hand-written `FromJson` or `ToJson` on the
+    same type takes that direction over."""
 
     pass
 

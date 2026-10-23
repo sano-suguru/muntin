@@ -51,6 +51,7 @@ step "architecture boundary"
 
 step "unsafe confinement"
 ./scripts/check_unsafe.sh
+./scripts/test_check_unsafe.sh
 
 step "documents"
 ./scripts/check_docs.sh
