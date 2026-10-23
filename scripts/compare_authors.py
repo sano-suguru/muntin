@@ -55,6 +55,7 @@ NOTES = ROOT / "bench" / "compare" / "notes"
 OUT = ROOT / "build" / "compare_authors"
 TASKS = ("me", "tag", "journal", "bad-request")
 PROGRAMS = ("muntin", "flare")
+PIXI = shutil.which("pixi") or str(pathlib.Path.home() / ".pixi" / "bin" / "pixi")
 SOURCE = {"muntin": KIT / "notes_muntin.mojo", "flare": NOTES / "notes_flare.mojo"}
 
 
@@ -128,7 +129,7 @@ def prepare(task, program, dest):
         "#!/bin/sh\n"
         f"# Builds ./notes from notes_{program}.mojo.\n"
         'cd "$(dirname "$0")" || exit 1\n'
-        f"exec pixi run --manifest-path {ROOT / 'pixi.toml'} --frozen -e flare "
+        f"exec {PIXI} run --manifest-path {ROOT / 'pixi.toml'} --frozen -e flare "
         f"mojo build {include} notes_{program}.mojo -o notes\n")
     (dest / "serve.sh").write_text(
         "#!/bin/sh\n"
