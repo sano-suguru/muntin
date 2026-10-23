@@ -1,0 +1,44 @@
+journal	started, MAX_TEXT 40
+ok	journal	GET /notes (-)	401
+ok	journal	WWW-Authenticate: Bearer
+ok	journal	GET /notes (Bearer nope)	401
+ok	journal	WWW-Authenticate: Bearer
+ok	journal	POST /notes (-)	401
+ok	journal	POST /notes (Bearer t-ada)	201
+ok	journal	Content-Type: application/json
+ok	journal	POST /notes (Bearer t-bo)	201
+ok	journal	Content-Type: application/json
+ok	journal	GET /notes/1 (Bearer t-ada)	200
+ok	journal	Content-Type: application/json
+ok	journal	GET /notes/1 (Bearer t-bo)	404
+ok	journal	GET /notes/9 (Bearer t-ada)	404
+ok	journal	GET /notes/x (Bearer t-ada)	400
+    stderr: rejected: GET /notes/x path id: not an integer
+ok	journal	standard error, after the request, names 'integer'
+ok	journal	GET /notes (Bearer t-ada)	200
+ok	journal	Content-Type: application/json
+ok	journal	GET /notes (bearer t-ada)	200
+ok	journal	Content-Type: application/json
+ok	journal	POST /notes (Bearer t-ada)	400
+    stderr: rejected: POST /notes from_json: text: JSON member is missing
+ok	journal	standard error, after the request, names 'text'
+ok	journal	POST /notes (Bearer t-ada)	422
+journal	journal broken
+ok	journal	POST /notes (Bearer t-ada)	503
+    stderr: storage unavailable: journal /home/user/muntin/build/compare_authors/check/journal_muntin_r17/run/journal.log: Failed to open file '/home/user/muntin/build/compare_authors/check/journal_muntin_r17/run/journal.log': Is a directory
+ok	journal	standard error names 'Is a directory'
+ok	journal	GET /notes (Bearer t-ada)	200
+ok	journal	Content-Type: application/json
+ok	journal	GET /notes/3 (Bearer t-ada)	404
+journal	journal restored
+ok	journal	POST /notes (Bearer t-ada)	201
+ok	journal	Content-Type: application/json
+journal	started, MAX_TEXT 10
+ok	journal	GET /notes/3 (Bearer t-ada)	200
+ok	journal	Content-Type: application/json
+ok	journal	GET /notes (Bearer t-bo)	200
+ok	journal	Content-Type: application/json
+ok	journal	POST /notes (Bearer t-ada)	422
+ok	journal	POST /notes (Bearer t-ada)	201
+ok	journal	Content-Type: application/json
+misses 0 of 36

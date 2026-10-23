@@ -1,0 +1,26 @@
+{
+ "seconds": 177,
+ "turns": 19,
+ "tool_calls": 10,
+ "builds": 3,
+ "places": 13,
+ "framework_places": 4,
+ "framework": [
+  "docs",
+  "docs/reference/bodies.md",
+  "examples",
+  "lib"
+ ],
+ "other": [
+  ".",
+  "API.md",
+  "TASK.md",
+  "build.sh",
+  "notes",
+  "notes_muntin.mojo",
+  "serve.sh",
+  "store.mojo",
+  "tokens"
+ ],
+ "outside": []
+}

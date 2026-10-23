@@ -1,0 +1,27 @@
+{
+ "seconds": 153,
+ "turns": 17,
+ "tool_calls": 9,
+ "builds": 2,
+ "places": 14,
+ "framework_places": 5,
+ "framework": [
+  "docs",
+  "docs/reference/errors.md",
+  "docs/reference/middleware.md",
+  "examples",
+  "lib"
+ ],
+ "other": [
+  ".",
+  "API.md",
+  "TASK.md",
+  "build.sh",
+  "notes",
+  "notes_muntin.mojo",
+  "serve.sh",
+  "store.mojo",
+  "tokens"
+ ],
+ "outside": []
+}

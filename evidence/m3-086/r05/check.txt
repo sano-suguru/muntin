@@ -1,0 +1,59 @@
+me	started, MAX_TEXT 40
+ok	me	GET /notes (-)	401
+ok	me	WWW-Authenticate: Bearer
+ok	me	GET /notes (Bearer nope)	401
+ok	me	WWW-Authenticate: Bearer
+ok	me	POST /notes (-)	401
+ok	me	GET /me (-)	401
+ok	me	WWW-Authenticate: Bearer
+ok	me	GET /me (Bearer nope)	401
+ok	me	WWW-Authenticate: Bearer
+ok	me	GET /me (Bearer t-ada)	200
+ok	me	Content-Type: application/json
+ok	me	POST /notes (Bearer t-ada)	201
+ok	me	Content-Type: application/json
+ok	me	POST /notes (Bearer t-bo)	201
+ok	me	Content-Type: application/json
+ok	me	GET /me (Bearer t-ada)	200
+ok	me	Content-Type: application/json
+ok	me	GET /me (bearer t-bo)	200
+ok	me	Content-Type: application/json
+ok	me	GET /notes/1 (Bearer t-ada)	200
+ok	me	Content-Type: application/json
+ok	me	GET /notes/1 (Bearer t-bo)	404
+ok	me	GET /notes/9 (Bearer t-ada)	404
+ok	me	GET /notes/x (Bearer t-ada)	400
+    stderr: rejected: GET /notes/x path id: not an integer
+ok	me	standard error, after the request, names 'integer'
+ok	me	GET /notes (Bearer t-ada)	200
+ok	me	Content-Type: application/json
+ok	me	GET /notes (bearer t-ada)	200
+ok	me	Content-Type: application/json
+ok	me	POST /notes (Bearer t-ada)	400
+    stderr: rejected: POST /notes from_json: text: JSON member is missing
+ok	me	standard error, after the request, names 'text'
+ok	me	POST /notes (Bearer t-ada)	422
+me	journal broken
+ok	me	POST /notes (Bearer t-ada)	503
+    stderr: storage: journal /home/user/muntin/build/compare_authors/check/me_muntin_r05/run/journal.log: Failed to open file '/home/user/muntin/build/compare_authors/check/me_muntin_r05/run/journal.log': Is a directory
+ok	me	standard error names 'Is a directory'
+ok	me	GET /notes (Bearer t-ada)	200
+ok	me	Content-Type: application/json
+ok	me	GET /notes/3 (Bearer t-ada)	404
+me	journal restored
+ok	me	POST /notes (Bearer t-ada)	201
+ok	me	Content-Type: application/json
+me	started, MAX_TEXT 10
+ok	me	GET /notes/3 (Bearer t-ada)	200
+ok	me	Content-Type: application/json
+ok	me	GET /notes (Bearer t-bo)	200
+ok	me	Content-Type: application/json
+ok	me	POST /notes (Bearer t-ada)	422
+ok	me	POST /notes (Bearer t-ada)	201
+ok	me	Content-Type: application/json
+ok	me	GET /me (Bearer t-ada)	200
+ok	me	Content-Type: application/json
+ok	me	API.md names the route GET /me
+ok	me	API.md names the answer's member user
+ok	me	API.md names the answer's member notes
+misses 0 of 51

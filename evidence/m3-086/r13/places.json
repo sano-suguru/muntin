@@ -1,0 +1,31 @@
+{
+ "seconds": 327,
+ "turns": 38,
+ "tool_calls": 21,
+ "builds": 4,
+ "places": 16,
+ "framework_places": 8,
+ "framework": [
+  "docs",
+  "docs/README.md",
+  "docs/reference/errors.md",
+  "docs/reference/middleware.md",
+  "docs/reference/serving.md",
+  "docs/reference/state.md",
+  "examples",
+  "lib"
+ ],
+ "other": [
+  ".",
+  "API.md",
+  "TASK.md",
+  "build.sh",
+  "notes_muntin.mojo",
+  "serve.sh",
+  "store.mojo",
+  "tokens"
+ ],
+ "outside": [
+  "/root/.claude/projects/-home-user-muntin/9f7fdeae-9869-5d09-b0c3-5fd9ed7887e6/tool-results/bxtsvgxh8.txt"
+ ]
+}

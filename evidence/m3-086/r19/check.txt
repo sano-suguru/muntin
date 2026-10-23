@@ -1,0 +1,44 @@
+bad-request	started, MAX_TEXT 40
+ok	bad-request	GET /notes (-)	401
+ok	bad-request	WWW-Authenticate: Bearer
+ok	bad-request	GET /notes (Bearer nope)	401
+ok	bad-request	WWW-Authenticate: Bearer
+ok	bad-request	POST /notes (-)	401
+ok	bad-request	POST /notes (Bearer t-ada)	201
+ok	bad-request	Content-Type: application/json
+ok	bad-request	POST /notes (Bearer t-bo)	201
+ok	bad-request	Content-Type: application/json
+ok	bad-request	GET /notes/1 (Bearer t-ada)	200
+ok	bad-request	Content-Type: application/json
+ok	bad-request	GET /notes/1 (Bearer t-bo)	404
+ok	bad-request	GET /notes/9 (Bearer t-ada)	404
+ok	bad-request	GET /notes/x (Bearer t-ada)	400
+    stderr: rejected: GET /notes/x path id: not an integer
+ok	bad-request	standard error, after the request, names 'integer'
+ok	bad-request	GET /notes (Bearer t-ada)	200
+ok	bad-request	Content-Type: application/json
+ok	bad-request	GET /notes (bearer t-ada)	200
+ok	bad-request	Content-Type: application/json
+ok	bad-request	POST /notes (Bearer t-ada)	400
+    stderr: rejected: POST /notes from_json: text: JSON member is missing
+ok	bad-request	standard error, after the request, names 'text'
+ok	bad-request	POST /notes (Bearer t-ada)	422
+bad-request	journal broken
+ok	bad-request	POST /notes (Bearer t-ada)	503
+    stderr: storage: journal /home/user/muntin/build/compare_authors/check/bad-request_muntin_r19/run/journal.log: Failed to open file '/home/user/muntin/build/compare_authors/check/bad-request_muntin_r19/run/journal.log': Is a directory
+ok	bad-request	standard error names 'Is a directory'
+ok	bad-request	GET /notes (Bearer t-ada)	200
+ok	bad-request	Content-Type: application/json
+ok	bad-request	GET /notes/3 (Bearer t-ada)	404
+bad-request	journal restored
+ok	bad-request	POST /notes (Bearer t-ada)	201
+ok	bad-request	Content-Type: application/json
+bad-request	started, MAX_TEXT 10
+ok	bad-request	GET /notes/3 (Bearer t-ada)	200
+ok	bad-request	Content-Type: application/json
+ok	bad-request	GET /notes (Bearer t-bo)	200
+ok	bad-request	Content-Type: application/json
+ok	bad-request	POST /notes (Bearer t-ada)	422
+ok	bad-request	POST /notes (Bearer t-ada)	201
+ok	bad-request	Content-Type: application/json
+misses 0 of 36

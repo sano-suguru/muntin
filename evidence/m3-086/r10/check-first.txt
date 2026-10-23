@@ -1,0 +1,27 @@
+tag	started, MAX_TEXT 40
+ok	tag	GET /notes (-)	401
+    stderr: [flare:unauthorized] rid=- AuthError(EMPTY_VALUE)
+ok	tag	WWW-Authenticate: Bearer
+ok	tag	POST /notes (Bearer t-ada)	201
+ok	tag	POST /notes (Bearer t-ada)	201
+ok	tag	POST /notes (Bearer t-bo)	201
+ok	tag	POST /notes (Bearer t-ada)	400
+    stderr: [flare:bad-request] rid=- missing required field 'tag' for notes.NewNote
+ok	tag	POST /notes (Bearer t-ada)	422
+ok	tag	GET /notes (Bearer t-ada)	200
+ok	tag	GET /notes/1 (Bearer t-ada)	200
+ok	tag	GET /notes/3 (Bearer t-ada)	404
+tag	journal broken
+ok	tag	POST /notes (Bearer t-ada)	503
+    stderr: storage: journal /home/user/muntin/build/compare_authors/check/tag_flare_r10/run/journal.log: Failed to open file '/home/user/muntin/build/compare_authors/check/tag_flare_r10/run/journal.log': Is a directory
+ok	tag	standard error names 'Is a directory'
+ok	tag	GET /notes (Bearer t-ada)	200
+ok	tag	GET /notes/4 (Bearer t-ada)	404
+tag	journal restored
+ok	tag	POST /notes (Bearer t-ada)	201
+tag	started, MAX_TEXT 10
+ok	tag	GET /notes (Bearer t-ada)	200
+ok	tag	GET /notes/3 (Bearer t-bo)	200
+ok	tag	POST /notes (Bearer t-ada)	422
+ok	tag	POST /notes (Bearer t-ada)	201
+misses 0 of 19

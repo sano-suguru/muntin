@@ -1,0 +1,34 @@
+{
+ "seconds": 781,
+ "turns": 69,
+ "tool_calls": 41,
+ "builds": 11,
+ "places": 21,
+ "framework_places": 13,
+ "framework": [
+  "README.md",
+  "docs",
+  "docs/concurrency.md",
+  "examples",
+  "flare-src",
+  "flare-src/flare",
+  "flare-src/flare/http/*.mojo",
+  "flare-src/flare/http/extract.mojo",
+  "flare-src/flare/http/server.mojo",
+  "flare-src/flare/net/_libc.mojo",
+  "flare-src/flare/net/_libc_fileio.mojo",
+  "flare-src/flare/tcp/listener.mojo",
+  "flare-src/flare/uds/_libc.mojo"
+ ],
+ "other": [
+  ".",
+  "API.md",
+  "TASK.md",
+  "build.sh",
+  "notes_flare.mojo",
+  "serve.sh",
+  "store.mojo",
+  "tokens"
+ ],
+ "outside": []
+}

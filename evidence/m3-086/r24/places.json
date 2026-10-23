@@ -1,0 +1,27 @@
+{
+ "seconds": 237,
+ "turns": 19,
+ "tool_calls": 11,
+ "builds": 3,
+ "places": 14,
+ "framework_places": 5,
+ "framework": [
+  "README.md",
+  "docs",
+  "examples",
+  "flare-src",
+  "flare-src/flare"
+ ],
+ "other": [
+  ".",
+  "API.md",
+  "TASK.md",
+  "build.sh",
+  "notes",
+  "notes_flare.mojo",
+  "serve.sh",
+  "store.mojo",
+  "tokens"
+ ],
+ "outside": []
+}
