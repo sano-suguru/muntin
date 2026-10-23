@@ -6,6 +6,7 @@ delivers against hidden checks the author never sees. Not run by CI.
     python3 -I scripts/compare_authors.py prepare TASK PROGRAM DIR
     python3 -I scripts/compare_authors.py check TASK PROGRAM DIR
     python3 -I scripts/compare_authors.py selftest
+    python3 -I scripts/compare_authors.py places TRANSCRIPT DIR
 
 TASK is one of tasks/*.md under bench/compare/authors (me, tag, journal,
 bad-request); PROGRAM is muntin or flare: the notes application of
@@ -25,23 +26,40 @@ of the tag pixi.toml pins, cloned once into build/compare_authors.
 
 `check` builds DIR's notes_PROGRAM.mojo with the kit's store.mojo (not
 DIR's) and this repository's src/ and adapters/flare/, and runs it through
-checks/TASK.tsv, in bench/compare/notes/scenario.tsv's steps; it prints
-each step and `misses N of M`, the checks that failed of all of them (all of
+checks/TASK.tsv, in bench/compare/notes/scenario.tsv's steps; then it matches
+DIR's API.md against each `doc REGEX WHAT` line of that file. It prints each
+step and `misses N of M`, the checks that failed of all of them (all of
 them when the program does not build). It exits 0 either way: a miss is a
 result, not an error.
 
 `selftest` prepares each task and program, requires the unchanged workspace
 to miss at least one check (the task is not done already) and the workspace
 with the reference solution applied to miss none: solutions/TASK_PROGRAM.diff,
-or the fault undone. Exits 1 otherwise.
+or the fault undone, and solutions/TASK_API.diff on API.md when there is one.
+Exits 1 otherwise.
+
+`places` reads an author's transcript (Claude Code's JSONL) of a run in
+workspace DIR and prints, as JSON, the run's wall-clock seconds, assistant
+turns, tool calls and builds, and its places looked: the distinct paths
+under DIR, each an existing file or directory or a glob pattern, that a
+Read, Grep or Glob call or a reading command (cat, grep, ls, sed, find and
+the like, after any cd) names, a grep's or sed's pattern excepted; which of
+them are the framework's (docs/, lib/, flare-src/, examples/, README.md);
+and the existing paths outside DIR that a reading command named, other than
+temporary ones (/tmp, /dev, /proc). DIR must still hold the run's files.
 
 Needs pixi, patch, git and Python 3.9 or later, standard library only.
 """
 
 import contextlib
+import datetime
+import glob
 import io
+import json
+import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -150,9 +168,11 @@ def check(task, program, workspace, quiet=False):
     work.mkdir(parents=True)
     shutil.copy(pathlib.Path(workspace) / f"notes_{program}.mojo", work / "notes.mojo")
     store_for(task, work / "store.mojo")
-    scenario = KIT / "checks" / f"{task}.tsv"
-    total = sum(1 for l in scenario.read_text().splitlines()
-                if l.split("\t")[0] in ("req", "field", "log"))
+    lines = (KIT / "checks" / f"{task}.tsv").read_text().splitlines()
+    docs = [l.split("\t")[1:] for l in lines if l.startswith("doc\t")]
+    scenario = work / "scenario.tsv"
+    scenario.write_text("".join(l + "\n" for l in lines if not l.startswith("doc\t")))
+    total = sum(1 for l in lines if l.split("\t")[0] in ("req", "field", "log", "said", "doc"))
     if compare_notes.build(work / "notes.mojo", work / "notes", work) != 0:
         print(f"does not build:\n{(work / 'notes.log').read_text()}")
         print(f"misses {total} of {total}")
@@ -160,6 +180,10 @@ def check(task, program, workspace, quiet=False):
     captured = io.StringIO()
     with contextlib.redirect_stdout(captured):
         compare_notes.run_scenario(task, compare_notes.Served(work / "notes", work / "run"), scenario)
+    api = (pathlib.Path(workspace) / "API.md").read_text()
+    for pattern, what in docs:
+        verdict = "ok" if re.search(pattern, api, re.M) else "FAIL"
+        captured.write(f"{verdict}\t{task}\t{what}\n")
     report = captured.getvalue()
     misses = sum(1 for l in report.splitlines() if l.startswith("FAIL\t"))
     if not quiet:
@@ -191,6 +215,9 @@ def selftest():
                 patch(main, solution)
             else:
                 patch(main, KIT / "faults" / f"{name}.diff", reverse=True)
+            api = KIT / "solutions" / f"{task}_API.diff"
+            if api.exists():
+                patch(ws / "API.md", api)
             print(f"== {name}, solved")
             misses, _ = check(task, program, ws, quiet=True)
             if misses:
@@ -200,12 +227,123 @@ def selftest():
     return ok
 
 
+READERS = {"cat", "head", "tail", "sed", "grep", "rg", "less", "more", "awk", "ls",
+           "find", "wc", "nl", "diff", "tree", "file", "egrep"}
+FRAMEWORK = ("docs", "lib", "flare-src", "examples", "README.md")
+TEMP = ("/tmp", "/dev", "/proc")
+
+
+def without_heredocs(cmd):
+    out, lines, i = [], cmd.split("\n"), 0
+    while i < len(lines):
+        out.append(lines[i])
+        m = re.search(r"<<-?\s*['\"]?(\w+)['\"]?", lines[i])
+        i += 1
+        if m:
+            while i < len(lines) and lines[i].strip() != m.group(1):
+                i += 1
+            i += 1
+    return "\n".join(out)
+
+
+def read_arguments(words):
+    """The arguments of a reading command that name paths."""
+    args = words[1:]
+    if words[0] not in ("grep", "rg", "egrep", "awk", "sed"):
+        return args
+    # the first argument that is not an option is the pattern or the script
+    rest, pattern_seen, skip = [], False, False
+    for a in args:
+        if skip:
+            skip = False
+        elif a in ("-e", "-f", "-A", "-B", "-C", "-m", "--include", "--exclude"):
+            skip = True
+        elif a.startswith("-"):
+            pass
+        elif not pattern_seen:
+            pattern_seen = True
+        else:
+            rest.append(a)
+    if words[0] != "awk" and words[0] != "sed" and not rest and "-r" in " ".join(words):
+        rest = ["."]
+    return rest
+
+
+def places(transcript, workspace):
+    ws = str(pathlib.Path(workspace).resolve())
+    times, turns, calls, builds = [], 0, 0, 0
+    seen, outside = set(), set()
+
+    def add(arg, cwd):
+        if not arg or arg.startswith("-") or arg in ("|", ">", "<"):
+            return
+        p = os.path.normpath(arg if arg.startswith("/") else os.path.join(cwd, arg))
+        if p == ws or p.startswith(ws + "/"):
+            rel = os.path.relpath(p, ws)
+            if any(ch in rel for ch in "*?[") or os.path.exists(p) or glob.glob(p):
+                seen.add(rel)
+        elif not p.startswith(TEMP) and (os.path.exists(p) or glob.glob(p)):
+            outside.add(p)
+
+    def bash(cmd):
+        cwd = ws
+        for seg in re.split(r"&&|\|\||;|\||\n|\(|\)", without_heredocs(cmd)):
+            try:
+                words = shlex.split(seg, comments=True)
+            except ValueError:
+                words = seg.split()
+            if not words:
+                continue
+            if words[0] == "cd" and len(words) > 1:
+                cwd = os.path.normpath(os.path.join(cwd, words[1]))
+            elif words[0] in READERS:
+                for a in read_arguments(words):
+                    add(a, cwd)
+
+    for line in open(transcript):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("timestamp"):
+            times.append(datetime.datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")))
+        if e.get("type") != "assistant":
+            continue
+        turns += 1
+        for c in e.get("message", {}).get("content", []):
+            if not isinstance(c, dict) or c.get("type") != "tool_use":
+                continue
+            calls += 1
+            name, inp = c.get("name"), c.get("input", {})
+            if name == "Read":
+                add(inp.get("file_path", ""), ws)
+            elif name in ("Grep", "Glob"):
+                add(inp.get("path", ws), ws)
+            elif name == "Bash":
+                builds += len(re.findall(r"build\.sh", inp.get("command", "")))
+                bash(inp.get("command", ""))
+    framework = sorted(p for p in seen if p.split("/")[0] in FRAMEWORK)
+    print(json.dumps({
+        "seconds": round((max(times) - min(times)).total_seconds()) if times else None,
+        "turns": turns,
+        "tool_calls": calls,
+        "builds": builds,
+        "places": len(seen),
+        "framework_places": len(framework),
+        "framework": framework,
+        "other": sorted(p for p in seen if p.split("/")[0] not in FRAMEWORK),
+        "outside": sorted(outside),
+    }, indent=1))
+
+
 def main():
     args = sys.argv[1:]
     if args[:1] == ["prepare"] and len(args) == 4:
         prepare(*args[1:])
     elif args[:1] == ["check"] and len(args) == 4:
         check(*args[1:])
+    elif args[:1] == ["places"] and len(args) == 3:
+        places(*args[1:])
     elif args == ["selftest"]:
         sys.exit(0 if selftest() else 1)
     else:

@@ -1,6 +1,8 @@
 # The hidden checks of tasks/me.md: bench/compare/notes/scenario.tsv with
 # GET /me asked with no token, a wrong one, a lower-case scheme, before and
-# after a restart.
+# after a restart, with the Content-Type of every JSON answer and the cause of
+# every 400 on standard error (API.md, "Every route"); then what API.md must
+# now say (doc REGEX WHAT: the author's API.md matches REGEX).
 start	40
 req	GET	/notes	-	-	401	Unauthorized
 field	WWW-Authenticate	Bearer
@@ -12,29 +14,47 @@ field	WWW-Authenticate	Bearer
 req	GET	/me	Bearer nope	-	401	Unauthorized
 field	WWW-Authenticate	Bearer
 req	GET	/me	Bearer t-ada	-	200	{"user":"ada","notes":0}
+field	Content-Type	application/json
 req	POST	/notes	Bearer t-ada	{"text":"buy milk"}	201	{"id":1,"owner":"ada","text":"buy milk"}
+field	Content-Type	application/json
 req	POST	/notes	Bearer t-bo	{"text":"call Ada"}	201	{"id":2,"owner":"bo","text":"call Ada"}
+field	Content-Type	application/json
 req	GET	/me	Bearer t-ada	-	200	{"user":"ada","notes":1}
 field	Content-Type	application/json
 req	GET	/me	bearer t-bo	-	200	{"user":"bo","notes":1}
+field	Content-Type	application/json
 req	GET	/notes/1	Bearer t-ada	-	200	{"id":1,"owner":"ada","text":"buy milk"}
+field	Content-Type	application/json
 req	GET	/notes/1	Bearer t-bo	-	404	no note 1
 req	GET	/notes/9	Bearer t-ada	-	404	no note 9
 req	GET	/notes/x	Bearer t-ada	-	400	Bad Request
+said	integer
 req	GET	/notes	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk"}]
+field	Content-Type	application/json
 req	GET	/notes	bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk"}]
+field	Content-Type	application/json
 req	POST	/notes	Bearer t-ada	{"txt":"x"}	400	Bad Request
+said	text
 req	POST	/notes	Bearer t-ada	{"text":"this text is longer than forty bytes long"}	422	text too long
 break
 req	POST	/notes	Bearer t-ada	{"text":"lost"}	503	storage unavailable
 log	Is a directory
 req	GET	/notes	Bearer t-ada	-	200	[{"id":1,"owner":"ada","text":"buy milk"}]
+field	Content-Type	application/json
 req	GET	/notes/3	Bearer t-ada	-	404	no note 3
 restore
 req	POST	/notes	Bearer t-ada	{"text":"walk"}	201	{"id":3,"owner":"ada","text":"walk"}
+field	Content-Type	application/json
 start	10
 req	GET	/notes/3	Bearer t-ada	-	200	{"id":3,"owner":"ada","text":"walk"}
+field	Content-Type	application/json
 req	GET	/notes	Bearer t-bo	-	200	[{"id":2,"owner":"bo","text":"call Ada"}]
+field	Content-Type	application/json
 req	POST	/notes	Bearer t-ada	{"text":"buy oat milk"}	422	text too long
 req	POST	/notes	Bearer t-ada	{"text":"ten bytes!"}	201	{"id":4,"owner":"ada","text":"ten bytes!"}
+field	Content-Type	application/json
 req	GET	/me	Bearer t-ada	-	200	{"user":"ada","notes":3}
+field	Content-Type	application/json
+doc	GET /me\b	API.md names the route GET /me
+doc	"user"	API.md names the answer's member user
+doc	"notes"	API.md names the answer's member notes

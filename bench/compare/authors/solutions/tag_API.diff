@@ -1,0 +1,20 @@
+--- a/API.md
++++ b/API.md
+@@ -13,7 +13,7 @@
+ - A note is visible to its owner only: anyone else gets the same `404` as for
+   a note that does not exist.
+ - JSON is sent and received as `Content-Type: application/json`. A note is
+-  `{"id":1,"owner":"ada","text":"buy milk"}`, its members in that order.
++  `{"id":1,"owner":"ada","text":"buy milk","tag":"home"}`, its members in that order.
+ - A request the service cannot read (a path value that is not a number, a
+   JSON body that is malformed or lacks a member) is `400`, body
+   `Bad Request`, with its cause written to the service's standard error.
+@@ -24,7 +24,7 @@
+ |---|---|
+ | `GET /notes` | `200`, the caller's notes, oldest first: `[{"id":1,...}]`, or `[]` |
+ | `GET /notes/{id}` | `200`, the note; `404`, body `no note {id}`, when there is none the caller owns |
+-| `POST /notes`, body `{"text":"..."}` | `201`, the note as stored, with its new id; `422`, body `text too long`, when the text is longer than the service's limit in bytes |
++| `POST /notes`, body `{"text":"...","tag":"..."}`, both required | `201`, the note as stored, with its new id; `422`, body `text too long`, when the text is longer than the service's limit in bytes |
+ 
+ ## Storage
+ 

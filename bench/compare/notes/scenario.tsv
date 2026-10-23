@@ -6,6 +6,8 @@
 #   restore           the journal is back where it was
 #   log TEXT          what the program wrote to standard error since it
 #                     started contains TEXT (standard output does not count)
+#   said TEXT         what it wrote to standard error during the previous
+#                     request contains TEXT
 #   field NAME VALUE  the previous answer carries the field NAME: VALUE
 #   req METHOD TARGET AUTHORIZATION BODY STATUS RESPONSE_BODY
 #
