@@ -99,22 +99,26 @@ In priority order: the first entry is the next item unless the user asks for ano
 
 Then, in priority order, each with its issue, after the owner's decision on entry 2 ([deferral](history/deferrals.md#candidates-after-the-comparison-by-new-authors)):
 
-3. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
-4. body limits beyond `FromBytes` ([#143](https://github.com/sano-suguru/muntin/issues/143));
-5. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
-6. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
-7. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
-8. more body shapes: text type, optional, multiple, streaming, multipart ([#147](https://github.com/sano-suguru/muntin/issues/147));
-9. fallible response conversions ([#148](https://github.com/sano-suguru/muntin/issues/148));
-10. broader raw handlers ([#149](https://github.com/sano-suguru/muntin/issues/149));
-11. more middleware: per-route, error types ([#150](https://github.com/sano-suguru/muntin/issues/150));
-12. structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
-13. observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
-14. streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
-15. serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
-16. a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
-17. handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
-18. performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
+3. derived JSON values inside hand-written codecs ([#195](https://github.com/sano-suguru/muntin/issues/195));
+4. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
+5. body limits beyond `FromBytes`, including the fixed `Json[T]` cap ([#143](https://github.com/sano-suguru/muntin/issues/143));
+6. `+json` media types or a missing `Content-Type` on JSON bodies ([#193](https://github.com/sano-suguru/muntin/issues/193));
+7. a JSON body and result without the `Json` wrapper ([#194](https://github.com/sano-suguru/muntin/issues/194));
+8. renamed and defaulted members and more field kinds for derived JSON ([#196](https://github.com/sano-suguru/muntin/issues/196));
+9. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
+10. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
+11. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
+12. more body shapes: text type, optional, multiple, streaming, multipart ([#147](https://github.com/sano-suguru/muntin/issues/147));
+13. fallible response conversions ([#148](https://github.com/sano-suguru/muntin/issues/148));
+14. broader raw handlers ([#149](https://github.com/sano-suguru/muntin/issues/149));
+15. more middleware: per-route, error types ([#150](https://github.com/sano-suguru/muntin/issues/150));
+16. structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
+17. observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
+18. streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
+19. serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
+20. a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
+21. handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
+22. performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
 
 ## Long-term success criterion
 
