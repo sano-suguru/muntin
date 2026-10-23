@@ -10,17 +10,14 @@ from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from muntin import (
     App,
-    FromJson,
     Headers,
     Json,
-    JsonValue,
-    JsonWriter,
+    JsonFields,
     Next,
     Request,
     Response,
     State,
     ToErrorResponse,
-    ToJson,
 )
 from muntin.testing import TestClient
 
@@ -73,34 +70,20 @@ def search(q: String, sort: Optional[String]) -> String:
 
 # fmt: off
 # example: request-bodies
-from muntin import App, FromJson, Json, JsonValue, JsonWriter, ToJson
+from muntin import App, Json, JsonFields
 
 
 @fieldwise_init
-struct CreateUser(FromJson):
+struct CreateUser(JsonFields):     # a JSON object, one member per field, named after it
     var name: String
     var age: Int
-    var nickname: Optional[String]
-
-    @staticmethod
-    def from_json(value: JsonValue) raises -> Self:   # raise -> 400, handler not called
-        var nick = Optional[String]()
-        var n = value.get("nickname")                  # None when absent
-        if n and not n.value().is_null():
-            nick = n.value().string()
-        return Self(value["name"].string(), value["age"].int(), nick^)
+    var nickname: Optional[String]  # may be absent or null; the other members are required
 
 
 @fieldwise_init
-struct User(ToJson):
+struct User(JsonFields):
     var id: Int
     var name: String
-
-    def write_json(self, mut out: JsonWriter) raises:  # raise -> fixed 500, not the handler's error
-        out.begin_object()
-        out.field("id", self.id)
-        out.field("name", self.name)
-        out.end_object()
 
 
 def create_user(body: Json[CreateUser]) -> Json[User]:    # borrow and read body.value
@@ -284,7 +267,8 @@ def test_request_bodies() raises:
     app.post["/users"](create_user)
     # POST /users  Content-Type: application/json  {"name":"Ada","age":36}
     #   -> 200, Content-Type: application/json, {"id":1,"name":"Ada"}
-    # Content-Type missing -> 415; a body over 1 MiB -> 413; malformed JSON -> 400
+    # Content-Type missing -> 415; a body over 1 MiB -> 413
+    # malformed JSON, a missing member, a wrong kind -> 400 (create_user not called)
     # example: end
     var r = app.handle(
         Request("POST", "/users", '{"name":"Ada","age":36}', _json())
@@ -300,6 +284,24 @@ def test_request_bodies() raises:
     assert_equal(too_large.status, 413)
     var bad = app.handle(Request("POST", "/users", '{"name":', _json()))
     assert_equal(bad.status, 400)
+    var no_age = app.handle(
+        Request("POST", "/users", '{"name":"Ada"}', _json())
+    )
+    assert_equal(no_age.status, 400)
+    assert_equal(
+        String(no_age.rejection().value()),
+        "from_json: age: JSON member is missing",
+    )
+    var wrong = app.handle(
+        Request("POST", "/users", '{"name":"Ada","age":"36"}', _json())
+    )
+    assert_equal(wrong.status, 400)
+    var with_null = app.handle(
+        Request(
+            "POST", "/users", '{"name":"Bo","age":1,"nickname":null}', _json()
+        )
+    )
+    assert_equal(with_null.text(), '{"id":1,"name":"Bo"}')
 
 
 def test_results_and_errors() raises:

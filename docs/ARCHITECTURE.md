@@ -51,7 +51,7 @@ Toolchain: Mojo 1.1.0 (8189361e) via pixi, pinned by `pixi.lock`; `scripts/check
 
 ```text
 src/muntin/__init__.mojo          exports App, Group, Middleware, Next, FromBody, FromBytes, Failure, Headers, Rejection, Request, Response,
-                                  ToErrorResponse, ToResponse, FromJson, Json, JsonValue, JsonWriter, ToJson,
+                                  ToErrorResponse, ToResponse, FromJson, Json, JsonFields, JsonValue, JsonWriter, ToJson,
                                   FromRouteValue, Param, RouteValues, State, WithHeaders
 src/muntin/http.mojo              Request, Response, Failure, Rejection, Headers, ToResponse, ToErrorResponse; private _failed,
                                   _rejected_by
@@ -60,17 +60,20 @@ src/muntin/headers_body.mojo      WithHeaders[B]; private _HeaderCarrier and _co
 src/muntin/app.mojo               App and Group (one generic _App: the five methods' overloads, use, mount), Next,
                                   Middleware; private _Core (route table, handle, middleware chain _run, dispatch
                                   _dispatch), the adapters, guarded ones included, matching (_match), slot
-                                  extraction and the one rebind helper (_as)
+                                  extraction
 src/muntin/_registration_rules.mojo
                                   private registration rules (_kind, _rule, _check, _admits), evaluated at compile
                                   time, and the route-literal grammar, which route construction also uses at
                                   registration and _match per request (_is_param); imports the Muntin types its
                                   rules name (Response for the raw rule's result among them) and std.reflection,
-                                  which reads a route-value record's fields
+                                  which reads a route-value record's fields; reads Json's refusals
 src/muntin/route_value.mojo       Param, FromRouteValue, RouteValues; private _NamedValue
 src/muntin/state.mojo             State[S]; private _InjectedState
-src/muntin/json.mojo              Json[T], FromJson, ToJson, JsonValue, JsonWriter; private parser and limits
+src/muntin/json.mojo              Json[T], FromJson, ToJson, JsonFields, JsonValue, JsonWriter; private parser, limits
+                                  and derived codec
 src/muntin/_handler_storage.mojo  private _Erased, _Shared, _build_record: the only module with unsafe operations
+src/muntin/_field_built.mojo      private _FieldBuilt, what _build_record may build
+src/muntin/_rebind.mojo           private _as and _view: the only rebinds
 src/muntin/testing.mojo           TestClient
 adapters/flare/muntin_flare.mojo  Flare adapter (Server, Tls, MuntinHandler); flare environment only
 adapters/flare/flare_internals.mojo  every non-public Flare name the adapter uses, with what it is relied on for
@@ -118,13 +121,13 @@ These are safety invariants; each storage module's docstring states its own in f
 - **The State guarantee (M3-004), verbatim:** **Muntin must not introduce a Muntin-specific safe-code path that lets one `State` alias replace, mutate, swap, or prematurely destroy the shared payload observed through another alias. Toolchain-wide primitives that can violate the same property for standard-library types and existing Muntin storage (origin rebind, forged allocation or header replacement, `memmove`, stdlib-private fields) are outside this guarantee and are pinned as Mojo 1.1.0 toolchain-wide soundness gaps.** The pins are `tests/toolchain_soundness_gaps` (must build).
 - **Guarded route box `_Guarded`:** the handler (or its `_Bound`), the group's guard and one copy of the guard's state share the route's one `_Erased` box, so the context the guard returns is made and consumed in the guarded adapter's frame, never stored or erased; its type passes `State`'s name filter (below). `tests/test_group.mojo` counts live contexts and states.
 - **No erased value borrows** ([M3-065](history/decisions/m3-065-request-context-storage-decision.md), [M3-074](history/decisions/m3-074-state-borrowing-decision.md)): erasing a value's type drops its origins. So a request context value is never erased, and `State.__init__` refuses at compile time an `S` whose reflected name shows `{}` (an origin or a parameter pack). `AnyOrigin` can escape the check, for example behind a trait's associated type (`tests/state_known_gaps/state_any_origin_associated_type.mojo`), also inside an `Optional`, a `List` or a `Tuple` field, and no check found on Mojo 1.1.0 refuses it while still admitting owned states ([deferral](history/deferrals.md#closing-states-anyorigin-hole)). Any later erased value follows the same rule.
-- **The one rebind** (M3-015): `rebind_var` checks layout, not type, so it is called only in `_as[T, A]` in `app.mojo`, right after `comptime assert A == T`, which is exact for origin-free types; for a `StaticString` result exactness comes from the `where` clause.
-- **Route-value record construction** (M3-062): `_build_record` writes each field of a `MaybeUninit[T]` at its reflected offset, in field order; when a conversion raises, the fields already written are destroyed once and the storage is forgotten without `T`'s destructor. The record's `__init__` never runs. `tests/test_route_records.mojo` counts each field's conversions and destructions.
-- **Unsafe confinement:** `scripts/check_unsafe.sh` fails if any `src/muntin` module but `_handler_storage.mojo` names an unsafe operation or the boxes' fields, imports anything but `_Erased`, `_Shared` and `_build_record` from it, or if `src/muntin` holds any `rebind_var` but the one in `_as`. It is a confinement guard, not a safety proof, and does not check `tests/`. The runtime check on the paths tests run is `SANITIZE=address ./scripts/test.sh` ([DEVELOPMENT](DEVELOPMENT.md#3-verify-with-the-strongest-available-oracle)).
+- **The rebinds** (M3-015, M3-083): `rebind_var` and `rebind` check layout, not type, so they are called only in `_rebind.mojo`'s `_as` (a value) and `_view` (a reference), each right after `comptime assert A == T`, which is exact for origin-free types; for a `StaticString` result exactness comes from the `where` clause.
+- **Field-by-field construction** (M3-062, M3-083): `_build_record` builds only a `_FieldBuilt`, which only `RouteValues` and `JsonFields` refine. It writes each field of a `MaybeUninit[T]` at its reflected offset, in field order; when a conversion raises, the fields already written are destroyed once and the storage is forgotten without `T`'s destructor. `T`'s `__init__` never runs. `tests/test_route_records.mojo` and `tests/test_derived_json.mojo` count each field's conversions and destructions.
+- **Unsafe confinement:** `scripts/check_unsafe.sh` fails if any `src/muntin` module but `_handler_storage.mojo` names an unsafe operation or the boxes' fields, imports anything but `_Erased`, `_Shared` and `_build_record` from it, if a third type refines `_FieldBuilt`, or if `src/muntin` holds a rebind but the two in `_rebind.mojo`. It is a confinement guard, not a safety proof, and does not check `tests/`. The runtime check on the paths tests run is `SANITIZE=address ./scripts/test.sh` ([DEVELOPMENT](DEVELOPMENT.md#3-verify-with-the-strongest-available-oracle)).
 
 ### JSON
 
-`Json[T]` conforms to `FromBody` when `T: FromJson` and to `ToResponse` when `T: ToJson`, so JSON adds no handler shape. The codec is Muntin's own (RFC 8259, strict, with Muntin's limits); `JsonValue` is a read-only position in a compact tape held in `_Shared`. At the 1 MiB cap one parse adds at most about 29 MB of memory, and an `App` runs one parse at a time. Fields are mapped by hand: Mojo 1.1.0 reflection has no constructor ([M3-008](history/decisions/m3-008-json-codec-decision.md)). Reading a float is Muntin's own correctly rounded conversion ([M3-078](history/decisions/m3-078-json-float-reading-decision.md)); writing one goes through `String(Float64)`, which is not always round-trip, a pinned toolchain gap ([responses](reference/responses.md)).
+`Json[T]` conforms to `FromBody` and `ToResponse` when `T` is a `FromJson` or `ToJson` type, a `JsonFields` struct, or a `List` or `Optional` of one, so JSON adds no handler shape; the registration rules refuse a `T` that cannot be read or written, naming the innermost field (`_refusal`). The codec is Muntin's own (RFC 8259, strict, with Muntin's limits); `JsonValue` is a read-only position in a compact tape held in `_Shared`. At the 1 MiB cap one parse adds at most about 29 MB of memory, and an `App` runs one parse at a time. A `JsonFields` codec is derived by reflection: the writer walks the fields; the reader, as Mojo 1.1.0 has no reflective constructor, builds through `_build_record` ([M3-082](history/decisions/m3-082-derived-json-codecs-decision.md)). Reading a float is Muntin's own correctly rounded conversion ([M3-078](history/decisions/m3-078-json-float-reading-decision.md)); writing one goes through `String(Float64)`, which is not always round-trip, a pinned toolchain gap ([responses](reference/responses.md)).
 
 ### Flare adapter
 
@@ -191,6 +194,7 @@ If one of these pins changes (a pinned fixture unexpectedly compiles, fails to c
 | `tests/json_fail`; `tests/json_known_gaps` (must build); `test_float_writer_gap_on_mojo_1_1_0` in `tests/test_json.mojo` | [M3-008](history/decisions/m3-008-json-codec-decision.md) |
 | `tests/json_api_fail/positional_status.mojo` | [M3-028](history/decisions/m3-028-json-response-status-decision.md) |
 | `tests/json_api_fail/field_*.mojo`, `tests/json_api_fail/generic_writer_forwarding.mojo` | [M3-075](history/decisions/m3-075-json-writer-members-decision.md) |
+| `tests/json_api_fail/derived_*.mojo` | [M3-082](history/decisions/m3-082-derived-json-codecs-decision.md) |
 | a `get`, `post`, `put`, `patch` or `delete` overload beyond the eight arity overloads (slot arity 4 or more: two more overloads per method name) | [M3-052](history/decisions/m3-052-registration-complexity-budget-decision.md), [M3-022](history/decisions/m3-022-several-route-values-decision.md), [M3-020](history/decisions/m3-020-http-methods-decision.md), [M3-014](history/decisions/m3-014-registration-structure-decision.md), [M3-007](history/decisions/m3-007-stateful-raw-handlers-in-production.md), [M3-012](history/decisions/m3-012-typed-header-access-decision.md) |
 | a concurrent `App.handle`, an `App` called from several threads in turn, or a `Copyable` `App` | [M3-001](history/decisions/m3-001-application-state-decision.md), [M3-008](history/decisions/m3-008-json-codec-decision.md) |
 | `tests/testclient_headers_api_fail`; `tests/headers_api_fail/request_headers_moved_in.mojo` | [M3-010](history/decisions/m3-010-testclient-request-headers-decision.md), [M3-011](history/decisions/m3-011-testclient-request-headers-in-production.md) |

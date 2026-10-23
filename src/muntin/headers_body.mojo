@@ -30,7 +30,8 @@ def _convert_body[
     """The bare body `B` from the request's bytes, borrowed (M3-041,
     M3-084): `from_bytes` on them unread for a `FromBytes`; for a `FromBody`
     their text (`_body_text`), then `from_body`, or for a `Json[T]` the
-    parse and `from_json`. Each failure raises its `Rejection` step."""
+    parse and the conversion (`_JsonText`). Each failure raises its
+    `Rejection` step."""
     comptime if conforms_to(B, FromBytes):
         try:
             return B.from_bytes(body)
@@ -134,6 +135,9 @@ struct WithHeaders[B: _FromBodyOrBytes](
     (M3-041).
     """
 
+    comptime _read_refusal: String = _carried_refusal[Self.B, True]()
+    comptime _write_refusal: String = _carried_refusal[Self.B, False]()
+
     var headers: Headers
     """The request's header fields."""
     var body: Self.B
@@ -175,3 +179,11 @@ struct WithHeaders[B: _FromBodyOrBytes](
     @staticmethod
     def _carries_record() -> Bool:
         return conforms_to(Self.B, RouteValues)
+
+
+def _carried_refusal[B: AnyType, read: Bool]() -> String:
+    comptime if conforms_to(B, _JsonBody):
+        comptime if read:
+            return B._read_refusal
+        return B._write_refusal
+    return ""

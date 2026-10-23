@@ -19,6 +19,8 @@ TaskAt)` on `/organizations/{org_id}/projects/{project_id}/tasks/{task_id}`
 (M3-061)").
 """
 
+from ._field_built import _FieldBuilt
+
 
 trait _NamedValue(Deinitable, Movable):
     """Marks `Param`, so the registration rules (`_kind`) and the slot
@@ -106,7 +108,7 @@ trait FromRouteValue(Deinitable, Movable):
         ...
 
 
-trait RouteValues(Deinitable, Movable):
+trait RouteValues(_FieldBuilt):
     """A record of route values: one request slot carrying every route value
     of its route (M3-061).
 

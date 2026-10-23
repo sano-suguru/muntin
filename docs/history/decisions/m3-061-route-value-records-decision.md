@@ -3,6 +3,7 @@
 > **Current.** Now described in [route-values reference, "Route-value records"](../../reference/route-values.md#route-value-records), [ARCHITECTURE, "Registration surface"](../../ARCHITECTURE.md#registration-surface) and [ARCHITECTURE, "Storage and ownership"](../../ARCHITECTURE.md#storage-and-ownership).
 > Changed in part since:
 > - [M3-065](m3-065-request-context-storage-decision.md): the Context[T] slots reserved in the shape order were withdrawn with M3-063's context API.
+> - [M3-082](m3-082-derived-json-codecs-decision.md), built by M3-083: `_build_record` builds any `_FieldBuilt`, which `RouteValues` and `JsonFields` alone refine.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision** (M3-061, pull request #112; `src/muntin` unchanged). The two prototypes, the record prototype's patch on `29519e8`, its runs, the probes, the candidate-note counts and the build times are in the pull request.

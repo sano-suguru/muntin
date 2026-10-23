@@ -1,5 +1,5 @@
 # The JSON examples of docs/reference/bodies.md and responses.md (M3-009;
-# `status=`, M3-029; `JsonWriter.field`, M3-075), compiled and run as written
+# `status=`, M3-029; `JsonWriter.field`, M3-075; `JsonFields`, M3-083), compiled and run as written
 # there against production `muntin`. The successful JSON bodies go through
 # `TestClient.post(target, body, headers=headers^)` with the `Content-Type`
 # set, as the reference shows (M3-011), one of them also compared with
@@ -15,6 +15,7 @@ from muntin import (
     FromJson,
     Headers,
     Json,
+    JsonFields,
     JsonValue,
     JsonWriter,
     Request,
@@ -122,6 +123,108 @@ def profile(id: Int) -> Json[Profile]:
     return Json(Profile(id, None, ["a"], Place("Tokyo", 100), [Place("Osaka", 5)]))
 # example: end
 # fmt: on
+
+
+# fmt: off
+# example: bodies-json-derived
+from muntin import App, Json, JsonFields
+
+
+@fieldwise_init
+struct NewNote(JsonFields):       # a JSON object, one member per field, named after it
+    var text: String
+    var tags: List[String]
+    var due: Optional[Int]        # may be absent or null; every other member is required
+
+
+@fieldwise_init
+struct Note(JsonFields):
+    var id: Int
+    var text: String
+    var tags: List[String]
+    var due: Optional[Int]        # an empty Optional is written as null
+
+
+def create_note(body: Json[NewNote]) -> Json[Note]:
+    ref n = body.value
+    return Json(Note(1, n.text, n.tags.copy(), n.due), status=201)
+
+
+def import_notes(body: Json[List[NewNote]]) -> Json[List[Note]]:   # a top-level List
+    var notes = List[Note]()
+    for i in range(len(body.value)):
+        ref n = body.value[i]
+        notes.append(Note(i + 1, n.text, n.tags.copy(), n.due))
+    return Json(notes^)
+# example: end
+# fmt: on
+
+
+def make_notes_app() -> App:
+    var app = App()
+    # fmt: off
+    # example: bodies-json-derived
+    app.post["/notes"](create_note)
+    app.post["/notes/import"](import_notes)
+    # POST /notes  Content-Type: application/json  {"text":"hi","tags":["a"]}
+    #   -> 201, Content-Type: application/json, {"id":1,"text":"hi","tags":["a"],"due":null}
+    # POST /notes/import  [{"text":"a","tags":[]},{"text":"b","tags":[],"due":3}]
+    #   -> 200, [{"id":1,"text":"a","tags":[],"due":null},{"id":2,"text":"b","tags":[],"due":3}]
+    # {"tags":[]} -> 400 "Bad Request"; its Rejection: from_json: text: JSON member is missing
+    # [{"text":"a","tags":[1]}] -> 400; its Rejection: from_json: [0].tags[0]: JSON value is not a string
+    # example: end
+    # fmt: on
+    return app^
+
+
+def test_derived_json_example() raises:
+    var app = make_notes_app()
+    var client = TestClient(app)
+    var r = client.post(
+        "/notes",
+        '{"text":"hi","tags":["a"]}',
+        headers=_content_type("application/json"),
+    )
+    assert_equal(r.status, 201)
+    assert_equal(r.text(), '{"id":1,"text":"hi","tags":["a"],"due":null}')
+    assert_equal(len(r.headers), 1)
+    assert_equal(r.headers.get("content-type").value(), "application/json")
+    r = client.post(
+        "/notes/import",
+        '[{"text":"a","tags":[]},{"text":"b","tags":[],"due":3}]',
+        headers=_content_type("application/json"),
+    )
+    assert_equal(r.status, 200)
+    assert_equal(
+        r.text(),
+        '[{"id":1,"text":"a","tags":[],"due":null},'
+        + '{"id":2,"text":"b","tags":[],"due":3}]',
+    )
+    r = client.post(
+        "/notes", '{"tags":[]}', headers=_content_type("application/json")
+    )
+    assert_equal(r.status, 400)
+    assert_equal(r.text(), "Bad Request")
+    assert_equal(
+        String(r.rejection().value()), "from_json: text: JSON member is missing"
+    )
+    r = client.post(
+        "/notes/import",
+        '[{"text":"a","tags":[1]}]',
+        headers=_content_type("application/json"),
+    )
+    assert_equal(r.status, 400)
+    assert_equal(
+        String(r.rejection().value()),
+        "from_json: [0].tags[0]: JSON value is not a string",
+    )
+    # A null `Optional` member reads as empty, as an absent one does.
+    r = client.post(
+        "/notes",
+        '{"text":"hi","tags":[],"due":null}',
+        headers=_content_type("application/json"),
+    )
+    assert_equal(r.text(), '{"id":1,"text":"hi","tags":[],"due":null}')
 
 
 def _post(
