@@ -13,6 +13,6 @@ Rules:
 
 - Work only inside {WS}: do not read, list or search anything outside it. The Mojo toolchain `build.sh` runs is installed elsewhere; use it only through `build.sh`. Do not search the web.
 - Change only `notes_{PROGRAM}.mojo` and `API.md`.
-- Build, run and send requests (with curl or python3) as often as you like. Use only the ports {PORTS}, and stop every server you start before you finish.
+- Build, run and send requests (with curl or python3) as often as you like. Use only the ports {PORTS}. Others run their own copies of this service on this machine, also named `notes`: stop only the servers you started, by their process id, and stop every one of them before you finish.
 
 Do the task in `TASK.md`. When you are done, `./build.sh` must succeed. Then reply with: what was wrong or what you added, the files you changed, and anything you are unsure of.
