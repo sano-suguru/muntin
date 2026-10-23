@@ -90,7 +90,7 @@ What each capability does for an application: the [guide](GUIDE.md) and the [ref
 
 ### Remaining candidates
 
-After the comparison with Flare alone, which showed a static-checking advantage on its sample but not the long-term success criterion, the owner resumed these candidates in this order ([M3-079](history/decisions/m3-079-comparison-with-flare-alone-decision.md)), and kept it after the comparison by authors new to Muntin, in which Muntin's authors looked in fewer places and no author on either side missed a check ([M3-086](history/decisions/m3-086-comparison-by-new-authors-decision.md)).
+After the comparison with Flare alone, which showed a static-checking advantage on its sample but not the long-term success criterion, the owner resumed these candidates in this order ([M3-079](history/decisions/m3-079-comparison-with-flare-alone-decision.md)), and kept it after the comparison by authors new to Muntin, which did not meet its criterion: no author on either side missed a check, and Muntin's authors looked in fewer places on two of its four tasks ([M3-086](history/decisions/m3-086-comparison-by-new-authors-decision.md)).
 
 In priority order: the first entry is the next item unless the user asks for another. Each becomes its own item, a decision item first where it opens a design question. An entry here is only what it solves and when to start. A revisit condition, or any other condition that binds later items, lives in the linked decision record or in [`history/deferrals.md`](history/deferrals.md); the issue holds the details, design targets and discussion.
 
