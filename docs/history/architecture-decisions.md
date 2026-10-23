@@ -90,10 +90,11 @@ Earlier records include production records written before that rule; they stay a
 | <a id="json-writer-members-decision-m3-075"></a>[JSON writer members decision (M3-075)](decisions/m3-075-json-writer-members-decision.md) | Current | [responses reference, "Writing a `ToJson` type"](../reference/responses.md#writing-a-tojson-type) |
 | <a id="request-host-value-decision-m3-076"></a>[Request Host value decision (M3-076)](decisions/m3-076-request-host-value-decision.md) | Current | [headers reference, "Through the Flare adapter"](../reference/headers.md#through-the-flare-adapter) |
 | <a id="json-float-reading-decision-m3-078"></a>[JSON float reading decision (M3-078)](decisions/m3-078-json-float-reading-decision.md) | Current | [bodies reference, "JSON (`Json[T]`)"](../reference/bodies.md#json-jsont) |
-| <a id="comparison-with-flare-alone-decision-m3-079"></a>[Comparison with Flare alone decision (M3-079)](decisions/m3-079-comparison-with-flare-alone-decision.md) | Current | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
+| <a id="comparison-with-flare-alone-decision-m3-079"></a>[Comparison with Flare alone decision (M3-079)](decisions/m3-079-comparison-with-flare-alone-decision.md) | Current; changed in part by [M3-086](decisions/m3-086-comparison-by-new-authors-decision.md) | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
 | <a id="guarded-routes-and-request-context-decision-m3-080"></a>[Guarded routes and request context decision (M3-080)](decisions/m3-080-guarded-routes-and-request-context-decision.md) | Current | [groups reference](../reference/groups.md) |
 | <a id="derived-json-codecs-decision-m3-082"></a>[Derived JSON codecs decision (M3-082)](decisions/m3-082-derived-json-codecs-decision.md) | Current; changed in part by [M3-084](decisions/m3-084-request-rejection-report-decision.md) | [bodies reference, "JSON (`Json[T]`)"](../reference/bodies.md#json-jsont) |
 | <a id="request-rejection-report-decision-m3-084"></a>[Request rejection report decision (M3-084)](decisions/m3-084-request-rejection-report-decision.md) | Current | [errors reference, "Reports of rejected requests"](../reference/errors.md#reports-of-rejected-requests) |
+| <a id="comparison-by-new-authors-decision-m3-086"></a>[Comparison by new authors decision (M3-086)](decisions/m3-086-comparison-by-new-authors-decision.md) | Current | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
 
 ## Documents older records cite
 
