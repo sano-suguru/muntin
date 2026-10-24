@@ -11,6 +11,7 @@ from std.testing import assert_equal, assert_false, assert_true, TestSuite
 
 from muntin import (
     App,
+    State,
     FromBody,
     Headers,
     Json,
@@ -203,6 +204,25 @@ def shrink(var request: Request, var next: Next) raises -> Response:
     return next^.run(request^)
 
 
+struct Counter(Movable):
+    var n: Int
+
+    def __init__(out self, n: Int):
+        self.n = n
+
+
+def put_small(counter: State[Counter], id: Int, body: Small) -> String:
+    return String(counter[].n, ":", id, ":", body.n)
+
+
+def patch_small(counter: State[Counter], body: Small) -> String:
+    return String(counter[].n, ":", body.n)
+
+
+def widest(body: Json[Item, limit=4_294_967_295]) -> String:
+    return body.value.name
+
+
 def make_app() -> App:
     var app = App()
     app.use(shrink)
@@ -219,7 +239,34 @@ def make_app() -> App:
     app.get["/echo"](echo_item)
     app.get["/inferred"](inferred)
     app.post["/raw"](raw_tiny)
+    var counter = State(Counter(5))
+    app.put["/small/{id}"](put_small, counter)
+    app.patch["/small"](patch_small, counter)
+    app.post["/widest"](widest)
     return app^
+
+
+def test_text_limit_on_put_and_patch_with_state() raises:
+    var app = make_app()
+    var client = TestClient(app)
+    assert_equal(client.put("/small/3", _filled(8)).text(), "5:3:8")
+    assert_equal(client.put("/small/3", _filled(9)).status, 413)
+    assert_equal(client.put("/small/x", _filled(9)).status, 400)
+    assert_equal(client.patch("/small", _filled(8)).text(), "5:8")
+    assert_equal(client.patch("/small", _filled(9)).status, 413)
+
+
+def test_json_413_before_utf8_and_the_widest_limit() raises:
+    var app = make_app()
+    var client = TestClient(app)
+    var bad = _padded(33)
+    bad[10] = 0xFF  # inside the string: not UTF-8
+    assert_equal(client.post("/tiny", bad.copy(), headers=_json()).status, 413)
+    bad.resize(32, 0x20)
+    assert_equal(client.post("/tiny", bad^, headers=_json()).status, 400)
+    assert_equal(
+        client.post("/widest", _padded(64), headers=_json()).text(), "a"
+    )
 
 
 def test_text_default_is_one_mib() raises:

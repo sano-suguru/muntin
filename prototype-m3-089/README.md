@@ -11,7 +11,9 @@ What changed against the base:
   1_048_576` and its contract.
 - `src/muntin/json.mojo`: `Json[T, *, limit: Int = _MAX_BODY_BYTES]`,
   whose `max_bytes` is `limit`; `_parse_json` takes the limit, so
-  `from_body` and `_from_text` raise above it.
+  `from_body` and `_from_text` raise above it, and assert at compile time
+  that it is at most 2^32 - 1 (`_LARGEST_LIMIT`, the tape's `UInt32`
+  offsets).
 - `src/muntin/headers_body.mojo`: `_HeaderCarrier._max_bytes()` returns a
   carried `FromBody`'s `max_bytes` too.
 - `src/muntin/app.mojo`: `_json_status` compares with `_body_limit[B]()`
@@ -20,9 +22,17 @@ What changed against the base:
 - `src/muntin/_registration_rules.mojo`: `_kind` gives a `FromBody` with a
   negative `max_bytes` `_NEGATIVE_LIMIT`; the message says "a body type's".
 - `tests/bytes_limit_api_fail/negative_limit*.mojo`: the expected message.
-- `tests/body_limit_api_fail/` (built by `check.sh`): five must-not-build
-  fixtures.
-- `tests/test_spike_body_limits.mojo`: the spike (7 tests).
+- Comments in `app.mojo`, `json.mojo`, `body.mojo` and
+  `_registration_rules.mojo` that described the fixed 1 MiB or a
+  `FromBytes`-only limit.
+- `tests/body_limit_api_fail/` (built by `check.sh`): seven must-not-build
+  fixtures. Against the base's `src`: `text_negative_limit`,
+  `text_negative_limit_in_carrier` and `text_family_default` build there;
+  the three `json_*limit*` ones other than `json_positional_limit` fail
+  there with `unexpected keyword parameter 'limit'`; `json_positional_limit`
+  fails there with the same text (`unexpected parameter`), so it is a
+  regression pin of the keyword-only spelling, not evidence for it.
+- `tests/test_spike_body_limits.mojo`: the spike (9 tests).
 
 Expected failures in `test.sh` (tests that pin the base's "text bodies have
 no Muntin limit"; production rewrites them): `tests/test_bytes_limit.mojo`

@@ -44,8 +44,9 @@ trait FromBody(_FromBodyOrBytes):
     declares `comptime max_bytes = 8 << 20` to raise it and `Int.MAX` for
     no limit. A trait refining `FromBody` cannot give it another default
     (Mojo 1.1.0 rejects the conflicting defaults where a type conforms).
-    A negative value is rejected at registration. A direct call to
-    `from_body` is not limited.
+    A negative value is rejected at registration. A direct call to an
+    application's `from_body` is not limited; `Json[T].from_body` checks
+    its own limit.
     """
 
     comptime max_bytes: Int = 1_048_576

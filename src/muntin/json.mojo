@@ -39,12 +39,22 @@ this is rejected (400 through `from_body`), so the recursive parser's stack
 is bounded."""
 
 comptime _MAX_BODY_BYTES = 1_048_576
-"""Body cap for a JSON request: a fixed 1 MiB. A parsed document costs up to
-about 37 bytes per body byte, so the cap bounds one parse. Typed JSON routes
-answer a larger body 413 before parsing (the body adapters in `app.mojo`);
-the parser raises on it too, so `Json[T].from_body` called from a raw
-handler never parses an unbounded body. It also keeps the `UInt32` spans of
-the tape exact."""
+"""`Json[T]`'s default body cap, 1 MiB; a route chooses another with
+`Json[T, limit=n]` (M3-089). A parsed document costs up to about 37 bytes
+per body byte, so the cap bounds one parse. Typed JSON routes answer a
+larger body 413 before parsing (the body adapters in `app.mojo`); the
+parser raises on it too, so `Json[T].from_body` called from a raw handler
+never parses an unbounded body."""
+
+comptime _LARGEST_LIMIT = 4_294_967_295
+"""The largest `Json[T]` limit: the tape's spans are `UInt32` offsets into
+the body, exact only below 2^32 bytes. Checked where `from_body` or
+`_from_text` is instantiated (a route or a raw handler's call)."""
+
+comptime _LIMIT_TOO_LARGE = (
+    "Json's limit is over 4294967295 bytes, the longest body its parser"
+    " addresses"
+)
 
 # Node kinds of the parsed tape.
 comptime _NULL = 0
@@ -1197,7 +1207,8 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
     `Content-Type` field whose media type is `application/json` (else 415)
     and a body of at most `limit` bytes, 1 MiB unless the route's type says
     another (`Json[T, limit=64 * 1024]`, M3-089; else 413); `limit` is the
-    body's `max_bytes` and means nothing on a result. The body is then parsed strictly
+    body's `max_bytes`, at most 2^32 - 1 (`_LARGEST_LIMIT`), and means
+    nothing on a result. The body is then parsed strictly
     and the value built, either failing answers 400, all
     before the handler. As a result: the value is written as the
     body and the response has the status given to the initializer (200 by
@@ -1244,6 +1255,7 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
         a raw handler may call it directly, and its error model applies to
         the raise."""
         comptime assert _refusal[Self.T, True]() == "", _refusal[Self.T, True]()
+        comptime assert Self.limit <= _LARGEST_LIMIT, _LIMIT_TOO_LARGE
         return Self(_read_json[Self.T](_parse_json(body, Self.max_bytes)))
 
     @staticmethod
@@ -1251,6 +1263,7 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
         """`from_body` on a typed route: the parse and the conversion raise
         `Rejection.JSON` and `Rejection.FROM_JSON` (M3-084)."""
         comptime assert _refusal[Self.T, True]() == "", _refusal[Self.T, True]()
+        comptime assert Self.limit <= _LARGEST_LIMIT, _LIMIT_TOO_LARGE
         var value: JsonValue
         try:
             value = _parse_json(text, Self.max_bytes)

@@ -156,7 +156,8 @@ from .state import State, _may_borrow
 # field, else empty; other routes' arguments are unchanged). The body slot, for
 # a JSON body only, answers 415 unless the arguments end with the verdict `"1"`
 # at the expected position (an exact arity check), then 413 when the body is
-# over 1 MiB, after the route value and before `from_body`. Every text body
+# over its `max_bytes` (1 MiB unless `Json[T, limit=n]`, M3-089), after the
+# route value and before `from_body`. Every text body
 # slot then reads the body bytes as UTF-8 (`_body_text`, M3-040): bytes that are not
 # are 400, as a `from_body` raise is. Order on a JSON body route: 404 or 405,
 # query or capture 400 (`App.handle`), `Int` 400, 415, 413, UTF-8 400, JSON 400
@@ -198,6 +199,10 @@ from .state import State, _may_borrow
 # `_HeaderCarrier._max_bytes`) after the JSON steps and before the field
 # rebuild. The length is the body `invoke` passes, after middleware; a
 # negative limit is rejected at registration (`_kind`).
+#
+# Text body limits (M3-089): `FromBody` gives `max_bytes` a default of 1 MiB
+# (`Json[T]`'s is its `limit`); `_slot` answers a longer text body 413 as a
+# bytes one, before the UTF-8 read, bare or carried.
 #
 # Header slots (M3-016): on `get`, `delete` and bodyless handlers, `Headers`
 # is a slot kind by exact type equality (no trait, so no application type is
@@ -804,8 +809,9 @@ def _body_limit[B: AnyType]() -> Int:
 
 def _body_rejection_answer(status: Int) -> Response:
     """The response for a body slot's 415 or 413 before conversion: a
-    nonzero `_json_status`, or a `FromBytes` body over its `max_bytes`
-    (M3-043). Named for the body, not JSON, since both use it."""
+    nonzero `_json_status`, or a body over its type's `max_bytes`
+    (`FromBytes`, M3-043; `FromBody`, M3-089). Named for the body, not
+    JSON, since every body uses it."""
     if status == 415:
         return _unsupported_media_type()
     return _content_too_large()

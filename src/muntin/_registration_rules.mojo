@@ -176,8 +176,8 @@ def _kind[A: AnyType]() -> Int:
     wherever a body is, and so is a carrier around one
     (`_HeaderCarrier._conversions`). A carrier around a type with neither
     conversion (one conforming only to the private bound) is `_OTHER`. A
-    `FromBytes` body, bare or carried, whose `max_bytes` is negative is a
-    body with no valid limit (`_NEGATIVE_LIMIT`, M3-043), which the rules
+    `FromBytes` (M3-043) or `FromBody` (M3-089) body, bare or carried, whose
+    `max_bytes` is negative is a body with no valid limit (`_NEGATIVE_LIMIT`), which the rules
     reject where a body is accepted. A `Param[name, T]` (M3-050) has the
     kind of its `T` when that is a route value (`_named_kind`). A
     `FromRouteValue` type is an application route value (`_APP_VALUE`,
