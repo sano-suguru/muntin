@@ -17,7 +17,7 @@ In the `flare` environment, it
    ones), restarting it, breaking and restoring its journal as the scenario
    says; it fails if a program answers otherwise (status, body and any
    field the scenario names) or does not write to standard error what the
-   scenario names. It prints what each program wrote to standard output and
+   scenario names (since its start, or during a request). It prints what each program wrote to standard output and
    to standard error during each request. Then it prints both answers to
    defaults.tsv, which the scenario leaves open;
 3. plants each mistake in mistakes.txt in a copy of the program it names and
@@ -216,7 +216,7 @@ def print_log(streams, indent="    "):
 def run_scenario(name, served, path):
     """Runs the scenario in PATH against SERVED; returns False if any step
     fails."""
-    ok, fields = True, {}
+    ok, fields, said = True, {}, ""
     for raw in path.read_text().splitlines():
         if not raw or raw.startswith("#"):
             continue
@@ -236,6 +236,12 @@ def run_scenario(name, served, path):
             else:
                 print(f"FAIL\t{name}\tstandard error does not name {args[0]!r}")
                 ok = False
+        elif action == "said":
+            if args[0] in said:
+                print(f"ok\t{name}\tstandard error, after the request, names {args[0]!r}")
+            else:
+                print(f"FAIL\t{name}\tstandard error, after the request, does not name {args[0]!r}")
+                ok = False
         elif action == "field":
             got = fields.get(args[0].lower())
             if got == args[1]:
@@ -244,7 +250,7 @@ def run_scenario(name, served, path):
                 print(f"FAIL\t{name}\t{args[0]} is {got!r}, expected {args[1]!r}")
                 ok = False
         elif action == "req":
-            fields = {}
+            fields, said = {}, ""
             method, target, authz, body, status, expected = args
             label = f"{method} {target} ({authz})"
             try:
@@ -260,7 +266,9 @@ def run_scenario(name, served, path):
             else:
                 print(f"FAIL\t{name}\t{label}\t{got_status} {shown(got)}, expected {status} {expected}")
                 ok = False
-            print_log(served.logged())
+            streams = served.logged()
+            said = streams.get("stderr", "")
+            print_log(streams)
         else:
             fail(f"{path}: unknown step {action!r}")
     served.stop()

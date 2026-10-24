@@ -1,0 +1,10 @@
+--- a/API.md
++++ b/API.md
+@@ -24,6 +24,7 @@
+ |---|---|
+ | `GET /notes` | `200`, the caller's notes, oldest first: `[{"id":1,...}]`, or `[]` |
+ | `GET /notes/{id}` | `200`, the note; `404`, body `no note {id}`, when there is none the caller owns |
++| `GET /me` | `200`, the caller's name and how many notes they own: `{"user":"ada","notes":2}` |
+ | `POST /notes`, body `{"text":"..."}` | `201`, the note as stored, with its new id; `422`, body `text too long`, when the text is longer than the service's limit in bytes |
+ 
+ ## Storage

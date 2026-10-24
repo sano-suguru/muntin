@@ -1,0 +1,46 @@
+--- a/notes_muntin.mojo
++++ b/notes_muntin.mojo
+@@ -61,15 +61,17 @@
+     var id: Int
+     var owner: String
+     var text: String
++    var tag: String
+ 
+ 
+ def note_json(note: Note) -> NoteJson:
+-    return NoteJson(note.id, note.owner, note.text)
++    return NoteJson(note.id, note.owner, note.text, note.tag)
+ 
+ 
+ @fieldwise_init
+ struct NewNote(JsonFields):
+     var text: String
++    var tag: String
+ 
+ 
+ def authenticate(svc: State[Service], headers: Headers) raises ApiError -> User:
+@@ -90,9 +92,11 @@
+     return response^
+ 
+ 
+-def stored(svc: Service, owner: String, text: String) raises ApiError -> Note:
++def stored(
++    svc: Service, owner: String, text: String, tag: String
++) raises ApiError -> Note:
+     try:
+-        return svc.store.add(owner, text)
++        return svc.store.add(owner, text, tag)
+     except e:
+         print("storage:", e, file=stderr)
+         raise ApiError(503, "storage unavailable")
+@@ -120,7 +124,9 @@
+     ref text = body.value.text
+     if text.byte_length() > svc[].max_text:
+         raise ApiError(422, "text too long")
+-    return Json(note_json(stored(svc[], user.name, text)), status=201)
++    return Json(
++        note_json(stored(svc[], user.name, text, body.value.tag)), status=201
++    )
+ 
+ 
+ def main() raises:

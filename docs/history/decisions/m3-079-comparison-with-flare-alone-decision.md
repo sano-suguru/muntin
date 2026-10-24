@@ -1,6 +1,8 @@
 # Comparison with Flare alone decision (M3-079)
 
 > **Current.** The candidates' order it kept is in [SPEC, "Remaining candidates"](../../SPEC.md#remaining-candidates).
+> Changed in part since:
+> - [M3-086](m3-086-comparison-by-new-authors-decision.md): its revisit condition on the comparison by new authors is answered there; the owner kept the order.
 
 Status: **decision, a standing constraint** (M3-079, pull request #180; issue [#139](https://github.com/sano-suguru/muntin/issues/139)). The evaluation is in the pull request. It replaces the freeze of pull request #166 ("Extensions while Muntin's value is evaluated", formerly in [deferrals](../deferrals.md)).
 
@@ -16,7 +18,7 @@ Status: **decision, a standing constraint** (M3-079, pull request #180; issue [#
 - Claiming the criterion met: the evidence does not reach "materially".
 
 **Revisit when:**
-- the comparison by new authors reports ([its gate](../deferrals.md#candidates-after-the-comparison-by-new-authors));
+- the comparison by new authors reports ([its gate](m3-086-comparison-by-new-authors-decision.md), formerly in deferrals);
 - the Flare pin or the Mojo version changes, or a second backend is built: run both applications again, and check that no file an application author writes had to change.
 
 **Next production slice:** none. The rule is the candidates' order, owned by `docs/SPEC.md`, "Remaining candidates"; the next item is its first entry that can start.
