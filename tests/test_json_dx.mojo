@@ -1,5 +1,6 @@
 # The JSON examples of docs/reference/bodies.md and responses.md (M3-009;
-# `status=`, M3-029; `JsonWriter.field`, M3-075; `JsonFields`, M3-083), compiled and run as written
+# `status=`, M3-029; `JsonWriter.field`, M3-075; `JsonFields`, M3-083;
+# derived values inside hand-written codecs, M3-088), compiled and run as written
 # there against production `muntin`. The successful JSON bodies go through
 # `TestClient.post(target, body, headers=headers^)` with the `Content-Type`
 # set, as the reference shows (M3-011), one of them also compared with
@@ -18,6 +19,7 @@ from muntin import (
     JsonFields,
     JsonValue,
     JsonWriter,
+    Rejection,
     Request,
     Response,
     ToJson,
@@ -362,6 +364,86 @@ def test_json_writer_members() raises:
     )
     assert_equal(len(r.headers), 1)
     assert_equal(r.headers.get("content-type").value(), "application/json")
+
+
+# fmt: off
+# example: responses-json-hand-written-derived
+from muntin import App, FromJson, Json, JsonFields, JsonValue, JsonWriter, ToJson
+
+
+@fieldwise_init
+struct Stop(Copyable, JsonFields):
+    var city: String
+    var zip: Optional[Int]
+
+
+@fieldwise_init
+struct Trip(Copyable, FromJson, ToJson):     # one special member, the rest derived
+    var start: Stop
+    var stops: List[Stop]
+
+    @staticmethod
+    def from_json(value: JsonValue) raises -> Self:
+        if value["v"].int() != 2:                     # checked, not stored
+            raise Error("unsupported version")
+        return Self(value.read[Stop]("start"), value.read[List[Stop]]("stops"))
+
+    def write_json(self, mut out: JsonWriter) raises:
+        out.begin_object()
+        out.field("v", 2)
+        out.field("start", self.start)                # a JsonFields struct, as Json[Stop] writes it
+        out.field("stops", self.stops)                # a List (or Optional) of one
+        out.end_object()
+
+
+def echo_trip(body: Json[Trip]) -> Json[Trip]:
+    return Json(body.value.copy())
+# example: end
+# fmt: on
+
+
+def make_trips_app() -> App:
+    var app = App()
+    # fmt: off
+    # example: responses-json-hand-written-derived
+    app.post["/trips"](echo_trip)
+    # POST /trips  Content-Type: application/json  {"v":2,"start":{"city":"X"},"stops":[]}
+    #   -> 200, {"v":2,"start":{"city":"X","zip":null},"stops":[]}
+    # {"v":2,"start":{"city":1},"stops":[]} -> 400; its Rejection: from_json: start.city: JSON value is not a string
+    # {"v":1,"start":{"city":"X"},"stops":[]} -> 400; its Rejection: from_json: unsupported version
+    # example: end
+    # fmt: on
+    return app^
+
+
+def test_hand_written_derived_example() raises:
+    var app = make_trips_app()
+    var client = TestClient(app)
+    var r = client.post(
+        "/trips",
+        '{"v":2,"start":{"city":"X"},"stops":[]}',
+        headers=_content_type("application/json"),
+    )
+    assert_equal(r.status, 200)
+    assert_equal(r.text(), '{"v":2,"start":{"city":"X","zip":null},"stops":[]}')
+    r = client.post(
+        "/trips",
+        '{"v":2,"start":{"city":1},"stops":[]}',
+        headers=_content_type("application/json"),
+    )
+    assert_equal(r.status, 400)
+    assert_equal(r.text(), "Bad Request")
+    assert_equal(r.rejection().value().step, Rejection.FROM_JSON)
+    assert_equal(
+        r.rejection().value().message, "start.city: JSON value is not a string"
+    )
+    r = client.post(
+        "/trips",
+        '{"v":1,"start":{"city":"X"},"stops":[]}',
+        headers=_content_type("application/json"),
+    )
+    assert_equal(r.status, 400)
+    assert_equal(r.rejection().value().message, "unsupported version")
 
 
 def main() raises:
