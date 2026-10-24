@@ -905,6 +905,27 @@ def test_hand_written_writer_writes_derived_values() raises:
         + OTHER_PLACE
         + "]]}",
     )
+    # A full `Optional` both ways, as the derived text.
+    var full = String(ENVELOPE).replace(
+        '"trail":', '"spare":' + OTHER_PLACE + ',"trail":'
+    )
+    r = c.post("/envelopes", full, headers=json_headers())
+    assert_equal(r.status, 200)
+    var both = PLACE + "," + OTHER_PLACE
+    assert_equal(
+        r.text(),
+        '{"v":2,"place":'
+        + PLACE
+        + ',"spare":'
+        + OTHER_PLACE
+        + ',"trail":['
+        + both
+        + '],"badge":"badge 3","again":['
+        + both
+        + ",["
+        + both
+        + "]]}",
+    )
     # The same text `Json[T]` writes for the member's type.
     assert_equal(
         _text(Json(Place("X", Optional[Int](1), ["a"])).to_response()), PLACE
@@ -1052,6 +1073,21 @@ def test_read_kinds_and_paths() raises:
     assert_false(Bool(v.read[Optional[Place]]("p")))
     assert_false(Bool(v.read[Optional[Place]]("q")))
     assert_false(Bool(_parse("null").read[Optional[Place]]()))
+    var full = _parse('{"p":' + OTHER_PLACE + "}").read[Optional[Place]]("p")
+    assert_equal(full.value().city, "Y")
+    assert_false(Bool(full.value().zip))
+    # Every scalar kind, and a `List` and `Optional` of one.
+    var s = _parse('{"f":1.5,"b":true,"s":"x","l":[1,2],"o":"y","n":null}')
+    assert_equal(s.read[Float64]("f"), 1.5)
+    assert_true(s.read[Bool]("b"))
+    assert_equal(s.read[String]("s"), "x")
+    assert_equal(s.read[List[Int]]("l")[1], 2)
+    assert_equal(s.read[Optional[String]]("o").value(), "y")
+    assert_false(Bool(s.read[Optional[String]]("n")))
+    assert_equal(
+        _read_raised[List[Int]]('{"l":[1,"2"]}', "l"),
+        "l[1]: JSON value is not a number",
+    )
     # A `List` of a hand-written type, and its own `read` inside: each
     # hand-written boundary adds its own `: `.
     assert_equal(len(v.read[List[Inner]]("l")), 2)
@@ -1115,6 +1151,15 @@ def test_ownership_inside_and_after_a_read() raises:
     )
     assert_equal(_count(MADE), 1)
     assert_equal(_count(DROPPED), 1)
+    # A `List` read part-way: the elements built before the failure dropped
+    # once.
+    _reset()
+    assert_equal(
+        _read_raised[List[Token]]('{"l":["a","b",1]}', "l"),
+        "l[2]: JSON value is not a string",
+    )
+    assert_equal(_count(MADE), 2)
+    assert_equal(_count(DROPPED), 2)
 
 
 def main() raises:

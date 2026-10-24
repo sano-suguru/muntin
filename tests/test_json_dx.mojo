@@ -402,7 +402,7 @@ def echo_trip(body: Json[Trip]) -> Json[Trip]:
 # fmt: on
 
 
-def test_hand_written_derived_example() raises:
+def make_trips_app() -> App:
     var app = App()
     # fmt: off
     # example: responses-json-hand-written-derived
@@ -413,6 +413,11 @@ def test_hand_written_derived_example() raises:
     # {"v":1,"start":{"city":"X"},"stops":[]} -> 400; its Rejection: from_json: unsupported version
     # example: end
     # fmt: on
+    return app^
+
+
+def test_hand_written_derived_example() raises:
+    var app = make_trips_app()
     var client = TestClient(app)
     var r = client.post(
         "/trips",

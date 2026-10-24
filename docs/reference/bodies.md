@@ -210,7 +210,7 @@ app.post["/users/{id}"](replace_user)    # route value, then body
 
 Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), with these types and handlers as written; its app also registers `GET /create` (the media-type example of [responses](responses.md#json-results)), and it also posts `{"name":"Bo","age":1,"nickname":null}` to `/users/4` (`{"id":4,"name":"Bo"}`). It does not check that 415 is answered before 413.
 
-- `value[name]` raises naming the missing member (`JSON member "name" is missing`); `int()` and `float()` do not quote the literal.
+- `value[name]` raises naming the missing member (`JSON member "name" is missing`); `int()` and `float()` do not quote the literal. `value.read[T](name)` reads a derived value ([responses](responses.md#derived-values-inside-a-hand-written-codec)).
 
 ### Rules for every JSON body
 
