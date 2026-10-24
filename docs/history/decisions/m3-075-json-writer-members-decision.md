@@ -1,6 +1,8 @@
 # JSON writer members decision (M3-075)
 
 > **Current.** Now described in [responses reference, "Writing a `ToJson` type"](../../reference/responses.md#writing-a-tojson-type).
+> Changed in part since:
+> - [M3-087](m3-087-derived-json-in-hand-written-codecs-decision.md) (not built yet, M3-088): `field` and `value` also take a `JsonFields` struct, or an `Optional` or `List` of one, whose bad field fails when the codec is instantiated, not where it is called.
 
 Status: **decision and production** (M3-075, pull request #162, with its probes and measurements).
 
