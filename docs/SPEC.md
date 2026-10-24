@@ -98,7 +98,7 @@ In priority order: the first entry is the next item unless the user asks for ano
 
 Then, in priority order, each with its issue:
 
-2. derived JSON values inside hand-written codecs ([#195](https://github.com/sano-suguru/muntin/issues/195));
+2. derived JSON values inside hand-written codecs ([#195](https://github.com/sano-suguru/muntin/issues/195)): the production slice M3-088 of [M3-087](history/decisions/m3-087-derived-json-in-hand-written-codecs-decision.md);
 3. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
 4. body limits beyond `FromBytes`, including the fixed `Json[T]` cap ([#143](https://github.com/sano-suguru/muntin/issues/143));
 5. `+json` media types or a missing `Content-Type` on JSON bodies ([#193](https://github.com/sano-suguru/muntin/issues/193));
