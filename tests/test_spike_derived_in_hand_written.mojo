@@ -170,45 +170,26 @@ def test_hand_written_writer_writes_derived_values() raises:
     assert_equal(String(unsafe_from_utf8=alone.body), p)
 
 
-struct Nested(ToJson):
-    """Kinds a derived field takes beyond a struct and one `List` or
-    `Optional` of it, which M3-075's fixtures pinned as unwritable
-    (`field_list_of_lists`, `field_list_of_optionals`,
-    `field_optional_of_list`): written through the same rules."""
-
-    var grid: List[List[Place]]
-    var maybe: Optional[List[Place]]
+struct Mixed(ToJson):
     var shown: List[Shown]
-    var ints: List[List[Int]]
-    var marks: List[Optional[Int]]
-    var tags: Optional[List[Int]]
+    var maybe: Optional[Shown]
 
     def __init__(out self):
-        self.grid = [[Place("X", None, [])]]
-        self.maybe = Optional[List[Place]](List[Place]())
         self.shown = [Shown(1), Shown(2)]
-        self.ints = [[1, 2], []]
-        self.marks = [Optional[Int](1), None]
-        self.tags = Optional[List[Int]]([3])
+        self.maybe = Optional(Shown(3))
 
     def write_json(self, mut out: JsonWriter) raises:
         out.begin_object()
-        out.field("grid", self.grid)
-        out.field("maybe", self.maybe)
         out.field("shown", self.shown)
-        out.field("ints", self.ints)
-        out.field("marks", self.marks)
-        out.field("tags", self.tags)
+        out.field("maybe", self.maybe)
         out.end_object()
 
 
-def test_every_derived_kind_through_the_writer() raises:
-    var r = Json(Nested()).to_response()
+def test_a_to_json_type_keeps_its_writer() raises:
+    var r = Json(Mixed()).to_response()
     assert_equal(
         String(unsafe_from_utf8=r.body),
-        '{"grid":[[{"city":"X","zip":null,"tags":[]}]],"maybe":[],'
-        + '"shown":["shown 1","shown 2"],"ints":[[1,2],[]],'
-        + '"marks":[1,null],"tags":[3]}',
+        '{"shown":["shown 1","shown 2"],"maybe":"shown 3"}',
     )
 
 
@@ -283,6 +264,47 @@ def test_hand_written_reader_keeps_the_member_path() raises:
     except e:
         raised = String(e)
     assert_equal(raised, "tags[0]: JSON value is not a string")
+
+
+struct Inner(FromJson, Movable):
+    var n: Int
+
+    def __init__(out self, n: Int):
+        self.n = n
+
+    @staticmethod
+    def from_json(value: JsonValue) raises -> Self:
+        return Self(value.read[Int]("n"))
+
+
+def _raised[T: Movable & Deinitable](text: String, name: String) -> String:
+    try:
+        var v = _parse(text)
+        _ = v.read[T](name)
+        return "ok"
+    except e:
+        return String(e)
+
+
+def test_read_kinds_and_paths() raises:
+    # `null` and absence are both an empty `Optional`, as a derived field.
+    var v = _parse('{"p":null,"l":[{"n":1},{"n":2}]}')
+    assert_false(Bool(v.read[Optional[Place]]("p")))
+    assert_false(Bool(v.read[Optional[Place]]("q")))
+    assert_false(Bool(_parse("null").read[Optional[Place]]()))
+    # A `List` of a hand-written type, and its own `read` inside: each
+    # hand-written boundary adds its own `: `.
+    assert_equal(len(v.read[List[Inner]]("l")), 2)
+    assert_equal(
+        _raised[List[Inner]]('{"l":[{"n":1},{}]}', "l"),
+        "l[1]: n: JSON member is missing",
+    )
+    assert_equal(
+        _raised[Inner]('{"i":{"n":"x"}}', "i"),
+        "i: n: JSON value is not a number",
+    )
+    # Not an object: the parse step's message, without a path.
+    assert_equal(_raised[Int]("[1]", "n"), "JSON value is not an object")
 
 
 def _parse(text: String) raises -> JsonValue:

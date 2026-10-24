@@ -983,20 +983,16 @@ struct JsonWriter(Movable):
         _escape_into(self._out, value)
 
     # `value` and `field` are chosen by the value's type: Int, Float64, Bool,
-    # String, a `ToJson` type, and an `Optional` (empty: null) or a `List`
-    # (an array) of a scalar, each its own overload; any other kind a
-    # derived field takes (a `JsonFields` struct, a `List` or `Optional` of
-    # any derived kind) through one generic overload that writes it as
-    # `Json[T]` does (M3-087). A concrete overload wins over the generic
-    # one, and `not conforms_to(T, ToJson)` keeps a `ToJson` type, or a
-    # `ToJson` collection, out of it (both would match: ambiguous). On Mojo
-    # 1.1.0 a generic `value[T]` cannot forward to the overload of its `T`
-    # (it resolves to an `Optional` one by implicit conversion), so the
-    # generic overloads write through `_write_value`, and the `ToJson`
-    # `field` calls `write_json` itself. A type that is none of these fails
-    # where it is called, `no matching method`; an `Iterable` or
-    # `JsonFields` one that cannot be written fails its `comptime assert`,
-    # naming the innermost field.
+    # String, a `ToJson` type or a `JsonFields` struct (M3-087), and an
+    # `Optional` (empty: null) or a `List` (an array) of one of those. Each
+    # combination is its own overload: on Mojo 1.1.0 a generic `value[T]`
+    # cannot forward to the overload of its `T` (it resolves to the
+    # `Optional` one by implicit conversion), and an unsupported type then
+    # fails where it is called, `no matching method`. A `JsonFields` struct
+    # is written by the derived rules, and its overloads exclude a `ToJson`
+    # one, whose own writer takes over (without the `where`, such a type
+    # matches both: ambiguous); a field of it that cannot be written fails
+    # the overload's `comptime assert` when the codec is instantiated.
 
     def value(mut self, value: Int) raises:
         self.int(value)
@@ -1039,6 +1035,13 @@ struct JsonWriter(Movable):
         else:
             self.null()
 
+    def value[T: ToJson](mut self, value: Optional[T]) raises:
+        """The value, or null when empty."""
+        if value:
+            value.value().write_json(self)
+        else:
+            self.null()
+
     def value(mut self, value: List[Int]) raises:
         self.begin_array()
         for v in value:
@@ -1063,17 +1066,36 @@ struct JsonWriter(Movable):
             self.string(v)
         self.end_array()
 
+    def value[T: ToJson](mut self, value: List[T]) raises:
+        """An array of the elements. Indexed, not iterated: `List` iteration
+        requires `Copyable` elements, so a move-only `T` works."""
+        self.begin_array()
+        for i in range(len(value)):
+            value[i].write_json(self)
+        self.end_array()
+
     def value[
-        T: AnyType
-    ](mut self, value: T) raises where not conforms_to(T, ToJson) and (
-        conforms_to(T, JsonFields) or conforms_to(T, Iterable)
-    ):
-        """A `JsonFields` struct, or a `List` or `Optional` of any kind a
-        derived field may have, written as `Json[T]` writes it: the derived
-        rules, a `ToJson` element by its own `write_json`, an empty
-        `Optional` as `null`. A `ToJson` on a `JsonFields` struct takes over
-        (the overload above). A `T` that cannot be written fails the build,
-        naming its innermost field."""
+        T: JsonFields
+    ](mut self, value: T) raises where not conforms_to(T, ToJson):
+        """A `JsonFields` struct, written as `Json[T]` writes it (M3-087). A
+        field that cannot be written fails its `comptime assert`, naming
+        it."""
+        comptime assert _call_refusal[T, False]() == "", _call_refusal[
+            T, False
+        ]()
+        _write_value(self, value)
+
+    def value[
+        T: JsonFields
+    ](mut self, value: Optional[T]) raises where not conforms_to(T, ToJson):
+        comptime assert _call_refusal[T, False]() == "", _call_refusal[
+            T, False
+        ]()
+        _write_value(self, value)
+
+    def value[
+        T: JsonFields
+    ](mut self, value: List[T]) raises where not conforms_to(T, ToJson):
         comptime assert _call_refusal[T, False]() == "", _call_refusal[
             T, False
         ]()
@@ -1098,7 +1120,7 @@ struct JsonWriter(Movable):
 
     def field[T: ToJson](mut self, name: String, value: T) raises:
         self.name(name)
-        value.write_json(self)
+        self.value(value)
 
     def field(mut self, name: String, value: Optional[Int]) raises:
         self.name(name)
@@ -1113,6 +1135,10 @@ struct JsonWriter(Movable):
         self.value(value)
 
     def field(mut self, name: String, value: Optional[String]) raises:
+        self.name(name)
+        self.value(value)
+
+    def field[T: ToJson](mut self, name: String, value: Optional[T]) raises:
         self.name(name)
         self.value(value)
 
@@ -1132,16 +1158,31 @@ struct JsonWriter(Movable):
         self.name(name)
         self.value(value)
 
-    def field[
-        T: AnyType
-    ](mut self, name: String, value: T) raises where not conforms_to(
-        T, ToJson
-    ) and (conforms_to(T, JsonFields) or conforms_to(T, Iterable)):
-        comptime assert _call_refusal[T, False]() == "", _call_refusal[
-            T, False
-        ]()
+    def field[T: ToJson](mut self, name: String, value: List[T]) raises:
         self.name(name)
-        _write_value(self, value)
+        self.value(value)
+
+    def field[
+        T: JsonFields
+    ](mut self, name: String, value: T) raises where not conforms_to(T, ToJson):
+        self.name(name)
+        self.value(value)
+
+    def field[
+        T: JsonFields
+    ](mut self, name: String, value: Optional[T]) raises where not conforms_to(
+        T, ToJson
+    ):
+        self.name(name)
+        self.value(value)
+
+    def field[
+        T: JsonFields
+    ](mut self, name: String, value: List[T]) raises where not conforms_to(
+        T, ToJson
+    ):
+        self.name(name)
+        self.value(value)
 
     def _finish(deinit self) raises -> String:
         """The text; raises if the document is empty or unfinished."""
