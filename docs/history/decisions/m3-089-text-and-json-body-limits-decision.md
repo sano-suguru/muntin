@@ -1,0 +1,7 @@
+# Text and JSON body limits decision (M3-089)
+
+> **Current.** Not built yet: its "Next production slice" is M3-090.
+
+Status: **decision** (M3-089, issue [#143](https://github.com/sano-suguru/muntin/issues/143)). Evidence: the pull request. Changes part of M3-008 and M3-043 (below).
+
+**Question and what settles it.** [M3-043](m3-043-typed-binary-request-body-size-limits-decision.md) gave a `FromBytes` body a declared limit and left out text bodies, an `App`-wide or per-registration limit and a configurable `Json[T]` cap, whose fixed 1 MiB ([M3-008](m3-008-json-codec-decision.md)) a raw handler's `Json[T].from_body` also applies. How does an application bound a `FromBody` body, and choose a `Json[T]` body's cap per route, so that `App.handle` answers 413 before the conversion; at which unit, by what spelling, with which default; where in the order it answers; and does the place it chooses for a per-route JSON rule leave room for [#193](https://github.com/sano-suguru/muntin/issues/193)'s media-type rule? A per-route receive limit and one refusal status across protocols stay under [M3-044](m3-044-server-receive-body-limit-decision.md)'s revisit conditions: they need the backend to route before reading the body. Settled by Mojo 1.1.0 probes of each spelling; a scratch copy of production passing `check.sh`, `test.sh` (under AddressSanitizer too) and `check_flare.sh` with a spike through `TestClient`; and a fresh-context review.
