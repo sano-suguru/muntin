@@ -100,7 +100,7 @@ Then, in priority order, each with its issue:
 
 2. derived JSON values inside hand-written codecs ([#195](https://github.com/sano-suguru/muntin/issues/195)): the production slice M3-088 of [M3-087](history/decisions/m3-087-derived-json-in-hand-written-codecs-decision.md);
 3. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
-4. body limits beyond `FromBytes`, including the fixed `Json[T]` cap ([#143](https://github.com/sano-suguru/muntin/issues/143));
+4. body limits beyond `FromBytes`, including the fixed `Json[T]` cap ([#143](https://github.com/sano-suguru/muntin/issues/143)): the production slice M3-090 of [M3-089](history/decisions/m3-089-text-and-json-body-limits-decision.md);
 5. `+json` media types or a missing `Content-Type` on JSON bodies ([#193](https://github.com/sano-suguru/muntin/issues/193));
 6. a JSON body and result without the `Json` wrapper ([#194](https://github.com/sano-suguru/muntin/issues/194));
 7. renamed and defaulted members and more field kinds for derived JSON ([#196](https://github.com/sano-suguru/muntin/issues/196));
