@@ -33,26 +33,7 @@ trait FromBody(_FromBodyOrBytes):
     without calling `from_body`, so a conversion never sees a replaced
     byte. Future body capabilities are added as new APIs without changing
     this one: a body of any bytes is `FromBytes` (M3-041).
-
-    `max_bytes` (M3-089) is the longest body, in bytes, Muntin passes to
-    `from_body` when it dispatches a typed route, measured before the UTF-8
-    read: `App.handle` answers a longer one 413 `Content Too Large` without
-    reading it or calling `from_body` or the handler, at the step of a
-    `FromBytes` body's limit (M3-043). Unlike `FromBytes`, the trait gives
-    it a default, 1 MiB, `Json[T]`'s since M3-009, so a type that declares
-    nothing, or misspells the member, is limited, never unlimited; a type
-    declares `comptime max_bytes = 8 << 20` to raise it and `Int.MAX` for
-    no limit. A trait refining `FromBody` cannot give it another default
-    (Mojo 1.1.0 rejects the conflicting defaults where a type conforms).
-    A negative value is rejected at registration. A direct call to an
-    application's `from_body` is not limited; `Json[T].from_body` checks
-    its own limit.
     """
-
-    comptime max_bytes: Int = 1_048_576
-    """The longest body Muntin passes to `from_body` on a typed route, in
-    bytes (0 or more); 1 MiB unless the type declares another; `Int.MAX` is
-    no limit."""
 
     @staticmethod
     def from_body(body: String) raises -> Self:
