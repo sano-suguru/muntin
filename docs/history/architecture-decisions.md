@@ -95,7 +95,7 @@ Earlier records include production records written before that rule; they stay a
 | <a id="derived-json-codecs-decision-m3-082"></a>[Derived JSON codecs decision (M3-082)](decisions/m3-082-derived-json-codecs-decision.md) | Current; changed in part by [M3-084](decisions/m3-084-request-rejection-report-decision.md), [M3-087](decisions/m3-087-derived-json-in-hand-written-codecs-decision.md) | [bodies reference, "JSON (`Json[T]`)"](../reference/bodies.md#json-jsont) |
 | <a id="request-rejection-report-decision-m3-084"></a>[Request rejection report decision (M3-084)](decisions/m3-084-request-rejection-report-decision.md) | Current | [errors reference, "Reports of rejected requests"](../reference/errors.md#reports-of-rejected-requests) |
 | <a id="comparison-by-new-authors-decision-m3-086"></a>[Comparison by new authors decision (M3-086)](decisions/m3-086-comparison-by-new-authors-decision.md) | Current | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
-| <a id="derived-json-values-inside-hand-written-codecs-decision-m3-087"></a>[Derived JSON values inside hand-written codecs decision (M3-087)](decisions/m3-087-derived-json-in-hand-written-codecs-decision.md) | Current; not built yet (M3-088) | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
+| <a id="derived-json-values-inside-hand-written-codecs-decision-m3-087"></a>[Derived JSON values inside hand-written codecs decision (M3-087)](decisions/m3-087-derived-json-in-hand-written-codecs-decision.md) | Current | [responses reference, "Derived values inside a hand-written codec"](../reference/responses.md#derived-values-inside-a-hand-written-codec) |
 
 ## Documents older records cite
 
