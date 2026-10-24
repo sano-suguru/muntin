@@ -796,6 +796,29 @@ struct JsonValue(Copyable, Movable, Sized):
             raise Error('JSON member "', name, '" is missing')
         return found.take()
 
+    def read[T: Movable & Deinitable](self) raises -> T:
+        """The value as `T` by the derived rules of `Json[T]`: `T` is any
+        kind a `JsonFields` field may have (M3-082), so a hand-written
+        `from_json` reads a `JsonFields` struct, or a `List` or `Optional`
+        of one, without writing its members by hand. A failure's message
+        starts with the member path below this value (`tags[0]: ...`); a
+        `T` that cannot be read fails to build, naming its innermost
+        field."""
+        comptime assert _call_refusal[T, True]() == "", _call_refusal[T, True]()
+        return _read_json[T](self)
+
+    def read[T: Movable & Deinitable](self, name: String) raises -> T:
+        """The member `name` as `T`, as a derived reader reads a field of
+        that name: an absent or `null` member is an empty `Optional`, any
+        other `T` requires the member. A failure's message starts with the
+        path from this value (`place.city: ...`, `place: JSON member is
+        missing`)."""
+        comptime assert _call_refusal[T, True]() == "", _call_refusal[T, True]()
+        try:
+            return _read_named[T](self, name)
+        except f:
+            raise Error(f.text())
+
 
 trait FromJson(Deinitable, Movable):
     """An application type that `Json[T]` builds from a parsed request body.
@@ -961,10 +984,19 @@ struct JsonWriter(Movable):
 
     # `value` and `field` are chosen by the value's type: Int, Float64, Bool,
     # String, a `ToJson` type, and an `Optional` (empty: null) or a `List`
-    # (an array) of one of those. Each combination is its own overload: on
-    # Mojo 1.1.0 a generic `value[T]` cannot forward to the overload of its
-    # `T` (it resolves to the `Optional` one by implicit conversion), and an
-    # unsupported type then fails where it is called, `no matching method`.
+    # (an array) of a scalar, each its own overload; any other kind a
+    # derived field takes (a `JsonFields` struct, a `List` or `Optional` of
+    # any derived kind) through one generic overload that writes it as
+    # `Json[T]` does (M3-087). A concrete overload wins over the generic
+    # one, and `not conforms_to(T, ToJson)` keeps a `ToJson` type, or a
+    # `ToJson` collection, out of it (both would match: ambiguous). On Mojo
+    # 1.1.0 a generic `value[T]` cannot forward to the overload of its `T`
+    # (it resolves to an `Optional` one by implicit conversion), so the
+    # generic overloads write through `_write_value`, and the `ToJson`
+    # `field` calls `write_json` itself. A type that is none of these fails
+    # where it is called, `no matching method`; an `Iterable` or
+    # `JsonFields` one that cannot be written fails its `comptime assert`,
+    # naming the innermost field.
 
     def value(mut self, value: Int) raises:
         self.int(value)
@@ -1007,13 +1039,6 @@ struct JsonWriter(Movable):
         else:
             self.null()
 
-    def value[T: ToJson](mut self, value: Optional[T]) raises:
-        """The value, or null when empty."""
-        if value:
-            value.value().write_json(self)
-        else:
-            self.null()
-
     def value(mut self, value: List[Int]) raises:
         self.begin_array()
         for v in value:
@@ -1038,13 +1063,21 @@ struct JsonWriter(Movable):
             self.string(v)
         self.end_array()
 
-    def value[T: ToJson](mut self, value: List[T]) raises:
-        """An array of the elements. Indexed, not iterated: `List` iteration
-        requires `Copyable` elements, so a move-only `T` works."""
-        self.begin_array()
-        for i in range(len(value)):
-            value[i].write_json(self)
-        self.end_array()
+    def value[
+        T: AnyType
+    ](mut self, value: T) raises where not conforms_to(T, ToJson) and (
+        conforms_to(T, JsonFields) or conforms_to(T, Iterable)
+    ):
+        """A `JsonFields` struct, or a `List` or `Optional` of any kind a
+        derived field may have, written as `Json[T]` writes it: the derived
+        rules, a `ToJson` element by its own `write_json`, an empty
+        `Optional` as `null`. A `ToJson` on a `JsonFields` struct takes over
+        (the overload above). A `T` that cannot be written fails the build,
+        naming its innermost field."""
+        comptime assert _call_refusal[T, False]() == "", _call_refusal[
+            T, False
+        ]()
+        _write_value(self, value)
 
     def field(mut self, name: String, value: Int) raises:
         """One object member: `name(name)`, then `value(value)`."""
@@ -1065,7 +1098,7 @@ struct JsonWriter(Movable):
 
     def field[T: ToJson](mut self, name: String, value: T) raises:
         self.name(name)
-        self.value(value)
+        value.write_json(self)
 
     def field(mut self, name: String, value: Optional[Int]) raises:
         self.name(name)
@@ -1080,10 +1113,6 @@ struct JsonWriter(Movable):
         self.value(value)
 
     def field(mut self, name: String, value: Optional[String]) raises:
-        self.name(name)
-        self.value(value)
-
-    def field[T: ToJson](mut self, name: String, value: Optional[T]) raises:
         self.name(name)
         self.value(value)
 
@@ -1103,9 +1132,16 @@ struct JsonWriter(Movable):
         self.name(name)
         self.value(value)
 
-    def field[T: ToJson](mut self, name: String, value: List[T]) raises:
+    def field[
+        T: AnyType
+    ](mut self, name: String, value: T) raises where not conforms_to(
+        T, ToJson
+    ) and (conforms_to(T, JsonFields) or conforms_to(T, Iterable)):
+        comptime assert _call_refusal[T, False]() == "", _call_refusal[
+            T, False
+        ]()
         self.name(name)
-        self.value(value)
+        _write_value(self, value)
 
     def _finish(deinit self) raises -> String:
         """The text; raises if the document is empty or unfinished."""
@@ -1418,6 +1454,25 @@ def _refusal[T: AnyType, reading: Bool]() -> String:
     )
 
 
+def _call_refusal[T: AnyType, reading: Bool]() -> String:
+    """`_refusal` for a hand-written codec's call (`JsonValue.read`,
+    `JsonWriter.value` and `field`, M3-087): the type itself, not
+    `Json[T]`, when no field is to blame."""
+    comptime if _kind_ok[T, reading]():
+        return ""
+    var inner = _innermost[T, reading]()
+    if inner:
+        return inner
+    return (
+        String(reflect[T].name())
+        + " cannot be "
+        + ("read" if reading else "written")
+        + ": a derived value is an Int, Float64, Bool, String, a "
+        + ("FromJson" if reading else "ToJson")
+        + " type, a JsonFields struct, or a List or Optional of one"
+    )
+
+
 def _innermost[F: AnyType, reading: Bool]() -> String:
     """The message naming the innermost field that cannot be read or
     written, when `F` is a `JsonFields` struct, or a `List` or `Optional`
@@ -1517,11 +1572,19 @@ def _read_json[F: Movable & Deinitable](v: JsonValue) raises -> F:
 def _read_member[
     F: Movable & Deinitable, i: Int
 ](value: JsonValue, names: List[String]) raises _MemberFault -> F:
-    """Field `i`: an absent or `null` member is an empty `Optional`; any
-    other field requires its member. A failure's path gains the member."""
+    """Field `i` of a derived struct (`_read_named`)."""
+    return _read_named[F](value, names[i])
+
+
+def _read_named[
+    F: Movable & Deinitable
+](value: JsonValue, name: String) raises _MemberFault -> F:
+    """The member `name`: an absent or `null` member is an empty
+    `Optional`; any other field requires its member. A failure's path gains
+    the member. The one rule of a derived field and `JsonValue.read`."""
     var m: Optional[JsonValue]
     try:
-        m = value.get(names[i])
+        m = value.get(name)
     except e:
         raise _MemberFault("", String(e))
     comptime if conforms_to(F, Iterable):
@@ -1531,11 +1594,11 @@ def _read_member[
                 if not m or m.value().is_null():
                     return _as[Optional[E], F](Optional[E]())
     if not m:
-        raise _MemberFault("." + names[i], "JSON member is missing")
+        raise _MemberFault("." + name, "JSON member is missing")
     try:
         return _read_value[F](m.value())
     except f:
-        raise _MemberFault("." + names[i] + f.path, f.message)
+        raise _MemberFault("." + name + f.path, f.message)
 
 
 def _read_list[
