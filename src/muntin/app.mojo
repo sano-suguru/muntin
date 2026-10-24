@@ -38,7 +38,7 @@ from .http import (
     _failed,
     _rejected_by,
 )
-from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
+from .json import _JsonBody, _json_content_type
 from .route_value import FromRouteValue, RouteValues, _NamedValue
 from .state import State, _may_borrow
 
@@ -771,7 +771,8 @@ def _json_status[
     the body itself travels as bytes, M3-040) and must be `"1"`. For any
     other JSON body the arguments end there (an exact arity check); a
     carrier route (`_HeaderCarrier`) allows only header name and value pairs
-    after it, an even count. Then a body over 1 MiB (`body_length` bytes) is
+    after it, an even count. Then a body over the JSON type's `max_bytes`
+    (`body_length` bytes; 1 MiB unless `Json[T, limit=n]`, M3-089) is
     413."""
     var verdict = body_at
     if len(args) <= verdict or args[verdict] != "1":
@@ -782,9 +783,23 @@ def _json_status[
     else:
         if len(args) != verdict + 1:
             return 415
-    if body_length > _MAX_BODY_BYTES:
+    if body_length > _body_limit[B]():
         return 413
     return 0
+
+
+def _body_limit[B: AnyType]() -> Int:
+    """A body slot's limit: a carrier's carried type's (`_max_bytes`), else
+    the body type's own `max_bytes`, a `FromBytes`'s (M3-043) or a
+    `FromBody`'s (M3-089)."""
+    comptime if conforms_to(B, _HeaderCarrier):
+        return B._max_bytes()
+    elif conforms_to(B, FromBytes):
+        return B.max_bytes
+    elif conforms_to(B, FromBody):
+        return B.max_bytes
+    else:
+        return Int.MAX
 
 
 def _body_rejection_answer(status: Int) -> Response:
@@ -982,8 +997,8 @@ def _slot[
             if status != 0:
                 raise _Reject(status)
         comptime if conforms_to(A, _HeaderCarrier):
-            # The carried `FromBytes` type's limit, before the rebuild
-            # (M3-043); `Int.MAX`, no limit, for a text body.
+            # The carried type's limit, before the rebuild: a `FromBytes`'s
+            # (M3-043) or a `FromBody`'s (M3-089).
             if len(body) > A._max_bytes():
                 raise _Reject(413)
             var fields: Headers
@@ -997,6 +1012,10 @@ def _slot[
                 raise _Reject(400, f.step, -1, f.message)
         else:
             comptime assert conforms_to(A, FromBody)
+            # The type's limit (M3-089), before the UTF-8 read; a JSON
+            # body's was the 413 step above.
+            if len(body) > A.max_bytes:
+                raise _Reject(413)
             try:
                 return _convert_body[A](body)
             except f:

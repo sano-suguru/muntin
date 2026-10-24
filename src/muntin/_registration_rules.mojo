@@ -237,7 +237,7 @@ def _kind[A: AnyType]() -> Int:
     elif conforms_to(A, FromBytes):
         return _NEGATIVE_LIMIT if A.max_bytes < 0 else _BODY
     elif conforms_to(A, FromBody):
-        return _BODY
+        return _NEGATIVE_LIMIT if A.max_bytes < 0 else _BODY
     else:
         return _OTHER
 
@@ -953,7 +953,7 @@ def _check[
         " a body type conforms to one of them"
     )
     comptime assert rule != _BODY_NEGATIVE_LIMIT, (
-        "the request body's max_bytes is negative; a FromBytes type's"
+        "the request body's max_bytes is negative; a body type's"
         " max_bytes is a byte count, 0 or more"
     )
     comptime assert rule != _NAMES_MIXED, (
