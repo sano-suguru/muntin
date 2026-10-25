@@ -1162,5 +1162,70 @@ def test_ownership_inside_and_after_a_read() raises:
     assert_equal(_count(DROPPED), 2)
 
 
+@fieldwise_init
+struct Ticket(JsonFields):
+    """Move-only, derived, holding a counted token."""
+
+    var token: Token
+
+
+struct Desk(ToJson):
+    """Move-only derived values written through the hand-written writer's
+    `JsonFields` overloads, alone, in an `Optional` and in a `List`."""
+
+    var one: Ticket
+    var maybe: Optional[Ticket]
+    var many: List[Ticket]
+
+    def __init__(out self):
+        self.one = Ticket(Token("a"))
+        self.maybe = Optional(Ticket(Token("b")))
+        self.many = List[Ticket]()
+        self.many.append(Ticket(Token("c")))
+        self.many.append(Ticket(Token("d")))
+
+    def write_json(self, mut out: JsonWriter) raises:
+        out.begin_object()
+        out.field("one", self.one)
+        out.field("maybe", self.maybe)
+        out.field("many", self.many)
+        out.name("again")
+        out.begin_array()
+        out.value(self.one)
+        out.value(self.maybe)
+        out.value(self.many)
+        out.end_array()
+        out.end_object()
+
+
+def test_move_only_derived_values_written_by_hand() raises:
+    _reset()
+    var desk = Desk()
+    assert_equal(_count(MADE), 4)
+    var r = Json(desk^).to_response()
+    var one = '{"token":"<a>"}'
+    var maybe = '{"token":"<b>"}'
+    var many = '[{"token":"<c>"},{"token":"<d>"}]'
+    assert_equal(
+        _text(r),
+        '{"one":'
+        + one
+        + ',"maybe":'
+        + maybe
+        + ',"many":'
+        + many
+        + ',"again":['
+        + one
+        + ","
+        + maybe
+        + ","
+        + many
+        + "]}",
+    )
+    # Written by reference: nothing copied, each token dropped once.
+    assert_equal(_count(MADE), 4)
+    assert_equal(_count(DROPPED), 4)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
