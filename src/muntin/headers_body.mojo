@@ -71,9 +71,9 @@ trait _HeaderCarrier(Deinitable, Movable):
 
     @staticmethod
     def _max_bytes() -> Int:
-        """The carried body type's limit: its `max_bytes` for a `FromBytes`
-        (M3-043), else `Int.MAX`, no limit (a text body has no Muntin limit
-        of its own; a `Json[T]` body's 1 MiB step is the JSON one)."""
+        """The carried body type's limit: its `max_bytes`, a `FromBytes`'s
+        (M3-043) or a `FromBody`'s, a `Json[T]`'s included (M3-089); `Int.MAX`
+        for a type with neither conversion, which `_kind` rejects."""
         ...
 
     @staticmethod
@@ -162,6 +162,8 @@ struct WithHeaders[B: _FromBodyOrBytes](
     @staticmethod
     def _max_bytes() -> Int:
         comptime if conforms_to(Self.B, FromBytes):
+            return Self.B.max_bytes
+        elif conforms_to(Self.B, FromBody):
             return Self.B.max_bytes
         else:
             return Int.MAX
