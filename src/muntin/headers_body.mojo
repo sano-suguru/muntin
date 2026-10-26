@@ -20,7 +20,7 @@ from .body import (
     _body_text,
 )
 from .http import Headers, Rejection
-from .json import _JsonBody, _JsonText
+from .json import JsonWriter, _JsonBody, _JsonText
 from .route_value import FromRouteValue, RouteValues
 
 
@@ -97,6 +97,12 @@ trait _HeaderCarrier(Deinitable, Movable):
         """Whether the carried body type is also a `RouteValues` record
         (M3-061): `_kind` then rejects the carrier as it does such a type
         bare."""
+        ...
+
+    @staticmethod
+    def _carries_bytes() -> Bool:
+        """Whether the carried body type is a `FromBytes` (M3-091
+        prototype: the document's media type)."""
         ...
 
 
@@ -179,6 +185,17 @@ struct WithHeaders[B: _FromBodyOrBytes](
     @staticmethod
     def _carries_record() -> Bool:
         return conforms_to(Self.B, RouteValues)
+
+    @staticmethod
+    def _carries_bytes() -> Bool:
+        return conforms_to(Self.B, FromBytes)
+
+    @staticmethod
+    def _schema[reading: Bool](mut out: JsonWriter) raises:
+        comptime if conforms_to(Self.B, _JsonBody):
+            Self.B._schema[reading](out)
+        else:
+            comptime assert False, "not a JSON body"
 
 
 def _carried_refusal[B: AnyType, read: Bool]() -> String:
