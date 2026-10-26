@@ -42,7 +42,7 @@ expected_diagnostic() {
 
 case "$kind" in
 test)
-    if ! "${MOJO[@]}" build --Werror ${SANITIZE:+--sanitize "$SANITIZE"} "${flags[@]}" -I src -I tests "$t" -o "$bin"; then
+    if ! "${MOJO[@]}" build --Werror ${SANITIZE:+--sanitize "$SANITIZE"} ${flags[@]+"${flags[@]}"} -I src -I tests "$t" -o "$bin"; then
         echo "error: $t failed to build"
         exit 1
     fi
@@ -62,7 +62,7 @@ route)
     ;;
 must_fail)
     expected_diagnostic
-    if "${MOJO[@]}" build "${flags[@]}" -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
+    if "${MOJO[@]}" build ${flags[@]+"${flags[@]}"} -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
         echo "error: $t compiled; it is expected to fail"
         exit 1
     fi
