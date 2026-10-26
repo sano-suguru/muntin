@@ -180,9 +180,10 @@ from .state import State, _may_borrow
 # keeps the order above; its arity check allows only name and value pairs after
 # the verdict, and every other JSON body keeps the exact arity. Muntin chooses
 # no status for the fields the handler reads and gives them no meaning; the
-# `Content-Type` verdict for a `Json[T]` body (415), a bytes body's limit
-# (413, M3-043, before the rebuild) and the rebuild failure (500) still
-# answer before the handler.
+# `Content-Type` verdict for a `Json[T]` body (415), the carried body type's
+# limit (413 before the rebuild: a bytes body's, M3-043, a text or JSON
+# body's, M3-089) and the rebuild failure (500) still answer before the
+# handler.
 #
 # Bytes bodies (M3-041): a `FromBytes` type is a body slot too (`_kind`), on
 # every shape that takes a `FromBody`, and `_slot` passes it the request's
@@ -766,19 +767,16 @@ comptime _GUARD_DRIFT = "registration rule check and guard disagree"
 """The guard's `else`: `_admits` rejected a shape `_check` accepted."""
 
 
-def _json_status[
-    B: AnyType
-](args: List[String], body_at: Int, body_length: Int) -> Int:
+def _json_status[B: AnyType](args: List[String], body_at: Int) -> Int:
     """For a JSON body (`_JsonBody`): 0 when the body may be converted,
-    else the status to answer, 415 or 413, without parsing.
+    else 415, without parsing.
 
     The `Content-Type` verdict is at the body's position (`args[body_at]`;
     the body itself travels as bytes, M3-040) and must be `"1"`. For any
     other JSON body the arguments end there (an exact arity check); a
     carrier route (`_HeaderCarrier`) allows only header name and value pairs
-    after it, an even count. Then a body over the JSON type's `max_bytes`
-    (`body_length` bytes; 1 MiB unless `Json[T, limit=n]`, M3-089) is
-    413."""
+    after it, an even count. Its 413 is the generic step after this one in
+    `_slot`, as for any body (M3-089)."""
     var verdict = body_at
     if len(args) <= verdict or args[verdict] != "1":
         return 415
@@ -788,23 +786,7 @@ def _json_status[
     else:
         if len(args) != verdict + 1:
             return 415
-    if body_length > _body_limit[B]():
-        return 413
     return 0
-
-
-def _body_limit[B: AnyType]() -> Int:
-    """A body slot's limit: a carrier's carried type's (`_max_bytes`), else
-    the body type's own `max_bytes`, a `FromBytes`'s (M3-043) or a
-    `FromBody`'s (M3-089)."""
-    comptime if conforms_to(B, _HeaderCarrier):
-        return B._max_bytes()
-    elif conforms_to(B, FromBytes):
-        return B.max_bytes
-    elif conforms_to(B, FromBody):
-        return B.max_bytes
-    else:
-        return Int.MAX
 
 
 def _body_rejection_answer(status: Int) -> Response:
@@ -924,7 +906,7 @@ def _slot[
     `args[at]` on (`_header_slot`; a failure is the fixed 500). A
     `FromBody` body is read as UTF-8 (`_body_text`; 400 if it is not) and converted with
     `A.from_body` (400 if it raises); for a JSON body (`_JsonBody`) the 415
-    and 413 steps run first (`_json_status`); a `WithHeaders` carrier has
+    step runs first (`_json_status`); a `WithHeaders` carrier has
     its header fields rebuilt (the fixed 500 on failure), then is built
     through `A._from_parts` from the borrowed bytes, which converts them as
     a bare body of the carried type (M3-042: a UTF-8 read and `from_body`,
@@ -1000,7 +982,7 @@ def _slot[
             A, _HeaderCarrier
         )
         comptime if conforms_to(A, _JsonBody):
-            var status = _json_status[A](args, at, len(body))
+            var status = _json_status[A](args, at)
             if status != 0:
                 raise _Reject(status)
         comptime if conforms_to(A, _HeaderCarrier):
@@ -1019,8 +1001,8 @@ def _slot[
                 raise _Reject(400, f.step, -1, f.message)
         else:
             comptime assert conforms_to(A, FromBody)
-            # The type's limit (M3-089), before the UTF-8 read; a JSON
-            # body's was the 413 step above.
+            # The type's limit (M3-089), before the UTF-8 read; for a JSON
+            # body, after its 415.
             if len(body) > A.max_bytes:
                 raise _Reject(413)
             try:

@@ -123,9 +123,9 @@ otherwise), and writes it into both of Flare's fields, `max_body_size`
 every other field keeps Flare's default. Flare refuses a longer body itself,
 before the adapter, with its own answers (docs/reference/serving.md: over
 HTTP/1.1 413 or 400 and a closed connection, also counting a chunked body's
-framing; over h2c a reset stream). It is not
-`FromBytes.max_bytes` or `Json[T]`'s cap, which `App.handle` checks on a
-body already received. `Server.serve` refuses to start when the environment
+framing; over h2c a reset stream). It is not a body type's `max_bytes` or
+a `Json[T]` limit (docs/reference/body-limits.md), which `App.handle`
+checks on a body already received. `Server.serve` refuses to start when the environment
 selects Flare's opt-in `FLARE_BUFRING_HANDLER=1` loop, which is not
 supported (docs/reference/serving.md).
 

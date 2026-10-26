@@ -50,7 +50,14 @@ never parses an unbounded body."""
 comptime _LARGEST_LIMIT = 4_294_967_295
 """The largest `Json[T]` limit: the tape's spans are `UInt32` offsets into
 the body, exact only below 2^32 bytes. Checked where `from_body` or
-`_from_text` is instantiated (a route or a raw handler's call)."""
+`_from_text` is instantiated (a route or a raw handler's call).
+
+Every `UInt32` the parser stores is at most the body's length `n`, which
+`_parse_json` checks against the limit before reading: an offset is at
+most `n` (a string's `start` is one past its opening quote, before its
+closing one), and each parsed value takes at least one byte of the body,
+so a stored node index, a container's `count` and the length of `kids`
+(one entry per value but the root) are each below `n`. No test parses a body near 2^32 bytes."""
 
 comptime _EXPONENT_CAP = 1 << 40
 """Where `_to_float64` stops reading an exponent's digits. A literal's digit
@@ -59,6 +66,10 @@ count moves its decimal exponent by at most its length, at most
 magnitude passes about 1,100 (800 kept digits, 324 below the smallest
 double); so any exponent read up to this cap, or saturated at it, decides
 the same result."""
+
+comptime _LIMIT_NEGATIVE = (
+    "Json's limit is negative; a limit is a byte count, 0 or more"
+)
 
 comptime _LIMIT_TOO_LARGE = (
     "Json's limit is over 4294967295 bytes, the longest body its parser"
@@ -665,9 +676,7 @@ struct _Parser:
         return at
 
 
-def _parse_json(
-    text: String, max_bytes: Int = _MAX_BODY_BYTES
-) raises -> JsonValue:
+def _parse_json(text: String, max_bytes: Int) raises -> JsonValue:
     """Parses one JSON text (the RFC 8259 grammar with Muntin's limits; see
     `_Parser`) and returns its top-level value. Raises on anything else, and
     on a text longer than `max_bytes` (a `Json[T]`'s limit, M3-089), before
@@ -1297,8 +1306,8 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
     `Content-Type` field whose media type is `application/json` (else 415)
     and a body of at most `limit` bytes, 1 MiB unless the route's type says
     another (`Json[T, limit=64 * 1024]`, M3-089; else 413); `limit` is the
-    body's `max_bytes`, at most 2^32 - 1 (`_LARGEST_LIMIT`), and means
-    nothing on a result. The body is then parsed strictly
+    body's `max_bytes`, from 0 to 2^32 - 1 (`_LARGEST_LIMIT`), checked at
+    compile time where the body is read, and means nothing on a result. The body is then parsed strictly
     and the value built, either failing answers 400, all
     before the handler. As a result: the value is written as the
     body and the response has the status given to the initializer (200 by
@@ -1346,6 +1355,7 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
         the raise."""
         comptime assert _refusal[Self.T, True]() == "", _refusal[Self.T, True]()
         comptime assert Self.limit <= _LARGEST_LIMIT, _LIMIT_TOO_LARGE
+        comptime assert Self.limit >= 0, _LIMIT_NEGATIVE
         return Self(_read_json[Self.T](_parse_json(body, Self.max_bytes)))
 
     @staticmethod
@@ -1354,6 +1364,7 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
         `Rejection.JSON` and `Rejection.FROM_JSON` (M3-084)."""
         comptime assert _refusal[Self.T, True]() == "", _refusal[Self.T, True]()
         comptime assert Self.limit <= _LARGEST_LIMIT, _LIMIT_TOO_LARGE
+        comptime assert Self.limit >= 0, _LIMIT_NEGATIVE
         var value: JsonValue
         try:
             value = _parse_json(text, Self.max_bytes)

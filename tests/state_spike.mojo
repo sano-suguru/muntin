@@ -47,7 +47,7 @@ from muntin.app import _match, _parse_int
 from muntin.app import _query_value, _raw_request
 from muntin.headers_body import _HeaderCarrier
 from muntin.http import Headers
-from muntin.json import _JsonBody
+from muntin.json import _JsonBody, _MAX_BODY_BYTES
 
 # Local copies of production's response policies and adapters as of M3-014
 # (src/muntin/app.mojo before M3-015 replaced them with one adapter per
@@ -126,7 +126,8 @@ def _call_body[
     not a carrier it first answers 415 unless the arguments are exactly the
     body and the `Content-Type` verdict `"1"` (the arity check keeps a route registered
     without its `json` flag from reading a body `"1"` as the verdict), then
-    413 for a body over 1 MiB, without parsing it (`_json_status`).
+    413 for a body over 1 MiB (`_MAX_BODY_BYTES`), without parsing it
+    (`_json_status`, then the length).
 
     For a `WithHeaders[B]` carrier (`_HeaderCarrier`) the arguments go on
     with the header fields' names and values. After the JSON steps for a
@@ -143,7 +144,9 @@ def _call_body[
     """
     comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
     comptime if conforms_to(B, _JsonBody):
-        var status = _json_status[B](args, 1, args[0].byte_length())
+        var status = _json_status[B](args, 1)
+        if status == 0 and args[0].byte_length() > _MAX_BODY_BYTES:
+            status = 413
         if status != 0:
             return _body_rejection_answer(status)
     var body: B
@@ -197,7 +200,9 @@ def _call_int_body[
     except:
         return _bad_request()
     comptime if conforms_to(B, _JsonBody):
-        var status = _json_status[B](args, 2, args[1].byte_length())
+        var status = _json_status[B](args, 2)
+        if status == 0 and args[1].byte_length() > _MAX_BODY_BYTES:
+            status = 413
         if status != 0:
             return _body_rejection_answer(status)
     var body: B

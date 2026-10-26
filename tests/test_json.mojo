@@ -36,7 +36,6 @@ from muntin.json import (
     _MAX_DEPTH,
     _json_content_type,
     _parse_json,
-    _to_float64,
 )
 from muntin.testing import TestClient
 
@@ -676,23 +675,23 @@ def test_representative_round_trip_kinds() raises:
     # A present nickname, then absent and null told apart.
     var named = String(BODY).replace('"nickname":null', '"nickname":"Al"')
     assert_equal(Json[CreateUser].from_body(named).value.nickname.value(), "Al")
-    assert_false(Bool(_parse_json('{"a":1}').get("nickname")))
-    assert_true(_parse_json('{"n":null}')["n"].is_null())
-    assert_true(Bool(_parse_json('{"n":null}').get("n")))
+    assert_false(Bool(_parse('{"a":1}').get("nickname")))
+    assert_true(_parse('{"n":null}')["n"].is_null())
+    assert_true(Bool(_parse('{"n":null}').get("n")))
     # Top-level scalars and arrays are JSON texts too (RFC 8259).
-    assert_equal(_parse_json(" 42 ").int(), 42)
-    assert_equal(_parse_json("[true,false,null]")[1].bool(), False)
-    assert_true(_parse_json("[true,false,null]")[2].is_null())
-    assert_equal(len(_parse_json("[true,false,null]")), 3)
-    assert_equal(len(_parse_json("1")), 0)
-    assert_equal(_parse_json('"x"').string(), "x")
-    assert_equal(_parse_json('"\\/\\b\\f\\r\\t"').string(), "/\x08\x0c\r\t")
-    assert_equal(_parse_json('{"\\u0061":1}')["a"].int(), 1)
-    assert_equal(_parse_json("-0").int(), 0)
-    assert_equal(_parse_json("0.5e-1").float(), 0.05)
-    assert_equal(_parse_json("2").float(), 2.0)
+    assert_equal(_parse(" 42 ").int(), 42)
+    assert_equal(_parse("[true,false,null]")[1].bool(), False)
+    assert_true(_parse("[true,false,null]")[2].is_null())
+    assert_equal(len(_parse("[true,false,null]")), 3)
+    assert_equal(len(_parse("1")), 0)
+    assert_equal(_parse('"x"').string(), "x")
+    assert_equal(_parse('"\\/\\b\\f\\r\\t"').string(), "/\x08\x0c\r\t")
+    assert_equal(_parse('{"\\u0061":1}')["a"].int(), 1)
+    assert_equal(_parse("-0").int(), 0)
+    assert_equal(_parse("0.5e-1").float(), 0.05)
+    assert_equal(_parse("2").float(), 2.0)
     # Accessors of the wrong kind raise.
-    var v = _parse_json('{"a":[1],"s":"x","n":1.5}')
+    var v = _parse('{"a":[1],"s":"x","n":1.5}')
     for k in range(8):
         var raised = False
         try:
@@ -761,7 +760,7 @@ def test_malformed_json_is_400_before_the_handler() raises:
     for s in materialize[MALFORMED]():
         var raised = False
         try:
-            _ = _parse_json(s)
+            _ = _parse(s)
         except:
             raised = True
         assert_true(raised, "parsed: " + s)
@@ -775,7 +774,7 @@ def test_malformed_json_is_400_before_the_handler() raises:
         _reset()
         assert_equal(_post(app, "/users", s).status, 400, s)
         assert_equal(_count(HANDLER), 0)
-    _ = _parse_json('{"a":{"a":1},"b":{"a":2}}')
+    _ = _parse('{"a":{"a":1},"b":{"a":2}}')
 
 
 def test_field_errors_are_400_and_extra_members_are_ignored() raises:
@@ -815,11 +814,11 @@ def _nested(depth: Int) -> String:
 
 
 def test_nesting_cap() raises:
-    _ = _parse_json(_nested(_MAX_DEPTH))
+    _ = _parse(_nested(_MAX_DEPTH))
     assert_equal(_MAX_DEPTH, 64)
     var raised = False
     try:
-        _ = _parse_json(_nested(_MAX_DEPTH + 1))
+        _ = _parse(_nested(_MAX_DEPTH + 1))
     except:
         raised = True
     assert_true(raised)
@@ -1505,21 +1504,48 @@ def test_number_limits() raises:
     for s in ["1e400", "-1e400", "1.7976931348623159e308", "1e999999999999"]:
         var raised = False
         try:
-            _ = _parse_json(s).float()
+            _ = _parse(s).float()
         except:
             raised = True
         assert_true(raised, s)
-    assert_equal(_bits(_parse_json("1e-400").float()), UInt64(0))
+    assert_equal(_bits(_parse("1e-400").float()), UInt64(0))
+    assert_equal(_bits(_parse("-1e-400").float()), UInt64(0x8000000000000000))
+    assert_equal(_bits(_parse("-0").float()), UInt64(0x8000000000000000))
+    assert_equal(_bits(_parse("0e999999999999").float()), UInt64(0))
+    # An exponent's digits are read up to 2^40 (`_EXPONENT_CAP`) and then
+    # saturate: 2^40 itself, and 40 nines, which would overflow an `Int`,
+    # decide the same result as any exponent past 10^309. Leading zeros do
+    # not count toward the cap. The 10^9-digit case it was sized for needs
+    # about 2 GB: tests/large/test_exponent_past_a_billion.mojo.
+    var nines = String("9") * 40
+    for s in [
+        String("1e1099511627776"),
+        String("-1e1099511627776"),
+        String("1e") + nines,
+        String("0.") + "0" * 400 + "1e" + nines,
+    ]:
+        var raised = False
+        try:
+            _ = _parse(s).float()
+        except:
+            raised = True
+        assert_true(raised, s)
+    assert_equal(_bits(_parse("1e-1099511627776").float()), UInt64(0))
     assert_equal(
-        _bits(_parse_json("-1e-400").float()), UInt64(0x8000000000000000)
+        _bits(_parse(String("-1e-") + nines).float()),
+        UInt64(0x8000000000000000),
     )
-    assert_equal(_bits(_parse_json("-0").float()), UInt64(0x8000000000000000))
-    assert_equal(_bits(_parse_json("0e999999999999").float()), UInt64(0))
+    assert_equal(
+        _bits(_parse(String("1") + "0" * 400 + "e-" + nines).float()),
+        UInt64(0),
+    )
+    assert_equal(_bits(_parse(String("0e") + nines).float()), UInt64(0))
+    _assert_reads(String("1e") + "0" * 60 + "1", 0x4024000000000000)
     # The exact halfway point past the largest double rounds to 2^1024 (even),
     # so it raises; one unit less is the largest double.
     var raised = False
     try:
-        _ = _parse_json(
+        _ = _parse(
             _halfway(_HALF_PAST_MAX_DIGITS, _HALF_PAST_MAX_EXPONENT)
         ).float()
     except:
@@ -1529,8 +1555,12 @@ def test_number_limits() raises:
         _below(_HALF_PAST_MAX_DIGITS, _HALF_PAST_MAX_EXPONENT),
         0x7FEFFFFFFFFFFFFF,
     )
-    assert_equal(_parse_json("9223372036854775807").int(), Int.MAX)
-    assert_equal(_parse_json("-9223372036854775808").int(), Int.MIN)
+    assert_equal(_parse("9223372036854775807").int(), Int.MAX)
+    assert_equal(_parse("-9223372036854775808").int(), Int.MIN)
+
+
+def _parse(text: String) raises -> JsonValue:
+    return _parse_json(text, _MAX_BODY_BYTES)
 
 
 def _bits(x: Float64) -> UInt64:
@@ -1625,24 +1655,7 @@ def _past_kept(digits: String, exponent: String) -> String:
 
 
 def _assert_reads(text: String, expected: UInt64) raises:
-    assert_equal(_bits(_parse_json(text).float()), expected, text)
-
-
-def _long_literal(zeros: Int, exponent: String) -> String:
-    """`1`, `zeros` zeros, then `exponent`."""
-    var b = List[UInt8](length=zeros + 1, fill=UInt8(0x30))
-    b[0] = 0x31
-    b.extend(Span(exponent.as_bytes()))
-    return String(unsafe_from_utf8=b^)
-
-
-def test_an_exponent_past_a_billion_reads_within_the_widest_limit() raises:
-    # 1,000,000,014 bytes, within `limit=4_294_967_295`: 10^(10^9 - 10^10)
-    # is 0.0. Read only up to 10^9 (a cut sized for 1 MiB), the exponent
-    # would be cancelled by the digits and the result 1.0. About 2 GB.
-    var t = _long_literal(1_000_000_000, "e-10000000000")
-    assert_equal(t.byte_length(), 1_000_000_014)
-    assert_equal(_bits(_to_float64(t)), UInt64(0))
+    assert_equal(_bits(_parse(text).float()), expected, text)
 
 
 def test_float_is_correctly_rounded() raises:
@@ -1715,7 +1728,7 @@ def test_float_writer_gap_on_mojo_1_1_0() raises:
     # (M3-008)").
     var text = _written(bitcast[DType.float64](UInt64(0xC360B3B71251310B)))
     assert_equal(text, "-3.760958796054742e+16")
-    assert_equal(_bits(_parse_json(text).float()), UInt64(0xC360B3B71251310C))
+    assert_equal(_bits(_parse(text).float()), UInt64(0xC360B3B71251310C))
     # Finite floats print as valid JSON numbers.
     assert_equal(_written(1e16), "1e+16")
     assert_equal(_written(1e-07), "1e-07")
@@ -1756,7 +1769,7 @@ def test_writer_escapes_and_structure() raises:
         + '"o":{"a":1},"o2":{"a":2},"l":[true,[],-3]}',
     )
     # Muntin's parser reads back what the writer wrote.
-    var v = _parse_json(text)
+    var v = _parse(text)
     assert_equal(v['q"\\'].string(), "a\x01\x1f\t\r\n\x7f é")
     assert_equal(v["l"][2].int(), -3)
     # Structural misuse and non-finite numbers raise.
@@ -1824,8 +1837,8 @@ def test_parsing_and_access_are_linear() raises:
     assert_true(obj.byte_length() <= _MAX_BODY_BYTES)
     assert_true(arr.byte_length() <= _MAX_BODY_BYTES)
     var t0 = perf_counter_ns()
-    var o = _parse_json(obj)
-    var a = _parse_json(arr)
+    var o = _parse(obj)
+    var a = _parse(arr)
     var total = 0
     for i in range(len(a)):
         total += a[i].string().byte_length()
@@ -1839,7 +1852,7 @@ def test_parsing_and_access_are_linear() raises:
 def test_json_value_copies_share_the_document() raises:
     # One tape per parse; a sub-value copies one reference, not the tape;
     # string accessors return copies.
-    var v = _parse_json('{"a":{"b":[1,2]}}')
+    var v = _parse('{"a":{"b":[1,2]}}')
     assert_equal(v._doc.count(), 1)
     var a = v["a"]
     var b = a["b"]

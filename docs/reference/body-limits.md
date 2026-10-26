@@ -1,6 +1,6 @@
 # Body size limits
 
-Every typed body's type has a size limit in bytes (`Int.MAX` is none). A longer body is 413 `Content Too Large` before the conversion and the handler, bare or in `WithHeaders[B]`: after the route values, before a carrier's field rebuild and before a text body's UTF-8 read ([order of checks](routing.md#order-of-checks)).
+Every typed body's type has a size limit in bytes. A `FromBody` or `FromBytes` type's `Int.MAX` is none; a `Json[T]` limit is at most 4,294,967,295. A longer body is 413 `Content Too Large` before the conversion and the handler, bare or in `WithHeaders[B]`: after the route values, before a carrier's field rebuild and before a text body's UTF-8 read ([order of checks](routing.md#order-of-checks)).
 
 | Body | Its limit | When it declares none |
 |---|---|---|
@@ -90,7 +90,7 @@ app.post["/posts/import"](import_posts)
 
 Run by `tests/test_bytes_limit.mojo` (`test_dx_text_and_json_examples`), as written; its import posts an array of two `{"title":"a"}` padded with spaces to 2 MiB (`2 posts`), and it also checks that a 65,537-byte post without `Content-Type` is 415.
 
-- `limit` is keyword-only (`Json[T, 4096]` does not compile) and is 1 MiB unless given: `Json[T]` is `Json[T, limit=1048576]`. At most 4,294,967,295 (2^32 − 1), the longest body the parser addresses; a larger one fails where the route is registered (`Json's limit is over 4294967295 bytes, the longest body its parser addresses`).
+- `limit` is keyword-only (`Json[T, 4096]` does not compile) and is 1 MiB unless given: `Json[T]` is `Json[T, limit=1048576]`. At most 4,294,967,295 (2^32 − 1), the longest body the parser addresses; a larger one fails to compile where the route is registered or a raw handler calls `from_body` (`Json's limit is over 4294967295 bytes, the longest body its parser addresses`).
 - `Json[T, limit=n].from_body` raises above `n` (`JSON body too large`), so a raw handler that calls it gets the same bound.
 - A parse's memory grows with the limit: about 29 MB at 1 MiB ([JSON rules](bodies.md#rules-for-every-json-body)).
 - On a result `limit` means nothing: the whole value is written. It is part of the type, so a handler that returns its body returns `Json[T, limit=n]`.
@@ -172,7 +172,7 @@ Run by `tests/test_bytes_limit.mojo` (`test_dx_examples`), with `Blob`, `put_blo
 
 ## Every limit
 
-- A negative `max_bytes` or `limit` is rejected at registration (`the request body's max_bytes is negative; a body type's max_bytes is a byte count, 0 or more`).
+- A negative `max_bytes` or `limit` is rejected at registration (`the request body's max_bytes is negative; a body type's max_bytes is a byte count, 0 or more`); a negative `Json[T]` limit also where a raw handler calls `from_body` (`Json's limit is negative; a limit is a byte count, 0 or more`).
 - It is `App.handle`'s rule, not the type's: `Avatar.from_bytes(bytes)` or `Comment.from_body(text)` called directly checks no limit (`Json[T].from_body` checks its own). It measures `Request.body` after middleware.
 - It bounds what reaches the conversion, not what the server receives: the backend has already buffered the whole body. Receiving is bounded by the `Server`'s `max_body_bytes` ([serving](serving.md#receive-body-limit)); a limit above it is never reached.
 - There is no `App`-wide or per-registration limit. A raw handler measures `req.body` itself ([raw handlers](raw.md)).

@@ -651,8 +651,9 @@ def _post_rule(
     for two one message, then an optional value at a path position; then
     the last slot `X`, which is the body position (never a route value
     there, as such a shape is bodyless), where a type with two body conversions
-    (`_TWO_BODIES`) and a `FromBytes` with a negative `max_bytes`
-    (`_NEGATIVE_LIMIT`, M3-043) each get their own message."""
+    (`_TWO_BODIES`) and a body type with a negative `max_bytes`, a
+    `FromBytes` (`_NEGATIVE_LIMIT`, M3-043), a `FromBody` or a `Json[T]`'s
+    `limit` (M3-089), each get their own message."""
     if _bodyless(k1) and _bodyless(k2) and _bodyless(k3):
         return _get_rule(stateful, k1, k2, k3, response, paths, queries)
     if k1 == _RAW and k2 == _ABSENT:
