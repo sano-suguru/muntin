@@ -28,6 +28,7 @@ If these disagree, do not silently pick one. Preserve established architecture a
 - Never report an item done until a real executable check exercises it successfully. Syntax-only checks, commands that failed to start, and inspection alone are not passing evidence. An item is complete when its pull request merges; `main` requires CI to pass first.
 - When CI fails, first classify the cause (Muntin bug, toolchain bug, packaging, runner/image). Do not change Muntin core to work around a non-Muntin cause.
 - Write current stable Mojo: `def`, not the deprecated `fn`, except in a minimal reproduction that documents why. Keep third-party backend imports out of `src/muntin`.
+- ドキュメントと既存のコードが食い違うときはコードの書き方に従い、見つけた食い違いを最後の返答ですべて挙げること
 - When current Mojo or dependency behavior matters, verify it with the installed toolchain or authoritative upstream documentation instead of guessing. If a design target cannot be expressed, prove the limitation with a minimal reproduction and implement the closest type-safe alternative.
 - For architecture, ownership/lifetime, backend-seam, or public-API changes, use a fresh-context skeptical review when practical.
 - Each fact has one owner (`docs/DEVELOPMENT.md`, "Where information lives"). Update the owner; elsewhere link to it rather than copying it. Do not restate a fact to make it easier to find: a growing handoff or summary means an owner is missing or unclear, so fix the owner instead. A decision record follows the shape and size in `docs/DEVELOPMENT.md` section 2.
