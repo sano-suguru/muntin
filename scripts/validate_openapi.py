@@ -17,8 +17,8 @@ and jsonschema installed (not standard library; CI does not run it):
    A request that lacks the credentials the operation's `security` names
    is denied (401, 403) and only such a one; a 204, 205 or 304 answer has
    no body.
-3. The known gaps the record states must still show, each as the mismatch
-   named below; any other mismatch fails the run.
+3. The known gaps docs/reference/openapi.md states must still show, each
+   as the mismatch named below; any other mismatch fails the run.
 """
 
 import json
@@ -35,6 +35,12 @@ NO_BODY = {204, 205, 304}
 # (method, target, body) -> the mismatch the record accepts.
 KNOWN_GAPS = {
     ("POST", "/counts", '{"n":1.0}'): "admitted, refused",  # integer takes 1.0
+    ("POST", "/counts", '{"n":1e2}'): "admitted, refused",  # and 1e2
+    (  # number takes a literal past Float64's range
+        "POST",
+        "/notes",
+        '{"text":"t","tags":[],"place":{"city":"x","lat":1e400}}',
+    ): "admitted, refused",
     ("POST", "/versions", "3.0"): "admitted, refused",  # hand-written: {}
     ("DELETE", "/old-places/1", ""): "a body in a 204 answer",  # Json 204
 }
@@ -164,7 +170,8 @@ def main():
     validate(doc)
     ops = sum(len(v) for v in doc["paths"].values())
     print(f"openapi-spec-validator: a valid OpenAPI 3.1 document, {ops} operations")
-    agree = gaps = 0
+    agree = 0
+    seen = set()
     failures = []
     exchanges = [json.loads(line) for line in open(d + "/exchanges.jsonl")]
     for ex in exchanges:
@@ -173,18 +180,20 @@ def main():
         got = "no operation" if op is None else check(doc, ex, op, values)
         want = KNOWN_GAPS.get(key)
         if got == want and want is not None:
-            gaps += 1
+            seen.add(key)
         elif got is None and want is None:
             agree += 1
         else:
             failures.append(f"{key}: {got} (expected {want})")
     print(
         f"{len(exchanges)} exchanges: {agree} agree with the document, "
-        f"{gaps} show their known gap, {len(failures)} mismatch"
+        f"{len(seen)} show their known gap, {len(failures)} mismatch"
     )
     for f in failures:
         print("MISMATCH", f)
-    sys.exit(1 if failures or gaps != len(KNOWN_GAPS) else 0)
+    for key in KNOWN_GAPS.keys() - seen:
+        print("GAP NOT SHOWN", key)
+    sys.exit(1 if failures or seen != KNOWN_GAPS.keys() else 0)
 
 
 main()

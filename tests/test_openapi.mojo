@@ -319,8 +319,10 @@ struct _Log(Movable):
             r = client.delete(target, headers=h^)
         elif method == "PUT":
             r = client.put(target, body, headers=h^)
-        else:
+        elif method == "POST":
             r = client.post(target, body, headers=h^)
+        else:
+            raise Error("_Log.send: no " + method)
         var out = JsonWriter()
         out.begin_object()
         out.field("method", method)
@@ -437,8 +439,9 @@ def test_document_and_exchanges() raises:
     assert_equal(log.send(client, "GET", "/search").status, 400)
     assert_equal(log.send(client, "GET", "/orgs/1/tasks/t?limit=y").status, 400)
     # Known gaps the validator expects (the record's): JSON Schema's
-    # `integer` takes `1.0`, which the reader refuses; a hand-written
-    # reader's `{}`; a `Json` answer of 204, which carries a body. A 404
+    # `integer` takes `1.0` and `1e2`, and `number` a literal past
+    # `Float64`'s range, which the reader refuses; a hand-written reader's
+    # `{}`; a `Json` answer of 204, which carries a body. A 404
     # `Json` answer meets the entry `_additions` gives it, as a bodiless
     # 204 `Response` does.
     assert_equal(
@@ -447,6 +450,11 @@ def test_document_and_exchanges() raises:
     assert_equal(
         log.send(client, "POST", "/counts", '{"n":1.0}', True).status, 400
     )
+    assert_equal(
+        log.send(client, "POST", "/counts", '{"n":1e2}', True).status, 400
+    )
+    var far = '{"text":"t","tags":[],"place":{"city":"x","lat":1e400}}'
+    assert_equal(log.send(client, "POST", "/notes", far, True).status, 400)
     assert_equal(log.send(client, "POST", "/versions", "3.0", True).status, 400)
     assert_equal(log.send(client, "GET", "/missing").status, 404)
     assert_equal(log.send(client, "DELETE", "/places/1").status, 204)
@@ -709,8 +717,8 @@ def test_additions_that_repeat_or_miss_raise() raises:
     _refuses_addition(
         "",
         op,
-        '{"parameters":[]}',
-        "openapi: operations[POST /places]: parameters is derived",
+        '{"parameters":{}}',
+        "openapi: operations[POST /places]: parameters is not a JSON array",
     )
     _refuses_addition(
         "",
@@ -1208,6 +1216,119 @@ def test_field_kinds() raises:
         + _json('{"type":"array","items":{}}')
         + "}",
     )
+
+
+def test_parameters_added_after_the_derived_ones() raises:
+    # A raw or `Headers` handler reads what no type says; an addition
+    # describes it, but may not repeat a derived parameter's `in` and name.
+    var a = App()
+    a.get["/raw"](raw)
+    var ops = Dict[String, String]()
+    ops["GET /raw"] = (
+        '{"parameters":[{"name":"X-Id","in":"header","schema":'
+        + '{"type":"string"}},{"name":"page","in":"query"}]}'
+    )
+    assert_equal(
+        a.openapi(title="T", version="1", operations=ops^),
+        '{"openapi":"3.1.0","info":{"title":"T","version":"1"},"paths":'
+        + '{"/raw":{"get":{"parameters":[{"name":"X-Id","in":"header",'
+        + '"schema":{"type":"string"}},{"name":"page","in":"query"}],'
+        + _undescribed()
+        + "}}}}",
+    )
+    var b = App()
+    b.get["/n/{id}?{tag}"](_get_tagged)
+    var more = Dict[String, String]()
+    more["GET /n/{id}"] = (
+        '{"parameters":[{"name":"id","in":"query"},{"name":"tag","in":'
+        + '"header"},{"name":"id","in":"header"}]}'
+    )
+    var doc = b.openapi(title="T", version="1", operations=more^)
+    assert_true(
+        doc.find(
+            '"description":"An empty value is the same as an absent one.",'
+            + '"schema":{"type":"string","minLength":1}},{"name":"id",'
+            + '"in":"query"},{"name":"tag","in":"header"},'
+        )
+        >= 0,
+        doc,
+    )
+    for entry in [
+        '{"name":"id","in":"path"}',
+        '{"in":"query","name":"tag","schema":{}}',
+    ]:
+        var c = App()
+        c.get["/n/{id}?{tag}"](_get_tagged)
+        var repeat = Dict[String, String]()
+        repeat["GET /n/{id}"] = '{"parameters":[' + String(entry) + "]}"
+        try:
+            _ = c.openapi(title="T", version="1", operations=repeat^)
+        except e:
+            assert_true(String(e).find("]: parameter ") >= 0, String(e))
+            assert_true(String(e).endswith(" is derived"), String(e))
+            continue
+        raise Error("not refused: " + String(entry))
+
+
+def _post_b() -> String:
+    return "b"
+
+
+def _get_b() -> String:
+    return "b"
+
+
+def _yb(y: String) -> String:
+    return "yb"
+
+
+def _overlap_refused(var app: App, message: String) raises:
+    try:
+        _ = app.openapi(title="T", version="1")
+    except e:
+        assert_equal(String(e), message)
+        return
+    raise Error("not refused: " + message)
+
+
+def test_overlapping_paths() raises:
+    # `GET /a/b` goes to `/a/{x}`'s route, which OpenAPI resolves to the
+    # path `/a/b`: it must have every method `/a/{x}` has.
+    var a = App()
+    a.get["/a/{x}"](_a)
+    a.post["/a/b"](_post_b)
+    _overlap_refused(
+        a^,
+        "openapi: routes /a/{x} and /a/b overlap: OpenAPI resolves a"
+        + " request both match to /a/b, which has no GET route",
+    )
+    var b = App()
+    b.get["/a/b"](_get_b)  # the more specific first (M3-053)
+    b.get["/a/{x}"](_a)
+    b.post["/a/{x}"](_a)
+    _overlap_refused(
+        b^,
+        "openapi: routes /a/{x} and /a/b overlap: OpenAPI resolves a"
+        + " request both match to /a/b, which has no POST route",
+    )
+    # Neither covers the other: OpenAPI resolves `/a/b` to neither.
+    var c = App()
+    c.get["/a/{x}"](_a)
+    c.post["/{y}/b"](_yb)
+    _overlap_refused(
+        c^,
+        "openapi: routes /a/{x} and /{y}/b overlap, and OpenAPI does not say"
+        + " which one a request both match resolves to",
+    )
+    # The specific path has every method of the general one, or they do
+    # not overlap.
+    var d = App()
+    d.get["/a/b"](_get_b)
+    d.get["/a/{x}"](_a)
+    d.post["/a/b"](_post_b)
+    d.post["/c/d"](_post_b)
+    var doc = d.openapi(title="T", version="1")
+    assert_true(doc.find('"/a/b":{"get":') >= 0, doc)
 
 
 def main() raises:

@@ -24,8 +24,6 @@ from ._registration_rules import (
     _BODY,
     _INT,
     _OPT_INT,
-    _OPT_TEXT,
-    _TEXT,
     _kind,
     _is_optional,
     _is_value,
@@ -34,8 +32,7 @@ from ._registration_rules import (
 )
 from .body import FromBytes
 from .headers_body import _HeaderCarrier
-from .http import Response
-from .json import JsonValue, JsonWriter, _JsonBody, _OBJECT
+from .json import JsonValue, JsonWriter, _JsonBody, _ARRAY, _OBJECT, _STRING
 from .route_value import RouteValues
 
 
@@ -54,14 +51,18 @@ def _parameter[
     names: List[StaticString],
     mut j: Int,
     paths: Int,
+    mut derived: List[String],
 ) raises:
-    """The parameter that route value `j` of type `X` binds, then `j + 1`;
-    nothing when `X` is no route value."""
+    """The parameter that route value `j` of type `X` binds, then `j + 1`,
+    its `in` and name appended to `derived`; nothing when `X` is no route
+    value."""
     comptime k = _kind[X]()
     comptime if _is_value(k):
+        var place = "path" if j < paths else "query"
+        derived.append(place + " " + String(names[j]))
         out.begin_object()
         out.field("name", String(names[j]))
-        out.field("in", "path" if j < paths else "query")
+        out.field("in", place)
         out.field("required", not _is_optional(k))
         comptime if _is_optional(k):
             # An empty value, or a key without `=`, reads as `None`, as an
@@ -89,22 +90,50 @@ def _parameter[
 
 def _parameters[
     A: AnyType, B: AnyType, C: AnyType
-](mut out: JsonWriter, literal: StaticString) raises:
+](
+    mut out: JsonWriter, literal: StaticString, extra: Optional[JsonValue]
+) raises:
+    """The route values' parameters, then the application's own (`extra`'s
+    `parameters` entries, say a header field a handler reads), which may
+    not repeat a derived one's `in` and name."""
     var names = _placeholder_names(literal)
     var paths = _path_params(literal)
     var j = 0
+    var derived = List[String]()
     out.name("parameters")
     out.begin_array()
     comptime if conforms_to(A, RouteValues):
         comptime r = reflect[A]
         comptime types = r.field_types()
         comptime for i in range(r.field_count()):
-            _parameter[types[i]](out, names, j, paths)
+            _parameter[types[i]](out, names, j, paths, derived)
     else:
-        _parameter[A](out, names, j, paths)
-    _parameter[B](out, names, j, paths)
-    _parameter[C](out, names, j, paths)
+        _parameter[A](out, names, j, paths, derived)
+    _parameter[B](out, names, j, paths, derived)
+    _parameter[C](out, names, j, paths, derived)
+    if extra:
+        var more = extra.value().get("parameters")
+        if more:
+            if more.value()._kind() != _ARRAY:
+                raise Error("parameters is not a JSON array")
+            for i in range(len(more.value())):
+                var item = more.value()._child(i)
+                if item._kind() == _OBJECT:
+                    var key = _string_member(item, "in") + " "
+                    key += _string_member(item, "name")
+                    for d in derived:
+                        if d == key:
+                            raise Error("parameter " + key + " is derived")
+                out._copy(item)
     out.end_array()
+
+
+def _string_member(value: JsonValue, name: String) raises -> String:
+    """The string member `name` of an object, or `""`."""
+    var member = value.get(name)
+    if member and member.value()._kind() == _STRING:
+        return member.value().string()
+    return ""
 
 
 def _request_body[X: AnyType](mut out: JsonWriter) raises:
@@ -185,7 +214,7 @@ def _responses[
     if extra:
         var more = extra.value().get("responses")
         if more:
-            _merge(out, more.value(), False)
+            _merge(out, more.value())
     out.end_object()
 
 
@@ -196,30 +225,36 @@ def _operation[
 ) raises:
     """The derived operation, then the application's `extra` (a parsed
     JSON object from `App.openapi`'s `operations`), as written: its
-    `responses` beside the derived response, its other members beside the
-    derived ones (`_merge`)."""
+    `parameters` after the derived ones, its `responses` beside the derived
+    response, its other members beside the derived ones (`_merge`)."""
     out.begin_object()
-    _parameters[A, B, C](out, literal)
+    _parameters[A, B, C](out, literal, extra)
     _request_body[A](out)
     _request_body[B](out)
     _request_body[C](out)
     _responses[R](out, extra)
     if extra:
-        _merge(out, extra.value(), True)
+        _merge(out, extra.value(), "parameters", "responses")
     out.end_object()
 
 
-def _merge(mut out: JsonWriter, extra: JsonValue, skip_responses: Bool) raises:
-    """`extra`'s members (but `responses`, when `skip_responses`) into the
-    open object, after the derived ones; one that repeats a derived member
-    raises: `parameters` always, `requestBody` when the handler has a body
-    slot, a response of the status the result gives."""
+def _merge(
+    mut out: JsonWriter,
+    extra: JsonValue,
+    skip: String = "",
+    skip_too: String = "",
+) raises:
+    """`extra`'s members (but those named `skip` and `skip_too`, merged
+    elsewhere) into the open object, after the derived ones; one that
+    repeats a derived member raises: `requestBody` when the handler has a
+    body slot, a response of the status the result gives, a top-level
+    `openapi` or `paths`, `info`'s `title` or `version`."""
     if extra._kind() != _OBJECT:
         raise Error("not a JSON object")
     for i in range(len(extra)):
         var member = extra._child(i)
         var name = member._name()
-        if skip_responses and name == "responses":
+        if name.byte_length() > 0 and (name == skip or name == skip_too):
             continue
         if out._holds(name):
             raise Error(name + " is derived")

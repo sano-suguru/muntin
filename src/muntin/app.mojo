@@ -1716,7 +1716,7 @@ def _no_operation(
     """No operation: `_route` stores `_operation` only under `-D
     MUNTIN_OPENAPI`, which `App.openapi` requires (so a route built
     without types, as two tests do, is never described)."""
-    raise Error("openapi: no operation")
+    raise Error("no operation")
 
 
 struct _Route(Movable):
@@ -1859,6 +1859,7 @@ def _document(
 ) raises -> String:
     var paths = List[String]()
     var shapes = List[String]()
+    var split = List[List[String]]()
     for i in range(len(routes)):
         for key in routes[i].query_keys:
             if not _sent_as_written(key, True):
@@ -1911,6 +1912,48 @@ def _document(
                     )
         paths.append(p)
         shapes.append(shape^)
+        split.append(segments^)
+    # A request two paths both match goes to the route of its method that
+    # matches, the most specific (M3-053); OpenAPI resolves it to the more
+    # specific path, whatever the method, and to neither when neither
+    # covers the other.
+    for a in range(len(paths)):
+        for b in range(len(paths)):
+            if a == b or not _overlaps_segments(split[a], split[b]):
+                continue
+            if _covers_segments(split[a], split[b]):
+                for i in range(len(routes)):
+                    if routes[i].path != paths[a]:
+                        continue
+                    var found = False
+                    for r in range(len(routes)):
+                        if (
+                            routes[r].path == paths[b]
+                            and routes[r].method == routes[i].method
+                        ):
+                            found = True
+                    if not found:
+                        raise Error(
+                            "openapi: routes "
+                            + paths[a]
+                            + " and "
+                            + paths[b]
+                            + " overlap: OpenAPI resolves a request both"
+                            + " match to "
+                            + paths[b]
+                            + ", which has no "
+                            + routes[i].method
+                            + " route"
+                        )
+            elif a < b and not _covers_segments(split[b], split[a]):
+                raise Error(
+                    "openapi: routes "
+                    + paths[a]
+                    + " and "
+                    + paths[b]
+                    + " overlap, and OpenAPI does not say which one a"
+                    + " request both match resolves to"
+                )
     # Each key of `operations` names a route's operation, as `METHOD path`
     # with the document's path (the literal's path part).
     for entry in operations.items():
@@ -1934,7 +1977,7 @@ def _document(
         var info = top.value().get("info")
         if info:
             try:
-                _merge(out, info.value(), False)
+                _merge(out, info.value())
             except e:
                 raise Error("openapi: document: info: " + String(e))
     out.end_object()
@@ -1954,22 +1997,23 @@ def _document(
                 try:
                     routes[i].describe(out, routes[i].literal, extra)
                 except e:
+                    # Without an addition, the derived part failed.
+                    var what = "operations[" if text else "route "
                     raise Error(
-                        "openapi: operations[" + key + "]: " + String(e)
+                        "openapi: "
+                        + what
+                        + key
+                        + ("]: " if text else ": ")
+                        + String(e)
                     )
         out.end_object()
     out.end_object()
     if top:
         # `openapi` and `paths` are derived, and `info` merged above.
-        for i in range(len(top.value())):
-            var member = top.value()._child(i)
-            var name = member._name()
-            if name == "info":
-                continue
-            if out._holds(name):
-                raise Error("openapi: document: " + name + " is derived")
-            out.name(name)
-            out._copy(member)
+        try:
+            _merge(out, top.value(), "info")
+        except e:
+            raise Error("openapi: document: " + String(e))
     out.end_object()
     return out^._finish()
 
@@ -2297,23 +2341,26 @@ struct _App[
         (M3-091): one path item per route path, in registration
         order, one operation per route, each described from the handler's
         types alone. Only a build with `-D MUNTIN_OPENAPI` compiles a call
-        (and links the operations, so other builds pay for none). What the
+        (and links the operations, so other builds link none). What the
         types cannot say the application adds as JSON
         objects, written into the document as given: `document`'s members
         at the top level (`info`'s into `info`), say `servers`, `security`
         and `components`; `operations["GET /notes/{id}"]`'s into that
         operation (`METHOD` and the document's path), say `security`,
-        `summary` or a `responses` entry of another status.
+        `summary`, a `parameters` entry (after the derived ones) or a
+        `responses` entry of another status.
 
         Raises when a route cannot be described truly: a path placeholder
         name repeated in it, two route paths that differ only in their
-        placeholder names, or a query key or static segment a client may
-        not send as written (`_sent_as_written`), which Muntin compares
-        undecoded. Raises, too, when an addition is no JSON object, names
-        no route, or repeats a derived member: `openapi`, `paths`, `info`'s
-        `title` and `version`, an operation's `parameters`, its
-        `requestBody` when the handler takes a body, the status its result
-        gives."""
+        placeholder names, two that overlap unless the more specific has
+        every method of the more general (OpenAPI resolves a request both
+        match to the more specific path), or a query key or static segment
+        a client may not send as written (`_sent_as_written`), which Muntin
+        compares undecoded. Raises, too, when an addition is no JSON
+        object, names no route, or repeats a derived member: `openapi`,
+        `paths`, `info`'s `title` and `version`, a derived parameter's `in`
+        and name, an operation's `requestBody` when the handler takes a
+        body, the status its result gives."""
         comptime assert Self.Ctx == _NoContext, "openapi: mount the Group first"
         comptime assert is_defined[
             "MUNTIN_OPENAPI"

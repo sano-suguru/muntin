@@ -1,6 +1,6 @@
 # OpenAPI and schema output decision (M3-091)
 
-> **Current.** Built by M3-092; see [OpenAPI](../../reference/openapi.md).
+> **Current.** Built by M3-092, changed in part by [its amendment](m3-092-openapi-output-amendment.md): overlapping paths and `%2e` dot segments raise, `parameters` additions are appended. Now described in [OpenAPI reference](../../reference/openapi.md).
 
 Status: **decision** (M3-091, issue [#142](https://github.com/sano-suguru/muntin/issues/142)). Evidence: its pull request, [#202](https://github.com/sano-suguru/muntin/pull/202).
 
