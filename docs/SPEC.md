@@ -99,7 +99,7 @@ In priority order: the first entry is the next item unless the user asks for ano
 
 Then, in priority order, each with its issue:
 
-2. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
+2. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142)): the production slice M3-092 of [M3-091](history/decisions/m3-091-openapi-output-decision.md);
 3. body limits beyond `FromBytes`, including the fixed `Json[T]` cap ([#143](https://github.com/sano-suguru/muntin/issues/143)): the production slice M3-090 of [M3-089](history/decisions/m3-089-text-and-json-body-limits-decision.md);
 4. `+json` media types or a missing `Content-Type` on JSON bodies ([#193](https://github.com/sano-suguru/muntin/issues/193));
 5. a JSON body and result without the `Json` wrapper ([#194](https://github.com/sano-suguru/muntin/issues/194));
