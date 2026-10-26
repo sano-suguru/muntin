@@ -167,6 +167,10 @@ def upload(blob: Blob) -> Response:
     return Response.text(String(blob.n))
 
 
+def upload_with_headers(var input: WithHeaders[Blob]) -> Response:
+    return Response.text(String(input.body.n))
+
+
 def raw(req: Request) -> Response:
     return Response.text("raw")
 
@@ -214,6 +218,7 @@ def make_app() -> App:
     app.get["/orgs/{org}/tasks/{task}?{limit}"](get_task)
     app.put["/lines/{id}"](put_line)
     app.post["/upload"](upload)
+    app.post["/upload-with-headers"](upload_with_headers)
     app.get["/raw"](raw)
     app.post["/envelope"](with_headers)
     app.get["/headers"](headers_only)
@@ -307,6 +312,28 @@ def test_document_and_exchanges() raises:
     ]:
         r = client.post("/notes", String(refused), headers=_json_headers())
         assert_equal(r.status, 400, String(refused))
+        log.add("post", "/notes", "", r)
+    # Muntin's own answers: none is 2xx, so none meets a schema.
+    r = client.get("/notes/x")
+    assert_equal(r.status, 400)
+    log.add("get", "/notes/{id}", "", r)
+    r = client.post("/notes", "{}")
+    assert_equal(r.status, 415)
+    log.add("post", "/notes", "", r)
+    r = client.get("/notes?tag=")
+    assert_equal(r.status, 200)
+    # A binary body, bare or carried, has no schema; a route string is
+    # non-empty.
+    assert_equal(
+        doc.count('"requestBody":{"required":true,"content":{"*/*":{}}}'), 2
+    )
+    assert_true(
+        doc.find(
+            '{"name":"slug","in":"path","required":true,"schema":'
+            + '{"type":"string","minLength":1}}'
+        )
+        >= 0
+    )
     var dir = getenv("MUNTIN_OPENAPI_OUT")
     if dir:
         with open(dir + "/openapi.json", "w") as f:
@@ -326,8 +353,8 @@ def test_exact_operation() raises:
         + '{"name":"id","in":"path","required":true,"schema":'
         + '{"type":"integer","format":"int64"}},'
         + '{"name":"tag","in":"query","required":false,"schema":'
-        + '{"type":"string"}}],'
-        + '"responses":{"default":{"description":"The handler\'s JSON'
+        + '{"type":"string","minLength":1}}],'
+        + '"responses":{"2XX":{"description":"The handler\'s JSON'
         + ' value","content":{"application/json":{"schema":'
         + '{"type":"object","properties":{"city":{"type":"string"},'
         + '"lat":{"type":"number","format":"double"}},'
@@ -370,6 +397,36 @@ def test_repeated_path_name_raises() raises:
         _ = app.openapi(title="T", version="1")
     except e:
         assert_true(String(e).find("repeats the placeholder {id}") >= 0)
+        return
+    raise Error("no raise")
+
+
+def _d(key: Optional[String]) -> String:
+    return "d"
+
+
+def test_percent_encoded_query_key_raises() raises:
+    var app = App()
+    app.get["/f?{filter[name]}"](_d)
+    try:
+        _ = app.openapi(title="T", version="1")
+    except e:
+        assert_true(String(e).find("percent-encodes the query key") >= 0)
+        return
+    raise Error("no raise")
+
+
+def _e() -> String:
+    return "e"
+
+
+def test_percent_encoded_segment_raises() raises:
+    var app = App()
+    app.get["/hello world"](_e)
+    try:
+        _ = app.openapi(title="T", version="1")
+    except e:
+        assert_true(String(e).find("percent-encodes the segment") >= 0)
         return
     raise Error("no raise")
 

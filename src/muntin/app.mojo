@@ -1781,28 +1781,45 @@ struct _Route(Movable):
         self.describe = describe
 
 
-def _template(path: String) -> String:
-    """`path` with each placeholder's name removed: OpenAPI treats two
-    templates that differ only in names as the same path."""
-    var t = String()
-    var first = True
-    for segment in path.split("/"):
-        if not first:
-            t += "/"
-        first = False
-        if _is_param(segment):
-            t += "{}"
-        else:
-            t += segment
-    return t^
+def _sent_as_written(text: String, query: Bool) -> Bool:
+    """Whether a client sends `text` unencoded, so that Muntin's byte
+    comparison sees it as written: a query key of unreserved characters
+    alone (RFC 3986 section 2.3; a client encodes the rest of a parameter's
+    name), a static path segment of path characters (`pchar` without
+    `%`)."""
+    for b in text.as_bytes():
+        var c = Int(b)
+        if (
+            (c >= ord("a") and c <= ord("z"))
+            or (c >= ord("A") and c <= ord("Z"))
+            or (c >= ord("0") and c <= ord("9"))
+            or c == ord("-")
+            or c == ord(".")
+            or c == ord("_")
+            or c == ord("~")
+        ):
+            continue
+        if not query and String(chr(c)) in "!$&'()*+,;=:@":
+            continue
+        return False
+    return True
 
 
 def _document(
     routes: List[_Route], title: String, version: String
 ) raises -> String:
     var paths = List[String]()
-    var templates = List[String]()
+    var shapes = List[String]()
     for i in range(len(routes)):
+        for key in routes[i].query_keys:
+            if not _sent_as_written(key, True):
+                raise Error(
+                    "openapi: route "
+                    + String(routes[i].literal)
+                    + ": a client percent-encodes the query key "
+                    + key
+                    + ", which Muntin compares undecoded"
+                )
         var p = routes[i].path
         var seen = False
         for q in paths:
@@ -1810,9 +1827,10 @@ def _document(
                 seen = True
         if seen:
             continue
-        var t = _template(p)
-        for k in range(len(templates)):
-            if templates[k] == t:
+        var segments = _segments(p)
+        var shape = _shape(segments)
+        for k in range(len(shapes)):
+            if shapes[k] == shape:
                 raise Error(
                     "openapi: routes "
                     + paths[k]
@@ -1822,21 +1840,30 @@ def _document(
                     + " treats as one path"
                 )
         var names = List[String]()
-        for segment in p.split("/"):
-            if _is_param(segment):
-                var name = String(segment[byte = 1 : segment.byte_length() - 1])
-                for n in names:
-                    if n == name:
-                        raise Error(
-                            "openapi: route "
-                            + p
-                            + " repeats the placeholder {"
-                            + name
-                            + "}, which OpenAPI does not allow"
-                        )
-                names.append(name)
+        for segment in segments:
+            if not _is_param(segment):
+                if not _sent_as_written(segment, False):
+                    raise Error(
+                        "openapi: route "
+                        + p
+                        + ": a client percent-encodes the segment "
+                        + segment
+                        + ", which Muntin matches undecoded"
+                    )
+                continue
+            var name = String(segment[byte = 1 : segment.byte_length() - 1])
+            for n in names:
+                if n == name:
+                    raise Error(
+                        "openapi: route "
+                        + p
+                        + " repeats the placeholder {"
+                        + name
+                        + "}, which OpenAPI does not allow"
+                    )
+            names.append(name)
         paths.append(p)
-        templates.append(t^)
+        shapes.append(shape^)
     var out = JsonWriter()
     out.begin_object()
     out.field("openapi", "3.1.0")
@@ -2175,9 +2202,10 @@ struct _App[
         """The OpenAPI 3.1 document of this `App`'s routes, as JSON text
         (M3-091 prototype): one path item per route path, in registration
         order, one operation per route, each described from the handler's
-        types alone. Raises when a route cannot be a valid OpenAPI path: a
-        path placeholder name repeated in it, or two route paths that
-        differ only in their placeholder names."""
+        types alone. Raises when a route cannot be described truly: a path
+        placeholder name repeated in it, two route paths that differ only
+        in their placeholder names, or a query key or static segment a
+        client would percent-encode, which Muntin compares undecoded."""
         comptime assert Self.Ctx == _NoContext, "openapi: mount the Group first"
         return _document(self._core._routes, title, version)
 

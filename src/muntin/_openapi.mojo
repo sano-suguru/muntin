@@ -7,9 +7,10 @@ values as parameters, named by the literal's placeholders in binding
 order; the body as the request body; the result as the responses. `_route`
 in `app.mojo` stores it in the route, so the document costs nothing until
 `App.openapi` asks for it. It says only what `App.handle` does: a
-`Json[T]` result's status is chosen at run time, so it is the `default`
-response; a hand-written codec's schema is `{}`; Muntin's own 400, 413 and
-415 answers, middleware and a group's guard are not described.
+`Json[T]` result's status is chosen at run time, so it is the `2XX`
+response (Muntin's own answers are never 2xx); a hand-written codec's
+schema is `{}`; Muntin's own 400, 413 and 415 answers, middleware and a
+group's guard are not described.
 """
 
 from std.reflection import reflect
@@ -65,8 +66,9 @@ def _parameter[
             out.end_object()
         else:
             # `String` and a `FromRouteValue` type read the decoded text,
-            # never empty (an optional value's empty text is `None`).
-            _string_schema(out, not _is_optional(k))
+            # never empty: a required empty value is 400, an optional one
+            # `None`.
+            _string_schema(out, True)
         out.end_object()
         j += 1
 
@@ -140,8 +142,9 @@ def _responses[R: AnyType](mut out: JsonWriter) raises:
         out.end_object()
         out.end_object()
     elif conforms_to(R, _JsonBody):
-        # `Json(value, status=)` chooses the status at run time.
-        out.name("default")
+        # `Json(value, status=)` chooses the status at run time; Muntin's
+        # own answers (400, 413, 415, 500) are never 2xx.
+        out.name("2XX")
         out.begin_object()
         out.field("description", "The handler's JSON value")
         out.name("content")
@@ -156,7 +159,7 @@ def _responses[R: AnyType](mut out: JsonWriter) raises:
     else:
         out.name("default")
         out.begin_object()
-        out.field("description", "The handler's response")
+        out.field("description", "Not described: the handler's response")
         out.end_object()
     out.end_object()
 
