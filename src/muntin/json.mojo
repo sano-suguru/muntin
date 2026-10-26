@@ -1231,12 +1231,6 @@ trait _JsonBody:
     comptime _read_refusal: String
     comptime _write_refusal: String
 
-    @staticmethod
-    def _schema[reading: Bool](mut out: JsonWriter) raises:
-        """The JSON Schema of the value read (`reading`) or written (M3-091
-        prototype)."""
-        ...
-
 
 trait _JsonText:
     """`Json`'s body conversion in its two steps (M3-084), so a typed route
@@ -1304,10 +1298,6 @@ struct Json[T: Movable & Deinitable](
         """Moves the value out (`body^.take()`): a field cannot be moved
         out of the middle of a `Json` on Mojo 1.1.0."""
         return self.value^
-
-    @staticmethod
-    def _schema[reading: Bool](mut out: JsonWriter) raises:
-        _write_schema[Self.T, reading](out)
 
     @staticmethod
     def from_body(
@@ -1727,83 +1717,3 @@ def _as_optional[
     if v.is_null():
         return _as[Optional[E], F](Optional[E]())
     return _as[Optional[E], F](Optional(_read_value[E](v)))
-
-
-# Schemas (M3-091 prototype): the JSON Schema of what the derived codec
-# reads (`reading`) or writes, by the same rules as `_kind_ok`. A
-# hand-written direction has no schema source, so it is `{}` (any value).
-
-
-def _write_schema[F: AnyType, reading: Bool](mut out: JsonWriter) raises:
-    comptime if F == Int:
-        out.begin_object()
-        out.field("type", "integer")
-        out.field("format", "int64")
-        out.end_object()
-    elif F == Float64:
-        out.begin_object()
-        out.field("type", "number")
-        out.field("format", "double")
-        out.end_object()
-    elif F == Bool:
-        out.begin_object()
-        out.field("type", "boolean")
-        out.end_object()
-    elif F == String:
-        out.begin_object()
-        out.field("type", "string")
-        out.end_object()
-    elif reading and conforms_to(F, FromJson):
-        out.begin_object()
-        out.end_object()
-    elif not reading and conforms_to(F, ToJson):
-        out.begin_object()
-        out.end_object()
-    elif conforms_to(F, JsonFields):
-        comptime r = reflect[F]
-        comptime names = r.field_names()
-        comptime types = r.field_types()
-        out.begin_object()
-        out.field("type", "object")
-        out.name("properties")
-        out.begin_object()
-        comptime for i in range(r.field_count()):
-            out.name(String(materialize[names[i]]()))
-            _write_schema[types[i], reading](out)
-        out.end_object()
-        out.name("required")
-        out.begin_array()
-        comptime for i in range(r.field_count()):
-            # A read takes an absent `Optional` member; a write always
-            # writes the member (`null` when empty).
-            comptime if not (reading and _is_optional[types[i]]()):
-                out.string(String(materialize[names[i]]()))
-        out.end_array()
-        comptime if not reading:
-            out.field("additionalProperties", False)
-        out.end_object()
-    elif conforms_to(F, Iterable):
-        comptime E = F.IteratorType[ImmutAnyOrigin].Element
-        comptime if conforms_to(E, Movable & Deinitable):
-            comptime if F == List[E]:
-                out.begin_object()
-                out.field("type", "array")
-                out.name("items")
-                _write_schema[E, reading](out)
-                out.end_object()
-            elif F == Optional[E]:
-                out.begin_object()
-                out.name("anyOf")
-                out.begin_array()
-                _write_schema[E, reading](out)
-                out.begin_object()
-                out.field("type", "null")
-                out.end_object()
-                out.end_array()
-                out.end_object()
-            else:
-                comptime assert False, "not a JSON kind"
-        else:
-            comptime assert False, "not a JSON kind"
-    else:
-        comptime assert False, "not a JSON kind"
