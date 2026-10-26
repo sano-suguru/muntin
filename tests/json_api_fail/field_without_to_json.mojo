@@ -1,7 +1,8 @@
 # Must not compile (M3-075): `JsonWriter.field` takes Int, Float64, Bool,
-# String, a `ToJson` type, and an `Optional` or `List` of one of those. A
-# struct that does not conform to `ToJson` fails where `field` is called,
-# not deeper in an instantiation.
+# String, a `ToJson` type, a `JsonFields` struct (M3-087), and an `Optional`
+# or `List` of one of those. A struct that conforms to neither `ToJson` nor
+# `JsonFields` fails where `field` is called, not deeper in an
+# instantiation.
 # Expected diagnostic (checked by scripts/check.sh): no matching method in call to 'field'
 from muntin import Json, JsonWriter, ToJson
 

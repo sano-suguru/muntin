@@ -51,6 +51,7 @@ What each capability does for an application: the [guide](GUIDE.md) and the [ref
 | a chosen status for a JSON result (`Json(value, status=201)`) | [M3-028](history/decisions/m3-028-json-response-status-decision.md) | shipped |
 | one-call JSON object members, chosen by the value's type (`out.field("id", self.id)`, `Optional` and `List` included) | [M3-075](history/decisions/m3-075-json-writer-members-decision.md) | shipped |
 | JSON codecs derived from a struct's fields (`JsonFields`), and top-level `List` and `Optional` bodies and results | [M3-082](history/decisions/m3-082-derived-json-codecs-decision.md) | shipped |
+| derived JSON values read and written inside hand-written codecs (`value.read[Place]("place")`, `out.field("place", self.place)`) | [M3-087](history/decisions/m3-087-derived-json-in-hand-written-codecs-decision.md) | shipped |
 | request header fields from `TestClient` (`headers=`) | [M3-010](history/decisions/m3-010-testclient-request-headers-decision.md) | shipped |
 | request header fields in typed `post` handlers (`WithHeaders[B]`) | [M3-012](history/decisions/m3-012-typed-header-access-decision.md) | shipped |
 | registration on generic-arity slots (one overload per request-slot arity) | [M3-014](history/decisions/m3-014-registration-structure-decision.md) | shipped |
@@ -98,26 +99,25 @@ In priority order: the first entry is the next item unless the user asks for ano
 
 Then, in priority order, each with its issue:
 
-2. derived JSON values inside hand-written codecs ([#195](https://github.com/sano-suguru/muntin/issues/195)): the production slice M3-088 of [M3-087](history/decisions/m3-087-derived-json-in-hand-written-codecs-decision.md);
-3. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
-4. body limits beyond `FromBytes`, including the fixed `Json[T]` cap ([#143](https://github.com/sano-suguru/muntin/issues/143));
-5. `+json` media types or a missing `Content-Type` on JSON bodies ([#193](https://github.com/sano-suguru/muntin/issues/193));
-6. a JSON body and result without the `Json` wrapper ([#194](https://github.com/sano-suguru/muntin/issues/194));
-7. renamed and defaulted members and more field kinds for derived JSON ([#196](https://github.com/sano-suguru/muntin/issues/196));
-8. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
-9. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
-10. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
-11. more body shapes: text type, optional, multiple, streaming, multipart ([#147](https://github.com/sano-suguru/muntin/issues/147));
-12. fallible response conversions ([#148](https://github.com/sano-suguru/muntin/issues/148));
-13. broader raw handlers ([#149](https://github.com/sano-suguru/muntin/issues/149));
-14. more middleware: per-route, error types ([#150](https://github.com/sano-suguru/muntin/issues/150));
-15. structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
-16. observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
-17. streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
-18. serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
-19. a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
-20. handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
-21. performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
+2. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142));
+3. body limits beyond `FromBytes`, including the fixed `Json[T]` cap ([#143](https://github.com/sano-suguru/muntin/issues/143));
+4. `+json` media types or a missing `Content-Type` on JSON bodies ([#193](https://github.com/sano-suguru/muntin/issues/193));
+5. a JSON body and result without the `Json` wrapper ([#194](https://github.com/sano-suguru/muntin/issues/194));
+6. renamed and defaulted members and more field kinds for derived JSON ([#196](https://github.com/sano-suguru/muntin/issues/196));
+7. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
+8. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
+9. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
+10. more body shapes: text type, optional, multiple, streaming, multipart ([#147](https://github.com/sano-suguru/muntin/issues/147));
+11. fallible response conversions ([#148](https://github.com/sano-suguru/muntin/issues/148));
+12. broader raw handlers ([#149](https://github.com/sano-suguru/muntin/issues/149));
+13. more middleware: per-route, error types ([#150](https://github.com/sano-suguru/muntin/issues/150));
+14. structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
+15. observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
+16. streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
+17. serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
+18. a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
+19. handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
+20. performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
 
 ## Long-term success criterion
 
