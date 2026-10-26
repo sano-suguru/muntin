@@ -130,11 +130,63 @@ app.get["/profiles/{id}"](profile)
 
 Run by `tests/test_json_dx.mojo` (`test_json_writer_members`), as written. Every kind, full and empty, against the explicit calls below: `tests/test_json_fields.mojo`.
 
-- `field(name, value)` is `name(name)` then `value(value)`. `value(value)` takes an `Int`, `Float64`, `Bool` or `String` (a string literal too), a `ToJson` type (written by its own `write_json`), and an `Optional` or a `List` of one of those. An empty `Optional` is written as `null`: the member is there, never left out. A `List` is an array; its `ToJson` elements may be move-only.
+- `field(name, value)` is `name(name)` then `value(value)`. `value(value)` takes an `Int`, `Float64`, `Bool` or `String` (a string literal too), a `ToJson` type (written by its own `write_json`), a `JsonFields` struct ([below](#derived-values-inside-a-hand-written-codec)), and an `Optional` or a `List` of one of those. An empty `Optional` is written as `null`: the member is there, never left out. A `List` is an array; its `ToJson` elements may be move-only.
 - One level only: `Optional[List[Int]]`, `List[List[Int]]` and `List[Optional[Int]]` do not compile (`no matching method in call to 'field'`); write them with `begin_array`, a loop and `end_array`.
-- Other types fail where `field` is called, `no matching method in call to 'field'`: a struct that is not `ToJson`, or another width such as `Int64` or `Float32`. Convert first (`Int(n)`, `Float64(x)`).
+- Other types fail where `field` is called, `no matching method in call to 'field'`: a struct that is neither `ToJson` nor `JsonFields`, or another width such as `Int64` or `Float32`. Convert first (`Int(n)`, `Float64(x)`).
 - A numeric list literal is ambiguous: `out.field("ids", [1, 2])`, `[1.5]` and `[]` are `ambiguous call to 'field'`, since the literal converts to `Int`, `Float64`, `List[Int]` and `List[Float64]`. Pass a typed value (`var ids: List[Int] = [1, 2]`). A literal string list (`["a"]`) is fine.
 - The explicit calls stay and mix with `field`: `begin_object`, `end_object`, `begin_array`, `end_array`, `name`, `null`, `int`, `float`, `bool`, `string` and `value`. The writer adds the separators. It raises, so the answer is the fixed 500 above, on a member or name outside an object, a value without a name inside one, a name repeated in one object (found at `end_object`), an unmatched close, a second top-level value, NaN or infinity, and a document left unfinished.
+
+### Derived values inside a hand-written codec
+
+A hand-written codec reads and writes a derived value by the derived rules, so a type with one special member does not write its nested DTOs by hand:
+
+<!-- example: tests/test_json_dx.mojo#responses-json-hand-written-derived -->
+```mojo
+from muntin import App, FromJson, Json, JsonFields, JsonValue, JsonWriter, ToJson
+
+
+@fieldwise_init
+struct Stop(Copyable, JsonFields):
+    var city: String
+    var zip: Optional[Int]
+
+
+@fieldwise_init
+struct Trip(Copyable, FromJson, ToJson):     # one special member, the rest derived
+    var start: Stop
+    var stops: List[Stop]
+
+    @staticmethod
+    def from_json(value: JsonValue) raises -> Self:
+        if value["v"].int() != 2:                     # checked, not stored
+            raise Error("unsupported version")
+        return Self(value.read[Stop]("start"), value.read[List[Stop]]("stops"))
+
+    def write_json(self, mut out: JsonWriter) raises:
+        out.begin_object()
+        out.field("v", 2)
+        out.field("start", self.start)                # a JsonFields struct, as Json[Stop] writes it
+        out.field("stops", self.stops)                # a List (or Optional) of one
+        out.end_object()
+
+
+def echo_trip(body: Json[Trip]) -> Json[Trip]:
+    return Json(body.value.copy())
+
+
+app.post["/trips"](echo_trip)
+# POST /trips  Content-Type: application/json  {"v":2,"start":{"city":"X"},"stops":[]}
+#   -> 200, {"v":2,"start":{"city":"X","zip":null},"stops":[]}
+# {"v":2,"start":{"city":1},"stops":[]} -> 400; its Rejection: from_json: start.city: JSON value is not a string
+# {"v":1,"start":{"city":"X"},"stops":[]} -> 400; its Rejection: from_json: unsupported version
+```
+
+Run by `tests/test_json_dx.mojo` (`test_hand_written_derived_example`), as written. Every kind, the member paths, a type that is both, and ownership inside and after a read: `tests/test_derived_json.mojo`.
+
+- `value.read[T](name)` reads the member `name` as a derived field of that name reads it: an absent or `null` member is an empty `Optional`, any other `T` requires the member. `value.read[T]()` reads the value itself. `T` is any kind a [derived field](bodies.md#json-jsont) takes.
+- `out.field(name, value)` and `out.value(value)` write a `JsonFields` struct, or an `Optional` or `List` of one, as `Json[T]` writes it. A type that is both `JsonFields` and `ToJson` is written by its own `write_json`. One level of `Optional` or `List` still holds ([above](#writing-a-tojson-type)).
+- A failure's message starts with the path below the value read (`start.city: ...` above, `start: JSON member is missing`, `stops[1].zip: ...`); `read[T](name)` on a value that is not an object raises `JSON value is not an object`, without a path. Paths are not joined across a hand-written boundary, which adds its own `: `: under a derived parent's member `trip` the report is `trip: start.city: ...`.
+- A derived value with a field that cannot be read or written fails the build where a route or a call instantiates the codec, naming the innermost field (`constraint failed: field zip of the JsonFields struct <module>.Stop has type SIMD[DType.uint8, 1], which cannot be written: ...`), with the hand-written call in the chain of notes; a codec nothing instantiates builds. `read` of a kind no derived field takes names the type: `SIMD[DType.uint8, 1] cannot be read: a derived value is ...`.
 
 ## `Response`
 
