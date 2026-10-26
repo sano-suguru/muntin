@@ -23,10 +23,11 @@ What changed against the base:
   `_App.openapi(*, title, version) raises -> String`, an `App`'s alone
   (`comptime assert`), and `_document`, which raises for a path placeholder
   name repeated in a path, for two paths that differ only in names, and
-  for a query key or static segment a client percent-encodes
-  (`_sent_as_written`).
+  for a query key or static segment common clients do not send as written
+  (`_sent_as_written`: a query key of letters, digits and `-._`; a segment
+  of `pchar` without `%`, not `.` or `..`).
 - `tests/test_spike_openapi.mojo` and `tests/openapi_spike_handlers.mojo`:
-  the spike (7 tests). Its `Param` handler is in its own module: on Mojo
+  the spike (8 tests). Its `Param` handler is in its own module: on Mojo
   1.1.0, on the base too, a module whose `__functions_in_module()` holds a
   function taking a `Param` crashes the compiler (as
   `tests/named_value_handlers.mojo` avoids).
@@ -37,7 +38,9 @@ Revised after review on the pull request: a `Json[T]` result is the
 `2XX` response, not `default` (which also covered Muntin's own 400, 413,
 415 and 500); every route string, optional ones too, has `minLength: 1`;
 the encoded-name refusals; the spike asserts a carried binary body and
-Muntin's own answers.
+Muntin's own answers. Revised again after the review of those fixes: `~`
+refused in a query key (a form serializer encodes it), `.` and `..`
+segments refused, and a test of the character classes' boundaries.
 
 With `MUNTIN_OPENAPI_OUT=<dir>`, the spike writes its document and each
 exchange it sent, which the pull request's validator checks.

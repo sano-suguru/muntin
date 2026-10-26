@@ -1782,11 +1782,14 @@ struct _Route(Movable):
 
 
 def _sent_as_written(text: String, query: Bool) -> Bool:
-    """Whether a client sends `text` unencoded, so that Muntin's byte
-    comparison sees it as written: a query key of unreserved characters
-    alone (RFC 3986 section 2.3; a client encodes the rest of a parameter's
-    name), a static path segment of path characters (`pchar` without
-    `%`)."""
+    """Whether common clients send `text` as written, so that Muntin's byte
+    comparison sees it: a query key of letters, digits and `-._` alone (a
+    form serializer encodes the rest of a parameter's name, `~` included),
+    a static path segment of unreserved characters, sub-delimiters, `:`
+    and `@` (RFC 3986 `pchar` without `%`, which a client building a path
+    may encode again), except `.` and `..`, which a client removes."""
+    if not query and (text == "." or text == ".."):
+        return False
     for b in text.as_bytes():
         var c = Int(b)
         if (
@@ -1796,10 +1799,9 @@ def _sent_as_written(text: String, query: Bool) -> Bool:
             or c == ord("-")
             or c == ord(".")
             or c == ord("_")
-            or c == ord("~")
         ):
             continue
-        if not query and String(chr(c)) in "!$&'()*+,;=:@":
+        if not query and String(chr(c)) in "~!$&'()*+,;=:@":
             continue
         return False
     return True
@@ -1816,9 +1818,9 @@ def _document(
                 raise Error(
                     "openapi: route "
                     + String(routes[i].literal)
-                    + ": a client percent-encodes the query key "
+                    + ": a client may not send the query key "
                     + key
-                    + ", which Muntin compares undecoded"
+                    + " as written, and Muntin compares it undecoded"
                 )
         var p = routes[i].path
         var seen = False
@@ -1846,9 +1848,9 @@ def _document(
                     raise Error(
                         "openapi: route "
                         + p
-                        + ": a client percent-encodes the segment "
+                        + ": a client may not send the segment "
                         + segment
-                        + ", which Muntin matches undecoded"
+                        + " as written, and Muntin matches it undecoded"
                     )
                 continue
             var name = String(segment[byte = 1 : segment.byte_length() - 1])
@@ -2205,7 +2207,8 @@ struct _App[
         types alone. Raises when a route cannot be described truly: a path
         placeholder name repeated in it, two route paths that differ only
         in their placeholder names, or a query key or static segment a
-        client would percent-encode, which Muntin compares undecoded."""
+        client may not send as written (`_sent_as_written`), which Muntin
+        compares undecoded."""
         comptime assert Self.Ctx == _NoContext, "openapi: mount the Group first"
         return _document(self._core._routes, title, version)
 

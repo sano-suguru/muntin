@@ -411,7 +411,7 @@ def test_percent_encoded_query_key_raises() raises:
     try:
         _ = app.openapi(title="T", version="1")
     except e:
-        assert_true(String(e).find("percent-encodes the query key") >= 0)
+        assert_true(String(e).find("may not send the query key") >= 0)
         return
     raise Error("no raise")
 
@@ -426,9 +426,41 @@ def test_percent_encoded_segment_raises() raises:
     try:
         _ = app.openapi(title="T", version="1")
     except e:
-        assert_true(String(e).find("percent-encodes the segment") >= 0)
+        assert_true(String(e).find("may not send the segment") >= 0)
         return
     raise Error("no raise")
+
+
+def _refused(var app: App) raises -> Bool:
+    try:
+        _ = app.openapi(title="T", version="1")
+    except:
+        return True
+    return False
+
+
+def test_sent_as_written_boundaries() raises:
+    # Sub-delimiters, `:`, `@` and `~` in a path segment are sent as
+    # written; in a query key, `~` and sub-delimiters are not, nor are the
+    # dot segments, which a client removes.
+    var a = App()
+    a.get["/a:b@c/x;y/~k/p!q(r)*s+t,u=v$w&z'"](_e)
+    assert_true(not _refused(a^))
+    var b = App()
+    b.get["/f?{a,b}"](_d)
+    assert_true(_refused(b^))
+    var c = App()
+    c.get["/f?{a~b}"](_d)
+    assert_true(_refused(c^))
+    var d = App()
+    d.get["/a/./b"](_e)
+    assert_true(_refused(d^))
+    var e = App()
+    e.get["/a/../b"](_e)
+    assert_true(_refused(e^))
+    var f = App()
+    f.get["/caf%C3%A9"](_e)
+    assert_true(_refused(f^))
 
 
 def test_same_path_two_methods_one_path_item() raises:

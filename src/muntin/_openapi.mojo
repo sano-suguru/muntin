@@ -9,8 +9,8 @@ in `app.mojo` stores it in the route, so the document costs nothing until
 `App.openapi` asks for it. It says only what `App.handle` does: a
 `Json[T]` result's status is chosen at run time, so it is the `2XX`
 response (Muntin's own answers are never 2xx); a hand-written codec's
-schema is `{}`; Muntin's own 400, 413 and 415 answers, middleware and a
-group's guard are not described.
+schema is `{}`. Not described: a `Json` answer with another status,
+Muntin's own 400, 413 and 415 answers, middleware and a group's guard.
 """
 
 from std.reflection import reflect
