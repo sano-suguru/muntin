@@ -1,6 +1,6 @@
 # OpenAPI and schema output decision (M3-091)
 
-> **Current.** Not built yet: its "Next production slice" is M3-092.
+> **Current.** Built by M3-092; see [OpenAPI](../../reference/openapi.md).
 
 Status: **decision** (M3-091, issue [#142](https://github.com/sano-suguru/muntin/issues/142)). Evidence: its pull request, [#202](https://github.com/sano-suguru/muntin/pull/202).
 

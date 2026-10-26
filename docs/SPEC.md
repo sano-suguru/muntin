@@ -88,6 +88,7 @@ What each capability does for an application: the [guide](GUIDE.md) and the [ref
 | reports of the errors behind the fixed 500, read by middleware (`Response.failure()`, `Failure`) | [M3-058](history/decisions/m3-058-dropped-error-report-decision.md) | shipped |
 | reports of why Muntin answered 400 before a handler, read by middleware (`Response.rejection()`, `Rejection`) | [M3-084](history/decisions/m3-084-request-rejection-report-decision.md) | shipped |
 | routes behind one guard that hands handlers a typed context (`Group`, `app.mount`) | [M3-080](history/decisions/m3-080-guarded-routes-and-request-context-decision.md) | shipped |
+| the OpenAPI 3.1 document of an `App`'s routes, written from the handlers' types (`app.openapi`, under `-D MUNTIN_OPENAPI`) | [M3-091](history/decisions/m3-091-openapi-output-decision.md) | shipped |
 
 ### Remaining candidates
 
@@ -99,25 +100,24 @@ In priority order: the first entry is the next item unless the user asks for ano
 
 Then, in priority order, each with its issue:
 
-2. OpenAPI and schema output ([#142](https://github.com/sano-suguru/muntin/issues/142)): the production slice M3-092 of [M3-091](history/decisions/m3-091-openapi-output-decision.md);
-3. body limits beyond `FromBytes`, including the fixed `Json[T]` cap ([#143](https://github.com/sano-suguru/muntin/issues/143)): the production slice M3-090 of [M3-089](history/decisions/m3-089-text-and-json-body-limits-decision.md);
-4. `+json` media types or a missing `Content-Type` on JSON bodies ([#193](https://github.com/sano-suguru/muntin/issues/193));
-5. a JSON body and result without the `Json` wrapper ([#194](https://github.com/sano-suguru/muntin/issues/194));
-6. renamed and defaulted members and more field kinds for derived JSON ([#196](https://github.com/sano-suguru/muntin/issues/196));
-7. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
-8. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
-9. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
-10. more body shapes: text type, optional, multiple, streaming, multipart ([#147](https://github.com/sano-suguru/muntin/issues/147));
-11. fallible response conversions ([#148](https://github.com/sano-suguru/muntin/issues/148));
-12. broader raw handlers ([#149](https://github.com/sano-suguru/muntin/issues/149));
-13. more middleware: per-route, error types ([#150](https://github.com/sano-suguru/muntin/issues/150));
-14. structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
-15. observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
-16. streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
-17. serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
-18. a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
-19. handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
-20. performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
+2. body limits beyond `FromBytes`, including the fixed `Json[T]` cap ([#143](https://github.com/sano-suguru/muntin/issues/143)): the production slice M3-090 of [M3-089](history/decisions/m3-089-text-and-json-body-limits-decision.md);
+3. `+json` media types or a missing `Content-Type` on JSON bodies ([#193](https://github.com/sano-suguru/muntin/issues/193));
+4. a JSON body and result without the `Json` wrapper ([#194](https://github.com/sano-suguru/muntin/issues/194));
+5. renamed and defaulted members and more field kinds for derived JSON ([#196](https://github.com/sano-suguru/muntin/issues/196));
+6. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
+7. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
+8. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
+9. more body shapes: text type, optional, multiple, streaming, multipart ([#147](https://github.com/sano-suguru/muntin/issues/147));
+10. fallible response conversions ([#148](https://github.com/sano-suguru/muntin/issues/148));
+11. broader raw handlers ([#149](https://github.com/sano-suguru/muntin/issues/149));
+12. more middleware: per-route, error types ([#150](https://github.com/sano-suguru/muntin/issues/150));
+13. structured errors and application-level error mappers ([#152](https://github.com/sano-suguru/muntin/issues/152));
+14. observability ([#153](https://github.com/sano-suguru/muntin/issues/153));
+15. streamed responses ([#154](https://github.com/sano-suguru/muntin/issues/154));
+16. serving lifecycle beyond `Server` ([#155](https://github.com/sano-suguru/muntin/issues/155); spreading connections over workers is [deferred](history/deferrals.md#spreading-kept-open-connections-over-workers-m3-069));
+17. a connection cap for `Server` ([#156](https://github.com/sano-suguru/muntin/issues/156); [deferred](history/deferrals.md#connection-cap-for-server));
+18. handler execution model ([#157](https://github.com/sano-suguru/muntin/issues/157));
+19. performance benchmarks and allocation profiling ([#158](https://github.com/sano-suguru/muntin/issues/158)).
 
 ## Long-term success criterion
 
