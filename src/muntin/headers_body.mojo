@@ -119,9 +119,11 @@ struct WithHeaders[B: _FromBodyOrBytes](
     the handler: a `Json[T]` body's `Content-Type` verdict (415), and the
     rebuild of a field an in-memory `Headers` holds invalidly (the fixed
     500). `input.body` is converted as a bare body of its type would be: a
-    `FromBody` by `B.from_body` (bytes that are not UTF-8, or a raise, are
-    400 before the handler; a `WithHeaders[Json[T]]` body keeps the JSON
-    `Content-Type` (415) and size (413) steps), a `FromBytes` by
+    `FromBody` by `B.from_body` (a body longer than `B.max_bytes`, 1 MiB
+    unless the type declares another, is 413 before the field rebuild and
+    the UTF-8 read, M3-089; bytes that are not UTF-8, or a raise, are 400
+    before the handler; a `WithHeaders[Json[T]]` body keeps the JSON
+    `Content-Type` (415) step), a `FromBytes` by
     `B.from_bytes` on the body's bytes, whatever they are (a raise is 400
     before the handler; no `Content-Type` rule; a body longer than
     `B.max_bytes` is 413 before the field rebuild and `from_bytes`,

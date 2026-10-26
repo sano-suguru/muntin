@@ -11,6 +11,7 @@ from std.testing import assert_equal, assert_false, assert_true, TestSuite
 from muntin import (
     App,
     WithHeaders,
+    FromBody,
     FromJson,
     Group,
     Headers,
@@ -202,6 +203,26 @@ def create_note(
     return Json(NoteJson(note^), status=201)
 
 
+struct Memo(FromBody):
+    """A text body of at most 8 bytes (M3-089)."""
+
+    comptime max_bytes = 8
+
+    var text: String
+
+    def __init__(out self, var text: String):
+        self.text = text^
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        return Self(body)
+
+
+def memo(svc: State[Service], user: User, body: Memo) -> String:
+    svc[].counts.handler_calls[] += 1
+    return user.name + ": " + body.text
+
+
 # The fourth protected route, added without an authentication line.
 def delete_note(
     svc: State[Service], user: User, id: Int
@@ -278,6 +299,7 @@ def make_app(counts: Counts) -> App:
     notes.get["/whoami"](whoami)
     notes.post["/whoami-state"](whoami_state, svc)
     notes.get["/raw"](raw_plain)
+    notes.post["/memo"](memo, svc)
     app.mount(notes^)
     var open = Group(anyone, svc)
     open.get["/open"](whoami)
@@ -367,6 +389,32 @@ def test_401_comes_before_conversion_400() raises:
     assert_equal(client.get("/notes/abc", headers=_auth("t-ada")).status, 400)
     assert_equal(client.get("/notes/%zz", headers=_auth("t-ada")).status, 400)
     assert_equal(counts.handler_calls[], 0)
+    assert_equal(counts.users_live[], 0)
+
+
+def test_401_comes_before_the_body_limit_413() raises:
+    # A body over its limit (M3-089), a JSON one over 1 MiB and a text one
+    # over 8 bytes: 401 without a token, 413 with one, before the handler.
+    var counts = Counts()
+    var app = make_app(counts)
+    var client = TestClient(app)
+    var big = '{"text":"x"}' + String(" ") * 1_048_565
+    assert_equal(big.byte_length(), 1_048_577)
+    assert_equal(
+        client.post("/notes", big, headers=_no_token_json()).status, 401
+    )
+    assert_equal(client.post("/memo", "123456789").status, 401)
+    var over = client.post("/notes", big, headers=_json("t-ada"))
+    assert_equal(over.status, 413)
+    assert_equal(over.text(), "Content Too Large")
+    assert_equal(
+        client.post("/memo", "123456789", headers=_auth("t-ada")).status, 413
+    )
+    assert_equal(counts.handler_calls[], 0)
+    assert_equal(
+        client.post("/memo", "12345678", headers=_auth("t-ada")).text(),
+        "ada: 12345678",
+    )
     assert_equal(counts.users_live[], 0)
 
 

@@ -931,9 +931,10 @@ def _slot[
     or `from_bytes` on them unread), a failure being the same 400. A `FromBytes` body (M3-041) is converted with
     `A.from_bytes(body)`, the borrowed bytes unread and uncopied by Muntin
     (400 if it raises); the rules reject a type that is also a `FromBody`.
-    A `FromBytes` body longer than its type's `max_bytes`, bare or carried
+    A body longer than its type's `max_bytes`, bare or carried
     (`A._max_bytes()`, checked before the rebuild), is 413 before any of
-    that (M3-043). A `RouteValues` record (M3-061) is built by
+    that but the JSON 415: a `FromBytes`'s (M3-043) or a `FromBody`'s, a
+    `Json[T]`'s `limit` included (M3-089). A `RouteValues` record (M3-061) is built by
     `_build_record`, never by its own initializers: field `i` is converted
     as a bare slot of its type from `args[at + i]` (`_record_field`), in
     field order, so the first invalid one is 400 and nothing after it is

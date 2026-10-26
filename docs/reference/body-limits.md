@@ -1,6 +1,6 @@
 # Body size limits
 
-Every typed body has a size limit in bytes. A longer body is 413 `Content Too Large` before the conversion and the handler, bare or in `WithHeaders[B]`: after the route values, before a carrier's field rebuild and before a text body's UTF-8 read ([order of checks](routing.md#order-of-checks)).
+Every typed body's type has a size limit in bytes (`Int.MAX` is none). A longer body is 413 `Content Too Large` before the conversion and the handler, bare or in `WithHeaders[B]`: after the route values, before a carrier's field rebuild and before a text body's UTF-8 read ([order of checks](routing.md#order-of-checks)).
 
 | Body | Its limit | When it declares none |
 |---|---|---|
@@ -59,7 +59,7 @@ app.post["/articles/{id}/comments"](add_comment)
 Run by `tests/test_bytes_limit.mojo` (`test_dx_text_and_json_examples`), as written, in the same app as the JSON example below; its 413 for `PUT /articles/7` is checked with a body of `a`s and with bytes that are not UTF-8. It checks the statuses and texts, not which functions ran.
 
 - `FromBody` gives `max_bytes` a default of 1 MiB, so a type that declares none, or misspells it (`max_byte`), is limited, never unlimited. `Int.MAX` is no limit; `0` accepts only the empty body.
-- A trait refining `FromBody` cannot give its family another default: Mojo 1.1.0 rejects the type (`trait member 'max_bytes' has conflicting default implementations`). Declare it on each type, or make it a type parameter, as `Blob` below.
+- A trait refining `FromBody` cannot give its family another default: Mojo 1.1.0 rejects the type (`trait member 'max_bytes' has conflicting default implementations`). Declare it on each type; a type parameter gives one type a limit per route, as `Blob` below.
 
 ## JSON bodies (`Json[T, limit=n]`)
 

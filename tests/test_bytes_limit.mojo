@@ -367,6 +367,32 @@ struct Misspelled(FromBody):
         return Self(body.byte_length())
 
 
+struct Snippet[limit: Int](FromBody):
+    """One text type, a limit per route."""
+
+    comptime max_bytes = Self.limit
+
+    var n: Int
+
+    def __init__(out self, n: Int):
+        self.n = n
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        _bump(CONVERSIONS)
+        return Self(body.byte_length())
+
+
+def snippet_4(s: Snippet[4]) -> String:
+    _bump(HANDLER_CALLS)
+    return String(s.n)
+
+
+def snippet_16(input: WithHeaders[Snippet[16]]) -> String:
+    _bump(HANDLER_CALLS)
+    return String(input.body.n)
+
+
 struct FreeText(FromBody):
     """Declares `Int.MAX`: no limit."""
 
@@ -866,6 +892,8 @@ def limit_app() -> App:
     app.post["/opt/t?{tag}"](b_optional[TextCapped])
     app.post["/opt/tc?{tag}"](c_optional[TextCapped])
     app.post["/plain"](plain)
+    app.post["/snippet/4"](snippet_4)
+    app.post["/snippet/16"](snippet_16)
     app.post["/plain/c"](plain_carrier)
     app.post["/misspelled"](misspelled)
     app.post["/misspelled/c"](misspelled_carrier)
@@ -969,7 +997,7 @@ def _json_padded(text: String, n: Int) -> List[UInt8]:
     return out^
 
 
-def test_dx_text_and_json_examples() raises:
+def text_and_json_app() -> App:
     var app = App()
     # fmt: off
     # example: body-limits-text
@@ -987,6 +1015,11 @@ def test_dx_text_and_json_examples() raises:
     # POST /posts/import  Content-Type: application/json  2 MiB -> 200 (Json[T] alone: 413 past 1 MiB)
     # example: end
     # fmt: on
+    return app^
+
+
+def test_dx_text_and_json_examples() raises:
+    var app = text_and_json_app()
     var client = TestClient(app)
     _reset()
     var at = client.put("/articles/7", _filled(8 << 20, 0x61))
@@ -1134,6 +1167,24 @@ def test_a_text_type_that_declares_nothing_gets_one_mib() raises:
         _reset()
         _assert_413(
             client.post(target, _filled(MIB + 1, 0x61), headers=_sent()), target
+        )
+
+
+def test_a_type_parameter_gives_a_text_type_a_limit_per_route() raises:
+    assert_equal(Snippet[4].max_bytes, 4)
+    var app = limit_app()
+    var client = TestClient(app)
+    var limits: List[Tuple[String, Int]] = [
+        (String("/snippet/4"), 4),
+        (String("/snippet/16"), 16),
+    ]
+    for c in limits:
+        _reset()
+        var at = client.post(c[0], _filled(c[1], 0x61), headers=_sent())
+        assert_equal(at.text(), String(c[1]), c[0])
+        _reset()
+        _assert_413(
+            client.post(c[0], _filled(c[1] + 1, 0x61), headers=_sent()), c[0]
         )
 
 
