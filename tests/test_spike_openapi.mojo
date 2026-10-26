@@ -1,0 +1,387 @@
+# M3-091 prototype spike: `App.openapi` through every slot kind, result kind
+# and JSON field kind, and its refusals. With MUNTIN_OPENAPI_OUT set, it
+# writes the document to `<dir>/openapi.json` and each exchange it sends
+# through `TestClient` to `<dir>/exchanges.jsonl`, which the pull request's
+# validator checks against the document's schemas.
+
+from std.os import getenv
+from std.testing import assert_equal, assert_true, TestSuite
+
+from muntin import (
+    App,
+    FromBody,
+    FromBytes,
+    FromJson,
+    FromRouteValue,
+    Group,
+    Headers,
+    Json,
+    JsonFields,
+    JsonValue,
+    JsonWriter,
+    Request,
+    Response,
+    RouteValues,
+    State,
+    ToJson,
+    WithHeaders,
+)
+from muntin.testing import TestClient
+from openapi_spike_handlers import delete_note
+
+
+@fieldwise_init
+struct Place(Copyable, JsonFields):
+    var city: String
+    var lat: Float64
+
+
+@fieldwise_init
+struct Note(Copyable, JsonFields):
+    var id: Int
+    var text: String
+    var tags: List[String]
+    var done: Bool
+    var place: Optional[Place]
+    var score: Optional[Float64]
+
+
+@fieldwise_init
+struct NewNote(Copyable, JsonFields):
+    var text: String
+    var tags: List[String]
+    var place: Optional[Place]
+
+
+@fieldwise_init
+struct Version(Copyable, FromJson, ToJson):
+    """Hand-written both ways: a bare number."""
+
+    var v: Int
+
+    @staticmethod
+    def from_json(value: JsonValue) raises -> Self:
+        return Self(value.int())
+
+    def write_json(self, mut out: JsonWriter) raises:
+        out.int(self.v)
+
+
+@fieldwise_init
+struct Envelope(Copyable, JsonFields):
+    var version: Version
+    var notes: List[Note]
+
+
+@fieldwise_init
+struct Slug(FromRouteValue):
+    var text: String
+
+    @staticmethod
+    def from_route_value(value: String) raises -> Self:
+        return Self(value)
+
+
+@fieldwise_init
+struct TaskAt(RouteValues):
+    var org: Int
+    var task: String
+    var limit: Optional[Int]
+
+
+struct Line(FromBody):
+    var text: String
+
+    def __init__(out self, var text: String):
+        self.text = text^
+
+    @staticmethod
+    def from_body(body: String) raises -> Self:
+        return Self(body)
+
+
+struct Blob(FromBytes):
+    comptime max_bytes = 64
+    var n: Int
+
+    def __init__(out self, n: Int):
+        self.n = n
+
+    @staticmethod
+    def from_bytes(body: List[UInt8]) raises -> Self:
+        return Self(len(body))
+
+
+@fieldwise_init
+struct Store(Movable):
+    var prefix: String
+
+
+@fieldwise_init
+struct Member(Movable):
+    var name: String
+
+
+def _note(id: Int) -> Note:
+    var tags = List[String]()
+    tags.append("a")
+    return Note(id, "first", tags^, False, Optional(Place("Kyoto", 35.0)), None)
+
+
+def get_note(id: Int) -> Json[Note]:
+    return Json(_note(id))
+
+
+def list_notes(tag: Optional[String], limit: Optional[Int]) -> Json[List[Note]]:
+    var l = List[Note]()
+    l.append(_note(1))
+    var n = _note(2)
+    n.place = None
+    n.score = Optional(0.5)
+    l.append(n^)
+    return Json(l^)
+
+
+def create_note(var body: Json[NewNote]) -> Json[Note]:
+    var b = body^.take()
+    return Json(
+        Note(3, b.text, b.tags.copy(), False, b.place.copy(), None), status=201
+    )
+
+
+def by_slug(slug: Slug) -> Json[Optional[Note]]:
+    if slug.text == "none":
+        return Json(Optional[Note]())
+    return Json(Optional(_note(4)))
+
+
+def get_task(at: TaskAt) -> String:
+    return "task"
+
+
+def put_line(id: Int, line: Line) -> String:
+    return line.text
+
+
+def upload(blob: Blob) -> Response:
+    return Response.text(String(blob.n))
+
+
+def raw(req: Request) -> Response:
+    return Response.text("raw")
+
+
+def with_headers(var input: WithHeaders[Json[NewNote]]) -> Json[Envelope]:
+    var notes = List[Note]()
+    notes.append(_note(5))
+    return Json(Envelope(Version(2), notes^))
+
+
+def headers_only(h: Headers) -> String:
+    return "h"
+
+
+def stateful(store: State[Store], id: Int) -> String:
+    return store[].prefix + String(id)
+
+
+def versioned(var body: Json[Version]) -> Json[List[Version]]:
+    var l = List[Version]()
+    l.append(body^.take())
+    return Json(l^)
+
+
+def guard(s: State[Store], h: Headers) raises -> Member:
+    return Member("ada")
+
+
+def me(m: Member) -> String:
+    return m.name
+
+
+def member_note(m: Member, id: Int) -> Json[Note]:
+    return Json(_note(id))
+
+
+def make_app() -> App:
+    var store = State(Store("n"))
+    var app = App()
+    app.get["/notes/{id}"](get_note)
+    app.get["/notes?{tag}&{limit}"](list_notes)
+    app.post["/notes"](create_note)
+    app.delete["/notes/{id}"](delete_note)
+    app.get["/by-slug/{slug}"](by_slug)
+    app.get["/orgs/{org}/tasks/{task}?{limit}"](get_task)
+    app.put["/lines/{id}"](put_line)
+    app.post["/upload"](upload)
+    app.get["/raw"](raw)
+    app.post["/envelope"](with_headers)
+    app.get["/headers"](headers_only)
+    app.get["/stateful/{id}"](stateful, store)
+    app.post["/versions"](versioned)
+    var members = Group(guard, store)
+    members.get["/me"](me)
+    members.get["/members/notes/{id}"](member_note)
+    app.mount(members^)
+    return app^
+
+
+def _json_headers() -> Headers:
+    var h = Headers()
+    try:
+        h.add("Content-Type", "application/json")
+    except:
+        pass
+    return h^
+
+
+struct _Log(Movable):
+    var lines: List[String]
+
+    def __init__(out self):
+        self.lines = List[String]()
+
+    def add(
+        mut self,
+        method: String,
+        route: String,
+        request: String,
+        r: Response,
+    ) raises:
+        var out = JsonWriter()
+        out.begin_object()
+        out.field("method", method)
+        out.field("path", route)
+        out.field("request", request)
+        out.field("status", r.status)
+        out.field("response", String(unsafe_from_utf8=r.body))
+        var ct = r.headers.get("content-type")
+        out.field("content_type", ct.or_else(""))
+        out.end_object()
+        self.lines.append(out^._finish())
+
+
+def test_document_and_exchanges() raises:
+    var app = make_app()
+    var doc = app.openapi(title="Spike", version="0.1.0")
+    assert_true(doc.startswith('{"openapi":"3.1.0","info":{"title":"Spike"'))
+    var client = TestClient(app)
+    var log = _Log()
+    var r = client.get("/notes/7")
+    assert_equal(r.status, 200)
+    log.add("get", "/notes/{id}", "", r)
+    r = client.get("/notes?tag=a")
+    assert_equal(r.status, 200)
+    log.add("get", "/notes", "", r)
+    var body = '{"text":"t","tags":["x"],"place":null}'
+    r = client.post("/notes", body, headers=_json_headers())
+    assert_equal(r.status, 201)
+    log.add("post", "/notes", body, r)
+    body = '{"text":"t","tags":[]}'
+    r = client.post("/notes", body, headers=_json_headers())
+    assert_equal(r.status, 201)
+    log.add("post", "/notes", body, r)
+    body = '{"text":"t","tags":[],"place":{"city":"Oslo","lat":59.9},"x":1}'
+    r = client.post("/notes", body, headers=_json_headers())
+    assert_equal(r.status, 201)
+    log.add("post", "/notes", body, r)
+    r = client.get("/by-slug/none")
+    log.add("get", "/by-slug/{slug}", "", r)
+    r = client.get("/by-slug/x")
+    log.add("get", "/by-slug/{slug}", "", r)
+    body = '{"text":"t","tags":[]}'
+    r = client.post("/envelope", body, headers=_json_headers())
+    assert_equal(r.status, 200)
+    log.add("post", "/envelope", body, r)
+    body = "3"
+    r = client.post("/versions", body, headers=_json_headers())
+    assert_equal(r.status, 200)
+    log.add("post", "/versions", body, r)
+    # The values the validator's negative controls expect the request
+    # schema to refuse are refused by the derived reader too.
+    for refused in [
+        '{"tags":[]}',
+        '{"text":1,"tags":[]}',
+        '{"text":"t","tags":[1]}',
+        '{"text":"t","tags":[],"place":{"city":"x"}}',
+    ]:
+        r = client.post("/notes", String(refused), headers=_json_headers())
+        assert_equal(r.status, 400, String(refused))
+    var dir = getenv("MUNTIN_OPENAPI_OUT")
+    if dir:
+        with open(dir + "/openapi.json", "w") as f:
+            f.write(doc)
+        with open(dir + "/exchanges.jsonl", "w") as f:
+            for line in log.lines:
+                f.write(line + "\n")
+
+
+def test_exact_operation() raises:
+    var app = App()
+    app.get["/notes/{id}?{tag}"](_get_tagged)
+    assert_equal(
+        app.openapi(title="T", version="1"),
+        '{"openapi":"3.1.0","info":{"title":"T","version":"1"},"paths":'
+        + '{"/notes/{id}":{"get":{"parameters":['
+        + '{"name":"id","in":"path","required":true,"schema":'
+        + '{"type":"integer","format":"int64"}},'
+        + '{"name":"tag","in":"query","required":false,"schema":'
+        + '{"type":"string"}}],'
+        + '"responses":{"default":{"description":"The handler\'s JSON'
+        + ' value","content":{"application/json":{"schema":'
+        + '{"type":"object","properties":{"city":{"type":"string"},'
+        + '"lat":{"type":"number","format":"double"}},'
+        + '"required":["city","lat"],"additionalProperties":false}}}}}}}}}',
+    )
+
+
+def _get_tagged(id: Int, tag: Optional[String]) -> Json[Place]:
+    return Json(Place("Kyoto", 35.0))
+
+
+def _a(id: Int) -> String:
+    return "a"
+
+
+def _b(name: String) -> String:
+    return "b"
+
+
+def _c(a: Int, b: Int) -> String:
+    return "c"
+
+
+def test_templates_that_differ_only_in_names_raise() raises:
+    var app = App()
+    app.get["/users/{id}"](_a)
+    app.delete["/users/{name}"](_b)
+    try:
+        _ = app.openapi(title="T", version="1")
+    except e:
+        assert_true(String(e).find("differ only in placeholder names") >= 0)
+        return
+    raise Error("no raise")
+
+
+def test_repeated_path_name_raises() raises:
+    var app = App()
+    app.get["/pairs/{id}/{id}"](_c)
+    try:
+        _ = app.openapi(title="T", version="1")
+    except e:
+        assert_true(String(e).find("repeats the placeholder {id}") >= 0)
+        return
+    raise Error("no raise")
+
+
+def test_same_path_two_methods_one_path_item() raises:
+    var app = App()
+    app.get["/users/{id}"](_a)
+    app.delete["/users/{id}"](_a)
+    var doc = app.openapi(title="T", version="1")
+    assert_true(doc.find('"/users/{id}":{"get":') >= 0)
+    assert_true(doc.find('}},"delete":') >= 0)
+
+
+def main() raises:
+    TestSuite.discover_tests[__functions_in_module()]().run()
