@@ -2,6 +2,11 @@
 
 from .http import Rejection
 
+comptime _MAX_BODY_BYTES = 1_048_576
+"""The default body limit, 1 MiB (M3-089): `FromBody.max_bytes`'s and
+`Json[T]`'s `limit`'s, one constant so the two stay the same. A typed route
+answers a longer body 413 before reading it (`_slot` in `app.mojo`)."""
+
 
 trait _FromBodyOrBytes(Deinitable, Movable):
     """What `FromBody` and `FromBytes` share, and nothing more: the bound of
@@ -49,7 +54,7 @@ trait FromBody(_FromBodyOrBytes):
     its own limit.
     """
 
-    comptime max_bytes: Int = 1_048_576
+    comptime max_bytes: Int = _MAX_BODY_BYTES
     """The longest body Muntin passes to `from_body` on a typed route, in
     bytes (0 or more); 1 MiB unless the type declares another; `Int.MAX` is
     no limit."""

@@ -1,6 +1,6 @@
 # Must not compile (M3-089): a Json[T] body whose limit is
 # negative is rejected at registration, as any body type's max_bytes.
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: the request body's max_bytes is negative; a body type's max_bytes is a byte count, 0 or more
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: the request body's max_bytes (a Json[T]'s limit) is negative; a body type's max_bytes is a byte count, 0 or more
 from muntin import App, Json, JsonFields
 
 

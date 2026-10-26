@@ -47,8 +47,8 @@ app.post["/users"](create_user)
 
 Run by `tests/test_reference_examples.mojo` (`test_bodies_text_body`), as written. That `from_body` and `create_user` are not called is checked by `tests/test_body.mojo` (`test_invalid_body_is_400_without_calling_the_handler`, `test_method_mismatch_is_405_and_unmatched_path_404_without_conversion`), on an app with more routes.
 
-- `FromBody` refines `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`, and `comptime max_bytes: Int = 1_048_576`. The type conforms in its own module; Muntin never names it. `from_body` sees the body only, as one `String`, not the header fields (use `WithHeaders[B]` for those).
-- Muntin reads the body's bytes as strict UTF-8 first: bytes that are not well-formed UTF-8 are 400 before `from_body`, never replaced by U+FFFD. An empty body, whitespace, NUL and a U+FFFD the client sent reach `from_body` unchanged. A body over the type's `max_bytes`, 1 MiB unless it declares another, is 413 before this read ([body size limits](body-limits.md#text-bodies-frombody)).
+- `FromBody` refines `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`, and `comptime max_bytes: Int`, which has a default ([body size limits](body-limits.md#text-bodies-frombody)). The type conforms in its own module; Muntin never names it. `from_body` sees the body only, as one `String`, not the header fields (use `WithHeaders[B]` for those).
+- Muntin reads the body's bytes as strict UTF-8 first: bytes that are not well-formed UTF-8 are 400 before `from_body`, never replaced by U+FFFD. An empty body, whitespace, NUL and a U+FFFD the client sent reach `from_body` unchanged. A body over the type's `max_bytes` is 413 before this read ([body size limits](body-limits.md#text-bodies-frombody)).
 
 ### A route value, then the body
 
@@ -217,7 +217,7 @@ Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), with these types and
 ### Rules for every JSON body
 
 - `Content-Type`: exactly one field whose media type (before any `;`, trimmed) is `application/json`, ASCII case-insensitively; parameters are ignored. Missing, repeated, other and `+json` types are 415.
-- Size: at most 1,048,576 bytes unless `Json[T, limit=n]` says otherwise; one more is 413. `Json[T].from_body` also raises above it in a raw handler ([body size limits](body-limits.md#json-bodies-jsont-limitn)).
+- Size: a body over its `limit` is 413, and `Json[T].from_body` raises on it in a raw handler ([body size limits](body-limits.md#json-bodies-jsont-limitn)).
 - Grammar: RFC 8259, strictly. Comments, trailing commas, leading zeros, `NaN`, duplicate member names, a byte order mark, lone surrogates and nesting deeper than 64 are 400. Extra members are ignored.
 - Numbers: `int()` is exact for integer literals that fit `Int`. `float()` rounds a literal of any length to the nearest `Float64`, ties to even. It raises (400) only when that rounding gives infinity, at a magnitude of 2^1024 − 2^970 or more, so `1.7976931348623158e308` reads as the largest double; a magnitude of 2^-1075 or less rounds to a zero of the literal's sign, so `2.4703282292062328e-324` reads as the smallest subnormal.
 - A `FromJson` or `JsonFields` type is not a body by itself (`def create_user(body: CreateUser)` gets the `FromBody or FromBytes` message).

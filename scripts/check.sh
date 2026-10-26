@@ -157,6 +157,10 @@ done
 # (warnings allowed: the deprecated `memmove` warns) and is never run.
 for t in tests/toolchain_soundness_gaps/*.mojo; do fixtures+=(toolchain_gap "$t"); done
 
+# Opt-in tests that need gigabytes of memory: built here so they keep
+# building, run only when named (./scripts/test.sh tests/large/<file>).
+for t in tests/large/test_*.mojo; do fixtures+=(large "$t"); done
+
 total=$(( ${#fixtures[@]} / 2 ))
 mine=()
 for (( k = 0; k < total; k++ )); do

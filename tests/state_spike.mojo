@@ -108,6 +108,15 @@ def _call_int[
     return respond(result^)
 
 
+def _spike_json_status[B: AnyType](args: List[String], body_at: Int) -> Int:
+    """`_json_status` (415), then 413 for a body (`args[body_at - 1]`) over
+    1 MiB, the length check production makes in `_slot`."""
+    var status = _json_status[B](args, body_at)
+    if status == 0 and args[body_at - 1].byte_length() > _MAX_BODY_BYTES:
+        return 413
+    return status
+
+
 def _call_body[
     B: Movable & Deinitable,
     E: Deinitable,
@@ -127,7 +136,7 @@ def _call_body[
     body and the `Content-Type` verdict `"1"` (the arity check keeps a route registered
     without its `json` flag from reading a body `"1"` as the verdict), then
     413 for a body over 1 MiB (`_MAX_BODY_BYTES`), without parsing it
-    (`_json_status`, then the length).
+    (`_spike_json_status`).
 
     For a `WithHeaders[B]` carrier (`_HeaderCarrier`) the arguments go on
     with the header fields' names and values. After the JSON steps for a
@@ -144,9 +153,7 @@ def _call_body[
     """
     comptime assert conforms_to(B, FromBody) or conforms_to(B, _HeaderCarrier)
     comptime if conforms_to(B, _JsonBody):
-        var status = _json_status[B](args, 1)
-        if status == 0 and args[0].byte_length() > _MAX_BODY_BYTES:
-            status = 413
+        var status = _spike_json_status[B](args, 1)
         if status != 0:
             return _body_rejection_answer(status)
     var body: B
@@ -200,9 +207,7 @@ def _call_int_body[
     except:
         return _bad_request()
     comptime if conforms_to(B, _JsonBody):
-        var status = _json_status[B](args, 2)
-        if status == 0 and args[1].byte_length() > _MAX_BODY_BYTES:
-            status = 413
+        var status = _spike_json_status[B](args, 2)
         if status != 0:
             return _body_rejection_answer(status)
     var body: B

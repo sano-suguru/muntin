@@ -955,8 +955,8 @@ def _check[
         " a body type conforms to one of them"
     )
     comptime assert rule != _BODY_NEGATIVE_LIMIT, (
-        "the request body's max_bytes is negative; a body type's"
-        " max_bytes is a byte count, 0 or more"
+        "the request body's max_bytes (a Json[T]'s limit) is negative; a"
+        " body type's max_bytes is a byte count, 0 or more"
     )
     comptime assert rule != _NAMES_MIXED, (
         "handler takes two route values and only one is a Param; declare"

@@ -31,7 +31,7 @@ from ._field_built import _FieldBuilt
 from ._handler_storage import _Shared
 from ._handler_storage import _build_record
 from ._rebind import _as, _view
-from .body import FromBody, _BodyFault
+from .body import FromBody, _BodyFault, _MAX_BODY_BYTES
 from .http import Failure, Headers, Rejection, Response, ToResponse, _failed
 
 comptime _MAX_DEPTH = 64
@@ -39,18 +39,9 @@ comptime _MAX_DEPTH = 64
 this is rejected (400 through `from_body`), so the recursive parser's stack
 is bounded."""
 
-comptime _MAX_BODY_BYTES = 1_048_576
-"""`Json[T]`'s default body cap, 1 MiB; a route chooses another with
-`Json[T, limit=n]` (M3-089). A parsed document costs up to about 37 bytes
-per body byte, so the cap bounds one parse. Typed JSON routes answer a
-larger body 413 before parsing (the body adapters in `app.mojo`); the
-parser raises on it too, so `Json[T].from_body` called from a raw handler
-never parses an unbounded body."""
-
 comptime _LARGEST_LIMIT = 4_294_967_295
 """The largest `Json[T]` limit: the tape's spans are `UInt32` offsets into
-the body, exact only below 2^32 bytes. Checked where `from_body` or
-`_from_text` is instantiated (a route or a raw handler's call).
+the body, exact only below 2^32 bytes (`_check_limit`).
 
 Every `UInt32` the parser stores is at most the body's length `n`, which
 `_parse_json` checks against the limit before reading: an offset is at
@@ -75,6 +66,15 @@ comptime _LIMIT_TOO_LARGE = (
     "Json's limit is over 4294967295 bytes, the longest body its parser"
     " addresses"
 )
+
+
+def _check_limit[limit: Int]():
+    """`Json[T]`'s limit is from 0 to `_LARGEST_LIMIT`: checked where its
+    `from_body` or `_from_text` is instantiated (a route or a raw handler's
+    call)."""
+    comptime assert limit <= _LARGEST_LIMIT, _LIMIT_TOO_LARGE
+    comptime assert limit >= 0, _LIMIT_NEGATIVE
+
 
 # Node kinds of the parsed tape.
 comptime _NULL = 0
@@ -680,7 +680,9 @@ def _parse_json(text: String, max_bytes: Int) raises -> JsonValue:
     """Parses one JSON text (the RFC 8259 grammar with Muntin's limits; see
     `_Parser`) and returns its top-level value. Raises on anything else, and
     on a text longer than `max_bytes` (a `Json[T]`'s limit, M3-089), before
-    reading it. The document keeps one copy of `text`: the parser's, moved
+    reading it: a parsed document costs up to about 37 bytes per body byte,
+    so `max_bytes` bounds one parse, a raw handler's `from_body` call
+    included. The document keeps one copy of `text`: the parser's, moved
     into it."""
     if text.byte_length() > max_bytes:
         raise Error("JSON body too large")
@@ -1354,8 +1356,7 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
         a raw handler may call it directly, and its error model applies to
         the raise."""
         comptime assert _refusal[Self.T, True]() == "", _refusal[Self.T, True]()
-        comptime assert Self.limit <= _LARGEST_LIMIT, _LIMIT_TOO_LARGE
-        comptime assert Self.limit >= 0, _LIMIT_NEGATIVE
+        _check_limit[Self.max_bytes]()
         return Self(_read_json[Self.T](_parse_json(body, Self.max_bytes)))
 
     @staticmethod
@@ -1363,8 +1364,7 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
         """`from_body` on a typed route: the parse and the conversion raise
         `Rejection.JSON` and `Rejection.FROM_JSON` (M3-084)."""
         comptime assert _refusal[Self.T, True]() == "", _refusal[Self.T, True]()
-        comptime assert Self.limit <= _LARGEST_LIMIT, _LIMIT_TOO_LARGE
-        comptime assert Self.limit >= 0, _LIMIT_NEGATIVE
+        _check_limit[Self.max_bytes]()
         var value: JsonValue
         try:
             value = _parse_json(text, Self.max_bytes)

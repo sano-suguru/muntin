@@ -1,7 +1,7 @@
 # A JSON number at the widest `Json[T, limit=n]` (M3-089) whose exponent
 # passes 10^9, the cut `_to_float64` once made for a 1 MiB body. It builds a
-# 10^9-digit literal, so it needs about 2 GB of memory: neither
-# `./scripts/test.sh` without arguments nor CI runs it. Run it with
+# 10^9-digit literal, so it needs about 2 GB of memory: `check.sh` builds it,
+# but neither `./scripts/test.sh` without arguments nor CI runs it. Run it with
 # `./scripts/test.sh tests/large/test_exponent_past_a_billion.mojo` when
 # changing `_to_float64`'s exponent reading or `_LARGEST_LIMIT`. The normal
 # suite's small cases are in tests/test_json.mojo's `test_number_limits`, and
