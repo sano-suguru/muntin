@@ -1804,9 +1804,10 @@ def _sent_as_written(text: String, query: Bool) -> Bool:
     form serializer encodes the rest of a parameter's name, `~` included),
     a static path segment of RFC 3986 `pchar` (unreserved characters,
     sub-delimiters, `:`, `@` and a `%` with two hexadecimal digits, which a
-    client sends as written), except `.` and `..`, which a client
-    removes."""
-    if not query and (text == "." or text == ".."):
+    client sends as written), except a dot segment (`.` or `..`, also
+    written with `%2e` or `%2E`), which a client removes."""
+    var dots = text.replace("%2e", ".").replace("%2E", ".")
+    if not query and (dots == "." or dots == ".."):
         return False
     var bytes = text.as_bytes()
     var i = 0

@@ -450,7 +450,9 @@ def test_document_and_exchanges() raises:
     assert_equal(log.send(client, "POST", "/versions", "3.0", True).status, 400)
     assert_equal(log.send(client, "GET", "/missing").status, 404)
     assert_equal(log.send(client, "DELETE", "/places/1").status, 204)
-    assert_equal(log.send(client, "DELETE", "/old-places/1").status, 204)
+    var old = log.send(client, "DELETE", "/old-places/1")
+    assert_equal(old.status, 204)
+    assert_true(len(old.body) > 0)  # the gap: a `Json` 204 carries a body
     # A binary body, bare or carried, has no schema; a route string is
     # non-empty.
     assert_equal(
@@ -595,6 +597,31 @@ def test_sent_as_written_boundaries() raises:
     var g = App()
     g.get["/caf%C3%G9"](_e)
     assert_true(_refused(g^))
+    # Letters of either case, digits, `-`, `.` and `_` are sent as written
+    # in both; `%HH` only in a segment.
+    var h = App()
+    h.get["/V1.2/open_API-x.json?{Page_size-2.x}"](_d)
+    assert_true(not _refused(h^))
+    var i = App()
+    i.get["/f?{a%41}"](_d)
+    assert_true(_refused(i^))
+    # A dot segment written with `%2e` or `%2E` is one too.
+    var j = App()
+    j.get["/a/%2e/b"](_e)
+    assert_true(_refused(j^))
+    var k = App()
+    k.get["/a/%2E%2e/b"](_e)
+    assert_true(_refused(k^))
+    var l = App()
+    l.get["/a/.%2E/b"](_e)
+    assert_true(_refused(l^))
+    var m = App()
+    m.get["/a/%2e./b"](_e)
+    assert_true(_refused(m^))
+    # `%2e` beside other text is no dot segment.
+    var n = App()
+    n.get["/a/%2ex/b"](_e)
+    assert_true(not _refused(n^))
 
 
 def _find(id: Int) -> Json[Place]:
@@ -610,9 +637,10 @@ def test_additions_merged_as_written() raises:
     app.get["/places/{id}"](_find)
     app.get["/raw"](raw)
     var ops = Dict[String, String]()
-    ops[
-        "GET /places/{id}"
-    ] = '{"summary":"Find","responses":{"404":{"description":"No place"}}}'
+    ops["GET /places/{id}"] = (
+        '{"summary":"Find","responses":{"404":{"description":"No place"}},'
+        + '"x-rate":1.50,"x-n":[-0,1e3,true,false,null]}'
+    )
     # A raw handler reads the body itself: no derived `requestBody`.
     ops["GET /raw"] = '{"requestBody":{"content":{"text/plain":{}}}}'
     var doc = app.openapi(
@@ -633,7 +661,8 @@ def test_additions_merged_as_written() raises:
         + '{"type":"object","properties":{"city":{"type":"string"},'
         + '"lat":{"type":"number","format":"double"}},'
         + '"required":["city","lat"],"additionalProperties":false}}}},'
-        + '"404":{"description":"No place"}},"summary":"Find"}},'
+        + '"404":{"description":"No place"}},"summary":"Find",'
+        + '"x-rate":1.50,"x-n":[-0,1e3,true,false,null]}},'
         + '"/raw":{"get":{"parameters":[],"responses":{"default":'
         + '{"description":"Not described: the handler\'s response"}},'
         + '"requestBody":{"content":{"text/plain":{}}}}}},'
@@ -716,6 +745,13 @@ def test_additions_that_repeat_or_miss_raise() raises:
     )
     _refuses_addition(
         '{"info":[]}', "", "", "openapi: document: info: not a JSON object"
+    )
+    _refuses_addition(
+        "",
+        op,
+        '{"summary":"a","summary":"b"}',
+        "openapi: operations[POST /places] is not JSON:"
+        + " invalid JSON: duplicate member",
     )
     _refuses_addition(
         "",

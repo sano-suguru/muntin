@@ -67,7 +67,7 @@ Run by `tests/test_openapi_examples.mojo` (`test_openapi`), which checks the who
 
 ## Building with `-D MUNTIN_OPENAPI`
 
-- Only a build with `-D MUNTIN_OPENAPI` (`mojo build -D MUNTIN_OPENAPI app.mojo`) links the operations; without it, a call does not compile: `constraint failed: openapi: build with -D MUNTIN_OPENAPI`. A build without the define pays for none of it.
+- Only a build with `-D MUNTIN_OPENAPI` (`mojo build -D MUNTIN_OPENAPI app.mojo`) links the operations; without it, a call does not compile: `constraint failed: openapi: build with -D MUNTIN_OPENAPI`. A build without the define links none of the operations.
 - `openapi` is the `App`'s: a `Group`'s routes are described once mounted, and `group.openapi(...)` does not compile: `constraint failed: openapi: mount the Group first`.
 
 ## The document
@@ -144,4 +144,4 @@ The application adds what the types cannot say as JSON text, merged as written: 
 
 - a path placeholder repeated in a path, which OpenAPI does not allow: `openapi: route /pairs/{id}/{id} repeats the placeholder {id}, which OpenAPI does not allow`;
 - two paths that differ only in placeholder names, which OpenAPI treats as one path: `openapi: routes /users/{id} and /users/{name} differ only in placeholder names, which OpenAPI treats as one path`;
-- a query key or static segment that common clients do not send as written, since Muntin compares it undecoded: `openapi: route /f?{filter[name]}: a client may not send the query key filter[name] as written, and Muntin compares it undecoded`, and `openapi: route /hello world: a client may not send the segment hello world as written, and Muntin matches it undecoded`. A query key is sent as written when it holds only letters, digits and `-._`; a static segment when it holds only letters, digits, `-._~`, `!$&'()*+,;=`, `:`, `@` and `%` followed by two hexadecimal digits, and is not `.` or `..`.
+- a query key or static segment that common clients do not send as written, since Muntin compares it undecoded: `openapi: route /f?{filter[name]}: a client may not send the query key filter[name] as written, and Muntin compares it undecoded`, and `openapi: route /hello world: a client may not send the segment hello world as written, and Muntin matches it undecoded`. A query key is sent as written when it holds only letters, digits and `-._`; a static segment when it holds only letters, digits, `-._~`, `!$&'()*+,;=`, `:`, `@` and `%` followed by two hexadecimal digits, and is not a dot segment (`.` or `..`, also written with `%2e` or `%2E`), which a client removes.
