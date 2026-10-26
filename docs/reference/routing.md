@@ -266,8 +266,8 @@ On a typed route each step runs only if the previous one passed:
 2. Path values, in order, decoded: a bad escape or bytes that are not UTF-8, 400.
 3. Query values: one of the route's keys repeated anywhere in the query, 400; then each in order, a required key missing or its value empty, a bad escape or bytes that are not UTF-8, 400.
 4. Route values converted, in order (an `Int` that does not parse, a `from_route_value` raise): 400. The first invalid value stops the rest.
-5. `Json[T]` bodies: `Content-Type` 415, then the 1 MiB cap 413.
-6. `FromBytes` bodies, bare or carried: the type's `max_bytes`, 413.
+5. `Json[T]` bodies: `Content-Type` 415, then the type's limit 413 (1 MiB unless `Json[T, limit=n]`).
+6. Other bodies, bare or carried: the type's `max_bytes`, 413 (1 MiB when a `FromBody` type declares none; [body size limits](body-limits.md)).
 7. `WithHeaders[B]` and `Headers` parameters: the field rebuild (the fixed 500, only for a field an in-memory `Headers` holds invalidly).
 8. Text bodies: bytes that are not UTF-8, 400.
 9. Body conversion (`from_body`, `from_json`, `from_bytes`): a raise is 400.

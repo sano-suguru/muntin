@@ -1,8 +1,8 @@
 # Typed binary request body size limits decision (M3-043)
 
-> **Current.** Now described in [bodies reference, "Body size limits (`max_bytes`)"](../../reference/bodies.md#body-size-limits-max_bytes), [routing reference, "Order of checks"](../../reference/routing.md#order-of-checks) and [ARCHITECTURE, "Mojo 1.1.0 facts the design rests on"](../../ARCHITECTURE.md#mojo-110-facts-the-design-rests-on).
+> **Current.** Now described in [body size limits reference, "Binary bodies (`FromBytes`)"](../../reference/body-limits.md#binary-bodies-frombytes), [routing reference, "Order of checks"](../../reference/routing.md#order-of-checks) and [ARCHITECTURE, "Mojo 1.1.0 facts the design rests on"](../../ARCHITECTURE.md#mojo-110-facts-the-design-rests-on).
 > Changed in part since:
-> - [M3-089](m3-089-text-and-json-body-limits-decision.md) (not built yet, M3-090): a `FromBody` type's `max_bytes` (default 1 MiB) and `Json[T, limit=n]` are limits too; the negative-value message says "a body type's".
+> - [M3-089](m3-089-text-and-json-body-limits-decision.md), built by M3-090: a `FromBody` type's `max_bytes` (default 1 MiB) and `Json[T, limit=n]` are limits too; the negative-value message says "a body type's".
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision and production** (M3-043, [pull request #81](https://github.com/sano-suguru/muntin/pull/81)). It decides how an application gives a `FromBytes` body, bare or inside `WithHeaders[B]`, a Muntin-side size limit answered 413 before the conversion, which M3-041 and M3-042 left out with a revisit condition ("a size cap ... for bytes bodies"), and implements the choice in the same item. The question, the candidates, the comparison criteria and the pass conditions below were committed before the design was chosen; the only measurement before them was a scratch probe of how Mojo 1.1.0 treats a trait's `comptime` member with a default (needed to know whether one candidate exists at all).

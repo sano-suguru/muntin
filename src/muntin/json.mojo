@@ -10,7 +10,8 @@ chooses the result's status (M3-029, "JSON response status decision
 `JsonFields` struct whose codec is derived from its fields, or a `List` or
 `Optional` of one. The codec is Muntin's own: a strict
 parser for the RFC 8259 grammar with Muntin's limits (duplicate member names
-rejected, nesting depth 64, 1 MiB, `float()` finite) and a writer.
+rejected, nesting depth 64, a body limit of 1 MiB unless
+`Json[T, limit=n]`, `float()` finite) and a writer.
 
 Only documented Mojo 1.1.0 features are used: conditional conformance with
 `where`-gated methods, `conforms_to`, reflection of a struct's fields, and
@@ -39,12 +40,30 @@ this is rejected (400 through `from_body`), so the recursive parser's stack
 is bounded."""
 
 comptime _MAX_BODY_BYTES = 1_048_576
-"""Body cap for a JSON request: a fixed 1 MiB. A parsed document costs up to
-about 37 bytes per body byte, so the cap bounds one parse. Typed JSON routes
-answer a larger body 413 before parsing (the body adapters in `app.mojo`);
-the parser raises on it too, so `Json[T].from_body` called from a raw
-handler never parses an unbounded body. It also keeps the `UInt32` spans of
-the tape exact."""
+"""`Json[T]`'s default body cap, 1 MiB; a route chooses another with
+`Json[T, limit=n]` (M3-089). A parsed document costs up to about 37 bytes
+per body byte, so the cap bounds one parse. Typed JSON routes answer a
+larger body 413 before parsing (the body adapters in `app.mojo`); the
+parser raises on it too, so `Json[T].from_body` called from a raw handler
+never parses an unbounded body."""
+
+comptime _LARGEST_LIMIT = 4_294_967_295
+"""The largest `Json[T]` limit: the tape's spans are `UInt32` offsets into
+the body, exact only below 2^32 bytes. Checked where `from_body` or
+`_from_text` is instantiated (a route or a raw handler's call)."""
+
+comptime _EXPONENT_CAP = 1 << 40
+"""Where `_to_float64` stops reading an exponent's digits. A literal's digit
+count moves its decimal exponent by at most its length, at most
+`_LARGEST_LIMIT`, and the result is zero or out of range once the
+magnitude passes about 1,100 (800 kept digits, 324 below the smallest
+double); so any exponent read up to this cap, or saturated at it, decides
+the same result."""
+
+comptime _LIMIT_TOO_LARGE = (
+    "Json's limit is over 4294967295 bytes, the longest body its parser"
+    " addresses"
+)
 
 # Node kinds of the parsed tape.
 comptime _NULL = 0
@@ -300,6 +319,10 @@ def _to_float64(text: String) raises -> Float64:
     a literal the parser has validated. Raises when that rounding gives
     infinity (a magnitude of at least 2^1024 - 2^970); a magnitude of at most
     2^-1075 rounds to a zero of the literal's sign."""
+    comptime assert _EXPONENT_CAP > _LARGEST_LIMIT + 1_124, (
+        "_EXPONENT_CAP must exceed the longest JSON body by the 1,124"
+        " decimal places in which a literal's digits still change its double"
+    )
     var b = text.as_bytes()
     var n = len(b)
     var i = 0
@@ -336,9 +359,9 @@ def _to_float64(text: String) raises -> Float64:
             i += 1
         var exponent = 0
         while i < n:
-            # Past 10^9 the result is zero or out of range whatever the
-            # digits, which the body cap keeps under 2^20.
-            if exponent < 1_000_000_000:
+            # Past `_EXPONENT_CAP` the result is zero or out of range
+            # whatever the digits, which `_LARGEST_LIMIT` keeps far fewer.
+            if exponent < _EXPONENT_CAP:
                 exponent = exponent * 10 + Int(b[i]) - ord("0")
             i += 1
         scale += -exponent if exponent_negative else exponent
@@ -642,12 +665,15 @@ struct _Parser:
         return at
 
 
-def _parse_json(text: String) raises -> JsonValue:
+def _parse_json(
+    text: String, max_bytes: Int = _MAX_BODY_BYTES
+) raises -> JsonValue:
     """Parses one JSON text (the RFC 8259 grammar with Muntin's limits; see
     `_Parser`) and returns its top-level value. Raises on anything else, and
-    on a text longer than `_MAX_BODY_BYTES`, before reading it. The document
-    keeps one copy of `text`: the parser's, moved into it."""
-    if text.byte_length() > _MAX_BODY_BYTES:
+    on a text longer than `max_bytes` (a `Json[T]`'s limit, M3-089), before
+    reading it. The document keeps one copy of `text`: the parser's, moved
+    into it."""
+    if text.byte_length() > max_bytes:
         raise Error("JSON body too large")
     var p = _Parser(text)
     _ = p.value(0, 0, 0, 0)
@@ -1244,7 +1270,7 @@ trait _JsonText:
         ...
 
 
-struct Json[T: Movable & Deinitable](
+struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
     Deinitable,
     FromBody where (
         conforms_to(T, FromJson)
@@ -1269,7 +1295,10 @@ struct Json[T: Movable & Deinitable](
 
     As a body: a typed route requires exactly one request
     `Content-Type` field whose media type is `application/json` (else 415)
-    and a body of at most 1 MiB (else 413); the body is then parsed strictly
+    and a body of at most `limit` bytes, 1 MiB unless the route's type says
+    another (`Json[T, limit=64 * 1024]`, M3-089; else 413); `limit` is the
+    body's `max_bytes`, at most 2^32 - 1 (`_LARGEST_LIMIT`), and means
+    nothing on a result. The body is then parsed strictly
     and the value built, either failing answers 400, all
     before the handler. As a result: the value is written as the
     body and the response has the status given to the initializer (200 by
@@ -1280,6 +1309,7 @@ struct Json[T: Movable & Deinitable](
     `body.value`) or own it (`var body`).
     """
 
+    comptime max_bytes = Self.limit
     comptime _read_refusal: String = _refusal[Self.T, True]()
     comptime _write_refusal: String = _refusal[Self.T, False]()
 
@@ -1309,22 +1339,24 @@ struct Json[T: Movable & Deinitable](
     ):
         """Parses `body` and builds the value (`T.from_json`, or derived
         from a `JsonFields` struct's fields). Raises on malformed JSON, a
-        body over 1 MiB, or a failed conversion, whose message a derived
+        body over its `limit`, or a failed conversion, whose message a derived
         reader prefixes with the member path (`notes[2].text: ...`). A typed
         route answers the `Content-Type` and size steps before calling it;
         a raw handler may call it directly, and its error model applies to
         the raise."""
         comptime assert _refusal[Self.T, True]() == "", _refusal[Self.T, True]()
-        return Self(_read_json[Self.T](_parse_json(body)))
+        comptime assert Self.limit <= _LARGEST_LIMIT, _LIMIT_TOO_LARGE
+        return Self(_read_json[Self.T](_parse_json(body, Self.max_bytes)))
 
     @staticmethod
     def _from_text(text: String) raises _BodyFault -> Self:
         """`from_body` on a typed route: the parse and the conversion raise
         `Rejection.JSON` and `Rejection.FROM_JSON` (M3-084)."""
         comptime assert _refusal[Self.T, True]() == "", _refusal[Self.T, True]()
+        comptime assert Self.limit <= _LARGEST_LIMIT, _LIMIT_TOO_LARGE
         var value: JsonValue
         try:
-            value = _parse_json(text)
+            value = _parse_json(text, Self.max_bytes)
         except e:
             raise _BodyFault(Rejection.JSON, String(e))
         try:

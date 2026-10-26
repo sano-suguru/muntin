@@ -703,9 +703,10 @@ def test_body_size_cap() raises:
     # A JSON body is capped at MAX_BODY_BYTES (1 MiB). On the adapter
     # mirror: 415 first, then 413 before parsing, then 400; a route value
     # converts before both. `parse_json` (so `Json[T].from_body` from a raw
-    # handler) raises on it too. Production `App` has no 413 step yet: a
-    # `from_body` raise is 400 there, which is why the step is the
-    # adapters'.
+    # handler) raises on it too. Production `App` had no 413 step then (a
+    # `from_body` raise was 400), which is why the step was the adapters'.
+    # Since M3-089 it limits every `FromBody` body, to 1 MiB when the type
+    # declares no `max_bytes`, as this spike's `Json` does.
     var at_cap = "[" + String(" ") * (MAX_BODY_BYTES - 2) + "]"
     var over = "[" + String(" ") * (MAX_BODY_BYTES - 1) + "]"
     assert_equal(at_cap.byte_length(), MAX_BODY_BYTES)
@@ -747,13 +748,13 @@ def test_body_size_cap() raises:
         413,
     )
     assert_equal(_count(HANDLER), 0)
-    # A non-JSON body type has no cap.
+    # A non-JSON body type has no cap on the mirror (M3-008).
     assert_equal(
         model_post(note, Request("POST", "/n", over)).body.byte_length(),
         MAX_BODY_BYTES + 1,
     )
     var app = json_app()
-    assert_equal(TestClient(app).post("/users", over).status, 400)
+    assert_equal(TestClient(app).post("/users", over).status, 413)
 
 
 def _bits(x: Float64) -> UInt64:

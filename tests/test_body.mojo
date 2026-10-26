@@ -1,6 +1,8 @@
 # Request-body extraction (M2-006): body-only `app.post` with an
 # application-defined `FromBody` type. The body types live here, in the
-# application module; `src/muntin` never names them.
+# application module; `src/muntin` never names them. A type that declares
+# no `max_bytes` is limited to 1 MiB (M3-089); every shape and method of
+# the limit: tests/test_bytes_limit.mojo.
 
 from std.os import getenv, setenv, unsetenv
 from std.testing import assert_equal, assert_false, assert_true, TestSuite
@@ -226,6 +228,25 @@ def test_test_client_post_is_the_backend_seam() raises:
         var via_client = client.post("/users", body)
         assert_equal(via_client.status, direct.status, body)
         assert_equal(via_client.text(), direct.text(), body)
+
+
+def test_a_body_type_that_declares_no_limit_gets_one_mib() raises:
+    # 413 `Content Too Large` before `from_body` and the handler; exactly
+    # 1 MiB is converted.
+    assert_equal(CreateUser.max_bytes, 1_048_576)
+    var app = body_app()
+    var client = TestClient(app)
+    var at = "name=" + String("a") * (1_048_576 - 5)
+    _reset()
+    var ok = client.post("/users", at)
+    assert_equal(ok.status, 200)
+    assert_true(_called(FROM_BODY_CALLED))
+    _reset()
+    var over = client.post("/users", at + "a")
+    assert_equal(over.status, 413)
+    assert_equal(over.text(), "Content Too Large")
+    assert_false(_called(FROM_BODY_CALLED))
+    assert_false(_called(HANDLER_CALLED))
 
 
 def test_app_with_body_routes_moves() raises:
