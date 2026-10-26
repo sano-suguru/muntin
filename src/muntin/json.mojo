@@ -697,14 +697,6 @@ struct JsonValue(Copyable, Movable, Sized):
         var at = Int(self._doc.owned()[].kids[Int(self._node().kids) + k])
         return JsonValue(_doc=self._doc, _at=at)
 
-    def _name(self) raises -> String:
-        """The member name of an object member (M3-091 prototype)."""
-        var n = self._node()
-        ref doc = self._doc.owned()[]
-        if n.flags & UInt8(_KEY_ESCAPED):
-            return _decode(doc.text, Int(n.key_start), Int(n.key_end))
-        return String(doc.text[byte = Int(n.key_start) : Int(n.key_end)])
-
     def is_null(self) -> Bool:
         """Whether the value is `null`."""
         return self._kind() == _NULL
@@ -1192,42 +1184,6 @@ struct JsonWriter(Movable):
         self.name(name)
         self.value(value)
 
-    def _holds(self, name: String) -> Bool:
-        """Whether the open object already has a member `name` (M3-091
-        prototype)."""
-        if len(self._names) == 0:
-            return False
-        for n in self._names[len(self._names) - 1]:
-            if n == name:
-                return True
-        return False
-
-    def _copy(mut self, value: JsonValue) raises:
-        """`value` as parsed: a number keeps its literal, an object its
-        members' order (M3-091 prototype)."""
-        var k = value._kind()
-        if k == _NULL:
-            self.null()
-        elif k == _TRUE or k == _FALSE:
-            self.bool(k == _TRUE)
-        elif k == _NUMBER:
-            self._before_value()
-            self._out += value._literal()
-        elif k == _STRING:
-            self.string(value.string())
-        elif k == _ARRAY:
-            self.begin_array()
-            for i in range(len(value)):
-                self._copy(value._child(i))
-            self.end_array()
-        else:
-            self.begin_object()
-            for i in range(len(value)):
-                var member = value._child(i)
-                self.name(member._name())
-                self._copy(member)
-            self.end_object()
-
     def _finish(deinit self) raises -> String:
         """The text; raises if the document is empty or unfinished."""
         if len(self._stack) != 0 or not self._done:
@@ -1274,12 +1230,6 @@ trait _JsonBody:
 
     comptime _read_refusal: String
     comptime _write_refusal: String
-
-    @staticmethod
-    def _schema[reading: Bool](mut out: JsonWriter) raises:
-        """The JSON Schema of the value read (`reading`) or written (M3-091
-        prototype)."""
-        ...
 
 
 trait _JsonText:
@@ -1348,10 +1298,6 @@ struct Json[T: Movable & Deinitable](
         """Moves the value out (`body^.take()`): a field cannot be moved
         out of the middle of a `Json` on Mojo 1.1.0."""
         return self.value^
-
-    @staticmethod
-    def _schema[reading: Bool](mut out: JsonWriter) raises:
-        _write_schema[Self.T, reading](out)
 
     @staticmethod
     def from_body(
@@ -1771,85 +1717,3 @@ def _as_optional[
     if v.is_null():
         return _as[Optional[E], F](Optional[E]())
     return _as[Optional[E], F](Optional(_read_value[E](v)))
-
-
-# Schemas (M3-091 prototype): the JSON Schema of what the derived codec
-# reads (`reading`) or writes, by the same rules as `_kind_ok`. A
-# hand-written direction has no schema source, so it is `{}` (any value).
-
-
-def _write_schema[F: AnyType, reading: Bool](mut out: JsonWriter) raises:
-    comptime if F == Int:
-        out.begin_object()
-        out.field("type", "integer")
-        out.field("format", "int64")
-        out.field("minimum", Int.MIN)
-        out.field("maximum", Int.MAX)
-        out.end_object()
-    elif F == Float64:
-        out.begin_object()
-        out.field("type", "number")
-        out.field("format", "double")
-        out.end_object()
-    elif F == Bool:
-        out.begin_object()
-        out.field("type", "boolean")
-        out.end_object()
-    elif F == String:
-        out.begin_object()
-        out.field("type", "string")
-        out.end_object()
-    elif reading and conforms_to(F, FromJson):
-        out.begin_object()
-        out.end_object()
-    elif not reading and conforms_to(F, ToJson):
-        out.begin_object()
-        out.end_object()
-    elif conforms_to(F, JsonFields):
-        comptime r = reflect[F]
-        comptime names = r.field_names()
-        comptime types = r.field_types()
-        out.begin_object()
-        out.field("type", "object")
-        out.name("properties")
-        out.begin_object()
-        comptime for i in range(r.field_count()):
-            out.name(String(materialize[names[i]]()))
-            _write_schema[types[i], reading](out)
-        out.end_object()
-        out.name("required")
-        out.begin_array()
-        comptime for i in range(r.field_count()):
-            # A read takes an absent `Optional` member; a write always
-            # writes the member (`null` when empty).
-            comptime if not (reading and _is_optional[types[i]]()):
-                out.string(String(materialize[names[i]]()))
-        out.end_array()
-        comptime if not reading:
-            out.field("additionalProperties", False)
-        out.end_object()
-    elif conforms_to(F, Iterable):
-        comptime E = F.IteratorType[ImmutAnyOrigin].Element
-        comptime if conforms_to(E, Movable & Deinitable):
-            comptime if F == List[E]:
-                out.begin_object()
-                out.field("type", "array")
-                out.name("items")
-                _write_schema[E, reading](out)
-                out.end_object()
-            elif F == Optional[E]:
-                out.begin_object()
-                out.name("anyOf")
-                out.begin_array()
-                _write_schema[E, reading](out)
-                out.begin_object()
-                out.field("type", "null")
-                out.end_object()
-                out.end_array()
-                out.end_object()
-            else:
-                comptime assert False, "not a JSON kind"
-        else:
-            comptime assert False, "not a JSON kind"
-    else:
-        comptime assert False, "not a JSON kind"
