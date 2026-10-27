@@ -13,9 +13,9 @@ schema is `{}`. Not described: a `Json` answer with another status,
 Muntin's own answers (listed in docs/reference/openapi.md), middleware and
 a group's guard; the application adds those through `App.openapi`'s
 `operations` (`_merge`), an explicit status taking precedence over `2XX`.
-A `Json` answer of 204, 205 or 304 carries a body (`Json.to_response`
-writes one whatever the status), which no entry can describe truly: a
-bodiless one is a `Response`.
+A `Json` answer of 204 or 205 has no body (M3-093), which the derived
+`2XX` describes with content: the application describes it through an
+addition.
 """
 
 from std.reflection import reflect

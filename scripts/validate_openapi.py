@@ -49,7 +49,6 @@ KNOWN_GAPS = {
         '{"text":"t","tags":[],"place":{"city":"x","lat":1e400}}',
     ): "admitted, refused",
     ("POST", "/versions", "3.0"): "admitted, refused",  # hand-written: {}
-    ("DELETE", "/old-places/1", ""): "a body in a 204 answer",  # Json 204
 }
 
 

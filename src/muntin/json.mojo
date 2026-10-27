@@ -1364,7 +1364,8 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
     before the handler. As a result: the value is written as the
     body and the response has the status given to the initializer (200 by
     default) and exactly `Content-Type: application/json`; a serialization
-    failure is the fixed 500, whatever the status. The value
+    failure is the fixed 500, whatever the status. A 1xx, 204 or 205 has
+    no body and no fields, and the value is not written (M3-093). The value
     is moved in and out (`Json(v^)`, `body^.take()`), so a move-only `T`
     works. A handler may borrow the body (`body: Json[T]`, read
     `body.value`) or own it (`var body`).
@@ -1441,10 +1442,14 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
         `write_json`, or a non-finite number, answers the fixed 500
         (`Internal Server Error`, no fields) instead, whatever the status,
         carrying a `Failure.RESPONSE` report of the error's text (M3-058);
-        no partial body is sent."""
+        no partial body is sent. A 1xx, 204 or 205 answers with no body and
+        no fields, and the value is not written, so it cannot fail; a 304
+        keeps the written body (`_writes_no_body`, M3-093)."""
         comptime assert _refusal[Self.T, False]() == "", _refusal[
             Self.T, False
         ]()
+        if _writes_no_body(self._status):
+            return Response(self._status, "")
         var out = JsonWriter()
         try:
             _write_value(out, self.value)
@@ -1453,6 +1458,16 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
             return r^
         except e:
             return _failed(Failure.RESPONSE, String(e))
+
+
+def _writes_no_body(status: Int) -> Bool:
+    """Whether `Json` answers `status` with no body (M3-093): a 1xx, 204 or
+    205, which never carry content (RFC 9110). A 304 never carries content
+    either, but keeps its body: its `Content-Length` is the length of the
+    content a 200 would carry, and a backend may frame it from the body
+    (docs/ARCHITECTURE.md, "Current limits"), so an empty one would declare
+    0."""
+    return (status >= 100 and status <= 199) or status == 204 or status == 205
 
 
 def _json_content_type(headers: Headers) -> Bool:

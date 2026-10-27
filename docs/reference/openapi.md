@@ -106,6 +106,8 @@ A raw handler reads the body itself: its operation has no `requestBody` unless a
 | `Json[T]` | `2XX`, `application/json` with the schema of what `T`'s writer writes: the status is chosen at run time (`Json(value, status=201)`), and Muntin's own answers are never 2xx |
 | `Response`, a `ToResponse` type | `default`, described `Not described: the handler's response` |
 
+A `Json` answer of 204 or 205 has no body ([responses](responses.md#json-results)), so `2XX`'s content does not describe it: an addition does (`"204":{"description":"Deleted"}`), an explicit status taking precedence.
+
 Not described unless an addition says so: a `Json` answer of a status outside 2xx, Muntin's own answers (400, 404, 405, 413, 415, 500), a `ToErrorResponse` error's answer, a guard's refusal and what middleware changes.
 
 ### Schemas
@@ -122,7 +124,7 @@ The schemas follow the derived codec's rules ([JSON bodies](bodies.md#json-jsont
 | `Optional[E]` | `{"anyOf":[E,{"type":"null"}]}` |
 | a hand-written direction (`FromJson` read, `ToJson` written), a struct's or a field's | `{}`, any value |
 
-A schema admits more than the reader where JSON Schema cannot say it: `1.0` or `1e2` as an `Int`, a number past `Float64`'s range (`1e400`), a repeated member name, Muntin's nesting and size limits. A `Json` answer of 204, 205 or 304 carries a body (`Json.to_response` writes one whatever the status), which no response describes truly; a bodiless answer is a `Response`, described through an addition.
+A schema admits more than the reader where JSON Schema cannot say it: `1.0` or `1e2` as an `Int`, a number past `Float64`'s range (`1e400`), a repeated member name, Muntin's nesting and size limits.
 
 ## Additions
 
