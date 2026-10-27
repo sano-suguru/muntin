@@ -4,7 +4,7 @@
 > Changed in part since:
 > - [M3-084](m3-084-request-rejection-report-decision.md): a derived decoder's failure message names the member path, which the 400's `Rejection` reports.
 > - [M3-087](m3-087-derived-json-in-hand-written-codecs-decision.md): a hand-written codec reads and writes derived values, which this slice left out.
-> - [M3-098](m3-098-renamed-and-defaulted-json-members-decision.md) (not built yet, M3-099): members can be renamed and defaulted, and fields take more integer widths and `Float32`.
+> - [M3-098](m3-098-renamed-and-defaulted-json-members-decision.md) (not built yet, M3-099): members can be renamed (`JsonMembers`, `JsonCamelCase`) and given a default.
 
 Status: **decision** (M3-082, #187, issue [#141](https://github.com/sano-suguru/muntin/issues/141)). Evidence: the pull request.
 
