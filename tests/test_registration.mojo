@@ -13,15 +13,7 @@
 
 from std.testing import assert_equal, TestSuite
 
-from muntin import (
-    App,
-    FromBody,
-    JsonFields,
-    Request,
-    Response,
-    State,
-    ToResponse,
-)
+from muntin import App, FromBody, Request, Response, State, ToResponse
 from muntin.testing import TestClient
 
 
@@ -196,11 +188,7 @@ def register_slot_and_result[
 def register_full_clause[
     R: Movable & Deinitable
 ](mut app: App, h: def() thin raises Never -> R) where (
-    R == String
-    or R == StaticString
-    or conforms_to(R, ToResponse)
-    or conforms_to(R, JsonFields)
-    or conforms_to(R, Iterable)
+    R == String or R == StaticString or conforms_to(R, ToResponse)
 ):
     """The registration's own clause, copied verbatim."""
     app.get["/full-clause"](h)
@@ -209,11 +197,7 @@ def register_full_clause[
 def register_full_clause_reordered[
     R: Movable & Deinitable
 ](mut app: App, h: def() thin raises Never -> R) where (
-    R == StaticString
-    or R == String
-    or conforms_to(R, ToResponse)
-    or conforms_to(R, Iterable)
-    or conforms_to(R, JsonFields)
+    R == StaticString or R == String or conforms_to(R, ToResponse)
 ):
     """The registration's clause with its branches reordered."""
     app.get["/full-clause-reordered"](h)

@@ -1,6 +1,8 @@
 # Guarded routes and request context decision (M3-080)
 
 > **Current.** Built by M3-081. Now described in [groups reference](../../reference/groups.md) and [ARCHITECTURE, "Registration surface"](../../ARCHITECTURE.md#registration-surface).
+> Changed in part since:
+> - [M3-096](m3-096-bare-json-bodies-and-results-decision.md) (not built yet, M3-097): a `JsonFields` struct, or a `List` of one, is a request body, so it cannot be a Group's context; wrap it in a struct of the application's own.
 
 Status: **decision** (M3-080, #183, issue [#151](https://github.com/sano-suguru/muntin/issues/151)). Evidence and review: the pull request.
 
