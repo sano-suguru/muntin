@@ -4,8 +4,10 @@ A typed `post`, `put` or `patch` handler takes one body, as its last parameter, 
 
 - a `FromBody` type: text the application parses;
 - `Json[T]` with `T: FromJson`: JSON parsed by Muntin's codec;
-- a `FromBytes` type: the body's bytes, with a declared size limit;
+- a `FromBytes` type: the body's bytes;
 - `WithHeaders[B]` around one of these: the body and the request's header fields.
+
+Each has a size limit, a type's `max_bytes` or `Json[T, limit=n]`, and a longer body is 413 ([body size limits](body-limits.md)).
 
 The body comes from the request body only, never from the path or query, byte for byte. A conversion that raises is 400 `Bad Request` and the handler is not called; the error's text is not sent, only kept in the 400's report, which tells a body that is not UTF-8 or, for `Json[T]`, not JSON from a conversion's raise ([errors](errors.md#reports-of-rejected-requests)). The order of checks is in [routing](routing.md#order-of-checks). A handler without a body on these methods is bodyless ([routing](routing.md#bodyless-post-put-and-patch)); a raw handler reads any body itself ([raw handlers](raw.md)).
 
@@ -45,8 +47,8 @@ app.post["/users"](create_user)
 
 Run by `tests/test_reference_examples.mojo` (`test_bodies_text_body`), as written. That `from_body` and `create_user` are not called is checked by `tests/test_body.mojo` (`test_invalid_body_is_400_without_calling_the_handler`, `test_method_mismatch_is_405_and_unmatched_path_404_without_conversion`), on an app with more routes.
 
-- `FromBody` refines `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`. The type conforms in its own module; Muntin never names it. `from_body` sees the body only, as one `String`, not the header fields (use `WithHeaders[B]` for those).
-- Muntin reads the body's bytes as strict UTF-8 first: bytes that are not well-formed UTF-8 are 400 before `from_body`, never replaced by U+FFFD. An empty body, whitespace, NUL and a U+FFFD the client sent reach `from_body` unchanged. Text bodies have no Muntin size limit, `Json[T]` keeps its fixed 1 MiB step ([below](#json-jsont)), and raw handlers measure `req.body` themselves; the `Server`'s `max_body_bytes` applies over the wire ([serving](serving.md#receive-body-limit)).
+- `FromBody` refines `Deinitable & Movable` with one requirement, `@staticmethod def from_body(body: String) raises -> Self`, and `comptime max_bytes: Int`, which has a default ([body size limits](body-limits.md#text-bodies-frombody)). The type conforms in its own module; Muntin never names it. `from_body` sees the body only, as one `String`, not the header fields (use `WithHeaders[B]` for those).
+- Muntin reads the body's bytes as strict UTF-8 first: bytes that are not well-formed UTF-8 are 400 before `from_body`, never replaced by U+FFFD. An empty body, whitespace, NUL and a U+FFFD the client sent reach `from_body` unchanged. A body over the type's `max_bytes` is 413 before this read ([body size limits](body-limits.md#text-bodies-frombody)).
 
 ### A route value, then the body
 
@@ -215,12 +217,12 @@ Run by `tests/test_json_dx.mojo` (`test_dx_json_examples`), with these types and
 ### Rules for every JSON body
 
 - `Content-Type`: exactly one field whose media type (before any `;`, trimmed) is `application/json`, ASCII case-insensitively; parameters are ignored. Missing, repeated, other and `+json` types are 415.
-- Size: at most 1,048,576 bytes; one more is 413 (fixed). `Json[T].from_body` also raises above it in a raw handler.
+- Size: a body over its `limit` is 413, and `Json[T].from_body` raises on it in a raw handler ([body size limits](body-limits.md#json-bodies-jsont-limitn)).
 - Grammar: RFC 8259, strictly. Comments, trailing commas, leading zeros, `NaN`, duplicate member names, a byte order mark, lone surrogates and nesting deeper than 64 are 400. Extra members are ignored.
 - Numbers: `int()` is exact for integer literals that fit `Int`. `float()` rounds a literal of any length to the nearest `Float64`, ties to even. It raises (400) only when that rounding gives infinity, at a magnitude of 2^1024 − 2^970 or more, so `1.7976931348623158e308` reads as the largest double; a magnitude of 2^-1075 or less rounds to a zero of the literal's sign, so `2.4703282292062328e-324` reads as the smallest subnormal.
 - A `FromJson` or `JsonFields` type is not a body by itself (`def create_user(body: CreateUser)` gets the `FromBody or FromBytes` message).
 - Ownership: borrow (`body.value`) or own and move out (`var body`, `body^.take()`); `body.value^` does not compile.
-- Cost: parsing is linear apart from a sort of each object's member names; reading k fields of an m-member object costs O(k·m), by hand or derived. At the cap a parse adds up to about 29 MB of memory (1 MiB of `[0,0,...]`), about 5 MB for typical records. `float()` converts the literal on every call, so its cost follows the calls, not the body: about a microsecond for a short literal near either end of the range, more for hundreds of digits ([#176](https://github.com/sano-suguru/muntin/pull/176) measures it).
+- Cost: parsing is linear apart from a sort of each object's member names; reading k fields of an m-member object costs O(k·m), by hand or derived. At 1 MiB a parse adds up to about 29 MB of memory (1 MiB of `[0,0,...]`), about 5 MB for typical records. `float()` converts the literal on every call, so its cost follows the calls, not the body: about a microsecond for a short literal near either end of the range, more for hundreds of digits ([#176](https://github.com/sano-suguru/muntin/pull/176) measures it).
 - `TestClient.post(target, body)` sends no fields, so it gets 415; send `headers=` with the `Content-Type` ([testing](testing.md)).
 
 ## Header fields with a body (`WithHeaders[B]`)
@@ -333,7 +335,7 @@ app.post["/upload"](upload)
 
 Run by `tests/test_bytes_body.mojo` (`test_dx_example`), with `Image` and `upload` as written.
 
-- `FromBytes` refines `Deinitable & Movable` with `comptime max_bytes: Int` and `@staticmethod def from_bytes(body: List[UInt8]) raises -> Self` (a non-raising one conforms too).
+- `FromBytes` refines `Deinitable & Movable` with `comptime max_bytes: Int` and `@staticmethod def from_bytes(body: List[UInt8]) raises -> Self` (a non-raising one conforms too); `max_bytes` and its examples: [body size limits](body-limits.md#binary-bodies-frombytes).
 - `from_bytes` receives `Request.body` itself, borrowed and read-only: the bytes as received or as middleware replaced them, with no UTF-8 check and no copy. A type that keeps them copies them (`body.copy()`).
 - Every shape that takes a `FromBody` takes a `FromBytes`. There is no `Content-Type` rule.
 - With header fields, wrap it: `WithHeaders[B]` around a `FromBytes` follows the carrier's rules above.
@@ -386,81 +388,3 @@ app.put["/objects/{key}"](put_object)
 Run by `tests/test_bytes_headers_body.mojo` (`test_dx_example`), with `Upload`, this `Unauthorized` and `put_object` as written; its requests without `X-Signature` go to `/objects/a`.
 
 **A field the handler checks is read after the conversion.** `from_bytes` runs on every request the route selects, signed or not. When the conversion is costly or must not see unauthenticated input, check the field in a [guarded group](groups.md)'s guard, which runs after routing and before the conversion, in middleware, which answers before routing and conversion (scope it by `request.path` and `request.method`, since it also answers ahead of 404 and 405), or in a raw handler.
-
-### Body size limits (`max_bytes`)
-
-Every `FromBytes` type declares the longest body it accepts, in bytes; a longer body is 413 `Content Too Large` before `from_bytes`, bare or carried:
-
-<!-- example: tests/test_bytes_limit.mojo#bodies-limit-avatar -->
-```mojo
-from muntin import App, FromBytes, WithHeaders
-
-
-struct Avatar(FromBytes):
-    comptime max_bytes = 64 * 1024  # a longer body is 413, before from_bytes
-
-    var data: List[UInt8]
-
-    def __init__(out self, var data: List[UInt8]):
-        self.data = data^
-
-    @staticmethod
-    def from_bytes(body: List[UInt8]) raises -> Self:
-        if len(body) == 0:
-            raise Error("empty avatar")  # 400, set_avatar not called
-        return Self(body.copy())
-
-
-def set_avatar(id: Int, avatar: Avatar) -> String:
-    return String(id, ": ", len(avatar.data), " bytes")
-
-
-app.put["/users/{id}/avatar"](set_avatar)
-# PUT /users/7/avatar  65,536 bytes  -> 200 "7: 65536 bytes"
-# PUT /users/7/avatar  65,537 bytes  -> 413 "Content Too Large"  (from_bytes and set_avatar not called)
-# PUT /users/x/avatar  70,000 bytes  -> 400 "Bad Request"  (the route value answers first, whatever the length)
-# PUT /users/7/avatar  empty         -> 400 "Bad Request"  (from_bytes raised)
-```
-
-Run by `tests/test_bytes_limit.mojo` (`test_dx_examples`), with `Avatar` and `set_avatar` as written; the same app also registers the `Blob` routes below. It checks the statuses and texts, not which functions ran.
-
-A different limit per route is a type parameter; a family of types can share a default through a trait refining `FromBytes` (`trait SmallUpload(FromBytes): comptime max_bytes: Int = 16`):
-
-<!-- example: tests/test_bytes_limit.mojo#bodies-limit-blob -->
-```mojo
-struct Blob[limit: Int](FromBytes):
-    comptime max_bytes = Self.limit  # one type, a limit per route
-
-    var data: List[UInt8]
-
-    def __init__(out self, var data: List[UInt8]):
-        self.data = data^
-
-    @staticmethod
-    def from_bytes(body: List[UInt8]) raises -> Self:
-        return Self(body.copy())
-
-
-def put_blob(key: String, input: WithHeaders[Blob[1 << 20]]) -> String:
-    var kind = input.headers.get("content-type").or_else("unknown")
-    return String(key, ": ", len(input.body.data), " bytes, ", kind)
-
-
-def put_icon(key: String, input: WithHeaders[Blob[4096]]) -> String:
-    return String(key, ": ", len(input.body.data), " byte icon")
-
-
-app.put["/blobs/{key}"](put_blob)
-app.put["/icons/{key}"](put_icon)
-# PUT /blobs/a.png  Content-Type: image/png  1,048,576 bytes -> 200 "a.png: 1048576 bytes, image/png"
-# PUT /blobs/a.png  1,048,577 bytes                          -> 413 "Content Too Large"
-# PUT /icons/i  4,096 bytes -> 200 "i: 4096 byte icon";  4,097 bytes -> 413
-```
-
-Run by `tests/test_bytes_limit.mojo` (`test_dx_examples`), with `Blob`, `put_blob` and `put_icon` as written, in the same app as the `Avatar` route above; the example's imports are the `Avatar` example's.
-
-- `max_bytes` is required, with no default in `FromBytes`: a type whose traits give `max_bytes` no default and that declares none, or misspells it (`max_byte`), does not conform (`required member 'max_bytes' is not specified`). `Int.MAX` is no limit; `0` accepts only the empty body. A negative value is rejected at registration (`the request body's max_bytes is negative; a FromBytes type's max_bytes is a byte count, 0 or more`).
-- **Under a refining trait's default the compiler no longer catches a misspelling**: `comptime max_byte = 4096` compiles and inherits the family's value. Give a family a finite default, the strictest its types share, never `Int.MAX`, and check an override where the type is declared (`comptime assert Banner.max_bytes == 4096`).
-- It is `App.handle`'s rule, not the type's: `Avatar.from_bytes(bytes)` called directly checks no limit. It measures `Request.body` after middleware.
-- It bounds what reaches `from_bytes`, not what the server receives: the backend has already buffered the whole body. Receiving is bounded by the `Server`'s `max_body_bytes` ([serving](serving.md#receive-body-limit)); a `max_bytes` above it is never reached.
-- Only a `FromBytes` type's `max_bytes` is a limit; the same member on a `FromBody` type is ignored. There is no `App`-wide or per-registration limit.

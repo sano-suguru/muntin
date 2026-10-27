@@ -120,6 +120,10 @@ M3-009 serves `json_app()`: the JSON body route `POST /greet` ->
 `POST /greet-derived`, whose body is a derived `JsonFields` struct and whose
 result a top-level `List` of it: 200 with the derived array, 400 for a
 missing member and 415 without the field, each equal to `App.handle`.
+M3-090 adds `POST /greet-text`, a text body whose type declares no
+`max_bytes`, and `POST /greet-small` (`Json[Greeting, limit=32]`): the
+same body over 1 MiB, and over 32 bytes, is `App.handle`'s 413 on the
+wire, a text body's whatever its `Content-Type`.
 
 M3-013 registers the stateful carrier route `POST /signed-greet` ->
 `signed_greet(gate: State[Gate], input: WithHeaders[Json[Greeting]])
@@ -2059,6 +2063,14 @@ def greet_derived(
     )
 
 
+def greet_text(body: RawText) -> String:
+    return "hello " + body.text
+
+
+def greet_small(var body: Json[Greeting, limit=32]) -> Json[Greeting]:
+    return Json(body^.take())
+
+
 @fieldwise_init
 struct Greeter(Movable):
     var title: String
@@ -2108,6 +2120,8 @@ def json_app() -> App:
     app.post["/greet"](greet)
     app.post["/greet-created"](greet_created)
     app.post["/greet-derived"](greet_derived)
+    app.post["/greet-text"](greet_text)
+    app.post["/greet-small"](greet_small)
     app.post["/greet/{id}"](greet_staff, State(Greeter("Dr. ")))
     app.post["/signed-greet"](signed_greet, State(Gate("t0k")))
     return app^
@@ -2164,6 +2178,18 @@ def test_json_over_localhost_matches_app_handle() raises:
                 False,
             ),
             (String("-derived"), good, String(""), 415, False),
+            (String("-text"), good, String(""), 200, False),
+            (String("-text"), big, String(""), 413, False),
+            (String("-text"), big, String("application/json"), 413, False),
+            (String("-small"), good, String("application/json"), 200, True),
+            (
+                String("-small"),
+                '{"name":"b"}' + String(" ") * 21,
+                String("application/json"),
+                413,
+                False,
+            ),
+            (String("-small"), big, String(""), 415, False),
         ]
         for c in cases:
             var path = "/greet" + c[0]
