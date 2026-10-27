@@ -103,7 +103,7 @@ Then, in priority order, each with its issue:
 
 2. `+json` media types or a missing `Content-Type` on JSON bodies ([#193](https://github.com/sano-suguru/muntin/issues/193));
 3. a JSON body and result without the `Json` wrapper ([#194](https://github.com/sano-suguru/muntin/issues/194));
-4. renamed and defaulted members and more field kinds for derived JSON ([#196](https://github.com/sano-suguru/muntin/issues/196));
+4. renamed and defaulted members and more field kinds for derived JSON ([#196](https://github.com/sano-suguru/muntin/issues/196)): the production slice M3-099 of [M3-098](history/decisions/m3-098-renamed-and-defaulted-json-members-decision.md);
 5. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
 6. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
 7. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));
