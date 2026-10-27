@@ -81,6 +81,10 @@ BUDGETS = [
     # M3-084 was 4,083 bytes when it merged (#190), leaving no room for the
     # opening line that names where its behavior is now described (M3-085).
     ("docs/history/decisions/m3-084-request-rejection-report-decision.md", 5 * KB),
+    # M3-094 is 4,339 bytes (#207): the owner's review asked it to state its
+    # rule for a declared type's parameters and the subtype's length limit,
+    # both part of the slice's contract.
+    ("docs/history/decisions/m3-094-json-media-types-decision.md", 5 * KB),
     # A record is 1-3 KB (docs/DEVELOPMENT.md section 2); the rest is room
     # for its opening lines, which grow as later records change it.
     ("docs/history/decisions/*.md", 4 * KB),
