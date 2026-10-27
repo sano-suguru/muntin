@@ -6,8 +6,8 @@
 # and each exchange to `<dir>/exchanges.jsonl`, which
 # `scripts/validate_openapi.py` checks against the document. Some of those
 # exchanges pin the known gaps of M3-091 (docs/ARCHITECTURE.md's revisit
-# index): JSON Schema's `integer` takes `1.0`, a hand-written reader's
-# schema is `{}`, and a `Json` answer of 204 carries a body.
+# index): JSON Schema's `integer` takes `1.0`, and a hand-written reader's
+# schema is `{}`.
 # Build flags (scripts/build_one.sh): -D MUNTIN_OPENAPI
 
 from std.collections import Dict
@@ -202,8 +202,8 @@ def delete_place(id: Int) -> Response:
 
 
 def delete_old_place(id: Int) -> Json[Place]:
-    # `Json.to_response` writes the value whatever the status, so this 204
-    # carries a body: a known gap (the record's), which no document fixes.
+    # A 204 carries no body (M3-093), which the derived `2XX` describes
+    # with content: `_additions` describes the 204.
     return Json(Place("gone", 0.0), status=204)
 
 
@@ -342,7 +342,8 @@ struct _Log(Movable):
 def _additions() -> Dict[String, String]:
     """What the types cannot say: the credential the guard checks, the
     statuses it and a `Json` handler answer (an explicit 404 or 401 takes
-    precedence over the derived `2XX`), and a `Response` handler's 204."""
+    precedence over the derived `2XX`), and the 204 of a `Response` and of
+    a `Json` handler."""
     var member = (
         '{"security":[{"member":[]}],"responses":{"401":{"description":'
         + '"No X-Member field","content":{"*/*":{"schema":'
@@ -361,9 +362,9 @@ def _additions() -> Dict[String, String]:
         + place
         + "}}}}}"
     )
-    ops[
-        "DELETE /places/{id}"
-    ] = '{"responses":{"204":{"description":"Deleted"}}}'
+    var deleted = '{"responses":{"204":{"description":"Deleted"}}}'
+    ops["DELETE /places/{id}"] = deleted
+    ops["DELETE /old-places/{id}"] = deleted
     return ops^
 
 
@@ -442,9 +443,8 @@ def test_document_and_exchanges() raises:
     # Known gaps the validator expects (the record's): JSON Schema's
     # `integer` takes `1.0` and `1e2`, and `number` a literal past
     # `Float64`'s range, which the reader refuses; a hand-written reader's
-    # `{}`; a `Json` answer of 204, which carries a body. A 404
-    # `Json` answer meets the entry `_additions` gives it, as a bodiless
-    # 204 `Response` does.
+    # `{}`. A 404 `Json` answer meets the entry `_additions` gives it, as
+    # the bodiless 204 of a `Response` and of a `Json` do.
     assert_equal(
         log.send(client, "POST", "/counts", '{"n":1}', True).status, 200
     )
@@ -461,7 +461,7 @@ def test_document_and_exchanges() raises:
     assert_equal(log.send(client, "DELETE", "/places/1").status, 204)
     var old = log.send(client, "DELETE", "/old-places/1")
     assert_equal(old.status, 204)
-    assert_true(len(old.body) > 0)  # the gap: a `Json` 204 carries a body
+    assert_equal(len(old.body), 0)  # a `Json` 204 carries no body (M3-093)
     # A binary body, bare or carried, has no schema; a route string is
     # non-empty.
     assert_equal(

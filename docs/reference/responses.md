@@ -65,6 +65,7 @@ app.post["/accounts"](register)
 Run by `tests/test_json_dx.mojo` (`test_json_result_status`), as written, with the types of [bodies](bodies.md#json-jsont).
 
 - `status` is keyword-only (`Json(value, 201)` does not compile) and not validated.
+- A status that never carries content (1xx, 204, 205, 304) answers with no body and no fields: the value is not written, so the 500 below cannot happen ([why](../history/decisions/m3-093-json-statuses-without-content-decision.md)).
 - Another media type is an edit of the converted response:
 
 <!-- example: tests/test_json_dx.mojo#responses-json-media-type -->

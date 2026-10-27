@@ -116,7 +116,9 @@ M3-009 serves `json_app()`: the JSON body route `POST /greet` ->
 413, and malformed JSON is 400; each status, body and `Content-Type` equals
 `App.handle` with the same fields. The adapter is unchanged. M3-029 adds
 `POST /greet-created` (`Json(..., status=201)`): 201 with the same body and
-`Content-Type` on the wire, 415 without the field. M3-083 adds
+`Content-Type` on the wire, 415 without the field. M3-093 adds
+`POST /greet-none/{status}` (`Json(..., status=)`): a 204 and a 304 go out
+with no body and no `Content-Type`, as `App.handle` answers them. M3-083 adds
 `POST /greet-derived`, whose body is a derived `JsonFields` struct and whose
 result a top-level `List` of it: 200 with the derived array, 400 for a
 missing member and 415 without the field, each equal to `App.handle`.
@@ -2050,6 +2052,10 @@ def greet_created(var body: Json[Greeting]) -> Json[Greeting]:
     return Json(body^.take(), status=201)
 
 
+def greet_none(status: Int, var body: Json[Greeting]) -> Json[Greeting]:
+    return Json(body^.take(), status=status)
+
+
 @fieldwise_init
 struct DerivedGreeting(Copyable, JsonFields):
     var name: String
@@ -2119,6 +2125,7 @@ def json_app() -> App:
     var app = App()
     app.post["/greet"](greet)
     app.post["/greet-created"](greet_created)
+    app.post["/greet-none/{status}"](greet_none)
     app.post["/greet-derived"](greet_derived)
     app.post["/greet-text"](greet_text)
     app.post["/greet-small"](greet_small)
@@ -2169,6 +2176,20 @@ def test_json_over_localhost_matches_app_handle() raises:
             (String("/x"), big, String("text/plain"), 400, False),
             (String("-created"), good, String("application/json"), 201, True),
             (String("-created"), good, String(""), 415, False),
+            (
+                String("-none/204"),
+                good,
+                String("application/json"),
+                204,
+                False,
+            ),
+            (
+                String("-none/304"),
+                good,
+                String("application/json"),
+                304,
+                False,
+            ),
             (String("-derived"), good, String("application/json"), 200, True),
             (
                 String("-derived"),

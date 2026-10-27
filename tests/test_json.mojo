@@ -8,7 +8,8 @@
 # `TestClient`. `TestClient`'s `headers=` (M3-011):
 # tests/test_testclient_headers.mojo. The reference's JSON examples:
 # tests/test_json_dx.mojo. Must-not-compile cases: tests/json_api_fail. A chosen
-# result status, `Json(value, status=)`: M3-029.
+# result status, `Json(value, status=)`: M3-029; none written for a status
+# that never carries content: M3-093.
 
 from std.collections import Optional
 from std.memory import bitcast
@@ -494,6 +495,16 @@ def unvalidated_address(id: Int) -> Json[Address]:
     return Json(Address("Paris", id), status=999)
 
 
+def bodiless_address(status: Int) -> Json[Address]:
+    # `status` from the route: one that never carries content has no body.
+    return Json(Address("Paris", status), status=status)
+
+
+def bodiless_measure(status: Int) -> Json[Measurement]:
+    # A value that cannot be written, which such a status never writes.
+    return Json(Measurement(Float64(0) / Float64(0)), status=status)
+
+
 def status_set_after_failure() raises -> Response:
     # docs/reference/responses.md: an edit after `to_response()` applies to
     # the fixed 500.
@@ -568,6 +579,8 @@ def json_app() raises -> App:
     app.get["/refusing-created"](refusing_created)
     app.get["/explicit-addresses/{id}"](explicit_address)
     app.get["/unvalidated-addresses/{id}"](unvalidated_address)
+    app.get["/bodiless/{status}"](bodiless_address)
+    app.get["/bodiless-measure/{status}"](bodiless_measure)
     app.get["/status-after-failure"](status_set_after_failure)
     app.get["/media-type-after-failure"](media_type_after_failure)
     app.post["/return-body"](return_body)
@@ -1452,6 +1465,33 @@ def test_serialization_failure_ignores_the_chosen_status() raises:
     assert_equal(
         m.headers.get("content-type").value(), "application/problem+json"
     )
+
+
+def test_a_status_without_content_writes_no_body() raises:
+    # 1xx, 204, 205 and 304 never carry content (RFC 9110): no body, no
+    # fields, and the value is not written, so one that cannot be is not
+    # the fixed 500 (M3-093). The statuses beside them keep the JSON body.
+    var app = json_app()
+    var client = TestClient(app)
+    for status in [100, 101, 199, 204, 205, 304]:
+        var code = String(status)
+        _assert_fixed(client.get("/bodiless/" + code), status, "")
+        _assert_fixed(client.get("/bodiless-measure/" + code), status, "")
+        _assert_fixed(
+            Json(Address("Paris", 7), status=status).to_response(), status, ""
+        )
+    for status in [99, 200, 203, 206, 303, 305]:
+        var code = String(status)
+        _assert_json(
+            client.get("/bodiless/" + code),
+            status,
+            '{"city":"Paris","zip":' + code + "}",
+        )
+        _assert_fixed(
+            client.get("/bodiless-measure/" + code),
+            500,
+            "Internal Server Error",
+        )
 
 
 def test_head_on_a_json_result_with_a_status() raises:
