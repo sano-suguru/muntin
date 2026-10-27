@@ -31,8 +31,18 @@ from ._registration_rules import (
     _placeholder_names,
 )
 from .body import FromBytes
+from .http import ToResponse
 from .headers_body import _HeaderCarrier
-from .json import JsonValue, JsonWriter, _JsonBody, _ARRAY, _OBJECT, _STRING
+from .json import (
+    JsonValue,
+    JsonWriter,
+    _JsonBody,
+    _bare_json,
+    _write_schema,
+    _ARRAY,
+    _OBJECT,
+    _STRING,
+)
 from .route_value import RouteValues
 
 
@@ -143,10 +153,16 @@ def _request_body[X: AnyType](mut out: JsonWriter) raises:
         out.begin_object()
         # Only a `Json[T]` body refuses an empty one (it is not JSON); a
         # text or binary body's type decides, so Muntin requires none.
-        out.field("required", conforms_to(X, _JsonBody))
+        out.field("required", conforms_to(X, _JsonBody) or _bare_json[X]())
         out.name("content")
         out.begin_object()
-        comptime if conforms_to(X, _JsonBody):
+        comptime if _bare_json[X]():
+            out.name("application/json")
+            out.begin_object()
+            out.name("schema")
+            _write_schema[X, True](out)
+            out.end_object()
+        elif conforms_to(X, _JsonBody):
             out.name("application/json")
             out.begin_object()
             out.name("schema")
@@ -187,6 +203,19 @@ def _responses[
         out.begin_object()
         out.name("schema")
         _string_schema(out, False)
+        out.end_object()
+        out.end_object()
+        out.end_object()
+    elif _bare_json[R]() and not conforms_to(R, ToResponse):
+        out.name("200")
+        out.begin_object()
+        out.field("description", "The handler's JSON value")
+        out.name("content")
+        out.begin_object()
+        out.name("application/json")
+        out.begin_object()
+        out.name("schema")
+        _write_schema[R, False](out)
         out.end_object()
         out.end_object()
         out.end_object()
