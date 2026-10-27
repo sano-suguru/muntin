@@ -1,6 +1,6 @@
 # Must not compile (M3-083): a carried `List` of derived structs in a guarded
 # group's route is refused at the registration, naming the innermost field.
-# Expected diagnostic (checked by scripts/check.sh): constraint failed: field at of the JsonFields struct derived_with_headers_guarded.Inner has type SIMD[DType.float16, 1], which cannot be read
+# Expected diagnostic (checked by scripts/check.sh): constraint failed: field at of the JsonFields struct derived_with_headers_guarded.Inner has type SIMD[DType.float32, 1], which cannot be read
 from muntin import (
     App,
     Group,
@@ -16,7 +16,7 @@ from muntin import (
 
 @fieldwise_init
 struct Inner(Copyable, JsonFields):
-    var at: Float16
+    var at: Float32
 
 
 @fieldwise_init
