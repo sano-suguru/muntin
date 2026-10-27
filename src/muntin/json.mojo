@@ -1464,9 +1464,9 @@ def _writes_no_body(status: Int) -> Bool:
     """Whether `Json` answers `status` with no body (M3-093): a 1xx, 204 or
     205, which never carry content (RFC 9110). A 304 never carries content
     either, but keeps its body: its `Content-Length` is the length of the
-    content a 200 would carry, and a backend frames it from the body (Flare
-    v0.12.0 over HTTP/1.1 sends only that length), so an empty one would
-    declare 0."""
+    content a 200 would carry, and a backend may frame it from the body
+    (docs/ARCHITECTURE.md, "Current limits"), so an empty one would declare
+    0."""
     return (status >= 100 and status <= 199) or status == 204 or status == 205
 
 
