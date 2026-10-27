@@ -1012,6 +1012,11 @@ struct JsonWriter(Movable):
         self._before_value()
         self._out += String(value)
 
+    def _number(mut self, text: String) raises:
+        """A number literal the caller has formatted (prototype M3-098)."""
+        self._before_value()
+        self._out += text
+
     def float(mut self, value: Float64) raises:
         """A finite number; raises on NaN or infinity."""
         if (
@@ -1510,7 +1515,17 @@ trait JsonFields(_FieldBuilt):
     member per field, named after the field, so `Json[T]` reads and writes
     it without a hand-written `from_json` or `write_json` (M3-083).
 
-    A field is an `Int`, `Float64`, `Bool`, `String`, a `FromJson` (read)
+    `JsonMembers` renames members and marks defaulted ones, `JsonCamelCase`
+    renames every member, and `JsonDefault` supplies the defaults
+    (prototype M3-098); each refines this trait and requires its method, so
+    a misspelt or wrongly declared one fails conformance. `json_members` is
+    evaluated at compile time; an entry that names no field, names a field
+    twice, neither renames nor defaults it, two members with one name, or a
+    default on a struct that is not `JsonDefault` or of a type that is not
+    `Copyable` is refused at registration.
+
+    A field is an `Int`, `UInt`, a sized integer (`Int8` to `Int64`, `UInt8`
+    to `UInt64`), `Float64`, `Float32`, `Bool`, `String`, a `FromJson` (read)
     or `ToJson` (written) type, a `JsonFields` struct, or a `List` or
     `Optional` (not of an `Optional`) of one. An `Optional` member may be
     absent or `null`; every other member is required; unknown members are
@@ -1523,6 +1538,184 @@ trait JsonFields(_FieldBuilt):
     same type takes that direction over."""
 
     pass
+
+
+trait JsonMembers(JsonFields):
+    """A `JsonFields` struct with renamed or defaulted members (prototype
+    M3-098)."""
+
+    @staticmethod
+    def json_members() -> List[JsonMember]:
+        """Members renamed (`JsonMember("kind", name="type")`) or defaulted
+        (`JsonMember("limit", default=True)`), evaluated at compile time."""
+        ...
+
+
+trait JsonCamelCase(JsonFields):
+    """A `JsonFields` struct whose members not renamed by `json_members`
+    are the camelCase form of their fields' names (prototype M3-098): each
+    `_` after the first character that is followed by an ASCII lowercase
+    letter is removed and the letter uppercased (`created_at` is
+    `createdAt`; `_id` and `a__b` keep their first `_`)."""
+
+    pass
+
+
+trait JsonDefault(JsonFields):
+    """A `JsonFields` struct whose defaulted members (`json_members`) take
+    their value from `json_default()` when absent (prototype M3-098)."""
+
+    @staticmethod
+    def json_default() -> Self:
+        """The value whose fields an absent defaulted member takes. Called
+        once per read that lacks a defaulted member."""
+        ...
+
+
+struct JsonMember(ImplicitlyCopyable, Movable):
+    """One entry of `JsonMembers.json_members`: the field it is about, the
+    member's name when renamed, and whether an absent member is defaulted."""
+
+    var field: StaticString
+    var name: StaticString
+    var default: Bool
+
+    def __init__(
+        out self,
+        field: StaticString,
+        *,
+        name: StaticString = "",
+        default: Bool = False,
+    ):
+        self.field = field
+        self.name = name
+        self.default = default
+
+
+def _camel(field: StaticString) -> String:
+    var out = String()
+    var b = field.as_bytes()
+    var k = 0
+    while k < len(b):
+        var c = Int(b[k])
+        if (
+            c == ord("_")
+            and k > 0
+            and k + 1 < len(b)
+            and Int(b[k + 1]) >= ord("a")
+            and Int(b[k + 1]) <= ord("z")
+        ):
+            out += chr(Int(b[k + 1]) - 32)
+            k += 2
+            continue
+        out += chr(c)
+        k += 1
+    return out
+
+
+def _members[T: JsonFields]() -> List[JsonMember]:
+    comptime if conforms_to(T, JsonMembers):
+        return T.json_members()
+    return []
+
+
+def _wire[T: JsonFields, i: Int]() -> String:
+    """The member name of field `i` of `T`: its `json_members` name, else
+    its camelCase form for a `JsonCamelCase` struct, else the field's name.
+    Evaluated at compile time where it is used (`comptime`)."""
+    comptime field = materialize[reflect[T].field_names()[i]]()
+    comptime members = _members[T]()
+    comptime for k in range(len(members)):
+        comptime if members[k].field == field and members[k].name != "":
+            return String(materialize[members[k].name]())
+    comptime if conforms_to(T, JsonCamelCase):
+        return _camel(field)
+    return String(field)
+
+
+def _defaulted[T: JsonFields, i: Int]() -> Bool:
+    comptime field = materialize[reflect[T].field_names()[i]]()
+    comptime members = _members[T]()
+    comptime for k in range(len(members)):
+        comptime if members[k].field == field:
+            return materialize[members[k].default]()
+    return False
+
+
+def _members_refusal[T: JsonFields]() -> String:
+    """Empty when `T`'s member declarations are consistent; else the
+    registration message naming the entry at fault."""
+    comptime r = reflect[T]
+    comptime members = _members[T]()
+    var at = String(r.name())
+    comptime for k in range(len(members)):
+        comptime entry = materialize[members[k].field]()
+        var index = -1
+        comptime for i in range(r.field_count()):
+            comptime if materialize[r.field_names()[i]]() == entry:
+                index = i
+        if index < 0:
+            return (
+                "json_members of the JsonFields struct "
+                + at
+                + " names "
+                + String(entry)
+                + ", which is not one of its fields"
+            )
+        comptime for j in range(k):
+            comptime if materialize[members[j].field]() == entry:
+                return (
+                    "json_members of the JsonFields struct "
+                    + at
+                    + " names field "
+                    + String(entry)
+                    + " twice"
+                )
+        comptime if members[k].name == "" and not members[k].default:
+            return (
+                "json_members of the JsonFields struct "
+                + at
+                + " names field "
+                + String(entry)
+                + " without a name or a default"
+            )
+        comptime if members[k].default:
+            comptime if not conforms_to(T, JsonDefault):
+                return (
+                    "field "
+                    + String(entry)
+                    + " of the JsonFields struct "
+                    + at
+                    + " is defaulted, but "
+                    + at
+                    + " is not JsonDefault"
+                )
+            comptime for i in range(r.field_count()):
+                comptime if materialize[r.field_names()[i]]() == entry:
+                    comptime if not conforms_to(r.field_types()[i], Copyable):
+                        return (
+                            "field "
+                            + String(entry)
+                            + " of the JsonFields struct "
+                            + at
+                            + " is defaulted, but its type "
+                            + String(reflect[r.field_types()[i]].name())
+                            + " is not Copyable"
+                        )
+    comptime for i in range(r.field_count()):
+        comptime for j in range(i):
+            comptime if _wire[T, i]() == _wire[T, j]():
+                return (
+                    "fields "
+                    + String(materialize[r.field_names()[j]]())
+                    + " and "
+                    + String(materialize[r.field_names()[i]]())
+                    + " of the JsonFields struct "
+                    + at
+                    + " are both member "
+                    + _wire[T, i]()
+                )
+    return ""
 
 
 struct _MemberFault(Movable):
@@ -1548,15 +1741,157 @@ def _scalar[F: AnyType]() -> Bool:
     return F == Int or F == Float64 or F == Bool or F == String
 
 
+def _width[F: AnyType]() -> Bool:
+    """`UInt`, a sized integer, or `Float32` (prototype M3-098)."""
+    return (
+        F == UInt
+        or F == Int8
+        or F == Int16
+        or F == Int32
+        or F == Int64
+        or F == UInt8
+        or F == UInt16
+        or F == UInt32
+        or F == UInt64
+        or F == Float32
+    )
+
+
+def _read_width[F: Movable & Deinitable](v: JsonValue) raises -> F:
+    """An integer literal in `F`'s range, or a number rounded to the nearest
+    `Float64` and then to `Float32`, finite; raises otherwise."""
+    comptime if F == Float32:
+        var d: Float64
+        try:
+            d = v.float()
+        except e:
+            if v._kind() != _NUMBER:
+                raise e^
+            raise Error("JSON number is out of Float32 range")
+        var f = Float32(d)
+        if f > Float32.MAX_FINITE or f < -Float32.MAX_FINITE:
+            raise Error("JSON number is out of Float32 range")
+        return _as[Float32, F](f)
+    elif F == UInt64 or F == UInt:
+        if v._kind() != _NUMBER:
+            raise Error("JSON value is not a number")
+        var t = v._literal()
+        if t.find(".") >= 0 or t.find("e") >= 0 or t.find("E") >= 0:
+            raise Error("JSON number is not an integer")
+        if t.startswith("-"):
+            if t != "-0":
+                raise Error(
+                    "JSON number is out of " + _width_name[F]() + " range"
+                )
+            t = "0"
+        var n = UInt64(0)
+        for b in t.as_bytes():
+            var d = UInt64(Int(b) - ord("0"))
+            if n > (UInt64.MAX - d) // 10:
+                raise Error(
+                    "JSON number is out of " + _width_name[F]() + " range"
+                )
+            n = n * 10 + d
+        comptime if F == UInt:
+            return _as[UInt, F](UInt(n))
+        else:
+            return _as[UInt64, F](n)
+    else:
+        var n: Int
+        try:
+            n = v.int()
+        except e:
+            if (
+                v._kind() != _NUMBER
+                or String(e) != "JSON number is out of Int range"
+            ):
+                raise e^
+            raise Error("JSON number is out of " + _width_name[F]() + " range")
+        comptime if F == Int8:
+            if n >= Int(Int8.MIN) and n <= Int(Int8.MAX):
+                return _as[Int8, F](Int8(n))
+        elif F == Int16:
+            if n >= Int(Int16.MIN) and n <= Int(Int16.MAX):
+                return _as[Int16, F](Int16(n))
+        elif F == Int32:
+            if n >= Int(Int32.MIN) and n <= Int(Int32.MAX):
+                return _as[Int32, F](Int32(n))
+        elif F == Int64:
+            return _as[Int64, F](Int64(n))
+        elif F == UInt8:
+            if n >= 0 and n <= Int(UInt8.MAX):
+                return _as[UInt8, F](UInt8(n))
+        elif F == UInt16:
+            if n >= 0 and n <= Int(UInt16.MAX):
+                return _as[UInt16, F](UInt16(n))
+        else:
+            comptime assert F == UInt32, "not a JSON width"
+            if n >= 0 and n <= Int(UInt32.MAX):
+                return _as[UInt32, F](UInt32(n))
+        raise Error("JSON number is out of " + _width_name[F]() + " range")
+
+
+def _width_name[F: AnyType]() -> String:
+    comptime if F == UInt:
+        return "UInt"
+    elif F == Int8:
+        return "Int8"
+    elif F == Int16:
+        return "Int16"
+    elif F == Int32:
+        return "Int32"
+    elif F == Int64:
+        return "Int64"
+    elif F == UInt8:
+        return "UInt8"
+    elif F == UInt16:
+        return "UInt16"
+    elif F == UInt32:
+        return "UInt32"
+    elif F == UInt64:
+        return "UInt64"
+    else:
+        return "Float32"
+
+
+def _write_width[F: AnyType](mut out: JsonWriter, ref f: F) raises:
+    comptime if F == Float32:
+        var x = _view[Float32](f)
+        if x != x or x > Float32.MAX_FINITE or x < -Float32.MAX_FINITE:
+            raise Error("JSON writer: non-finite number")
+        out._number(String(x))
+    elif F == UInt64:
+        out._number(String(_view[UInt64](f)))
+    elif F == UInt:
+        out._number(String(_view[UInt](f)))
+    elif F == Int8:
+        out.int(Int(_view[Int8](f)))
+    elif F == Int16:
+        out.int(Int(_view[Int16](f)))
+    elif F == Int32:
+        out.int(Int(_view[Int32](f)))
+    elif F == Int64:
+        out.int(Int(_view[Int64](f)))
+    elif F == UInt8:
+        out.int(Int(_view[UInt8](f)))
+    elif F == UInt16:
+        out.int(Int(_view[UInt16](f)))
+    else:
+        comptime assert F == UInt32, "not a JSON width"
+        out.int(Int(_view[UInt32](f)))
+
+
 def _kind_ok[F: AnyType, reading: Bool]() -> Bool:
     """Whether a derived codec reads (`reading`) or writes `F`."""
-    comptime if _scalar[F]():
+    comptime if _scalar[F]() or _width[F]():
         return True
     elif reading and conforms_to(F, FromJson):
         return True
     elif not reading and conforms_to(F, ToJson):
         return True
     elif conforms_to(F, JsonFields):
+        comptime if _members_refusal[F]() != "":
+            return False
         return _fields_ok[F, reading]()
     elif conforms_to(F, Iterable):
         comptime E = F.IteratorType[ImmutAnyOrigin].Element
@@ -1620,7 +1955,8 @@ def _call_refusal[T: AnyType, reading: Bool]() -> String:
         String(reflect[T].name())
         + " cannot be "
         + ("read" if reading else "written")
-        + ": a derived value is an Int, Float64, Bool, String, a "
+        + ": a derived value is an Int, UInt, sized integer, Float64,"
+        + " Float32, Bool, String, a "
         + ("FromJson" if reading else "ToJson")
         + " type, a JsonFields struct, or a List or Optional of one"
     )
@@ -1635,6 +1971,9 @@ def _innermost[F: AnyType, reading: Bool]() -> String:
     elif not reading and conforms_to(F, ToJson):
         return ""
     elif conforms_to(F, JsonFields):
+        comptime members = _members_refusal[F]()
+        comptime if members != "":
+            return members
         comptime r = reflect[F]
         comptime names = r.field_names()
         comptime types = r.field_types()
@@ -1652,7 +1991,8 @@ def _innermost[F: AnyType, reading: Bool]() -> String:
                     + String(reflect[types[i]].name())
                     + ", which cannot be "
                     + ("read" if reading else "written")
-                    + ": a derived field is an Int, Float64, Bool, String, a "
+                    + ": a derived field is an Int, UInt, sized integer,"
+                    + " Float64, Float32, Bool, String, a "
                     + ("FromJson" if reading else "ToJson")
                     + " type, a JsonFields struct, or a List or Optional of"
                     + " one"
@@ -1671,7 +2011,9 @@ def _innermost[F: AnyType, reading: Bool]() -> String:
 
 
 def _write_value[F: AnyType](mut out: JsonWriter, ref f: F) raises:
-    comptime if F == Int:
+    comptime if _width[F]():
+        _write_width[F](out, f)
+    elif F == Int:
         out.int(_view[Int](f))
     elif F == Float64:
         out.float(_view[Float64](f))
@@ -1687,7 +2029,7 @@ def _write_value[F: AnyType](mut out: JsonWriter, ref f: F) raises:
         comptime types = r.field_types()
         out.begin_object()
         comptime for i in range(r.field_count()):
-            out.name(String(materialize[names[i]]()))
+            out.name(materialize[_wire[F, i]()]())
             _write_value[types[i]](out, r.field_ref[i](f))
         out.end_object()
     elif conforms_to(F, Iterable):
@@ -1722,11 +2064,37 @@ def _read_json[F: Movable & Deinitable](v: JsonValue) raises -> F:
         raise Error(f.text())
 
 
-def _read_member[
-    F: Movable & Deinitable, i: Int
-](value: JsonValue, names: List[String]) raises _MemberFault -> F:
-    """Field `i` of a derived struct (`_read_named`)."""
-    return _read_named[F](value, names[i])
+struct _Members[T: JsonFields](Movable):
+    """What a derived read of `T` passes to each field's reader: the member
+    names, and `T.json_default()` when a defaulted member is absent."""
+
+    var names: List[String]
+    var default: Optional[Self.T]
+
+    def __init__(
+        out self, var names: List[String], var default: Optional[Self.T]
+    ):
+        self.names = names^
+        self.default = default^
+
+    @staticmethod
+    def member[
+        F: Movable & Deinitable, i: Int
+    ](value: JsonValue, members: Self) raises _MemberFault -> F:
+        """Field `i` of `T` (`_read_named`), or the default's field `i`
+        when the member is defaulted and absent."""
+        comptime if _defaulted[Self.T, i]():
+            comptime assert conforms_to(F, Copyable)
+            comptime if conforms_to(F, Copyable):
+                var m: Optional[JsonValue]
+                try:
+                    m = value.get(members.names[i])
+                except e:
+                    raise _MemberFault("", String(e))
+                if not m:
+                    ref d = members.default.value()
+                    return _view[F](reflect[Self.T].field_ref[i](d)).copy()
+        return _read_named[F](value, members.names[i])
 
 
 def _read_named[
@@ -1773,7 +2141,12 @@ def _read_list[
 def _read_value[F: Movable & Deinitable](v: JsonValue) raises _MemberFault -> F:
     """`F` from `v`. A failure is raised with an empty path; each enclosing
     member or element prepends its own segment."""
-    comptime if _scalar[F]():
+    comptime if _width[F]():
+        try:
+            return _read_width[F](v)
+        except e:
+            raise _MemberFault("", String(e))
+    elif _scalar[F]():
         try:
             comptime if F == Int:
                 return _as[Int, F](v.int())
@@ -1797,8 +2170,20 @@ def _read_value[F: Movable & Deinitable](v: JsonValue) raises _MemberFault -> F:
             raise _MemberFault("", "JSON value is not an object")
         var ns = List[String](capacity=r.field_count())
         comptime for i in range(r.field_count()):
-            ns.append(String(materialize[names[i]]()))
-        return _build_record[F, _MemberFault, _read_member, 0](v, ns)
+            ns.append(materialize[_wire[F, i]()]())
+        var default = Optional[F]()
+        comptime for i in range(r.field_count()):
+            comptime if _defaulted[F, i]():
+                comptime if conforms_to(F, JsonDefault):
+                    if not default:
+                        try:
+                            if not v.get(ns[i]):
+                                default = F.json_default()
+                        except e:
+                            raise _MemberFault("", String(e))
+        return _build_record[F, _MemberFault, _Members[F].member, 0](
+            v, _Members[F](ns^, default^)
+        )
     elif conforms_to(F, Iterable):
         comptime E = F.IteratorType[ImmutAnyOrigin].Element
         comptime if conforms_to(E, Movable & Deinitable):
@@ -1837,7 +2222,45 @@ def _as_optional[
 
 
 def _write_schema[F: AnyType, reading: Bool](mut out: JsonWriter) raises:
-    comptime if F == Int:
+    comptime if F == Float32:
+        out.begin_object()
+        out.field("type", "number")
+        out.field("format", "float")
+        out.end_object()
+    elif F == UInt64 or F == UInt:
+        out.begin_object()
+        out.field("type", "integer")
+        out.field("minimum", 0)
+        out.name("maximum")
+        out._number(String(UInt64.MAX))
+        out.end_object()
+    elif _width[F]():
+        out.begin_object()
+        out.field("type", "integer")
+        comptime if F == Int32:
+            out.field("format", "int32")
+        elif F == Int64:
+            out.field("format", "int64")
+        var lo: Int
+        var hi: Int
+        comptime if F == Int8:
+            lo, hi = Int(Int8.MIN), Int(Int8.MAX)
+        elif F == Int16:
+            lo, hi = Int(Int16.MIN), Int(Int16.MAX)
+        elif F == Int32:
+            lo, hi = Int(Int32.MIN), Int(Int32.MAX)
+        elif F == Int64:
+            lo, hi = Int.MIN, Int.MAX
+        elif F == UInt8:
+            lo, hi = 0, Int(UInt8.MAX)
+        elif F == UInt16:
+            lo, hi = 0, Int(UInt16.MAX)
+        else:
+            lo, hi = 0, Int(UInt32.MAX)
+        out.field("minimum", lo)
+        out.field("maximum", hi)
+        out.end_object()
+    elif F == Int:
         out.begin_object()
         out.field("type", "integer")
         out.field("format", "int64")
@@ -1872,16 +2295,18 @@ def _write_schema[F: AnyType, reading: Bool](mut out: JsonWriter) raises:
         out.name("properties")
         out.begin_object()
         comptime for i in range(r.field_count()):
-            out.name(String(materialize[names[i]]()))
+            out.name(materialize[_wire[F, i]()]())
             _write_schema[types[i], reading](out)
         out.end_object()
         out.name("required")
         out.begin_array()
         comptime for i in range(r.field_count()):
-            # A read takes an absent `Optional` member; a write always
-            # writes the member (`null` when empty).
-            comptime if not (reading and _is_optional[types[i]]()):
-                out.string(String(materialize[names[i]]()))
+            # A read takes an absent `Optional` or defaulted member; a write
+            # always writes the member (`null` when empty).
+            comptime if not (
+                reading and (_is_optional[types[i]]() or _defaulted[F, i]())
+            ):
+                out.string(materialize[_wire[F, i]()]())
         out.end_array()
         comptime if not reading:
             out.field("additionalProperties", False)
