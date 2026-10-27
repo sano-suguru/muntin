@@ -18,15 +18,19 @@ struct MergePatch(JsonMedia):
 
 
 def _media_ok(name: StaticString) -> Bool:
-    var b = name.as_bytes()
-    if len(b) < 17:
-        return False
-    return String(name).startswith("application/") and (
-        String(name) == "application/json" or String(name).endswith("+json")
+    var s = String(name)
+    if s == "application/json":
+        return True
+    return (
+        s.startswith("application/")
+        and s.endswith("+json")
+        and len(s) > len("application/+json")
     )
 
 
-struct Body[T: Movable & Deinitable, *, limit: Int = 8, M: JsonMedia = ApplicationJson](Movable):
+struct Body[
+    T: Movable & Deinitable, *, limit: Int = 8, M: JsonMedia = ApplicationJson
+](Movable):
     var value: Self.T
 
     def __init__(out self, var value: Self.T):
@@ -44,7 +48,9 @@ def handler(body: Body[Int, M=MergePatch]) -> Body[Int]:
 
 def test_type_media() raises:
     assert_equal(Body[Int].media_type(), "application/json")
-    assert_equal(Body[Int, M=MergePatch].media_type(), "application/merge-patch+json")
+    assert_equal(
+        Body[Int, M=MergePatch].media_type(), "application/merge-patch+json"
+    )
     assert_equal(handler(Body[Int, M=MergePatch](1)).value, 2)
 
 
