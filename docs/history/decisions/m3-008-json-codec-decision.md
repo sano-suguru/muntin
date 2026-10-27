@@ -8,6 +8,7 @@
 > - [M3-078](m3-078-json-float-reading-decision.md): float() is Muntin's own correctly rounded conversion, of any length; atof's 1-ulp errors and long-literal 400s are gone.
 > - [M3-082](m3-082-derived-json-codecs-decision.md): derived codecs are decided (`JsonFields`): `List[<struct>]` is reachable through `Iterable`'s element type, an unsupported field is refused at registration, and decoding builds field by field as route-value records do; built by M3-083.
 > - [M3-089](m3-089-text-and-json-body-limits-decision.md), built by M3-090: the 1 MiB cap becomes `Json[T, limit=n]`'s default, chosen per route.
+> - [M3-094](m3-094-json-media-types-decision.md) (not built yet, M3-095): a route names its one JSON media type (`Json[T, media=...]`), `application/json` by default; a missing `Content-Type` stays 415.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision** (M3-008; production and adapters are unchanged in it; production since M3-009, "JSON in production (M3-009)" below). It decides Muntin's first JSON API, who owns the codec, the request and response `Content-Type` rules, where JSON failures go in the error model, and the production slice that follows.
