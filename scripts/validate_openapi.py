@@ -8,17 +8,22 @@ and jsonschema installed (not standard library; CI does not run it):
     python3 -I scripts/validate_openapi.py <dir>
 
 1. The document is a valid OpenAPI 3.1 document (openapi-spec-validator).
-2. A differential check of every exchange: the document admits the request
-   (its path, parameters with `allowEmptyValue`, and request body: presence,
-   media type and schema) exactly when Muntin did not refuse it (400, 413,
-   415); a 2xx answer, or one of a status the document names (an
-   application's addition), meets the response the document gives for it,
-   and no other answer meets a described one with content.
+2. A differential check of every exchange: OpenAPI's operation for it is
+   chosen by path first (one without a placeholder before the templated,
+   none between two templated), then by method; the document admits the
+   request (its path, parameters with `allowEmptyValue`, and request body:
+   presence, media type and schema) exactly when Muntin did not refuse it
+   (400, 413, 415); a 2xx answer, or one of a status the document names
+   (an application's addition), has a response in the document, and its
+   media type and value meet that response's content; no other answer
+   meets a described one with content.
    A request that lacks the credentials the operation's `security` names
    is denied (401, 403) and only such a one; a 204, 205 or 304 answer has
    no body.
 3. The known gaps docs/reference/openapi.md states must still show, each
    as the mismatch named below; any other mismatch fails the run.
+
+scripts/test_validate_openapi.py tests these checks; run it beside this.
 """
 
 import json
@@ -47,15 +52,28 @@ KNOWN_GAPS = {
 
 
 def operation(doc, method, path):
+    """The operation OpenAPI resolves the request to, and its path values;
+    or None and the reason. The path is chosen first, whatever the method:
+    a path without a placeholder before the templated ones, and no choice
+    between two templated paths, which OpenAPI leaves undefined."""
+    plain, templated = [], []
     for template, item in doc["paths"].items():
         parts = re.split(r"\{([^}]*)\}", template)
         names = parts[1::2]
         pattern = "^" + "([^/]+)".join(re.escape(s) for s in parts[0::2]) + "$"
         m = re.match(pattern, path)
-        if m and method.lower() in item:
+        if m:
             values = {n: urllib.parse.unquote(v) for n, v in zip(names, m.groups())}
-            return item[method.lower()], values
-    return None, None
+            (templated if names else plain).append((template, item, values))
+    if not plain and len(templated) > 1:
+        return None, "paths " + " and ".join(t for t, _, _ in templated)
+    matches = plain or templated
+    if not matches:
+        return None, "no path"
+    template, item, values = matches[0]
+    if method.lower() not in item:
+        return None, "no " + method + " in " + template
+    return item[method.lower()], values
 
 
 def value_for(schema, text):
@@ -101,8 +119,24 @@ def admits(op, path_values, query, ex):
 
 
 def response_for(op, status):
+    """The response object the document gives for `status`, and its key."""
     rs = op["responses"]
-    return rs.get(str(status)) or rs.get(f"{status // 100}XX") or rs.get("default")
+    for key in (str(status), f"{status // 100}XX", "default"):
+        if key in rs:
+            return rs[key], key
+    return None, None
+
+
+def media_for(content, content_type):
+    """The media type object of `content` that `content_type` (the answer's
+    field, maybe empty) falls under: the exact type, then `type/*`, then
+    `*/*`."""
+    base = content_type.split(";")[0].strip().lower()
+    if base and base in content:
+        return content[base]
+    if base and base.split("/")[0] + "/*" in content:
+        return content[base.split("/")[0] + "/*"]
+    return content.get("*/*")
 
 
 def credentials_met(doc, op, ex):
@@ -144,16 +178,31 @@ def check(doc, ex, op, values):
         return "admitted, refused"
     if not ok and not refused:
         return f"refused by the document ({why}), admitted"
-    entry = response_for(op, ex["status"])
-    explicit = str(ex["status"]) in op["responses"]
+    entry, key = response_for(op, ex["status"])
+    explicit = key == str(ex["status"])
     if ex["status"] // 100 == 2 or explicit:
-        if ex["status"] in (204, 205) and entry and "content" in entry:
+        # The handler's answer: the document must describe its status and,
+        # where it describes content, the media type and value it carries.
+        if entry is None:
+            return "status " + str(ex["status"]) + " not described"
+        if ex["status"] in (204, 205) and "content" in entry:
             return "content described for " + str(ex["status"])
-        if entry and "application/json" in entry.get("content", {}):
-            if ex["content_type"] != "application/json":
-                return "not JSON"
-            schema = entry["content"]["application/json"]["schema"]
-            if not Draft202012Validator(schema).is_valid(json.loads(ex["response"])):
+        if "content" not in entry:
+            if ex["response"] != "" and key != "default":
+                return "a body the document does not describe"
+            return None
+        media = media_for(entry["content"], ex["content_type"])
+        if media is None:
+            return "media type " + (ex["content_type"] or "(none)")
+        if "schema" in media:
+            if media is entry["content"].get("application/json"):
+                try:
+                    value = json.loads(ex["response"])
+                except ValueError:
+                    return "response not JSON"
+            else:
+                value = ex["response"]
+            if not Draft202012Validator(media["schema"]).is_valid(value):
                 return "response schema"
     elif entry is not None and "content" in entry:
         return "a non-2xx answer described with content"
@@ -173,7 +222,7 @@ def main():
     for ex in exchanges:
         op, values = operation(doc, ex["method"], ex["target"].partition("?")[0])
         key = (ex["method"], ex["target"], ex["body"])
-        got = "no operation" if op is None else check(doc, ex, op, values)
+        got = "no operation: " + values if op is None else check(doc, ex, op, values)
         want = KNOWN_GAPS.get(key)
         if got == want and want is not None:
             seen.add(key)
@@ -192,4 +241,5 @@ def main():
     sys.exit(1 if failures or seen != KNOWN_GAPS.keys() else 0)
 
 
-main()
+if __name__ == "__main__":
+    main()

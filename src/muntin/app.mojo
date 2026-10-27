@@ -1923,14 +1923,21 @@ def _document(
         shapes.append(shape^)
         split.append(segments^)
     # A request two paths both match goes to the route of its method that
-    # matches, the most specific (M3-053); OpenAPI resolves it to the more
-    # specific path, whatever the method, and to neither when neither
-    # covers the other.
+    # matches, the most specific (M3-053). OpenAPI resolves it to the path
+    # without a placeholder, whatever the method, and says nothing about
+    # two paths that both have one.
+    var concrete = List[Bool]()
+    for k in range(len(split)):
+        var plain = True
+        for segment in split[k]:
+            if _is_param(segment):
+                plain = False
+        concrete.append(plain)
     for a in range(len(paths)):
         for b in range(len(paths)):
             if a == b or not _overlaps_segments(split[a], split[b]):
                 continue
-            if _covers_segments(split[a], split[b]):
+            if concrete[b] and _covers_segments(split[a], split[b]):
                 for i in range(len(routes)):
                     if routes[i].path != paths[a]:
                         continue
@@ -1954,7 +1961,9 @@ def _document(
                             + routes[i].method
                             + " route"
                         )
-            elif a < b and not _covers_segments(split[b], split[a]):
+            elif a < b and not (
+                concrete[a] and _covers_segments(split[b], split[a])
+            ):
                 raise Error(
                     "openapi: routes "
                     + paths[a]
@@ -2361,9 +2370,10 @@ struct _App[
 
         Raises when a route cannot be described truly: a path placeholder
         name repeated in it, two route paths that differ only in their
-        placeholder names, two that overlap unless the more specific has
-        every method of the more general (OpenAPI resolves a request both
-        match to the more specific path), or a query key or static segment
+        placeholder names, two that overlap unless one has no placeholder
+        and every method of the other (OpenAPI resolves a request both
+        match to the path without one, and says nothing about two paths
+        that both have one), or a query key or static segment
         a client may not send as written (`_sent_as_written`), which Muntin
         compares undecoded. Raises, too, when an addition is no JSON
         object, names no route, or repeats a derived member: `openapi`,

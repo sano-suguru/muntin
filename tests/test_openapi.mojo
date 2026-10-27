@@ -1294,6 +1294,10 @@ def _yb(y: String) -> String:
     return "yb"
 
 
+def _xz(x: String, z: Int) -> String:
+    return "xz"
+
+
 def _overlap_refused(var app: App, message: String) raises:
     try:
         _ = app.openapi(title="T", version="1")
@@ -1332,8 +1336,18 @@ def test_overlapping_paths() raises:
         "openapi: routes /a/{x} and /{y}/b overlap, and OpenAPI does not say"
         + " which one a request both match resolves to",
     )
-    # The specific path has every method of the general one, or they do
-    # not overlap.
+    # OpenAPI says nothing about two templated paths, even where Muntin's
+    # most specific route is the same for every method.
+    var e = App()
+    e.get["/a/b/{z}"](_a)  # the more specific first (M3-053)
+    e.get["/a/{x}/{z}"](_xz)
+    _overlap_refused(
+        e^,
+        "openapi: routes /a/b/{z} and /a/{x}/{z} overlap, and OpenAPI does"
+        + " not say which one a request both match resolves to",
+    )
+    # The path without a placeholder has every method of the other, or
+    # they do not overlap.
     var d = App()
     d.get["/a/b"](_get_b)
     d.get["/a/{x}"](_a)
