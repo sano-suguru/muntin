@@ -24,7 +24,7 @@ def _media_ok(name: StaticString) -> Bool:
     return (
         s.startswith("application/")
         and s.endswith("+json")
-        and len(s) > len("application/+json")
+        and len(s.as_bytes()) > len("application/+json".as_bytes())
     )
 
 
