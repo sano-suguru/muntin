@@ -121,7 +121,7 @@ M3-009 serves `json_app()`: the JSON body route `POST /greet` ->
 bytes: a 204 and a 205 go out with no content and no `Content-Type` (a 205
 with Flare's `Content-Length: 0`), and a 304 with no content and the
 `Content-Length` of the JSON a 200 carries; over h2c a 204 and a 205 have
-no DATA frame. M3-083 adds
+no DATA frame, and a 304's body goes out as DATA (a known gap). M3-083 adds
 `POST /greet-derived`, whose body is a derived `JsonFields` struct and whose
 result a top-level `List` of it: 200 with the derived array, 400 for a
 missing member and 415 without the field, each equal to `App.handle`.
@@ -2273,6 +2273,18 @@ def test_json_over_localhost_matches_app_handle() raises:
             print("observed h2c GET /greet-as/" + code + ":", _h2_fields(h2[0]))
             assert_equal(_h2_fields(h2[0]), ":status=" + code + ";")
             assert_equal(h2[2], 0)
+        # A known gap (docs/ARCHITECTURE.md, "Current limits"): over h2c
+        # Flare sends a 304's body as DATA, so the body a `Json` 304 keeps
+        # goes out. A Flare that stops sending it fails this: revisit M3-093.
+        var h2_304 = h2_request(child.port, "GET", "/greet-as/304", none)
+        print(
+            "observed h2c GET /greet-as/304:", _h2_fields(h2_304[0]), h2_304[1]
+        )
+        assert_equal(
+            _h2_fields(h2_304[0]), ":status=304;content-type=application/json;"
+        )
+        assert_equal(h2_304[1], '{"hello":"Ada"}')
+        assert_true(h2_304[2] > 0)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)
