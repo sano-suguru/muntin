@@ -310,6 +310,10 @@ _ = client.post("/users", '{"name":"Ada","age":36}')                    # 415: n
 
 The client sends exactly the fields given in `headers=` and nothing else. Reference: [testing](reference/testing.md).
 
+## OpenAPI
+
+In a build with `-D MUNTIN_OPENAPI`, `app.openapi(title="Notes", version="1.0.0")` returns the OpenAPI 3.1 document of the routes registered so far, as JSON text: parameters, bodies and results are written from the handlers' types, JSON schemas from `JsonFields` structs. The application adds what the types cannot say, such as a 404 or a guard's `security`, as JSON objects (`operations=`), and serves the document through a `State`. Reference: [OpenAPI](reference/openapi.md).
+
 ## Serving
 
 The Flare adapter's `Server` serves an `App` over HTTP/1.1 and h2c, or HTTPS with `tls=Tls(cert_file=..., key_file=...)`:
@@ -353,6 +357,7 @@ Reference: [serving](reference/serving.md).
 - [Responses](reference/responses.md) and [errors](reference/errors.md): results, JSON status, `ToErrorResponse`, reports of dropped errors.
 - [Headers](reference/headers.md), [raw handlers](reference/raw.md), [middleware](reference/middleware.md), [state](reference/state.md), [guarded groups](reference/groups.md).
 - [Testing and the backend seam](reference/testing.md).
+- [OpenAPI](reference/openapi.md): `app.openapi`, what each type becomes, additions, refusals.
 - [Serving](reference/serving.md): `Server`, settings, workers, HTTPS, stopping.
 
 What is not supported yet: [`docs/SPEC.md`](SPEC.md), "Remaining candidates".

@@ -1,0 +1,251 @@
+"""Checks tests/test_openapi.mojo's document against the exchanges it sent
+(M3-092; docs/reference/openapi.md).
+
+Run the test with MUNTIN_OPENAPI_OUT=<dir>, then, with openapi-spec-validator
+and jsonschema installed (not standard library; CI does not run it):
+
+    MUNTIN_OPENAPI_OUT=<dir> ./scripts/test.sh tests/test_openapi.mojo
+    python3 -I scripts/validate_openapi.py <dir>
+
+1. The document is a valid OpenAPI 3.1 document (openapi-spec-validator).
+2. A differential check of every exchange: OpenAPI's operation for it is
+   chosen by path first (one without a placeholder before the templated,
+   none between two templated), then by method; the document admits the
+   request (its path, parameters with `allowEmptyValue`, and request body:
+   presence, media type and schema, JSON or not) exactly when Muntin did
+   not refuse it
+   (400, 413, 415); a 2xx answer, or one of a status the document names
+   (an application's addition), has a response in the document, and its
+   media type and value meet that response's content; no other answer
+   meets a described one with content.
+   A request that lacks the credentials the operation's `security` names
+   is denied (401, 403) and only such a one, and a denial's answer meets
+   the response the document gives for its status as any other; a 204, 205
+   or 304 answer has no body.
+3. The known gaps docs/reference/openapi.md states must still show, each
+   as the mismatch named below; any other mismatch fails the run.
+
+scripts/test_validate_openapi.py tests these checks; run it beside this.
+"""
+
+import json
+import re
+import sys
+import urllib.parse
+
+from jsonschema import Draft202012Validator
+from openapi_spec_validator import validate
+
+REFUSALS = {400, 413, 415}
+DENIALS = {401, 403}
+NO_BODY = {204, 205, 304}
+# (method, target, body) -> the mismatch the record accepts.
+KNOWN_GAPS = {
+    ("POST", "/counts", '{"n":1.0}'): "admitted, refused",  # integer takes 1.0
+    ("POST", "/counts", '{"n":1e2}'): "admitted, refused",  # and 1e2
+    (  # number takes a literal past Float64's range
+        "POST",
+        "/notes",
+        '{"text":"t","tags":[],"place":{"city":"x","lat":1e400}}',
+    ): "admitted, refused",
+    ("POST", "/versions", "3.0"): "admitted, refused",  # hand-written: {}
+    ("DELETE", "/old-places/1", ""): "a body in a 204 answer",  # Json 204
+}
+
+
+def operation(doc, method, path):
+    """The operation OpenAPI resolves the request to, and its path values;
+    or None and the reason. The path is chosen first, whatever the method:
+    a path without a placeholder before the templated ones, and no choice
+    between two templated paths, which OpenAPI leaves undefined."""
+    plain, templated = [], []
+    for template, item in doc["paths"].items():
+        parts = re.split(r"\{([^}]*)\}", template)
+        names = parts[1::2]
+        pattern = "^" + "([^/]+)".join(re.escape(s) for s in parts[0::2]) + "$"
+        m = re.match(pattern, path)
+        if m:
+            values = {n: urllib.parse.unquote(v) for n, v in zip(names, m.groups())}
+            (templated if names else plain).append((template, item, values))
+    if not plain and len(templated) > 1:
+        return None, "paths " + " and ".join(t for t, _, _ in templated)
+    matches = plain or templated
+    if not matches:
+        return None, "no path"
+    template, item, values = matches[0]
+    if method.lower() not in item:
+        return None, "no " + method + " in " + template
+    return item[method.lower()], values
+
+
+def value_for(schema, text):
+    if schema.get("type") == "integer" and re.fullmatch(r"-?[0-9]+", text):
+        return int(text)
+    return text
+
+
+def admits(op, path_values, query, ex):
+    """Whether the document admits the request, and why not."""
+    pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
+    q = dict(pairs)
+    for p in op.get("parameters", []):
+        name, schema = p["name"], p["schema"]
+        if p["in"] == "path":
+            text = path_values[name]
+        elif name in q:
+            text = q[name]
+            if text == "" and p.get("allowEmptyValue"):
+                continue
+        elif p["required"]:
+            return False, "missing " + name
+        else:
+            continue
+        if not Draft202012Validator(schema).is_valid(value_for(schema, text)):
+            return False, "parameter " + name
+    rb = op.get("requestBody")
+    if rb is not None:
+        if ex["body"] == "":
+            return (False, "empty body") if rb["required"] else (True, "")
+        # The test sends `Content-Type: application/json` or none.
+        content = rb["content"]
+        media = media_for(content, "application/json" if ex["json"] else "")
+        if media is None:
+            return False, "media type"
+        if "schema" in media:
+            value = ex["body"]
+            if media is content.get("application/json"):
+                try:
+                    value = json.loads(ex["body"])
+                except ValueError:
+                    return False, "not JSON"
+            if not Draft202012Validator(media["schema"]).is_valid(value):
+                return False, "body schema"
+    return True, ""
+
+
+def response_for(op, status):
+    """The response object the document gives for `status`, and its key."""
+    rs = op["responses"]
+    for key in (str(status), f"{status // 100}XX", "default"):
+        if key in rs:
+            return rs[key], key
+    return None, None
+
+
+def media_for(content, content_type):
+    """The media type object of `content` that `content_type` (the answer's
+    field, maybe empty) falls under: the exact type, then `type/*`, then
+    `*/*`."""
+    base = content_type.split(";")[0].strip().lower()
+    if base and base in content:
+        return content[base]
+    if base and base.split("/")[0] + "/*" in content:
+        return content[base.split("/")[0] + "/*"]
+    return content.get("*/*")
+
+
+def credentials_met(doc, op, ex):
+    """Whether the request meets the operation's `security` (the document's
+    when it has none): one requirement whose every scheme it meets. The
+    test's schemes are API keys in a header field, which it sends as
+    `member`; any other kind fails the run."""
+    reqs = op.get("security", doc.get("security", []))
+    if not reqs:
+        return True
+    schemes = doc["components"]["securitySchemes"]
+    for req in reqs:
+        met = True
+        for name in req:
+            scheme = schemes[name]
+            if scheme["type"] != "apiKey" or scheme["in"] != "header":
+                raise SystemExit("unchecked security scheme " + name)
+            if scheme["name"].lower() != "x-member" or not ex["member"]:
+                met = False
+        if met:
+            return True
+    return False
+
+
+def check(doc, ex, op, values):
+    """The mismatch an exchange shows, or None."""
+    # The guard answers before any conversion: a request that lacks the
+    # credentials is denied, one that has them is not. A denial skips the
+    # request's checks, not the response's.
+    denied = ex["status"] in DENIALS
+    if credentials_met(doc, op, ex) == denied:
+        return "denied with credentials" if denied else "admitted without credentials"
+    if ex["status"] in NO_BODY and ex["response"] != "":
+        return "a body in a " + str(ex["status"]) + " answer"
+    if not denied:
+        path, _, query = ex["target"].partition("?")
+        ok, why = admits(op, values, query, ex)
+        refused = ex["status"] in REFUSALS
+        if ok and refused:
+            return "admitted, refused"
+        if not ok and not refused:
+            return f"refused by the document ({why}), admitted"
+    entry, key = response_for(op, ex["status"])
+    explicit = key == str(ex["status"])
+    if ex["status"] // 100 == 2 or explicit:
+        # The handler's answer: the document must describe its status and,
+        # where it describes content, the media type and value it carries.
+        if entry is None:
+            return "status " + str(ex["status"]) + " not described"
+        if ex["status"] in (204, 205) and "content" in entry:
+            return "content described for " + str(ex["status"])
+        if "content" not in entry:
+            if ex["response"] != "" and key != "default":
+                return "a body the document does not describe"
+            return None
+        media = media_for(entry["content"], ex["content_type"])
+        if media is None:
+            return "media type " + (ex["content_type"] or "(none)")
+        if "schema" in media:
+            if media is entry["content"].get("application/json"):
+                try:
+                    value = json.loads(ex["response"])
+                except ValueError:
+                    return "response not JSON"
+            else:
+                value = ex["response"]
+            if not Draft202012Validator(media["schema"]).is_valid(value):
+                return "response schema"
+    elif entry is not None and "content" in entry:
+        return "a non-2xx answer described with content"
+    return None
+
+
+def main():
+    d = sys.argv[1]
+    doc = json.load(open(d + "/openapi.json"))
+    validate(doc)
+    ops = sum(len(v) for v in doc["paths"].values())
+    print(f"openapi-spec-validator: a valid OpenAPI 3.1 document, {ops} operations")
+    agree = 0
+    seen = set()
+    failures = []
+    exchanges = [json.loads(line) for line in open(d + "/exchanges.jsonl")]
+    for ex in exchanges:
+        op, values = operation(doc, ex["method"], ex["target"].partition("?")[0])
+        key = (ex["method"], ex["target"], ex["body"])
+        got = "no operation: " + values if op is None else check(doc, ex, op, values)
+        want = KNOWN_GAPS.get(key)
+        if got == want and want is not None:
+            seen.add(key)
+        elif got is None and want is None:
+            agree += 1
+        else:
+            failures.append(f"{key}: {got} (expected {want})")
+    print(
+        f"{len(exchanges)} exchanges: {agree} agree with the document, "
+        f"{len(seen)} show their known gap, {len(failures)} mismatch"
+    )
+    for f in failures:
+        print("MISMATCH", f)
+    for key in KNOWN_GAPS.keys() - seen:
+        print("GAP NOT SHOWN", key)
+    sys.exit(1 if failures or seen != KNOWN_GAPS.keys() else 0)
+
+
+if __name__ == "__main__":
+    main()

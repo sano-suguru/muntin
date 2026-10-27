@@ -2,6 +2,7 @@
 
 from std.collections import Dict
 from std.os import abort
+from std.sys import is_defined
 from std.reflection import reflect
 
 from ._handler_storage import _Erased
@@ -23,9 +24,17 @@ from ._registration_rules import (
     _param_name,
     _path_params,
     _path_part,
+    _placeholder_names,
     _query_items,
 )
-from .body import FromBody, FromBytes, _BodyFault, _NOT_UTF8, _body_text
+from .body import (
+    FromBody,
+    FromBytes,
+    _BodyFault,
+    _MAX_BODY_BYTES,
+    _NOT_UTF8,
+    _body_text,
+)
 from .headers_body import _HeaderCarrier, _convert_body
 from .http import (
     Failure,
@@ -38,7 +47,15 @@ from .http import (
     _failed,
     _rejected_by,
 )
-from .json import _JsonBody, _json_content_type
+from ._openapi import _merge, _operation
+from .json import (
+    JsonValue,
+    JsonWriter,
+    _JsonBody,
+    _OBJECT,
+    _json_content_type,
+    _parse_json,
+)
 from .route_value import FromRouteValue, RouteValues, _NamedValue
 from .state import State, _may_borrow
 
@@ -1663,7 +1680,7 @@ def _call_guarded_state_3[
 
 
 def _route[
-    A: AnyType, B: AnyType, C: AnyType
+    A: AnyType, B: AnyType, C: AnyType, R: AnyType
 ](method: String, path: StaticString, var handler: _Erased) -> _Route:
     """The route for an accepted handler whose request slots have types `A`,
     `B` and `C` (`_NoSlot` where there is none): a JSON route when its body
@@ -1688,6 +1705,9 @@ def _route[
         or _kind[C]() == _HEADERS,
         raw=_kind[A]() == _RAW,
     )
+    # Only a build that may call `App.openapi` links the operations.
+    comptime if is_defined["MUNTIN_OPENAPI"]():
+        route.describe = _operation[A, B, C, R]
     var paths = _path_params(path)
     var kinds = List[Int]()
     comptime if conforms_to(A, RouteValues):
@@ -1702,6 +1722,15 @@ def _route[
         if _is_optional(kinds[j]):
             route.query_optional[j - paths] = True
     return route^
+
+
+def _no_operation(
+    mut out: JsonWriter, literal: StaticString, extra: Optional[JsonValue]
+) raises:
+    """No operation: `_route` stores `_operation` only under `-D
+    MUNTIN_OPENAPI`, which `App.openapi` requires (so a route built
+    without types, as two tests do, is never described)."""
+    raise Error("no operation")
 
 
 struct _Route(Movable):
@@ -1741,6 +1770,15 @@ struct _Route(Movable):
     route-value 400 until after the guard, and appends the header fields
     and a verdict (`"1"`, or `"0"` for a deferred 400) last."""
     var handler: _Erased
+    var literal: StaticString
+    """The route literal as registered, for `_document`."""
+    var describe: def(
+        mut JsonWriter, StaticString, Optional[JsonValue]
+    ) thin raises
+    """Writes the route's OpenAPI operation from its literal and the
+    application's additions (M3-091): `_operation` of the
+    handler's slot and result types, which `_route` sets under the
+    define; `_no_operation` otherwise."""
 
     def __init__(
         out self,
@@ -1768,6 +1806,234 @@ struct _Route(Movable):
             length=len(self.query_keys), fill=False
         )
         self.handler = handler^
+        self.literal = route
+        self.describe = _no_operation
+
+
+def _sent_as_written(text: String, query: Bool) -> Bool:
+    """Whether common clients send `text` as written, so that Muntin's byte
+    comparison sees it: a query key of letters, digits and `-._` alone,
+    which both WHATWG's form serializer and RFC 3986 percent-encoders such
+    as Python's `urlencode` keep (the first encodes `~`, the second `*`),
+    a static path segment of RFC 3986 `pchar` (unreserved characters,
+    sub-delimiters, `:`, `@` and a `%` with two hexadecimal digits, which a
+    client sends as written), except a dot segment (`.` or `..`, also
+    written with `%2e` or `%2E`), which a client removes."""
+    var dots = text.replace("%2e", ".").replace("%2E", ".")
+    if not query and (dots == "." or dots == ".."):
+        return False
+    var bytes = text.as_bytes()
+    var i = 0
+    while i < len(bytes):
+        var c = Int(bytes[i])
+        i += 1
+        if (
+            not query
+            and c == ord("%")
+            and i + 1 < len(bytes)
+            and _hex_digit(bytes[i]) >= 0
+            and _hex_digit(bytes[i + 1]) >= 0
+        ):
+            i += 2
+            continue
+        if (
+            (c >= ord("a") and c <= ord("z"))
+            or (c >= ord("A") and c <= ord("Z"))
+            or (c >= ord("0") and c <= ord("9"))
+            or c == ord("-")
+            or c == ord(".")
+            or c == ord("_")
+        ):
+            continue
+        if not query and String(chr(c)) in "~!$&'()*+,;=:@":
+            continue
+        return False
+    return True
+
+
+def _object(text: String, what: String) raises -> JsonValue:
+    """`text` parsed as a JSON object; raises naming `what` otherwise."""
+    var value: JsonValue
+    try:
+        value = _parse_json(text, _MAX_BODY_BYTES)
+    except e:
+        raise Error("openapi: " + what + " is not JSON: " + String(e))
+    if value._kind() != _OBJECT:
+        raise Error("openapi: " + what + " is not a JSON object")
+    return value^
+
+
+def _document(
+    routes: List[_Route],
+    title: String,
+    version: String,
+    document: String,
+    operations: Dict[String, String],
+) raises -> String:
+    var paths = List[String]()
+    var shapes = List[String]()
+    var split = List[List[String]]()
+    for i in range(len(routes)):
+        for key in routes[i].query_keys:
+            if not _sent_as_written(key, True):
+                raise Error(
+                    "openapi: route "
+                    + String(routes[i].literal)
+                    + ": a client may not send the query key "
+                    + key
+                    + " as written, and Muntin compares it undecoded"
+                )
+        var p = routes[i].path
+        if p in paths:
+            continue
+        var segments = _segments(p)
+        var shape = _shape(segments)
+        for k in range(len(shapes)):
+            if shapes[k] == shape:
+                raise Error(
+                    "openapi: routes "
+                    + paths[k]
+                    + " and "
+                    + p
+                    + " differ only in placeholder names, which OpenAPI"
+                    + " treats as one path"
+                )
+        for segment in segments:
+            if not _is_param(segment) and not _sent_as_written(segment, False):
+                raise Error(
+                    "openapi: route "
+                    + p
+                    + ": a client may not send the segment "
+                    + segment
+                    + " as written, and Muntin matches it undecoded"
+                )
+        # The path's placeholders come first in binding order.
+        var names = _placeholder_names(routes[i].literal)
+        for a in range(_path_params(routes[i].literal)):
+            for b in range(a):
+                if names[a] == names[b]:
+                    raise Error(
+                        "openapi: route "
+                        + p
+                        + " repeats the placeholder {"
+                        + String(names[a])
+                        + "}, which OpenAPI does not allow"
+                    )
+        paths.append(p)
+        shapes.append(shape^)
+        split.append(segments^)
+    # A request two paths both match goes to the route of its method that
+    # matches, the most specific (M3-053). OpenAPI resolves it to the path
+    # without a placeholder, whatever the method, and says nothing about
+    # two paths that both have one.
+    var concrete = List[Bool]()
+    for k in range(len(split)):
+        var plain = True
+        for segment in split[k]:
+            if _is_param(segment):
+                plain = False
+        concrete.append(plain)
+    for a in range(len(paths)):
+        for b in range(len(paths)):
+            if a == b or not _overlaps_segments(split[a], split[b]):
+                continue
+            if concrete[b] and _covers_segments(split[a], split[b]):
+                for i in range(len(routes)):
+                    if routes[i].path != paths[a]:
+                        continue
+                    var found = False
+                    for r in range(len(routes)):
+                        if (
+                            routes[r].path == paths[b]
+                            and routes[r].method == routes[i].method
+                        ):
+                            found = True
+                    if not found:
+                        raise Error(
+                            "openapi: routes "
+                            + paths[a]
+                            + " and "
+                            + paths[b]
+                            + " overlap: OpenAPI resolves a request both"
+                            + " match to "
+                            + paths[b]
+                            + ", which has no "
+                            + routes[i].method
+                            + " route"
+                        )
+            elif a < b and not (
+                concrete[a] and _covers_segments(split[b], split[a])
+            ):
+                raise Error(
+                    "openapi: routes "
+                    + paths[a]
+                    + " and "
+                    + paths[b]
+                    + " overlap, and OpenAPI does not say which one a"
+                    + " request both match resolves to"
+                )
+    # Each key of `operations` names a route's operation, as `METHOD path`
+    # with the document's path (the literal's path part).
+    for entry in operations.items():
+        var found = False
+        for i in range(len(routes)):
+            if routes[i].method + " " + routes[i].path == entry.key:
+                found = True
+        if not found:
+            raise Error("openapi: operations: no route " + entry.key)
+    var top = Optional[JsonValue]()
+    if document.byte_length() > 0:
+        top = _object(document, "document")
+    var out = JsonWriter()
+    out.begin_object()
+    out.field("openapi", "3.1.0")
+    out.name("info")
+    out.begin_object()
+    out.field("title", title)
+    out.field("version", version)
+    if top:
+        var info = top.value().get("info")
+        if info:
+            try:
+                _merge(out, info.value())
+            except e:
+                raise Error("openapi: document: info: " + String(e))
+    out.end_object()
+    out.name("paths")
+    out.begin_object()
+    for p in paths:
+        out.name(p)
+        out.begin_object()
+        for i in range(len(routes)):
+            if routes[i].path == p:
+                var key = routes[i].method + " " + p
+                var extra = Optional[JsonValue]()
+                var text = operations.get(key)
+                if text:
+                    extra = _object(text.value(), "operations[" + key + "]")
+                out.name(routes[i].method.lower())
+                try:
+                    routes[i].describe(out, routes[i].literal, extra)
+                except e:
+                    # Without an addition, the derived part failed.
+                    var what = "operations[" if text else "route "
+                    raise Error(
+                        "openapi: "
+                        + what
+                        + key
+                        + ("]: " if text else ": ")
+                        + String(e)
+                    )
+        out.end_object()
+    out.end_object()
+    if top:
+        # `openapi` and `paths` are derived, and `info` merged above.
+        try:
+            _merge(out, top.value(), "info")
+        except e:
+            raise Error("openapi: document: " + String(e))
+    out.end_object()
+    return out^._finish()
 
 
 struct Next[o: Origin[mut=False]](Movable):
@@ -2081,6 +2347,47 @@ struct _App[
         while len(group._core._routes) > 0:
             self._add(group._core._routes.pop())
 
+    def openapi(
+        self,
+        *,
+        title: String,
+        version: String,
+        document: String = "",
+        operations: Dict[String, String] = Dict[String, String](),
+    ) raises -> String:
+        """The OpenAPI 3.1 document of this `App`'s routes, as JSON text
+        (M3-091): one path item per route path, in registration
+        order, one operation per route, each described from the handler's
+        types alone. Only a build with `-D MUNTIN_OPENAPI` compiles a call
+        (and links the operations, so other builds link none). What the
+        types cannot say the application adds as JSON
+        objects, written into the document as given: `document`'s members
+        at the top level (`info`'s into `info`), say `servers`, `security`
+        and `components`; `operations["GET /notes/{id}"]`'s into that
+        operation (`METHOD` and the document's path), say `security`,
+        `summary`, a `parameters` entry (after the derived ones) or a
+        `responses` entry of another status.
+
+        Raises when a route cannot be described truly: a path placeholder
+        name repeated in it, two route paths that differ only in their
+        placeholder names, two that overlap unless one has no placeholder
+        and every method of the other (OpenAPI resolves a request both
+        match to the path without one, and says nothing about two paths
+        that both have one), or a query key or static segment
+        a client may not send as written (`_sent_as_written`), which Muntin
+        compares undecoded. Raises, too, when an addition is no JSON
+        object, names no route, or repeats a derived member: `openapi`,
+        `paths`, `info`'s `title` and `version`, a derived parameter's `in`
+        and name, an operation's `requestBody` when the handler takes a
+        body, the status its result gives."""
+        comptime assert Self.Ctx == _NoContext, "openapi: mount the Group first"
+        comptime assert is_defined[
+            "MUNTIN_OPENAPI"
+        ](), "openapi: build with -D MUNTIN_OPENAPI"
+        return _document(
+            self._core._routes, title, version, document, operations
+        )
+
     def _add_guarded[
         F: Movable & Deinitable,
         //,
@@ -2110,7 +2417,7 @@ struct _App[
         comptime if A == Self.Ctx:
             _check[method, stateful, path, R, B, C, _NoSlot]()
             comptime if _admits[method, stateful, path, R, B, C, _NoSlot]():
-                self._add_guarded_route[B, C, _NoSlot, call](
+                self._add_guarded_route[B, C, _NoSlot, R, call](
                     String(method), path, value^
                 )
             else:
@@ -2118,7 +2425,7 @@ struct _App[
         else:
             _check[method, stateful, path, R, A, B, C]()
             comptime if _admits[method, stateful, path, R, A, B, C]():
-                self._add_guarded_route[A, B, C, call](
+                self._add_guarded_route[A, B, C, R, call](
                     String(method), path, value^
                 )
             else:
@@ -2130,13 +2437,14 @@ struct _App[
         A: AnyType,
         B: AnyType,
         C: AnyType,
+        R: AnyType,
         call: def(
             _Guarded[F, Self.GS, Self.GE, Self.Ctx], List[String], List[UInt8]
         ) thin -> Response,
     ](mut self, method: String, path: StaticString, var value: F):
         """Boxes `value` with the guard and a copy of its state, as the
         route of slots `A`, `B` and `C`, marked guarded."""
-        var route = _route[A, B, C](
+        var route = _route[A, B, C, R](
             method,
             path,
             _Erased.__init__[call=call](
@@ -2364,7 +2672,7 @@ struct _App[
                 "GET", False, path, R, _NoSlot, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[_NoSlot, _NoSlot, _NoSlot](
+                    _route[_NoSlot, _NoSlot, _NoSlot, R](
                         "GET",
                         path,
                         _Erased.__init__[call=_call_0[E, R]](handler),
@@ -2415,7 +2723,7 @@ struct _App[
             _check["GET", False, path, R, A, _NoSlot, _NoSlot]()
             comptime if _admits["GET", False, path, R, A, _NoSlot, _NoSlot]():
                 self._add(
-                    _route[A, _NoSlot, _NoSlot](
+                    _route[A, _NoSlot, _NoSlot, R](
                         "GET",
                         path,
                         _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -2454,7 +2762,7 @@ struct _App[
             _check["GET", False, path, R, A, B, _NoSlot]()
             comptime if _admits["GET", False, path, R, A, B, _NoSlot]():
                 self._add(
-                    _route[A, B, _NoSlot](
+                    _route[A, B, _NoSlot, R](
                         "GET",
                         path,
                         _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -2487,7 +2795,7 @@ struct _App[
             _check["GET", False, path, R, A, B, C]()
             comptime if _admits["GET", False, path, R, A, B, C]():
                 self._add(
-                    _route[A, B, C](
+                    _route[A, B, C, R](
                         "GET",
                         path,
                         _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -2517,7 +2825,7 @@ struct _App[
                 "GET", True, path, R, _NoSlot, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[_NoSlot, _NoSlot, _NoSlot](
+                    _route[_NoSlot, _NoSlot, _NoSlot, R](
                         "GET",
                         path,
                         _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -2551,7 +2859,7 @@ struct _App[
             _check["GET", True, path, R, A, _NoSlot, _NoSlot]()
             comptime if _admits["GET", True, path, R, A, _NoSlot, _NoSlot]():
                 self._add(
-                    _route[A, _NoSlot, _NoSlot](
+                    _route[A, _NoSlot, _NoSlot, R](
                         "GET",
                         path,
                         _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -2585,7 +2893,7 @@ struct _App[
             _check["GET", True, path, R, A, B, _NoSlot]()
             comptime if _admits["GET", True, path, R, A, B, _NoSlot]():
                 self._add(
-                    _route[A, B, _NoSlot](
+                    _route[A, B, _NoSlot, R](
                         "GET",
                         path,
                         _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -2620,7 +2928,7 @@ struct _App[
             _check["GET", True, path, R, A, B, C]()
             comptime if _admits["GET", True, path, R, A, B, C]():
                 self._add(
-                    _route[A, B, C](
+                    _route[A, B, C, R](
                         "GET",
                         path,
                         _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -2647,7 +2955,7 @@ struct _App[
                 "POST", False, path, R, _NoSlot, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[_NoSlot, _NoSlot, _NoSlot](
+                    _route[_NoSlot, _NoSlot, _NoSlot, R](
                         "POST",
                         path,
                         _Erased.__init__[call=_call_0[E, R]](handler),
@@ -2704,7 +3012,7 @@ struct _App[
             _check["POST", False, path, R, A, _NoSlot, _NoSlot]()
             comptime if _admits["POST", False, path, R, A, _NoSlot, _NoSlot]():
                 self._add(
-                    _route[A, _NoSlot, _NoSlot](
+                    _route[A, _NoSlot, _NoSlot, R](
                         "POST",
                         path,
                         _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -2747,7 +3055,7 @@ struct _App[
             _check["POST", False, path, R, A, B, _NoSlot]()
             comptime if _admits["POST", False, path, R, A, B, _NoSlot]():
                 self._add(
-                    _route[A, B, _NoSlot](
+                    _route[A, B, _NoSlot, R](
                         "POST",
                         path,
                         _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -2788,7 +3096,7 @@ struct _App[
             _check["POST", False, path, R, A, B, C]()
             comptime if _admits["POST", False, path, R, A, B, C]():
                 self._add(
-                    _route[A, B, C](
+                    _route[A, B, C, R](
                         "POST",
                         path,
                         _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -2817,7 +3125,7 @@ struct _App[
                 "POST", True, path, R, _NoSlot, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[_NoSlot, _NoSlot, _NoSlot](
+                    _route[_NoSlot, _NoSlot, _NoSlot, R](
                         "POST",
                         path,
                         _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -2855,7 +3163,7 @@ struct _App[
             _check["POST", True, path, R, A, _NoSlot, _NoSlot]()
             comptime if _admits["POST", True, path, R, A, _NoSlot, _NoSlot]():
                 self._add(
-                    _route[A, _NoSlot, _NoSlot](
+                    _route[A, _NoSlot, _NoSlot, R](
                         "POST",
                         path,
                         _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -2892,7 +3200,7 @@ struct _App[
             _check["POST", True, path, R, A, B, _NoSlot]()
             comptime if _admits["POST", True, path, R, A, B, _NoSlot]():
                 self._add(
-                    _route[A, B, _NoSlot](
+                    _route[A, B, _NoSlot, R](
                         "POST",
                         path,
                         _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -2931,7 +3239,7 @@ struct _App[
             _check["POST", True, path, R, A, B, C]()
             comptime if _admits["POST", True, path, R, A, B, C]():
                 self._add(
-                    _route[A, B, C](
+                    _route[A, B, C, R](
                         "POST",
                         path,
                         _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -2958,7 +3266,7 @@ struct _App[
                 "PUT", False, path, R, _NoSlot, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[_NoSlot, _NoSlot, _NoSlot](
+                    _route[_NoSlot, _NoSlot, _NoSlot, R](
                         "PUT",
                         path,
                         _Erased.__init__[call=_call_0[E, R]](handler),
@@ -3015,7 +3323,7 @@ struct _App[
             _check["PUT", False, path, R, A, _NoSlot, _NoSlot]()
             comptime if _admits["PUT", False, path, R, A, _NoSlot, _NoSlot]():
                 self._add(
-                    _route[A, _NoSlot, _NoSlot](
+                    _route[A, _NoSlot, _NoSlot, R](
                         "PUT",
                         path,
                         _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -3058,7 +3366,7 @@ struct _App[
             _check["PUT", False, path, R, A, B, _NoSlot]()
             comptime if _admits["PUT", False, path, R, A, B, _NoSlot]():
                 self._add(
-                    _route[A, B, _NoSlot](
+                    _route[A, B, _NoSlot, R](
                         "PUT",
                         path,
                         _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -3099,7 +3407,7 @@ struct _App[
             _check["PUT", False, path, R, A, B, C]()
             comptime if _admits["PUT", False, path, R, A, B, C]():
                 self._add(
-                    _route[A, B, C](
+                    _route[A, B, C, R](
                         "PUT",
                         path,
                         _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -3128,7 +3436,7 @@ struct _App[
                 "PUT", True, path, R, _NoSlot, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[_NoSlot, _NoSlot, _NoSlot](
+                    _route[_NoSlot, _NoSlot, _NoSlot, R](
                         "PUT",
                         path,
                         _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -3166,7 +3474,7 @@ struct _App[
             _check["PUT", True, path, R, A, _NoSlot, _NoSlot]()
             comptime if _admits["PUT", True, path, R, A, _NoSlot, _NoSlot]():
                 self._add(
-                    _route[A, _NoSlot, _NoSlot](
+                    _route[A, _NoSlot, _NoSlot, R](
                         "PUT",
                         path,
                         _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -3203,7 +3511,7 @@ struct _App[
             _check["PUT", True, path, R, A, B, _NoSlot]()
             comptime if _admits["PUT", True, path, R, A, B, _NoSlot]():
                 self._add(
-                    _route[A, B, _NoSlot](
+                    _route[A, B, _NoSlot, R](
                         "PUT",
                         path,
                         _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -3242,7 +3550,7 @@ struct _App[
             _check["PUT", True, path, R, A, B, C]()
             comptime if _admits["PUT", True, path, R, A, B, C]():
                 self._add(
-                    _route[A, B, C](
+                    _route[A, B, C, R](
                         "PUT",
                         path,
                         _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -3269,7 +3577,7 @@ struct _App[
                 "PATCH", False, path, R, _NoSlot, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[_NoSlot, _NoSlot, _NoSlot](
+                    _route[_NoSlot, _NoSlot, _NoSlot, R](
                         "PATCH",
                         path,
                         _Erased.__init__[call=_call_0[E, R]](handler),
@@ -3326,7 +3634,7 @@ struct _App[
             _check["PATCH", False, path, R, A, _NoSlot, _NoSlot]()
             comptime if _admits["PATCH", False, path, R, A, _NoSlot, _NoSlot]():
                 self._add(
-                    _route[A, _NoSlot, _NoSlot](
+                    _route[A, _NoSlot, _NoSlot, R](
                         "PATCH",
                         path,
                         _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -3369,7 +3677,7 @@ struct _App[
             _check["PATCH", False, path, R, A, B, _NoSlot]()
             comptime if _admits["PATCH", False, path, R, A, B, _NoSlot]():
                 self._add(
-                    _route[A, B, _NoSlot](
+                    _route[A, B, _NoSlot, R](
                         "PATCH",
                         path,
                         _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -3410,7 +3718,7 @@ struct _App[
             _check["PATCH", False, path, R, A, B, C]()
             comptime if _admits["PATCH", False, path, R, A, B, C]():
                 self._add(
-                    _route[A, B, C](
+                    _route[A, B, C, R](
                         "PATCH",
                         path,
                         _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -3439,7 +3747,7 @@ struct _App[
                 "PATCH", True, path, R, _NoSlot, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[_NoSlot, _NoSlot, _NoSlot](
+                    _route[_NoSlot, _NoSlot, _NoSlot, R](
                         "PATCH",
                         path,
                         _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -3477,7 +3785,7 @@ struct _App[
             _check["PATCH", True, path, R, A, _NoSlot, _NoSlot]()
             comptime if _admits["PATCH", True, path, R, A, _NoSlot, _NoSlot]():
                 self._add(
-                    _route[A, _NoSlot, _NoSlot](
+                    _route[A, _NoSlot, _NoSlot, R](
                         "PATCH",
                         path,
                         _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -3514,7 +3822,7 @@ struct _App[
             _check["PATCH", True, path, R, A, B, _NoSlot]()
             comptime if _admits["PATCH", True, path, R, A, B, _NoSlot]():
                 self._add(
-                    _route[A, B, _NoSlot](
+                    _route[A, B, _NoSlot, R](
                         "PATCH",
                         path,
                         _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -3553,7 +3861,7 @@ struct _App[
             _check["PATCH", True, path, R, A, B, C]()
             comptime if _admits["PATCH", True, path, R, A, B, C]():
                 self._add(
-                    _route[A, B, C](
+                    _route[A, B, C, R](
                         "PATCH",
                         path,
                         _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](
@@ -3589,7 +3897,7 @@ struct _App[
                 "DELETE", False, path, R, _NoSlot, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[_NoSlot, _NoSlot, _NoSlot](
+                    _route[_NoSlot, _NoSlot, _NoSlot, R](
                         "DELETE",
                         path,
                         _Erased.__init__[call=_call_0[E, R]](handler),
@@ -3642,7 +3950,7 @@ struct _App[
                 "DELETE", False, path, R, A, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[A, _NoSlot, _NoSlot](
+                    _route[A, _NoSlot, _NoSlot, R](
                         "DELETE",
                         path,
                         _Erased.__init__[call=_call_1[A, E, R]](handler),
@@ -3682,7 +3990,7 @@ struct _App[
             _check["DELETE", False, path, R, A, B, _NoSlot]()
             comptime if _admits["DELETE", False, path, R, A, B, _NoSlot]():
                 self._add(
-                    _route[A, B, _NoSlot](
+                    _route[A, B, _NoSlot, R](
                         "DELETE",
                         path,
                         _Erased.__init__[call=_call_2[A, B, E, R]](handler),
@@ -3715,7 +4023,7 @@ struct _App[
             _check["DELETE", False, path, R, A, B, C]()
             comptime if _admits["DELETE", False, path, R, A, B, C]():
                 self._add(
-                    _route[A, B, C](
+                    _route[A, B, C, R](
                         "DELETE",
                         path,
                         _Erased.__init__[call=_call_3[A, B, C, E, R]](handler),
@@ -3745,7 +4053,7 @@ struct _App[
                 "DELETE", True, path, R, _NoSlot, _NoSlot, _NoSlot
             ]():
                 self._add(
-                    _route[_NoSlot, _NoSlot, _NoSlot](
+                    _route[_NoSlot, _NoSlot, _NoSlot, R](
                         "DELETE",
                         path,
                         _Erased.__init__[call=_call_state_0[S, E, R]](
@@ -3779,7 +4087,7 @@ struct _App[
             _check["DELETE", True, path, R, A, _NoSlot, _NoSlot]()
             comptime if _admits["DELETE", True, path, R, A, _NoSlot, _NoSlot]():
                 self._add(
-                    _route[A, _NoSlot, _NoSlot](
+                    _route[A, _NoSlot, _NoSlot, R](
                         "DELETE",
                         path,
                         _Erased.__init__[call=_call_state_1[S, A, E, R]](
@@ -3813,7 +4121,7 @@ struct _App[
             _check["DELETE", True, path, R, A, B, _NoSlot]()
             comptime if _admits["DELETE", True, path, R, A, B, _NoSlot]():
                 self._add(
-                    _route[A, B, _NoSlot](
+                    _route[A, B, _NoSlot, R](
                         "DELETE",
                         path,
                         _Erased.__init__[call=_call_state_2[S, A, B, E, R]](
@@ -3848,7 +4156,7 @@ struct _App[
             _check["DELETE", True, path, R, A, B, C]()
             comptime if _admits["DELETE", True, path, R, A, B, C]():
                 self._add(
-                    _route[A, B, C](
+                    _route[A, B, C, R](
                         "DELETE",
                         path,
                         _Erased.__init__[call=_call_state_3[S, A, B, C, E, R]](

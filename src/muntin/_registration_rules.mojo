@@ -19,8 +19,12 @@ that they agree. The rules' parsers (`_path_params`, `_query_params`,
 `_Route.__init__` in `app.mojo` splits a literal into its matched path and
 query keys through `_path_part`, `_query_items` and `_param_name` at
 registration; and `_match` in `app.mojo` classifies each route segment with
-`_is_param` per request. The `/` segment separator is written both in
-`_path_params` and in `_match`, which splits the request path with it too.
+`_is_param` per request. For `App.openapi`, `_document` in `app.mojo`
+classifies each segment with `_is_param` and reads the path's placeholder
+names through `_placeholder_names` and `_path_params`, as `_parameters` in
+`_openapi.mojo` names each route value. The `/` segment separator is
+written both in `_path_params` and in `_match`, which splits the request
+path with it too.
 """
 
 from std.reflection import reflect

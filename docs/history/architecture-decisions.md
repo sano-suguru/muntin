@@ -97,7 +97,8 @@ Earlier records include production records written before that rule; they stay a
 | <a id="comparison-by-new-authors-decision-m3-086"></a>[Comparison by new authors decision (M3-086)](decisions/m3-086-comparison-by-new-authors-decision.md) | Current | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
 | <a id="derived-json-values-inside-hand-written-codecs-decision-m3-087"></a>[Derived JSON values inside hand-written codecs decision (M3-087)](decisions/m3-087-derived-json-in-hand-written-codecs-decision.md) | Current | [responses reference, "Derived values inside a hand-written codec"](../reference/responses.md#derived-values-inside-a-hand-written-codec) |
 | <a id="text-and-json-body-limits-decision-m3-089"></a>[Text and JSON body limits decision (M3-089)](decisions/m3-089-text-and-json-body-limits-decision.md) | Current | [body size limits reference](../reference/body-limits.md#body-size-limits) |
-| <a id="openapi-and-schema-output-decision-m3-091"></a>[OpenAPI and schema output decision (M3-091)](decisions/m3-091-openapi-output-decision.md) | Current; not built yet (M3-092) | [SPEC, "Remaining candidates"](../SPEC.md#remaining-candidates) |
+| <a id="openapi-and-schema-output-decision-m3-091"></a>[OpenAPI and schema output decision (M3-091)](decisions/m3-091-openapi-output-decision.md) | Current; changed in part by [M3-092](decisions/m3-092-openapi-output-amendment.md) | [OpenAPI reference](../reference/openapi.md) |
+| <a id="openapi-output-amendment-m3-092"></a>[OpenAPI output amendment (M3-092)](decisions/m3-092-openapi-output-amendment.md) | Current | [OpenAPI reference](../reference/openapi.md) |
 
 ## Documents older records cite
 
