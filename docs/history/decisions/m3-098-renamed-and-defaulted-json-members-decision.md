@@ -1,0 +1,7 @@
+# Renamed and defaulted derived JSON members decision (M3-098)
+
+> **Current.** Not built yet: its "Next production slice" is M3-099.
+
+Status: **decision** (M3-098, issue [#196](https://github.com/sano-suguru/muntin/issues/196)). Evidence: the pull request. Changes part of M3-082 (below).
+
+**Question and what settles it.** A `JsonFields` member is named after its field, with no renaming and no default, and its kinds are fixed ([M3-082](m3-082-derived-json-codecs-decision.md)); so a wire name in another style than the Mojo field (`createdAt` for `created_at`), a member that may be omitted with a default, or a narrower number forces a whole hand-written direction. Mojo 1.1.0 structs carry no per-field metadata. Through what Muntin-owned API, on documented Mojo 1.1.0 features, does a `JsonFields` struct rename and default its members; which more field kinds (other widths, `Dict`, `Optional[Optional[T]]`) does a derived codec take; how is a bad declaration refused at registration; and do the member path ([M3-084](m3-084-request-rejection-report-decision.md)), a hand-written `read` ([M3-087](m3-087-derived-json-in-hand-written-codecs-decision.md)) and the OpenAPI schema ([M3-091](m3-091-openapi-output-decision.md)) follow the wire names? Settled by Mojo 1.1.0 probes of each candidate expression; a scratch copy of production passing `check.sh`, `test.sh` (under AddressSanitizer too) and `check_flare.sh` with a spike through `TestClient`; each refusal measured; and a fresh-context review.
