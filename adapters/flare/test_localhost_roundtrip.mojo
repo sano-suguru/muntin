@@ -2270,9 +2270,7 @@ def test_json_over_localhost_matches_app_handle() raises:
         var none = List[Tuple[String, String]]()
         for code in ["204", "205"]:
             var h2 = h2_request(child.port, "GET", "/greet-as/" + code, none)
-            print(
-                "observed h2c GET /greet-as/" + code + ":", _h2_fields(h2[0])
-            )
+            print("observed h2c GET /greet-as/" + code + ":", _h2_fields(h2[0]))
             assert_equal(_h2_fields(h2[0]), ":status=" + code + ";")
             assert_equal(h2[2], 0)
     finally:
