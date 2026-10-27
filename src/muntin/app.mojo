@@ -1800,8 +1800,9 @@ struct _Route(Movable):
 
 def _sent_as_written(text: String, query: Bool) -> Bool:
     """Whether common clients send `text` as written, so that Muntin's byte
-    comparison sees it: a query key of letters, digits and `-._` alone (a
-    form serializer encodes the rest of a parameter's name, `~` included),
+    comparison sees it: a query key of letters, digits and `-._` alone,
+    which both WHATWG's form serializer and RFC 3986 percent-encoders such
+    as Python's `urlencode` keep (the first encodes `~`, the second `*`),
     a static path segment of RFC 3986 `pchar` (unreserved characters,
     sub-delimiters, `:`, `@` and a `%` with two hexadecimal digits, which a
     client sends as written), except a dot segment (`.` or `..`, also

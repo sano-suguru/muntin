@@ -10,12 +10,12 @@ in `app.mojo` stores it in the route, so the document costs nothing until
 `Json[T]` result's status is chosen at run time, so it is the `2XX`
 response (Muntin's own answers are never 2xx); a hand-written codec's
 schema is `{}`. Not described: a `Json` answer with another status,
-Muntin's own 400, 413 and 415 answers, middleware and a group's guard;
-the application adds those through `App.openapi`'s `operations`
-(`_merge`), an explicit status taking precedence over `2XX`. A `Json`
-answer of 204, 205 or 304 carries a body (`Json.to_response` writes one
-whatever the status), which no entry can describe truly: a bodiless one
-is a `Response`.
+Muntin's own answers (listed in docs/reference/openapi.md), middleware and
+a group's guard; the application adds those through `App.openapi`'s
+`operations` (`_merge`), an explicit status taking precedence over `2XX`.
+A `Json` answer of 204, 205 or 304 carries a body (`Json.to_response`
+writes one whatever the status), which no entry can describe truly: a
+bodiless one is a `Response`.
 """
 
 from std.reflection import reflect
@@ -192,7 +192,7 @@ def _responses[
         out.end_object()
     elif conforms_to(R, _JsonBody):
         # `Json(value, status=)` chooses the status at run time; Muntin's
-        # own answers (400, 413, 415, 500) are never 2xx. An application's
+        # own answers are never 2xx. An application's
         # explicit code (say `204`) takes precedence over the range.
         out.name("2XX")
         out.begin_object()

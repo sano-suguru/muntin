@@ -26,9 +26,9 @@ log="$outdir/$name.log"
 bin="$outdir/$name.bin"
 build_log="$outdir/$name.build"
 MOJO=(pixi run --frozen mojo)
-# A file's own build flags, on a "# Build flags (scripts/build_one.sh): "
-# line (such as -D MUNTIN_OPENAPI, M3-091).
-read -r -a flags <<<"$(sed -n 's/^# Build flags (scripts\/build_one.sh): //p' "$t")"
+# A file's own build flags, on "# Build flags (scripts/build_one.sh): "
+# lines (such as -D MUNTIN_OPENAPI, M3-091), for every kind.
+read -r -a flags <<<"$(sed -n 's/^# Build flags (scripts\/build_one.sh): //p' "$t" | tr '\n' ' ')"
 
 exec >"$log" 2>&1
 
@@ -49,7 +49,7 @@ test)
     ;;
 route)
     expected_diagnostic
-    if "${MOJO[@]}" build -I src "$t" -o "$bin" >"$build_log" 2>&1; then
+    if "${MOJO[@]}" build ${flags[@]+"${flags[@]}"} -I src "$t" -o "$bin" >"$build_log" 2>&1; then
         echo "error: $t compiled; Muntin no longer rejects it"
         exit 1
     fi
@@ -75,7 +75,7 @@ must_fail)
     ;;
 must_abort)
     expected_diagnostic
-    if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
+    if ! "${MOJO[@]}" build --Werror ${flags[@]+"${flags[@]}"} -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
         cat "$build_log"
         echo "error: $t failed to build"
         exit 1
@@ -93,7 +93,7 @@ must_abort)
     echo "ok: $t"
     ;;
 known_gap)
-    if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
+    if ! "${MOJO[@]}" build --Werror ${flags[@]+"${flags[@]}"} -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
         cat "$build_log"
         echo "error: $t no longer builds; a revisit condition in docs/ARCHITECTURE.md has fired"
         exit 1
@@ -101,7 +101,7 @@ known_gap)
     echo "ok: $t"
     ;;
 toolchain_gap)
-    if ! "${MOJO[@]}" build -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
+    if ! "${MOJO[@]}" build ${flags[@]+"${flags[@]}"} -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
         cat "$build_log"
         echo "error: $t no longer builds; the toolchain improved, see docs/ARCHITECTURE.md"
         exit 1

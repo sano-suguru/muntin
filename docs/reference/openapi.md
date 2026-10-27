@@ -126,7 +126,7 @@ A schema admits more than the reader where JSON Schema cannot say it: `1.0` or `
 
 ## Additions
 
-The application adds what the types cannot say as JSON text, merged as written: member order and number literals are kept, and nothing is checked against OpenAPI.
+The application adds what the types cannot say as JSON text, merged as written: member order and number literals are kept, and nothing is checked against OpenAPI. Each text is read with the JSON reader's limits ([JSON bodies](bodies.md#json-jsont)): at most 1 MiB and nesting depth 64, else `openapi: document is not JSON: JSON body too large` or `...: invalid JSON: nesting too deep`.
 
 - `document`: a JSON object whose members go at the top level after `paths` (`servers`, `security`, `components`), but for `info`, whose members go into `info` after `title` and `version` (`summary`, `description`, `license`).
 - `operations`: a `Dict[String, String]` keyed `METHOD path` (`"GET /notes/{id}"`, the method in uppercase and the document's path); each value is a JSON object whose members go into that operation after the derived ones (`summary`, `security`, `tags`), but for `parameters`, whose entries go after the derived parameters (a header field a handler reads, a raw handler's query key), and `responses`, whose members go into `responses` after the derived one. An explicit status (`404`) takes precedence over `2XX` in OpenAPI.

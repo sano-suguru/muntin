@@ -767,6 +767,18 @@ def test_additions_that_repeat_or_miss_raise() raises:
         '{"responses":[]}',
         "openapi: operations[POST /places]: not a JSON object",
     )
+    # Additions are read with the JSON reader's limits.
+    var deep = '{"x":' + String("[") * 100 + String("]") * 100
+    var big = '{"x":"' + String("a") * 1_048_576
+    _refuses_addition(
+        deep + "}",
+        "",
+        "",
+        "openapi: document is not JSON: invalid JSON: nesting too deep",
+    )
+    _refuses_addition(
+        big + '"}', "", "", "openapi: document is not JSON: JSON body too large"
+    )
 
 
 def _refuses_result(var app: App, key: String, status: String) raises:
