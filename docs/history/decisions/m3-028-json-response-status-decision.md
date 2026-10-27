@@ -1,6 +1,6 @@
 # JSON response status decision (M3-028)
 
-> **Current.** Changed in part by [M3-093](m3-093-json-statuses-without-content-decision.md): a status that never carries content (1xx, 204, 205, 304) has no body or fields, and the value is not written. Now described in [responses reference, "JSON results"](../../reference/responses.md#json-results) and [ARCHITECTURE, "Revisit index"](../../ARCHITECTURE.md#revisit-index).
+> **Current.** Changed in part by [M3-093](m3-093-json-statuses-without-content-decision.md): a 1xx, 204 or 205 has no body or fields, and the value is not written. Now described in [responses reference, "JSON results"](../../reference/responses.md#json-results) and [ARCHITECTURE, "Revisit index"](../../ARCHITECTURE.md#revisit-index).
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision** (M3-028, PR #64; `src/muntin`, `adapters/` and `tests/` are unchanged in it). It decides how a handler answers a `Json[T]` result with a status other than 200. Today `Json[T].to_response()` answers 200, and another status is an edit of the converted `Response` (DX section 5).

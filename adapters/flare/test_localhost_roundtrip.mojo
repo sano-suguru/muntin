@@ -117,8 +117,11 @@ M3-009 serves `json_app()`: the JSON body route `POST /greet` ->
 `App.handle` with the same fields. The adapter is unchanged. M3-029 adds
 `POST /greet-created` (`Json(..., status=201)`): 201 with the same body and
 `Content-Type` on the wire, 415 without the field. M3-093 adds
-`POST /greet-none/{status}` (`Json(..., status=)`): a 204 and a 304 go out
-with no body and no `Content-Type`, as `App.handle` answers them. M3-083 adds
+`GET /greet-as/{status}` (`Json(..., status=)`), read as raw HTTP/1.1
+bytes: a 204 and a 205 go out with no content and no `Content-Type` (a 205
+with Flare's `Content-Length: 0`), and a 304 with no content and the
+`Content-Length` of the JSON a 200 carries; over h2c a 204 and a 205 have
+no DATA frame. M3-083 adds
 `POST /greet-derived`, whose body is a derived `JsonFields` struct and whose
 result a top-level `List` of it: 200 with the derived array, 400 for a
 missing member and 415 without the field, each equal to `App.handle`.
@@ -2052,8 +2055,8 @@ def greet_created(var body: Json[Greeting]) -> Json[Greeting]:
     return Json(body^.take(), status=201)
 
 
-def greet_none(status: Int, var body: Json[Greeting]) -> Json[Greeting]:
-    return Json(body^.take(), status=status)
+def greet_as(status: Int) -> Json[Greeting]:
+    return Json(Greeting("Ada"), status=status)
 
 
 @fieldwise_init
@@ -2125,7 +2128,7 @@ def json_app() -> App:
     var app = App()
     app.post["/greet"](greet)
     app.post["/greet-created"](greet_created)
-    app.post["/greet-none/{status}"](greet_none)
+    app.get["/greet-as/{status}"](greet_as)
     app.post["/greet-derived"](greet_derived)
     app.post["/greet-text"](greet_text)
     app.post["/greet-small"](greet_small)
@@ -2176,20 +2179,6 @@ def test_json_over_localhost_matches_app_handle() raises:
             (String("/x"), big, String("text/plain"), 400, False),
             (String("-created"), good, String("application/json"), 201, True),
             (String("-created"), good, String(""), 415, False),
-            (
-                String("-none/204"),
-                good,
-                String("application/json"),
-                204,
-                False,
-            ),
-            (
-                String("-none/304"),
-                good,
-                String("application/json"),
-                304,
-                False,
-            ),
             (String("-derived"), good, String("application/json"), 200, True),
             (
                 String("-derived"),
@@ -2250,6 +2239,42 @@ def test_json_over_localhost_matches_app_handle() raises:
             '[{"name":"Adé \\"x\\""},{"name":"again"}]',
         )
         assert_equal(big.byte_length(), 1_048_577)
+        # M3-093: a `Json` 204 or 205 has no body, so no content goes out;
+        # a 304 keeps its body, from which Flare frames the length a 200
+        # carries (`{"hello":"Ada"}`, 15 bytes) and sends no content. Read
+        # as raw bytes: Flare's client reads no content for these statuses.
+        var ok = h1_raw(child.port, "GET", "/greet-as/200")
+        assert_true("\r\nContent-Length: 15\r\n" in ok, ok)
+        assert_true(ok.endswith('\r\n\r\n{"hello":"Ada"}'), ok)
+        var lines = [
+            (String("204"), String("HTTP/1.1 204 No Content\r\n"), String("")),
+            (String("205"), String("HTTP/1.1 205 "), String("0")),
+            (
+                String("304"),
+                String("HTTP/1.1 304 Not Modified\r\n"),
+                String("15"),
+            ),
+        ]
+        for c in lines:
+            var raw = h1_raw(child.port, "GET", "/greet-as/" + c[0])
+            print("observed HTTP/1.1 GET /greet-as/" + c[0] + ":", repr(raw))
+            assert_true(raw.startswith(c[1]), raw)
+            assert_true(raw.endswith("\r\n\r\n"), raw)
+            assert_equal(raw.count("\r\n\r\n"), 1, raw)
+            if c[2]:
+                assert_true("\r\nContent-Length: " + c[2] + "\r\n" in raw, raw)
+            else:
+                assert_false("Content-Length" in raw, raw)
+            var typed = "\r\nContent-Type: application/json\r\n" in raw
+            assert_equal(typed, c[0] == "304", raw)
+        var none = List[Tuple[String, String]]()
+        for code in ["204", "205"]:
+            var h2 = h2_request(child.port, "GET", "/greet-as/" + code, none)
+            print(
+                "observed h2c GET /greet-as/" + code + ":", _h2_fields(h2[0])
+            )
+            assert_equal(_h2_fields(h2[0]), ":status=" + code + ";")
+            assert_equal(h2[2], 0)
     finally:
         _ = kill(child.pid, SIGKILL)
         waitpid(child.pid)

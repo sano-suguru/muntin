@@ -8,8 +8,8 @@
 # `TestClient`. `TestClient`'s `headers=` (M3-011):
 # tests/test_testclient_headers.mojo. The reference's JSON examples:
 # tests/test_json_dx.mojo. Must-not-compile cases: tests/json_api_fail. A chosen
-# result status, `Json(value, status=)`: M3-029; none written for a status
-# that never carries content: M3-093.
+# result status, `Json(value, status=)`: M3-029; none written for a 1xx, 204
+# or 205: M3-093.
 
 from std.collections import Optional
 from std.memory import bitcast
@@ -496,7 +496,7 @@ def unvalidated_address(id: Int) -> Json[Address]:
 
 
 def bodiless_address(status: Int) -> Json[Address]:
-    # `status` from the route: one that never carries content has no body.
+    # `status` from the route: a 1xx, 204 or 205 has no body.
     return Json(Address("Paris", status), status=status)
 
 
@@ -1468,19 +1468,20 @@ def test_serialization_failure_ignores_the_chosen_status() raises:
 
 
 def test_a_status_without_content_writes_no_body() raises:
-    # 1xx, 204, 205 and 304 never carry content (RFC 9110): no body, no
+    # A 1xx, 204 or 205 never carries content (RFC 9110): no body, no
     # fields, and the value is not written, so one that cannot be is not
-    # the fixed 500 (M3-093). The statuses beside them keep the JSON body.
+    # the fixed 500 (M3-093). The statuses beside them keep the JSON body,
+    # and so does a 304, whose length the backend declares from it.
     var app = json_app()
     var client = TestClient(app)
-    for status in [100, 101, 199, 204, 205, 304]:
+    for status in [100, 101, 199, 204, 205]:
         var code = String(status)
         _assert_fixed(client.get("/bodiless/" + code), status, "")
         _assert_fixed(client.get("/bodiless-measure/" + code), status, "")
         _assert_fixed(
             Json(Address("Paris", 7), status=status).to_response(), status, ""
         )
-    for status in [99, 200, 203, 206, 303, 305]:
+    for status in [99, 200, 203, 206, 303, 304, 305]:
         var code = String(status)
         _assert_json(
             client.get("/bodiless/" + code),

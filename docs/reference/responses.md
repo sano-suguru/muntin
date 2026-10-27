@@ -65,7 +65,7 @@ app.post["/accounts"](register)
 Run by `tests/test_json_dx.mojo` (`test_json_result_status`), as written, with the types of [bodies](bodies.md#json-jsont).
 
 - `status` is keyword-only (`Json(value, 201)` does not compile) and not validated.
-- A status that never carries content (1xx, 204, 205, 304) answers with no body and no fields: the value is not written, so the 500 below cannot happen ([why](../history/decisions/m3-093-json-statuses-without-content-decision.md)).
+- A 1xx, 204 or 205 answers with no body and no fields: the value is not written, so the 500 below cannot happen. A 304 keeps the written body and its `Content-Type`: a network backend sends no content for it, and through Flare over HTTP/1.1 declares the body's byte length as `Content-Length`, which RFC 9110 requires to be the length a 200 would carry, so return the value the 200 returns ([why](../history/decisions/m3-093-json-statuses-without-content-decision.md)).
 - Another media type is an edit of the converted response:
 
 <!-- example: tests/test_json_dx.mojo#responses-json-media-type -->
