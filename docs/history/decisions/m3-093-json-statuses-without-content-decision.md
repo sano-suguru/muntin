@@ -2,7 +2,7 @@
 
 > **Current.** Changes in part [M3-028](m3-028-json-response-status-decision.md) and [M3-091](m3-091-openapi-output-decision.md). Now described in [responses reference, "JSON results"](../../reference/responses.md#json-results).
 
-Status: **decision**, built in its own pull request (#PR, the evidence) at the owner's choice: the fix is small but changes a decided behavior. Found reviewing M3-092 (#203).
+Status: **decision**, built in its own pull request ([#206](https://github.com/sano-suguru/muntin/pull/206), the evidence) at the owner's choice: the fix is small but changes a decided behavior. Found reviewing M3-092 (#203).
 
 **Question and what settles it.** M3-028 let `Json(value, status=)` write the value whatever the status, so a 204, 205 or 304 carried a JSON body and `Content-Type`. RFC 9110 gives these statuses no content (sections 6.4.1, 15.3.6, 15.4.5); on a connection kept open, a client or proxy reads such bytes as the start of the next response, and over HTTP/1.1 Flare frames a 304 with the body's length. What does such an answer carry, for which statuses, and what of a value that cannot be written? Settled by RFC 9110 and the set Muntin uses for `HEAD` ([M3-026](m3-026-head-decision.md)).
 
