@@ -1445,47 +1445,19 @@ struct Json[T: Movable & Deinitable, *, limit: Int = _MAX_BODY_BYTES](
         no partial body is sent. A 1xx, 204 or 205 answers with no body and
         no fields, and the value is not written, so it cannot fail; a 304
         keeps the written body (`_writes_no_body`, M3-093)."""
-        var status = self._status
-        return _json_response(self^.take(), status)
-
-
-def _json_response[
-    T: Movable & Deinitable
-](var value: T, status: Int) -> Response:
-    """`Json.to_response`'s answer, and a bare JSON result's (prototype
-    M3-096), which `_respond` cannot reach through the `where`-gated
-    method."""
-    comptime assert _refusal[T, False]() == "", _refusal[T, False]()
-    if _writes_no_body(status):
-        return Response(status, "")
-    var out = JsonWriter()
-    try:
-        _write_value(out, value)
-        var r = Response(status, out^._finish())
-        r.headers.set("Content-Type", "application/json")
-        return r^
-    except e:
-        return _failed(Failure.RESPONSE, String(e))
-
-
-def _bare_json[X: AnyType]() -> Bool:
-    """Whether `X` is JSON without the `Json` wrapper (prototype M3-096):
-    a `JsonFields` struct, or a `List` of one."""
-    comptime if conforms_to(X, JsonFields):
-        return True
-    elif conforms_to(X, Iterable):
-        comptime E = X.IteratorType[ImmutAnyOrigin].Element
-        comptime if conforms_to(E, Movable & Deinitable):
-            comptime if X == List[E]:
-                return conforms_to(E, JsonFields)
-        return False
-    else:
-        return False
-
-
-def _is_json[X: AnyType]() -> Bool:
-    """A JSON body: a `Json[T]` or a bare JSON type."""
-    return conforms_to(X, _JsonBody) or _bare_json[X]()
+        comptime assert _refusal[Self.T, False]() == "", _refusal[
+            Self.T, False
+        ]()
+        if _writes_no_body(self._status):
+            return Response(self._status, "")
+        var out = JsonWriter()
+        try:
+            _write_value(out, self.value)
+            var r = Response(self._status, out^._finish())
+            r.headers.set("Content-Type", "application/json")
+            return r^
+        except e:
+            return _failed(Failure.RESPONSE, String(e))
 
 
 def _writes_no_body(status: Int) -> Bool:

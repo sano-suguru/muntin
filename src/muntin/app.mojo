@@ -51,12 +51,7 @@ from ._openapi import _merge, _operation
 from .json import (
     JsonValue,
     JsonWriter,
-    Json,
-    JsonFields,
     _JsonBody,
-    _bare_json,
-    _is_json,
-    _json_response,
     _OBJECT,
     _json_content_type,
     _parse_json,
@@ -97,7 +92,7 @@ from .state import State, _may_borrow
 # `State[S]` keeps its spelling.
 #
 # The result type `R` is generic. Every overload accepts it only through
-# `where (R == String or R == StaticString or conforms_to(R, ToResponse) or conforms_to(R, JsonFields) or conforms_to(R, Iterable))`,
+# `where (R == String or R == StaticString or conforms_to(R, ToResponse))`,
 # which the compiler checks by identity at the call site: a check in the
 # body could not tell `StaticString` from other immutable-origin string
 # slices, because generic `==` keeps an origin's mutability but not its
@@ -990,17 +985,6 @@ def _slot[
             return _as[Headers, A](_header_slot(args, at))
         except:
             raise _Reject(500)  # only the `_fields` gap gets here
-    elif _bare_json[A]():
-        # Prototype M3-096: a bare JSON body takes `Json[A]`'s steps.
-        var status = _json_status[Json[A]](args, at)
-        if status != 0:
-            raise _Reject(status)
-        if len(body) > Json[A].max_bytes:
-            raise _Reject(413)
-        try:
-            return _convert_body[Json[A]](body).take()
-        except f:
-            raise _Reject(400, f.step, -1, f.message)
     elif conforms_to(A, FromBytes):
         # The type's limit first (M3-043), then the bytes as received,
         # borrowed: no UTF-8 read, no copy (M3-041).
@@ -1077,11 +1061,9 @@ def _respond[R: Movable & Deinitable](var result: R) -> Response:
         return Response.text(_as[R, String](result^))
     elif R == StaticString:
         return Response.text(String(_as[R, StaticString](result^)))
-    elif conforms_to(R, ToResponse):
-        return result^.to_response()
     else:
-        comptime assert _bare_json[R]()
-        return _json_response(result^, 200)
+        comptime assert conforms_to(R, ToResponse)
+        return result^.to_response()
 
 
 # Adapter parameters are explicit (no `//`): they are passed as `call=` to
@@ -1354,7 +1336,11 @@ def _guarded_at[A: AnyType, B: AnyType, C: AnyType]() -> Int:
     comptime if _kind[A]() == _RAW:
         return 3
     var at = _width[A]() + _width[B]() + _width[C]()
-    comptime if _is_json[A]() or _is_json[B]() or _is_json[C]():
+    comptime if (
+        conforms_to(A, _JsonBody)
+        or conforms_to(B, _JsonBody)
+        or conforms_to(C, _JsonBody)
+    ):
         at += 1
     return at
 
@@ -1708,7 +1694,9 @@ def _route[
         method,
         path,
         handler^,
-        json=_is_json[A]() or _is_json[B]() or _is_json[C](),
+        json=conforms_to(A, _JsonBody)
+        or conforms_to(B, _JsonBody)
+        or conforms_to(C, _JsonBody),
         headers=conforms_to(A, _HeaderCarrier)
         or conforms_to(B, _HeaderCarrier)
         or conforms_to(C, _HeaderCarrier)
@@ -2664,11 +2652,7 @@ struct _App[
     def get[
         E: Deinitable, R: Movable & Deinitable, //, path: StaticString
     ](mut self, handler: def() thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler`, which takes no parameter, for `GET path`;
         `path` declares no path or query parameter.
@@ -2706,11 +2690,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler`, which takes one request parameter, for
         `GET path`.
@@ -2762,11 +2742,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler` for `GET path` with a route value and then the
         request's `Headers`, where `path` declares exactly one route value, as
@@ -2806,11 +2782,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A, var B, var C) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler` for `GET path` with two route values and then
         the request's `Headers` (M3-022), where `path` declares exactly two
@@ -2842,13 +2814,7 @@ struct _App[
         path: StaticString,
     ](
         mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
         `def()`. `handler`'s one parameter is `State[S]`, the type of
         `state`; the route keeps one copy of `state`, and each request
@@ -2883,13 +2849,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
         `def(var A)` after the state: a route value, the request's `Headers`,
         or the raw `Request` returning `Response`. The state is passed as for
@@ -2924,13 +2884,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A, var B) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
         `def(var A, var B)` after the state: a route value, then the request's
         `Headers`, or two route values. The state is passed as for `get` on
@@ -2965,13 +2919,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A, var B, var C) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `GET path`, as `get` on
         `def(var A, var B, var C)` after the state: two route values, then the
         request's `Headers`. The state is passed as for `get` on
@@ -2996,11 +2944,7 @@ struct _App[
     def post[
         E: Deinitable, R: Movable & Deinitable, //, path: StaticString
     ](mut self, handler: def() thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers a parameterless `handler` for `POST path`, as `get`
         on `def()` (M3-048): `path` declares no parameter, and the request's
@@ -3029,11 +2973,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler`, which takes one request parameter, for
         `POST path`; `path` declares no path or query parameter.
@@ -3091,11 +3031,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler` for `POST path` with a route value and then the
         request body, where `path` declares exactly one route value, a `{name}`
@@ -3139,11 +3075,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A, var B, var C) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler` for `POST path` with two route values and then
         the request body (M3-022), where `path` declares exactly two route
@@ -3183,13 +3115,7 @@ struct _App[
         path: StaticString,
     ](
         mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers a stateful parameterless `handler` for `POST path`,
         as `get` on `def(State[S])` (M3-048); the request's body is not
         read."""
@@ -3223,13 +3149,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `POST path`, as `post` on
         `def(var A)` after the state: the request body, or the raw
         `Request` returning `Response`. `handler`'s first parameter is
@@ -3268,13 +3188,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A, var B) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `POST path`, as `post` on
         `def(var A, var B)` after the state: a route value, then the request
         body. The state is passed as for `post` on `def(State[S], var A)`.
@@ -3312,13 +3226,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A, var B, var C) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `POST path`, as `post` on
         `def(var A, var B, var C)` after the state: two route values, then the
         request body. The state is passed as for `post` on
@@ -3347,11 +3255,7 @@ struct _App[
     def put[
         E: Deinitable, R: Movable & Deinitable, //, path: StaticString
     ](mut self, handler: def() thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers a parameterless `handler` for `PUT path`, as `get`
         on `def()` (M3-048): `path` declares no parameter, and the request's
@@ -3380,11 +3284,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler`, which takes one request parameter, for
         `PUT path`; `path` declares no path or query parameter.
@@ -3442,11 +3342,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler` for `PUT path` with a route value and then the
         request body, where `path` declares exactly one route value, a `{name}`
@@ -3490,11 +3386,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A, var B, var C) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler` for `PUT path` with two route values and then
         the request body (M3-022), where `path` declares exactly two route
@@ -3534,13 +3426,7 @@ struct _App[
         path: StaticString,
     ](
         mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers a stateful parameterless `handler` for `PUT path`,
         as `get` on `def(State[S])` (M3-048); the request's body is not
         read."""
@@ -3574,13 +3460,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PUT path`, as `put` on
         `def(var A)` after the state: the request body, or the raw
         `Request` returning `Response`. `handler`'s first parameter is
@@ -3619,13 +3499,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A, var B) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PUT path`, as `put` on
         `def(var A, var B)` after the state: a route value, then the request
         body. The state is passed as for `put` on `def(State[S], var A)`.
@@ -3663,13 +3537,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A, var B, var C) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PUT path`, as `put` on
         `def(var A, var B, var C)` after the state: two route values, then the
         request body. The state is passed as for `put` on
@@ -3698,11 +3566,7 @@ struct _App[
     def patch[
         E: Deinitable, R: Movable & Deinitable, //, path: StaticString
     ](mut self, handler: def() thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers a parameterless `handler` for `PATCH path`, as `get`
         on `def()` (M3-048): `path` declares no parameter, and the request's
@@ -3731,11 +3595,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler`, which takes one request parameter, for
         `PATCH path`; `path` declares no path or query parameter.
@@ -3793,11 +3653,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler` for `PATCH path` with a route value and then the
         request body, where `path` declares exactly one route value, a `{name}`
@@ -3841,11 +3697,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A, var B, var C) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler` for `PATCH path` with two route values and then
         the request body (M3-022), where `path` declares exactly two route
@@ -3885,13 +3737,7 @@ struct _App[
         path: StaticString,
     ](
         mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers a stateful parameterless `handler` for `PATCH path`,
         as `get` on `def(State[S])` (M3-048); the request's body is not
         read."""
@@ -3925,13 +3771,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PATCH path`, as `patch` on
         `def(var A)` after the state: the request body, or the raw
         `Request` returning `Response`. `handler`'s first parameter is
@@ -3970,13 +3810,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A, var B) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PATCH path`, as `patch` on
         `def(var A, var B)` after the state: a route value, then the request
         body. The state is passed as for `patch` on `def(State[S], var A)`.
@@ -4014,13 +3848,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A, var B, var C) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `PATCH path`, as `patch` on
         `def(var A, var B, var C)` after the state: two route values, then the
         request body. The state is passed as for `patch` on
@@ -4049,11 +3877,7 @@ struct _App[
     def delete[
         E: Deinitable, R: Movable & Deinitable, //, path: StaticString
     ](mut self, handler: def() thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler`, which takes no parameter, for `DELETE path`;
         `path` declares no path or query parameter.
@@ -4091,11 +3915,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler`, which takes one request parameter, for
         `DELETE path`.
@@ -4149,11 +3969,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A, var B) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler` for `DELETE path` with a route value and then
         the request's `Headers`, where `path` declares exactly one route value,
@@ -4194,11 +4010,7 @@ struct _App[
         //,
         path: StaticString,
     ](mut self, handler: def(var A, var B, var C) thin raises E -> R) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
+        R == String or R == StaticString or conforms_to(R, ToResponse)
     ):
         """Registers `handler` for `DELETE path` with two route values and then
         the request's `Headers` (M3-022), where `path` declares exactly two
@@ -4230,13 +4042,7 @@ struct _App[
         path: StaticString,
     ](
         mut self, handler: def(State[S]) thin raises E -> R, state: State[S]
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `DELETE path`, as `delete` on
         `def()`. `handler`'s one parameter is `State[S]`, the type of
         `state`; the route keeps one copy of `state`, and each request
@@ -4271,13 +4077,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `DELETE path`, as `delete` on
         `def(var A)` after the state: a route value, the request's `Headers`,
         or the raw `Request` returning `Response`. The state is passed as for
@@ -4312,13 +4112,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A, var B) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `DELETE path`, as `delete` on
         `def(var A, var B)` after the state: a route value, then the request's
         `Headers`, or two route values. The state is passed as for `delete` on
@@ -4353,13 +4147,7 @@ struct _App[
         mut self,
         handler: def(State[S], var A, var B, var C) thin raises E -> R,
         state: State[S],
-    ) where (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or conforms_to(R, JsonFields)
-        or conforms_to(R, Iterable)
-    ):
+    ) where (R == String or R == StaticString or conforms_to(R, ToResponse)):
         """Registers the stateful `handler` for `DELETE path`, as `delete` on
         `def(var A, var B, var C)` after the state: two route values, then the
         request's `Headers`. The state is passed as for `delete` on
