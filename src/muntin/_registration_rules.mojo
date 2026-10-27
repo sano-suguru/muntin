@@ -761,11 +761,14 @@ def _rule[
         return _JSON_AMBIGUOUS
     comptime if conforms_to(R, JsonFields) and conforms_to(R, ToResponse):
         return _RESULT_JSON_AMBIGUOUS
-    comptime if not (
-        R == String
-        or R == StaticString
-        or conforms_to(R, ToResponse)
-        or _bare_json[R]()
+    # Before any `R == StaticString` test: the clause admits every
+    # `Iterable`, and generic `==` cannot tell `StaticString` from another
+    # immutable-origin slice, so a slice that became `Iterable` is refused
+    # here rather than taken for `StaticString`.
+    comptime if (
+        conforms_to(R, Iterable)
+        and not _bare_json[R]()
+        and not conforms_to(R, ToResponse)
     ):
         return _RESULT_KIND
     if k1 == _VALUE_AND_BODY or k2 == _VALUE_AND_BODY or k3 == _VALUE_AND_BODY:
@@ -833,7 +836,7 @@ def _admits[
 
 
 def _json_ok[X: AnyType, reading: Bool]() -> Bool:
-    comptime if _bare_json[X]() and not conforms_to(X, ToResponse):
+    comptime if _bare_json[X]() and (reading or not conforms_to(X, ToResponse)):
         return _refusal[X, reading]() == ""
     elif conforms_to(X, _JsonBody):
         comptime if reading:
@@ -919,12 +922,13 @@ def _check[
         rule != _ONE_STATE
     ), "a handler takes at most one State, as its first parameter"
     comptime assert rule != _BODY_TYPE, (
-        "the handler's parameter is the request body; its type must"
-        " conform to FromBody or FromBytes"
+        "the handler's parameter is the request body; its type must conform to"
+        " FromBody or FromBytes, or be a JsonFields struct or a List of one"
     )
     comptime assert rule != _LAST_BODY_TYPE, (
         "the handler's last parameter is the request body; its type must"
-        " conform to FromBody or FromBytes"
+        " conform to FromBody or FromBytes, or be a JsonFields struct or a List"
+        " of one"
     )
     comptime assert rule != _POST_RAW, (
         "a raw " + name + " handler takes only the Request and returns Response"
@@ -1034,7 +1038,8 @@ def _check[
     )
     comptime assert rule != _RESULT_KIND, (
         "the result type is a collection; a bare collection result is a"
-        " List of a JsonFields struct, any other is returned as Json[T]"
+        " List of a JsonFields struct (Json[T] writes a List or Optional of"
+        " another JSON value)"
     )
     comptime assert rule != _RECORD_FIELD_KIND, record_message
     comptime assert rule != _RECORD_FIELD_AMBIGUOUS, record_message
@@ -1052,7 +1057,7 @@ def _check[
 def _check_json[X: AnyType, reading: Bool]():
     """A derived `Json[T]` that cannot be read (a slot)
     or written (the result) is refused here, naming the field."""
-    comptime if _bare_json[X]() and not conforms_to(X, ToResponse):
+    comptime if _bare_json[X]() and (reading or not conforms_to(X, ToResponse)):
         comptime assert _refusal[X, reading]() == "", _refusal[X, reading]()
     elif conforms_to(X, _JsonBody):
         comptime if reading:

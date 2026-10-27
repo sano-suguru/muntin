@@ -24,22 +24,25 @@ What changed against the base:
   `_BODY`, or `_AMBIGUOUS_JSON` when it also conforms to `RouteValues`,
   `FromRouteValue`, `FromBody` or `FromBytes`; `_rule` refuses that
   (`_JSON_AMBIGUOUS`), a result that is a `JsonFields` struct and a
-  `ToResponse` (`_RESULT_JSON_AMBIGUOUS`), and a collection result that is
-  not a `List` of a `JsonFields` struct (`_RESULT_KIND`: `List[Int]`,
-  `Optional[T]`, `Dict`), each with a message; `_json_ok` and
-  `_check_json` read `_refusal[X, reading]()` for a bare type, naming the
-  innermost field as for `Json[T]`.
+  `ToResponse` (`_RESULT_JSON_AMBIGUOUS`), and an `Iterable` result that is
+  neither a bare JSON type nor a `ToResponse` (`_RESULT_KIND`: `List[Int]`,
+  `Optional[T]`, `Dict`), before any `R == StaticString` test, each with a
+  message; `_json_ok` and `_check_json` read `_refusal[X, reading]()` for a
+  bare body, and for a bare result that is not a `ToResponse`, naming the
+  innermost field as for `Json[T]`. The body-type messages add "or be a
+  JsonFields struct or a List of one".
 - `src/muntin/_openapi.mojo`: a bare body is a required `application/json`
   body, a bare result a `200` `application/json` response, each with the
   schema `Json[T]` gives.
 - `tests/test_registration.mojo`: the two helpers that copy the whole
   result clause copy the new one; with the old clause they no longer
   build (`lacking evidence to prove correctness`).
-- `tests/bare_json_fail/` (built by `check.sh`): nine must-not-build
-  fixtures. Against the base's `src`: `body_also_from_body` and
-  `result_also_to_response` build there; `list_of_string_body` fails there
-  with the same text, so it is a regression pin; the others fail there
-  with other text (candidate notes, or the `FromBody` body message).
+- `tests/bare_json_fail/` (built by `check.sh`): thirteen must-not-build
+  fixtures. Against the base's `src`: `body_also_from_body`,
+  `body_also_from_bytes`, `body_also_record` and `result_also_to_response`
+  build there; `list_of_string_body` fails there with the same text, so it
+  is a regression pin; the others fail there with other text (candidate
+  notes, a route-value message, or the `FromBody` body message).
 - `tests/test_spike_bare_json.mojo`: the spike (5 tests, built with
   `-D MUNTIN_OPENAPI`).
 
