@@ -345,7 +345,8 @@ def _additions() -> Dict[String, String]:
     precedence over the derived `2XX`), and a `Response` handler's 204."""
     var member = (
         '{"security":[{"member":[]}],"responses":{"401":{"description":'
-        + '"No X-Member field"}}}'
+        + '"No X-Member field","content":{"*/*":{"schema":'
+        + '{"const":"Unauthorized"}}}}}}'
     )
     var place = (
         '{"type":"object","properties":{"city":{"type":"string"},'

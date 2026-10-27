@@ -12,14 +12,16 @@ and jsonschema installed (not standard library; CI does not run it):
    chosen by path first (one without a placeholder before the templated,
    none between two templated), then by method; the document admits the
    request (its path, parameters with `allowEmptyValue`, and request body:
-   presence, media type and schema) exactly when Muntin did not refuse it
+   presence, media type and schema, JSON or not) exactly when Muntin did
+   not refuse it
    (400, 413, 415); a 2xx answer, or one of a status the document names
    (an application's addition), has a response in the document, and its
    media type and value meet that response's content; no other answer
    meets a described one with content.
    A request that lacks the credentials the operation's `security` names
-   is denied (401, 403) and only such a one; a 204, 205 or 304 answer has
-   no body.
+   is denied (401, 403) and only such a one, and a denial's answer meets
+   the response the document gives for its status as any other; a 204, 205
+   or 304 answer has no body.
 3. The known gaps docs/reference/openapi.md states must still show, each
    as the mismatch named below; any other mismatch fails the run.
 
@@ -104,16 +106,19 @@ def admits(op, path_values, query, ex):
     if rb is not None:
         if ex["body"] == "":
             return (False, "empty body") if rb["required"] else (True, "")
+        # The test sends `Content-Type: application/json` or none.
         content = rb["content"]
-        if "application/json" in content:
-            if not ex["json"]:
-                return False, "media type"
-            try:
-                value = json.loads(ex["body"])
-            except ValueError:
-                return False, "not JSON"
-            schema = content["application/json"]["schema"]
-            if not Draft202012Validator(schema).is_valid(value):
+        media = media_for(content, "application/json" if ex["json"] else "")
+        if media is None:
+            return False, "media type"
+        if "schema" in media:
+            value = ex["body"]
+            if media is content.get("application/json"):
+                try:
+                    value = json.loads(ex["body"])
+                except ValueError:
+                    return False, "not JSON"
+            if not Draft202012Validator(media["schema"]).is_valid(value):
                 return False, "body schema"
     return True, ""
 
@@ -164,20 +169,21 @@ def credentials_met(doc, op, ex):
 def check(doc, ex, op, values):
     """The mismatch an exchange shows, or None."""
     # The guard answers before any conversion: a request that lacks the
-    # credentials is denied, one that has them is not.
-    if not credentials_met(doc, op, ex):
-        return None if ex["status"] in DENIALS else "admitted without credentials"
-    if ex["status"] in DENIALS:
-        return "denied with credentials"
+    # credentials is denied, one that has them is not. A denial skips the
+    # request's checks, not the response's.
+    denied = ex["status"] in DENIALS
+    if credentials_met(doc, op, ex) == denied:
+        return "denied with credentials" if denied else "admitted without credentials"
     if ex["status"] in NO_BODY and ex["response"] != "":
         return "a body in a " + str(ex["status"]) + " answer"
-    path, _, query = ex["target"].partition("?")
-    ok, why = admits(op, values, query, ex)
-    refused = ex["status"] in REFUSALS
-    if ok and refused:
-        return "admitted, refused"
-    if not ok and not refused:
-        return f"refused by the document ({why}), admitted"
+    if not denied:
+        path, _, query = ex["target"].partition("?")
+        ok, why = admits(op, values, query, ex)
+        refused = ex["status"] in REFUSALS
+        if ok and refused:
+            return "admitted, refused"
+        if not ok and not refused:
+            return f"refused by the document ({why}), admitted"
     entry, key = response_for(op, ex["status"])
     explicit = key == str(ex["status"])
     if ex["status"] // 100 == 2 or explicit:

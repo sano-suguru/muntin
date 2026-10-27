@@ -120,5 +120,64 @@ class Check(unittest.TestCase):
         self.assertIsNone(self.check({"200": TEXT}, exchange(404, "Not Found")))
 
 
+class Request(unittest.TestCase):
+    def check(self, content, body, status=200, json=False):
+        ex = exchange(status, "ok")
+        ex["body"], ex["json"] = body, json
+        body_op = op({"200": TEXT})
+        body_op["requestBody"] = {"required": False, "content": content}
+        return v.check({"paths": {}}, ex, body_op, {})
+
+    def test_a_text_body_schema(self):
+        content = {"*/*": {"schema": {"type": "string", "minLength": 2}}}
+        self.assertEqual(
+            self.check(content, "x"), "refused by the document (body schema), admitted"
+        )
+        self.assertIsNone(self.check(content, "xy"))
+
+    def test_a_body_media_type(self):
+        content = {"application/json": {"schema": {"type": "integer"}}}
+        self.assertEqual(
+            self.check(content, "1"), "refused by the document (media type), admitted"
+        )
+        self.assertIsNone(self.check(content, "1", status=415))
+        self.assertIsNone(self.check(content, "1", json=True))
+
+
+class Denial(unittest.TestCase):
+    DOC = {
+        "paths": {},
+        "security": [{"member": []}],
+        "components": {
+            "securitySchemes": {
+                "member": {"type": "apiKey", "in": "header", "name": "X-Member"}
+            }
+        },
+    }
+
+    def check(self, responses, member=False, status=401):
+        ex = exchange(status, "Unauthorized")
+        ex["member"] = member
+        return v.check(self.DOC, ex, op(responses), {})
+
+    def test_a_denial_meets_its_described_response(self):
+        def denied(schema):
+            return {"401": {"description": "d", "content": {"*/*": {"schema": schema}}}}
+
+        self.assertEqual(self.check(denied({"const": "wrong"})), "response schema")
+        self.assertIsNone(self.check(denied({"const": "Unauthorized"})))
+        self.assertEqual(
+            self.check({"401": {"description": "d"}}),
+            "a body the document does not describe",
+        )
+        self.assertIsNone(self.check({"200": TEXT}))
+
+    def test_credentials_decide_the_denial(self):
+        self.assertEqual(self.check({}, member=True), "denied with credentials")
+        self.assertEqual(
+            self.check({"200": TEXT}, status=200), "admitted without credentials"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
