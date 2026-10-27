@@ -1,8 +1,6 @@
 # Derived JSON values inside hand-written codecs decision (M3-087)
 
 > **Current.** Built by M3-088. Now described in [responses reference, "Derived values inside a hand-written codec"](../../reference/responses.md#derived-values-inside-a-hand-written-codec) and [ARCHITECTURE, "JSON"](../../ARCHITECTURE.md#json).
-> Changed in part since:
-> - [M3-098](m3-098-renamed-and-defaulted-json-members-decision.md) (not built yet, M3-099): `read` also takes the new number kinds, which `value` and `field` still do not.
 
 Status: **decision** (M3-087, issue [#195](https://github.com/sano-suguru/muntin/issues/195)). Evidence: its pull request, [#199](https://github.com/sano-suguru/muntin/pull/199). Changes part of M3-075 and M3-082 (below).
 
