@@ -1510,18 +1510,6 @@ trait JsonFields(_FieldBuilt):
     member per field, named after the field, so `Json[T]` reads and writes
     it without a hand-written `from_json` or `write_json` (M3-083).
 
-    `JsonMembers` renames members and gives absent ones a default, and
-    `JsonCamelCase` renames every member not renamed by it (prototype
-    M3-098); each refines this trait, and `JsonMembers` requires its
-    method, so a misspelt or wrongly declared one fails conformance.
-    `json_members` and each default are evaluated at compile time; an entry
-    that names no field, names a field twice, or neither renames nor
-    defaults it, and two members with one name are refused at registration,
-    and so, where the struct is read, is a default its field does not read.
-    A default is for an `Int`, `Float64`, `Bool`, `String`, or a `List` or
-    `Optional` of one; any other `List`'s is `[]`, any other `Optional`'s
-    `null`, so no application code runs at compile time.
-
     A field is an `Int`, `Float64`, `Bool`, `String`, a `FromJson` (read)
     or `ToJson` (written) type, a `JsonFields` struct, or a `List` or
     `Optional` (not of an `Optional`) of one. An `Optional` member may be
@@ -1535,275 +1523,6 @@ trait JsonFields(_FieldBuilt):
     same type takes that direction over."""
 
     pass
-
-
-trait JsonMembers(JsonFields):
-    """A `JsonFields` struct with renamed or defaulted members (prototype
-    M3-098)."""
-
-    @staticmethod
-    def json_members() -> List[JsonMember]:
-        """Members renamed (`JsonMember("kind", name="type")`) or defaulted
-        (`JsonMember("limit", default="100")`), evaluated at compile time."""
-        ...
-
-
-trait JsonCamelCase(JsonFields):
-    """A `JsonFields` struct whose members not renamed by `json_members`
-    are the camelCase form of their fields' names (prototype M3-098): each
-    `_` after the first character that is followed by an ASCII lowercase
-    letter is removed and the letter uppercased (`created_at` is
-    `createdAt`; `_id` and `a__b` keep their first `_`)."""
-
-    pass
-
-
-struct JsonMember(ImplicitlyCopyable, Movable):
-    """One entry of `JsonMembers.json_members`: the field it is about, the
-    member's name when renamed, and the JSON text an absent member is read
-    from, by the field's own rules (`default="100"`, `default='"new"'`,
-    `default="[]"`), when it has one."""
-
-    var field: StaticString
-    var name: StaticString
-    var default: StaticString
-    var defaulted: Bool
-
-    def __init__(out self, field: StaticString, *, name: StaticString = ""):
-        self.field = field
-        self.name = name
-        self.default = ""
-        self.defaulted = False
-
-    def __init__(
-        out self,
-        field: StaticString,
-        *,
-        default: StaticString,
-        name: StaticString = "",
-    ):
-        self.field = field
-        self.name = name
-        self.default = default
-        self.defaulted = True
-
-
-def _camel(field: StaticString) -> String:
-    var out = String()
-    var b = field.as_bytes()
-    var k = 0
-    while k < len(b):
-        var c = Int(b[k])
-        if (
-            c == ord("_")
-            and k > 0
-            and k + 1 < len(b)
-            and Int(b[k + 1]) >= ord("a")
-            and Int(b[k + 1]) <= ord("z")
-        ):
-            out += chr(Int(b[k + 1]) - 32)
-            k += 2
-            continue
-        out += chr(c)
-        k += 1
-    return out
-
-
-def _members[T: JsonFields]() -> List[JsonMember]:
-    comptime if conforms_to(T, JsonMembers):
-        return T.json_members()
-    return []
-
-
-def _wire[T: JsonFields, i: Int]() -> String:
-    """The member name of field `i` of `T`: its `json_members` name, else
-    its camelCase form for a `JsonCamelCase` struct, else the field's name.
-    Evaluated at compile time where it is used (`comptime`)."""
-    comptime field = materialize[reflect[T].field_names()[i]]()
-    comptime members = _members[T]()
-    comptime for k in range(len(members)):
-        comptime if members[k].field == field and members[k].name != "":
-            return String(materialize[members[k].name]())
-    comptime if conforms_to(T, JsonCamelCase):
-        return _camel(field)
-    return String(field)
-
-
-def _default_text[T: JsonFields, i: Int]() -> Optional[StaticString]:
-    """The JSON text field `i` of `T` is read from when its member is
-    absent, if `json_members` gives it one."""
-    comptime field = materialize[reflect[T].field_names()[i]]()
-    comptime members = _members[T]()
-    comptime for k in range(len(members)):
-        comptime if members[k].field == field and members[k].defaulted:
-            return materialize[members[k].default]()
-    return None
-
-
-def _defaulted[T: JsonFields, i: Int]() -> Bool:
-    return Bool(_default_text[T, i]())
-
-
-def _plain[F: AnyType]() -> Bool:
-    """Whether `F` is read by Muntin's own readers alone, so a default of
-    type `F` can be read at compile time without running application code:
-    an `Int`, `Float64`, `Bool`, `String`, or a `List` or `Optional` of
-    one."""
-    comptime if _scalar[F]():
-        return True
-    elif conforms_to(F, Iterable):
-        comptime E = F.IteratorType[ImmutAnyOrigin].Element
-        comptime if conforms_to(E, Movable & Deinitable):
-            comptime if F == List[E] or F == Optional[E]:
-                return _plain[E]()
-        return False
-    else:
-        return False
-
-
-def _empty_kind[F: AnyType]() -> String:
-    """`[]` when `F` is a `List`, `null` when an `Optional`, else empty: the
-    one default of a field that is not `_plain`, read without building any
-    element."""
-    comptime if conforms_to(F, Iterable):
-        comptime E = F.IteratorType[ImmutAnyOrigin].Element
-        comptime if conforms_to(E, Movable & Deinitable):
-            comptime if F == List[E]:
-                return "[]"
-            elif F == Optional[E]:
-                return "null"
-    return ""
-
-
-def _reads_as[F: Movable & Deinitable](text: StaticString) -> String:
-    """Empty when `text` is JSON that reads as `F`; else why not. Evaluated
-    at compile time by `_default_refusal`, for a `_plain` `F` only."""
-    try:
-        _ = _read_json[F](_parse_json(String(text), text.byte_length()))
-        return ""
-    except e:
-        return String(e)
-
-
-def _is_empty(text: StaticString, kind: StaticString) -> Bool:
-    """Whether `text` is JSON for an empty array (`kind` `[]`) or `null`."""
-    try:
-        var v = _parse_json(String(text), text.byte_length())
-        if kind == "null":
-            return v.is_null()
-        return v._kind() == _ARRAY and len(v) == 0
-    except:
-        return False
-
-
-def _default_refusal[T: JsonFields]() -> String:
-    """Empty when each default of `T` reads as its field (checked where `T`
-    is read, once its fields are known to be readable); else the
-    registration message naming the field. No application code runs at
-    compile time: a default of a field that is not `_plain` is `[]` or
-    `null`, which builds no element."""
-    comptime r = reflect[T]
-    comptime types = r.field_types()
-    comptime for i in range(r.field_count()):
-        comptime text = _default_text[T, i]()
-        comptime if text:
-            comptime F = types[i]
-            comptime at = (
-                "the default '"
-                + String(materialize[text.value()]())
-                + "' of field "
-                + String(materialize[r.field_names()[i]]())
-                + " of the JsonFields struct "
-                + String(r.name())
-            )
-            comptime if not _plain[F]():
-                comptime empty = _empty_kind[F]()
-                comptime if empty == "":
-                    return (
-                        at
-                        + " is for a "
-                        + String(reflect[F].name())
-                        + ": a default is read at compile time, where no"
-                        + " application code runs, so its field is an Int,"
-                        + " Float64, Bool, String, or a List or Optional of"
-                        + " those"
-                    )
-                comptime if not _is_empty(text.value(), empty):
-                    return (
-                        at
-                        + " is not "
-                        + empty
-                        + ": a default of a "
-                        + String(reflect[F].name())
-                        + " is read at compile time, where no application"
-                        + " code runs, so it builds no element"
-                    )
-            else:
-                comptime assert conforms_to(F, Movable & Deinitable)
-                comptime if conforms_to(F, Movable & Deinitable):
-                    comptime why = _reads_as[F](text.value())
-                    comptime if why != "":
-                        return (
-                            at
-                            + " does not read as "
-                            + String(reflect[F].name())
-                            + ": "
-                            + why
-                        )
-    return ""
-
-
-def _members_refusal[T: JsonFields]() -> String:
-    """Empty when `T`'s member declarations are consistent; else the
-    registration message naming the entry at fault."""
-    comptime r = reflect[T]
-    comptime members = _members[T]()
-    var at = String(r.name())
-    comptime for k in range(len(members)):
-        comptime entry = materialize[members[k].field]()
-        var index = -1
-        comptime for i in range(r.field_count()):
-            comptime if materialize[r.field_names()[i]]() == entry:
-                index = i
-        if index < 0:
-            return (
-                "json_members of the JsonFields struct "
-                + at
-                + " names "
-                + String(entry)
-                + ", which is not one of its fields"
-            )
-        comptime for j in range(k):
-            comptime if materialize[members[j].field]() == entry:
-                return (
-                    "json_members of the JsonFields struct "
-                    + at
-                    + " names field "
-                    + String(entry)
-                    + " twice"
-                )
-        comptime if members[k].name == "" and not members[k].defaulted:
-            return (
-                "json_members of the JsonFields struct "
-                + at
-                + " names field "
-                + String(entry)
-                + " without a name or a default"
-            )
-    comptime for i in range(r.field_count()):
-        comptime for j in range(i):
-            comptime if _wire[T, i]() == _wire[T, j]():
-                return (
-                    "fields "
-                    + String(materialize[r.field_names()[j]]())
-                    + " and "
-                    + String(materialize[r.field_names()[i]]())
-                    + " of the JsonFields struct "
-                    + at
-                    + " are both member "
-                    + _wire[T, i]()
-                )
-    return ""
 
 
 struct _MemberFault(Movable):
@@ -1838,13 +1557,7 @@ def _kind_ok[F: AnyType, reading: Bool]() -> Bool:
     elif not reading and conforms_to(F, ToJson):
         return True
     elif conforms_to(F, JsonFields):
-        comptime if _members_refusal[F]() != "":
-            return False
-        comptime if not _fields_ok[F, reading]():
-            return False
-        comptime if reading:
-            return _default_refusal[F]() == ""
-        return True
+        return _fields_ok[F, reading]()
     elif conforms_to(F, Iterable):
         comptime E = F.IteratorType[ImmutAnyOrigin].Element
         comptime if conforms_to(E, Movable & Deinitable):
@@ -1922,9 +1635,6 @@ def _innermost[F: AnyType, reading: Bool]() -> String:
     elif not reading and conforms_to(F, ToJson):
         return ""
     elif conforms_to(F, JsonFields):
-        comptime members = _members_refusal[F]()
-        comptime if members != "":
-            return members
         comptime r = reflect[F]
         comptime names = r.field_names()
         comptime types = r.field_types()
@@ -1947,8 +1657,6 @@ def _innermost[F: AnyType, reading: Bool]() -> String:
                     + " type, a JsonFields struct, or a List or Optional of"
                     + " one"
                 )
-        comptime if reading:
-            return _default_refusal[F]()
         return ""
     elif conforms_to(F, Iterable):
         comptime E = F.IteratorType[ImmutAnyOrigin].Element
@@ -1979,7 +1687,7 @@ def _write_value[F: AnyType](mut out: JsonWriter, ref f: F) raises:
         comptime types = r.field_types()
         out.begin_object()
         comptime for i in range(r.field_count()):
-            out.name(materialize[_wire[F, i]()]())
+            out.name(String(materialize[names[i]]()))
             _write_value[types[i]](out, r.field_ref[i](f))
         out.end_object()
     elif conforms_to(F, Iterable):
@@ -2014,38 +1722,11 @@ def _read_json[F: Movable & Deinitable](v: JsonValue) raises -> F:
         raise Error(f.text())
 
 
-struct _Members[T: JsonFields](Movable):
-    """What a derived read of `T` passes to each field's reader: the member
-    names."""
-
-    var names: List[String]
-
-    def __init__(out self, var names: List[String]):
-        self.names = names^
-
-    @staticmethod
-    def member[
-        F: Movable & Deinitable, i: Int
-    ](value: JsonValue, members: Self) raises _MemberFault -> F:
-        """Field `i` of `T` (`_read_named`), or its default when the member
-        is defaulted and absent: the default's text read by the same rules,
-        which registration has checked it reads by (`_default_refusal`)."""
-        comptime text = _default_text[Self.T, i]()
-        comptime if text:
-            var m: Optional[JsonValue]
-            try:
-                m = value.get(members.names[i])
-            except e:
-                raise _MemberFault("", String(e))
-            if not m:
-                comptime literal = materialize[text.value()]()
-                try:
-                    return _read_json[F](
-                        _parse_json(String(literal), literal.byte_length())
-                    )
-                except e:
-                    raise _MemberFault("." + members.names[i], String(e))
-        return _read_named[F](value, members.names[i])
+def _read_member[
+    F: Movable & Deinitable, i: Int
+](value: JsonValue, names: List[String]) raises _MemberFault -> F:
+    """Field `i` of a derived struct (`_read_named`)."""
+    return _read_named[F](value, names[i])
 
 
 def _read_named[
@@ -2116,10 +1797,8 @@ def _read_value[F: Movable & Deinitable](v: JsonValue) raises _MemberFault -> F:
             raise _MemberFault("", "JSON value is not an object")
         var ns = List[String](capacity=r.field_count())
         comptime for i in range(r.field_count()):
-            ns.append(materialize[_wire[F, i]()]())
-        return _build_record[F, _MemberFault, _Members[F].member, 0](
-            v, _Members[F](ns^)
-        )
+            ns.append(String(materialize[names[i]]()))
+        return _build_record[F, _MemberFault, _read_member, 0](v, ns)
     elif conforms_to(F, Iterable):
         comptime E = F.IteratorType[ImmutAnyOrigin].Element
         comptime if conforms_to(E, Movable & Deinitable):
@@ -2193,18 +1872,16 @@ def _write_schema[F: AnyType, reading: Bool](mut out: JsonWriter) raises:
         out.name("properties")
         out.begin_object()
         comptime for i in range(r.field_count()):
-            out.name(materialize[_wire[F, i]()]())
+            out.name(String(materialize[names[i]]()))
             _write_schema[types[i], reading](out)
         out.end_object()
         out.name("required")
         out.begin_array()
         comptime for i in range(r.field_count()):
-            # A read takes an absent `Optional` or defaulted member; a write
-            # always writes the member (`null` when empty).
-            comptime if not (
-                reading and (_is_optional[types[i]]() or _defaulted[F, i]())
-            ):
-                out.string(materialize[_wire[F, i]()]())
+            # A read takes an absent `Optional` member; a write always
+            # writes the member (`null` when empty).
+            comptime if not (reading and _is_optional[types[i]]()):
+                out.string(String(materialize[names[i]]()))
         out.end_array()
         comptime if not reading:
             out.field("additionalProperties", False)
