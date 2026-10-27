@@ -103,7 +103,7 @@ known_gap)
     echo "ok: $t"
     ;;
 large)
-    if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
+    if ! "${MOJO[@]}" build --Werror ${flags[@]+"${flags[@]}"} -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
         cat "$build_log"
         echo "error: $t no longer builds"
         exit 1

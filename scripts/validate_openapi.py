@@ -48,13 +48,9 @@ KNOWN_GAPS = {
 
 def operation(doc, method, path):
     for template, item in doc["paths"].items():
-        names = []
-
-        def group(m):
-            names.append(m.group(1))
-            return "([^/]+)"
-
-        pattern = "^" + re.sub(r"\\\{([^}]*)\\\}", group, re.escape(template)) + "$"
+        parts = re.split(r"\{([^}]*)\}", template)
+        names = parts[1::2]
+        pattern = "^" + "([^/]+)".join(re.escape(s) for s in parts[0::2]) + "$"
         m = re.match(pattern, path)
         if m and method.lower() in item:
             values = {n: urllib.parse.unquote(v) for n, v in zip(names, m.groups())}

@@ -1777,7 +1777,8 @@ struct _Route(Movable):
     ) thin raises
     """Writes the route's OpenAPI operation from its literal and the
     application's additions (M3-091): `_operation` of the
-    handler's slot and result types."""
+    handler's slot and result types, which `_route` sets under the
+    define; `_no_operation` otherwise."""
 
     def __init__(
         out self,
@@ -1787,9 +1788,6 @@ struct _Route(Movable):
         json: Bool = False,
         headers: Bool = False,
         raw: Bool = False,
-        describe: def(
-            mut JsonWriter, StaticString, Optional[JsonValue]
-        ) thin raises = _no_operation,
     ):
         """Splits `route` into its path part and query keys with the
         route-literal grammar's primitives (`_registration_rules.mojo`); the
@@ -1809,7 +1807,7 @@ struct _Route(Movable):
         )
         self.handler = handler^
         self.literal = route
-        self.describe = describe
+        self.describe = _no_operation
 
 
 def _sent_as_written(text: String, query: Bool) -> Bool:
@@ -1886,11 +1884,7 @@ def _document(
                     + " as written, and Muntin compares it undecoded"
                 )
         var p = routes[i].path
-        var seen = False
-        for q in paths:
-            if q == p:
-                seen = True
-        if seen:
+        if p in paths:
             continue
         var segments = _segments(p)
         var shape = _shape(segments)
