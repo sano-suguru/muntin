@@ -176,10 +176,11 @@ def _kind[A: AnyType]() -> Int:
     wherever a body is, and so is a carrier around one
     (`_HeaderCarrier._conversions`). A carrier around a type with neither
     conversion (one conforming only to the private bound) is `_OTHER`. A
-    `FromBytes` body, bare or carried, whose `max_bytes` is negative is a
-    body with no valid limit (`_NEGATIVE_LIMIT`, M3-043), which the rules
-    reject where a body is accepted. A `Param[name, T]` (M3-050) has the
-    kind of its `T` when that is a route value (`_named_kind`). A
+    `FromBytes` (M3-043) or `FromBody` (M3-089) body, bare or carried,
+    whose `max_bytes` is negative is a body with no valid limit
+    (`_NEGATIVE_LIMIT`), which the rules reject where a body is accepted. A
+    `Param[name, T]` (M3-050) has the kind of its `T` when that is a route
+    value (`_named_kind`). A
     `FromRouteValue` type is an application route value (`_APP_VALUE`,
     M3-055), unless it is also a `FromBody` or a `FromBytes`: then it is a
     kind of its own (`_VALUE_AND_BODY`), which `_rule` rejects wherever it
@@ -237,7 +238,7 @@ def _kind[A: AnyType]() -> Int:
     elif conforms_to(A, FromBytes):
         return _NEGATIVE_LIMIT if A.max_bytes < 0 else _BODY
     elif conforms_to(A, FromBody):
-        return _BODY
+        return _NEGATIVE_LIMIT if A.max_bytes < 0 else _BODY
     else:
         return _OTHER
 
@@ -650,8 +651,9 @@ def _post_rule(
     for two one message, then an optional value at a path position; then
     the last slot `X`, which is the body position (never a route value
     there, as such a shape is bodyless), where a type with two body conversions
-    (`_TWO_BODIES`) and a `FromBytes` with a negative `max_bytes`
-    (`_NEGATIVE_LIMIT`, M3-043) each get their own message."""
+    (`_TWO_BODIES`) and a body type with a negative `max_bytes`, a
+    `FromBytes` (`_NEGATIVE_LIMIT`, M3-043), a `FromBody` or a `Json[T]`'s
+    `limit` (M3-089), each get their own message."""
     if _bodyless(k1) and _bodyless(k2) and _bodyless(k3):
         return _get_rule(stateful, k1, k2, k3, response, paths, queries)
     if k1 == _RAW and k2 == _ABSENT:
@@ -953,8 +955,8 @@ def _check[
         " a body type conforms to one of them"
     )
     comptime assert rule != _BODY_NEGATIVE_LIMIT, (
-        "the request body's max_bytes is negative; a FromBytes type's"
-        " max_bytes is a byte count, 0 or more"
+        "the request body's max_bytes (a Json[T]'s limit) is negative; a"
+        " body type's max_bytes is a byte count, 0 or more"
     )
     comptime assert rule != _NAMES_MIXED, (
         "handler takes two route values and only one is a Param; declare"

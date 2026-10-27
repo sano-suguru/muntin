@@ -14,6 +14,8 @@
 #   must_abort  must build with --Werror, then abort when run; the output
 #               must contain "ABORT:" and the expected diagnostic.
 #   known_gap   must build with --Werror (never run).
+#   large       tests/large: an opt-in test too large for test.sh's default
+#               run; must build with --Werror (never run here).
 #   toolchain_gap  must build, warnings allowed (never run).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -93,6 +95,14 @@ known_gap)
     if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
         cat "$build_log"
         echo "error: $t no longer builds; a revisit condition in docs/ARCHITECTURE.md has fired"
+        exit 1
+    fi
+    echo "ok: $t"
+    ;;
+large)
+    if ! "${MOJO[@]}" build --Werror -I src -I tests "$t" -o "$bin" >"$build_log" 2>&1; then
+        cat "$build_log"
+        echo "error: $t no longer builds"
         exit 1
     fi
     echo "ok: $t"

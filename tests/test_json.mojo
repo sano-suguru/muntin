@@ -1,6 +1,6 @@
 # JSON bodies and results in production (M3-009): `muntin.Json`, `FromJson`,
 # `ToJson`, `JsonValue` and `JsonWriter`, and the body adapters' `Content-Type`
-# (415) and size (413) steps. Decision: docs/history/architecture-decisions.md,
+# (415) and size (413) steps; `Json[T, limit=n]` (M3-089). Decision: docs/history/architecture-decisions.md,
 # "JSON codec decision (M3-008)". Successful JSON-body requests go through
 # `App.handle(Request(..., headers^))` with `Content-Type` set; the bare
 # `TestClient.post(target, body)` sends no fields, so its answer on a JSON-body
@@ -29,6 +29,7 @@ from muntin import (
     State,
     ToErrorResponse,
     ToJson,
+    WithHeaders,
 )
 from muntin.json import (
     _MAX_BODY_BYTES,
@@ -231,6 +232,78 @@ def staff_update_text(
     return "staff " + String(dir[].offset + id) + " " + body.value.name
 
 
+# The same eight shapes, and two in a carrier, with a chosen limit
+# (`Json[T, limit=n]`, M3-089); `n` is instantiated at registration.
+
+
+def l_create[n: Int](var body: Json[CreateUser, limit=n]) -> Json[User]:
+    _bump(HANDLER)
+    return Json(_user(1, body^.take()))
+
+
+def l_create_text[n: Int](body: Json[CreateUser, limit=n]) -> String:
+    _bump(HANDLER)
+    return "created " + body.value.name
+
+
+def l_update[
+    n: Int
+](id: Int, var body: Json[CreateUser, limit=n]) -> Json[User]:
+    _bump(HANDLER)
+    return Json(_user(id, body^.take()))
+
+
+def l_update_text[n: Int](id: Int, body: Json[CreateUser, limit=n]) -> String:
+    _bump(HANDLER)
+    return "updated " + String(id) + " " + body.value.name
+
+
+def l_staff_create[
+    n: Int
+](dir: State[Directory], var body: Json[CreateUser, limit=n]) -> Json[User]:
+    _bump(HANDLER)
+    return Json(_user(dir[].offset, body^.take()))
+
+
+def l_staff_create_text[
+    n: Int
+](dir: State[Directory], body: Json[CreateUser, limit=n]) -> String:
+    _bump(HANDLER)
+    return "staff " + String(dir[].offset) + " " + body.value.name
+
+
+def l_staff_update[
+    n: Int
+](dir: State[Directory], id: Int, var body: Json[CreateUser, limit=n]) -> Json[
+    User
+]:
+    _bump(HANDLER)
+    return Json(_user(dir[].offset + id, body^.take()))
+
+
+def l_staff_update_text[
+    n: Int
+](dir: State[Directory], id: Int, body: Json[CreateUser, limit=n]) -> String:
+    _bump(HANDLER)
+    return "staff " + String(dir[].offset + id) + " " + body.value.name
+
+
+def l_carried[
+    n: Int
+](id: Int, input: WithHeaders[Json[CreateUser, limit=n]]) -> String:
+    _bump(HANDLER)
+    return "updated " + String(id) + " " + input.body.value.name
+
+
+def l_staff_carried[
+    n: Int
+](
+    dir: State[Directory], var input: WithHeaders[Json[CreateUser, limit=n]]
+) -> Json[User]:
+    _bump(HANDLER)
+    return Json(_user(dir[].offset, input^.take_body().take()))
+
+
 struct Token(FromJson, ToJson):
     """Move-only: no `Copyable`. Moved from the body into the result."""
 
@@ -285,7 +358,8 @@ def get_staff(dir: State[Directory], id: Int) -> Json[Address]:
 
 @fieldwise_init
 struct Note(FromBody):
-    """An application body that is not JSON: no Content-Type, no cap."""
+    """An application body that is not JSON: no Content-Type, and
+    `FromBody`'s 1 MiB default (M3-089)."""
 
     var text: String
 
@@ -601,23 +675,23 @@ def test_representative_round_trip_kinds() raises:
     # A present nickname, then absent and null told apart.
     var named = String(BODY).replace('"nickname":null', '"nickname":"Al"')
     assert_equal(Json[CreateUser].from_body(named).value.nickname.value(), "Al")
-    assert_false(Bool(_parse_json('{"a":1}').get("nickname")))
-    assert_true(_parse_json('{"n":null}')["n"].is_null())
-    assert_true(Bool(_parse_json('{"n":null}').get("n")))
+    assert_false(Bool(_parse('{"a":1}').get("nickname")))
+    assert_true(_parse('{"n":null}')["n"].is_null())
+    assert_true(Bool(_parse('{"n":null}').get("n")))
     # Top-level scalars and arrays are JSON texts too (RFC 8259).
-    assert_equal(_parse_json(" 42 ").int(), 42)
-    assert_equal(_parse_json("[true,false,null]")[1].bool(), False)
-    assert_true(_parse_json("[true,false,null]")[2].is_null())
-    assert_equal(len(_parse_json("[true,false,null]")), 3)
-    assert_equal(len(_parse_json("1")), 0)
-    assert_equal(_parse_json('"x"').string(), "x")
-    assert_equal(_parse_json('"\\/\\b\\f\\r\\t"').string(), "/\x08\x0c\r\t")
-    assert_equal(_parse_json('{"\\u0061":1}')["a"].int(), 1)
-    assert_equal(_parse_json("-0").int(), 0)
-    assert_equal(_parse_json("0.5e-1").float(), 0.05)
-    assert_equal(_parse_json("2").float(), 2.0)
+    assert_equal(_parse(" 42 ").int(), 42)
+    assert_equal(_parse("[true,false,null]")[1].bool(), False)
+    assert_true(_parse("[true,false,null]")[2].is_null())
+    assert_equal(len(_parse("[true,false,null]")), 3)
+    assert_equal(len(_parse("1")), 0)
+    assert_equal(_parse('"x"').string(), "x")
+    assert_equal(_parse('"\\/\\b\\f\\r\\t"').string(), "/\x08\x0c\r\t")
+    assert_equal(_parse('{"\\u0061":1}')["a"].int(), 1)
+    assert_equal(_parse("-0").int(), 0)
+    assert_equal(_parse("0.5e-1").float(), 0.05)
+    assert_equal(_parse("2").float(), 2.0)
     # Accessors of the wrong kind raise.
-    var v = _parse_json('{"a":[1],"s":"x","n":1.5}')
+    var v = _parse('{"a":[1],"s":"x","n":1.5}')
     for k in range(8):
         var raised = False
         try:
@@ -686,7 +760,7 @@ def test_malformed_json_is_400_before_the_handler() raises:
     for s in materialize[MALFORMED]():
         var raised = False
         try:
-            _ = _parse_json(s)
+            _ = _parse(s)
         except:
             raised = True
         assert_true(raised, "parsed: " + s)
@@ -700,7 +774,7 @@ def test_malformed_json_is_400_before_the_handler() raises:
         _reset()
         assert_equal(_post(app, "/users", s).status, 400, s)
         assert_equal(_count(HANDLER), 0)
-    _ = _parse_json('{"a":{"a":1},"b":{"a":2}}')
+    _ = _parse('{"a":{"a":1},"b":{"a":2}}')
 
 
 def test_field_errors_are_400_and_extra_members_are_ignored() raises:
@@ -740,11 +814,11 @@ def _nested(depth: Int) -> String:
 
 
 def test_nesting_cap() raises:
-    _ = _parse_json(_nested(_MAX_DEPTH))
+    _ = _parse(_nested(_MAX_DEPTH))
     assert_equal(_MAX_DEPTH, 64)
     var raised = False
     try:
-        _ = _parse_json(_nested(_MAX_DEPTH + 1))
+        _ = _parse(_nested(_MAX_DEPTH + 1))
     except:
         raised = True
     assert_true(raised)
@@ -1001,6 +1075,238 @@ def test_raw_handler_decodes_with_from_body() raises:
     assert_true(raised)
 
 
+comptime SMALL = 4096
+"""The chosen limit of the `/small` routes: above `BODY`, far below 1 MiB."""
+
+comptime BIG = 2 * 1_048_576
+"""The chosen limit of the `/big` routes: above `Json[T]`'s default."""
+
+
+def raw_small(var req: Request) raises -> Response:
+    # A raw handler's `Json[T, limit=n].from_body` raises above `n`.
+    var body = Json[Token, limit=32].from_body(req.text())
+    return Response.text(body.value.secret)
+
+
+def short_limit_result() -> Json[Address, limit=4]:
+    # `limit` means nothing on a result: the whole value is written.
+    return Json[Address, limit=4](Address("Lisbon", 12345), status=201)
+
+
+def same_type(var body: Json[Token, limit=_MAX_BODY_BYTES]) -> Json[Token]:
+    # Builds only because `Json[T]` is `Json[T, limit=1048576]`.
+    return body^
+
+
+def limited_app() raises -> App:
+    var dir = State(Directory(100))
+    var app = App()
+    app.post["/small/users"](l_create[SMALL])
+    app.post["/small/users-text"](l_create_text[SMALL])
+    app.post["/small/users/{id}"](l_update[SMALL])
+    app.post["/small/users-text/{id}"](l_update_text[SMALL])
+    app.post["/small/query?{id}"](l_update[SMALL])
+    app.post["/small/staff"](l_staff_create[SMALL], dir)
+    app.post["/small/staff-text"](l_staff_create_text[SMALL], dir)
+    app.post["/small/staff/{id}"](l_staff_update[SMALL], dir)
+    app.post["/small/staff-text/{id}"](l_staff_update_text[SMALL], dir)
+    app.post["/small/staff-query?{id}"](l_staff_update[SMALL], dir)
+    app.post["/small/carried/{id}"](l_carried[SMALL])
+    app.post["/small/staff-carried"](l_staff_carried[SMALL], dir)
+    app.put["/small/users"](l_create[SMALL])
+    app.put["/small/users-text"](l_create_text[SMALL])
+    app.put["/small/users/{id}"](l_update[SMALL])
+    app.put["/small/users-text/{id}"](l_update_text[SMALL])
+    app.put["/small/query?{id}"](l_update[SMALL])
+    app.put["/small/staff"](l_staff_create[SMALL], dir)
+    app.put["/small/staff-text"](l_staff_create_text[SMALL], dir)
+    app.put["/small/staff/{id}"](l_staff_update[SMALL], dir)
+    app.put["/small/staff-text/{id}"](l_staff_update_text[SMALL], dir)
+    app.put["/small/staff-query?{id}"](l_staff_update[SMALL], dir)
+    app.put["/small/carried/{id}"](l_carried[SMALL])
+    app.put["/small/staff-carried"](l_staff_carried[SMALL], dir)
+    app.patch["/small/users"](l_create[SMALL])
+    app.patch["/small/users-text"](l_create_text[SMALL])
+    app.patch["/small/users/{id}"](l_update[SMALL])
+    app.patch["/small/users-text/{id}"](l_update_text[SMALL])
+    app.patch["/small/query?{id}"](l_update[SMALL])
+    app.patch["/small/staff"](l_staff_create[SMALL], dir)
+    app.patch["/small/staff-text"](l_staff_create_text[SMALL], dir)
+    app.patch["/small/staff/{id}"](l_staff_update[SMALL], dir)
+    app.patch["/small/staff-text/{id}"](l_staff_update_text[SMALL], dir)
+    app.patch["/small/staff-query?{id}"](l_staff_update[SMALL], dir)
+    app.patch["/small/carried/{id}"](l_carried[SMALL])
+    app.patch["/small/staff-carried"](l_staff_carried[SMALL], dir)
+    app.post["/big/users"](l_create[BIG])
+    app.post["/big/users-text"](l_create_text[BIG])
+    app.post["/big/users/{id}"](l_update[BIG])
+    app.post["/big/users-text/{id}"](l_update_text[BIG])
+    app.post["/big/query?{id}"](l_update[BIG])
+    app.post["/big/staff"](l_staff_create[BIG], dir)
+    app.post["/big/staff-text"](l_staff_create_text[BIG], dir)
+    app.post["/big/staff/{id}"](l_staff_update[BIG], dir)
+    app.post["/big/staff-text/{id}"](l_staff_update_text[BIG], dir)
+    app.post["/big/staff-query?{id}"](l_staff_update[BIG], dir)
+    app.post["/big/carried/{id}"](l_carried[BIG])
+    app.post["/big/staff-carried"](l_staff_carried[BIG], dir)
+    app.post["/widest/users"](l_create[4_294_967_295])
+    app.post["/raw-small"](raw_small)
+    app.get["/short-limit"](short_limit_result)
+    app.post["/same-type"](same_type)
+    return app^
+
+
+def _limited_shapes() -> List[Tuple[String, String]]:
+    """`_shapes()` and the two carried routes, without their prefix."""
+    var s = _shapes()
+    s.append((String("/carried/9"), "updated 9 " + NAME))
+    s.append((String("/staff-carried"), _user_json(100)))
+    return s^
+
+
+def _handle(
+    app: App,
+    method: String,
+    target: String,
+    var body: List[UInt8],
+    content_type: String = "application/json",
+) raises -> Response:
+    var h = Headers()
+    if content_type.byte_length() > 0:
+        h.add("Content-Type", content_type)
+    return app.handle(Request(method, target, body^, h^))
+
+
+def _bytes(text: String) -> List[UInt8]:
+    return List(text.as_bytes())
+
+
+def test_a_chosen_limit_on_every_json_body_shape_and_method() raises:
+    # `Json[T, limit=n]`: exactly `n` bytes are parsed; one byte more is 413
+    # before parsing and the handler, after the route value and the 415
+    # step, bare and carried, with and without state, on every method.
+    var app = limited_app()
+    var at = _bytes(_padded(BODY, SMALL))
+    var over = _bytes(_padded(BODY, SMALL + 1))
+    var bad_at = _bytes(_padded("{", SMALL))
+    var bad_over = _bytes(_padded("{", SMALL + 1))
+    for m in ["POST", "PUT", "PATCH"]:
+        for s in _limited_shapes():
+            var target = "/small" + s[0]
+            var what = String(m, " ", target)
+            _reset()
+            var ok = _handle(app, m, target, at.copy())
+            assert_equal(ok.status, 200, what)
+            assert_equal(ok.text(), s[1], what)
+            assert_equal(_count(HANDLER), 1, what)
+            _reset()
+            _assert_fixed(
+                _handle(app, m, target, over.copy()), 413, "Content Too Large"
+            )
+            _assert_fixed(
+                _handle(app, m, target, over.copy(), "text/plain"),
+                415,
+                "Unsupported Media Type",
+            )
+            _assert_fixed(
+                _handle(app, m, target, bad_at.copy()), 400, "Bad Request"
+            )
+            _assert_fixed(
+                _handle(app, m, target, bad_over.copy()),
+                413,
+                "Content Too Large",
+            )
+            assert_equal(_count(HANDLER), 0, what)
+        for target in [
+            "/small/users/x",
+            "/small/staff-text/x",
+            "/small/query?id=x",
+            "/small/carried/x",
+        ]:
+            _assert_fixed(
+                _handle(app, m, target, over.copy(), "text/plain"),
+                400,
+                "Bad Request",
+            )
+        assert_equal(_count(HANDLER), 0)
+
+
+def test_a_limit_above_the_default() raises:
+    var app = limited_app()
+    var over_default = _bytes(_padded(BODY, _MAX_BODY_BYTES + 1))
+    var at = _bytes(_padded(BODY, BIG))
+    var over = _bytes(_padded(BODY, BIG + 1))
+    for s in _limited_shapes():
+        var target = "/big" + s[0]
+        _reset()
+        assert_equal(
+            _handle(app, "POST", target, over_default.copy()).text(),
+            s[1],
+            target,
+        )
+        assert_equal(_handle(app, "POST", target, at.copy()).text(), s[1])
+        _assert_fixed(
+            _handle(app, "POST", target, over.copy()), 413, "Content Too Large"
+        )
+        assert_equal(_count(HANDLER), 2, target)
+    # The widest limit the parser addresses, 2^32 - 1.
+    assert_equal(
+        _handle(app, "POST", "/widest/users", _bytes(BODY)).text(),
+        _user_json(1),
+    )
+
+
+def test_a_json_limit_is_413_before_the_utf8_read() raises:
+    # A byte that is not UTF-8 inside the name: within the limit it is the
+    # UTF-8 read's 400; one byte over the limit, 413.
+    var app = limited_app()
+    for size in [SMALL, SMALL + 1]:
+        var body = _bytes(_padded(BODY, size))
+        body[10] = 0xFF
+        _reset()
+        _assert_fixed(
+            _handle(app, "PUT", "/small/users", body^),
+            400 if size == SMALL else 413,
+            "Bad Request" if size == SMALL else "Content Too Large",
+        )
+        assert_equal(_count(HANDLER), 0)
+
+
+def test_a_json_limit_in_a_raw_handler_and_on_a_result() raises:
+    var app = limited_app()
+    var token = '{"secret":"r"}'
+    assert_equal(_post(app, "/raw-small", _padded(token, 32)).text(), "r")
+    _assert_fixed(
+        _post(app, "/raw-small", _padded(token, 33)),
+        500,
+        "Internal Server Error",
+    )
+    var raised = False
+    try:
+        _ = Json[Token, limit=32].from_body(_padded(token, 33))
+    except e:
+        raised = True
+        assert_equal(String(e), "JSON body too large")
+    assert_true(raised)
+    var r = TestClient(app).get("/short-limit")
+    assert_equal(r.status, 201)
+    assert_equal(r.text(), '{"city":"Lisbon","zip":12345}')
+
+
+def test_a_json_limit_is_read_at_compile_time() raises:
+    assert_equal(Json[CreateUser].max_bytes, _MAX_BODY_BYTES)
+    assert_equal(Json[CreateUser, limit=32].max_bytes, 32)
+    assert_equal(Json[CreateUser, limit=BIG].max_bytes, BIG)
+    assert_equal(
+        Json[CreateUser, limit=_MAX_BODY_BYTES].max_bytes,
+        Json[CreateUser].max_bytes,
+    )
+    var app = limited_app()
+    assert_equal(
+        _post(app, "/same-type", '{"secret":"s"}').text(), '{"secret":"s"}'
+    )
+
+
 def test_json_results_on_get_and_post() raises:
     # Routes that only return `Json[T]` test through TestClient: GET, the
     # stateful GET, and POST with a non-JSON body (no Content-Type needed).
@@ -1168,21 +1474,26 @@ def test_text_results_keep_no_default_fields() raises:
     assert_equal(len(_post(app, "/users-text", BODY).headers), 0)
 
 
-def test_non_json_bodies_are_unchanged_and_uncapped() raises:
-    # An application `FromBody` route requires no Content-Type, has no cap,
-    # receives the body unchanged, and keeps its 400.
+def test_non_json_bodies_are_unchanged_and_capped_at_one_mib() raises:
+    # An application `FromBody` route requires no Content-Type, receives the
+    # body unchanged, keeps its 400, and its type, declaring no
+    # `max_bytes`, is limited to 1 MiB (M3-089).
     var app = json_app()
     var client = TestClient(app)
+    var at = String("x") * _MAX_BODY_BYTES
     var over = String("x") * (_MAX_BODY_BYTES + 1)
-    var r = client.post("/notes", over)
+    var r = client.post("/notes", at)
     assert_equal(r.status, 200)
-    assert_equal(r.body.byte_length(), _MAX_BODY_BYTES + 1)
+    assert_equal(r.body.byte_length(), _MAX_BODY_BYTES)
+    _assert_fixed(client.post("/notes", over), 413, "Content Too Large")
     assert_equal(client.post("/notes", "{").text(), "{")
     assert_equal(_post(app, "/notes", "hi", "text/plain").text(), "hi")
     assert_equal(_post(app, "/notes", "hi").text(), "hi")
-    assert_equal(client.post("/notes/4", over).text(), "4:1048577")
-    assert_equal(client.post("/notes/x", "hi").status, 400)
-    assert_equal(client.post("/staff-notes", over).text(), "100:1048577")
+    assert_equal(client.post("/notes/4", at).text(), "4:1048576")
+    _assert_fixed(client.post("/notes/4", over), 413, "Content Too Large")
+    assert_equal(client.post("/notes/x", over).status, 400)
+    assert_equal(client.post("/staff-notes", at).text(), "100:1048576")
+    _assert_fixed(client.post("/staff-notes", over), 413, "Content Too Large")
     _assert_fixed(client.post("/notes", "fail"), 400, "Bad Request")
     _assert_fixed(client.post("/staff-notes", "fail"), 400, "Bad Request")
 
@@ -1193,21 +1504,48 @@ def test_number_limits() raises:
     for s in ["1e400", "-1e400", "1.7976931348623159e308", "1e999999999999"]:
         var raised = False
         try:
-            _ = _parse_json(s).float()
+            _ = _parse(s).float()
         except:
             raised = True
         assert_true(raised, s)
-    assert_equal(_bits(_parse_json("1e-400").float()), UInt64(0))
+    assert_equal(_bits(_parse("1e-400").float()), UInt64(0))
+    assert_equal(_bits(_parse("-1e-400").float()), UInt64(0x8000000000000000))
+    assert_equal(_bits(_parse("-0").float()), UInt64(0x8000000000000000))
+    assert_equal(_bits(_parse("0e999999999999").float()), UInt64(0))
+    # An exponent's digits are read up to 2^40 (`_EXPONENT_CAP`) and then
+    # saturate: 2^40 itself, and 40 nines, which would overflow an `Int`,
+    # decide the same result as any exponent past 10^309. Leading zeros do
+    # not count toward the cap. The 10^9-digit case it was sized for needs
+    # about 2 GB: tests/large/test_exponent_past_a_billion.mojo.
+    var nines = String("9") * 40
+    for s in [
+        String("1e1099511627776"),
+        String("-1e1099511627776"),
+        String("1e") + nines,
+        String("0.") + "0" * 400 + "1e" + nines,
+    ]:
+        var raised = False
+        try:
+            _ = _parse(s).float()
+        except:
+            raised = True
+        assert_true(raised, s)
+    assert_equal(_bits(_parse("1e-1099511627776").float()), UInt64(0))
     assert_equal(
-        _bits(_parse_json("-1e-400").float()), UInt64(0x8000000000000000)
+        _bits(_parse(String("-1e-") + nines).float()),
+        UInt64(0x8000000000000000),
     )
-    assert_equal(_bits(_parse_json("-0").float()), UInt64(0x8000000000000000))
-    assert_equal(_bits(_parse_json("0e999999999999").float()), UInt64(0))
+    assert_equal(
+        _bits(_parse(String("1") + "0" * 400 + "e-" + nines).float()),
+        UInt64(0),
+    )
+    assert_equal(_bits(_parse(String("0e") + nines).float()), UInt64(0))
+    _assert_reads(String("1e") + "0" * 60 + "1", 0x4024000000000000)
     # The exact halfway point past the largest double rounds to 2^1024 (even),
     # so it raises; one unit less is the largest double.
     var raised = False
     try:
-        _ = _parse_json(
+        _ = _parse(
             _halfway(_HALF_PAST_MAX_DIGITS, _HALF_PAST_MAX_EXPONENT)
         ).float()
     except:
@@ -1217,8 +1555,12 @@ def test_number_limits() raises:
         _below(_HALF_PAST_MAX_DIGITS, _HALF_PAST_MAX_EXPONENT),
         0x7FEFFFFFFFFFFFFF,
     )
-    assert_equal(_parse_json("9223372036854775807").int(), Int.MAX)
-    assert_equal(_parse_json("-9223372036854775808").int(), Int.MIN)
+    assert_equal(_parse("9223372036854775807").int(), Int.MAX)
+    assert_equal(_parse("-9223372036854775808").int(), Int.MIN)
+
+
+def _parse(text: String) raises -> JsonValue:
+    return _parse_json(text, _MAX_BODY_BYTES)
 
 
 def _bits(x: Float64) -> UInt64:
@@ -1313,7 +1655,7 @@ def _past_kept(digits: String, exponent: String) -> String:
 
 
 def _assert_reads(text: String, expected: UInt64) raises:
-    assert_equal(_bits(_parse_json(text).float()), expected, text)
+    assert_equal(_bits(_parse(text).float()), expected, text)
 
 
 def test_float_is_correctly_rounded() raises:
@@ -1386,7 +1728,7 @@ def test_float_writer_gap_on_mojo_1_1_0() raises:
     # (M3-008)").
     var text = _written(bitcast[DType.float64](UInt64(0xC360B3B71251310B)))
     assert_equal(text, "-3.760958796054742e+16")
-    assert_equal(_bits(_parse_json(text).float()), UInt64(0xC360B3B71251310C))
+    assert_equal(_bits(_parse(text).float()), UInt64(0xC360B3B71251310C))
     # Finite floats print as valid JSON numbers.
     assert_equal(_written(1e16), "1e+16")
     assert_equal(_written(1e-07), "1e-07")
@@ -1427,7 +1769,7 @@ def test_writer_escapes_and_structure() raises:
         + '"o":{"a":1},"o2":{"a":2},"l":[true,[],-3]}',
     )
     # Muntin's parser reads back what the writer wrote.
-    var v = _parse_json(text)
+    var v = _parse(text)
     assert_equal(v['q"\\'].string(), "a\x01\x1f\t\r\n\x7f é")
     assert_equal(v["l"][2].int(), -3)
     # Structural misuse and non-finite numbers raise.
@@ -1495,8 +1837,8 @@ def test_parsing_and_access_are_linear() raises:
     assert_true(obj.byte_length() <= _MAX_BODY_BYTES)
     assert_true(arr.byte_length() <= _MAX_BODY_BYTES)
     var t0 = perf_counter_ns()
-    var o = _parse_json(obj)
-    var a = _parse_json(arr)
+    var o = _parse(obj)
+    var a = _parse(arr)
     var total = 0
     for i in range(len(a)):
         total += a[i].string().byte_length()
@@ -1510,7 +1852,7 @@ def test_parsing_and_access_are_linear() raises:
 def test_json_value_copies_share_the_document() raises:
     # One tape per parse; a sub-value copies one reference, not the tape;
     # string accessors return copies.
-    var v = _parse_json('{"a":{"b":[1,2]}}')
+    var v = _parse('{"a":{"b":[1,2]}}')
     assert_equal(v._doc.count(), 1)
     var a = v["a"]
     var b = a["b"]

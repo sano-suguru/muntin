@@ -96,7 +96,7 @@ app.post["/users"](create_user)
 ```
 
 - A `JsonFields` struct's codec is derived from its fields: `Int`, `Float64`, `Bool`, `String`, another `JsonFields` struct, or a `List` or `Optional` of one (and a hand-written `FromJson` or `ToJson` type); a field the codec cannot read or write is refused at the registration, naming it. `Json[List[User]]` is a body or result too. **Muntin builds the struct without running its initializers**, so it is for a DTO that any combination of field values leaves valid; build a type with an invariant from the checked DTO with its own constructor, or read it with a hand-written `from_json`. For another representation, write `FromJson` and `ToJson` by hand ([bodies](reference/bodies.md#json-jsont)).
-- Other bodies: a `FromBody` type parses text itself, with no Muntin size limit (`Json[T]` keeps its 1 MiB one); a `FromBytes` type receives the bytes, and its `comptime max_bytes` is its size limit (a longer body is 413), required unless a refining trait gives a default.
+- Other bodies: a `FromBody` type parses text itself; a `FromBytes` type receives the bytes. **A body over its type's size limit is 413**: a type's `comptime max_bytes` (1 MiB when a `FromBody` type declares none, required on a `FromBytes` type unless a refining trait gives a default) or `Json[T, limit=n]` (1 MiB by default) ([body size limits](reference/body-limits.md)).
 - A handler that also needs header fields takes `WithHeaders[B]` instead of `B`. **Muntin gives header fields no meaning**: a missing field is `None`, and the handler decides the status. Only a `Json[T]` body's `Content-Type` (415) is checked before the handler.
 - A handler with only route values, and at most one `Headers` last, on `post`, `put` or `patch` is bodyless: the body is not read.
 
@@ -349,7 +349,7 @@ Reference: [serving](reference/serving.md).
 
 - [Routing and registration](reference/routing.md): route literals, methods, `HEAD`, 405, conflicts, accepted shapes, order of checks, compile errors.
 - [Route values](reference/route-values.md): `Int`, `String`, decoding, query values, `Param`, `Optional`, `FromRouteValue`, `RouteValues`.
-- [Request bodies](reference/bodies.md): `FromBody`, `Json[T]`, `WithHeaders[B]`, `FromBytes` and `max_bytes`.
+- [Request bodies](reference/bodies.md): `FromBody`, `Json[T]`, `WithHeaders[B]`, `FromBytes`; [body size limits](reference/body-limits.md): `max_bytes`, `Json[T, limit=n]`.
 - [Responses](reference/responses.md) and [errors](reference/errors.md): results, JSON status, `ToErrorResponse`, reports of dropped errors.
 - [Headers](reference/headers.md), [raw handlers](reference/raw.md), [middleware](reference/middleware.md), [state](reference/state.md), [guarded groups](reference/groups.md).
 - [Testing and the backend seam](reference/testing.md).

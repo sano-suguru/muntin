@@ -38,7 +38,7 @@ from .http import (
     _failed,
     _rejected_by,
 )
-from .json import _JsonBody, _MAX_BODY_BYTES, _json_content_type
+from .json import _JsonBody, _json_content_type
 from .route_value import FromRouteValue, RouteValues, _NamedValue
 from .state import State, _may_borrow
 
@@ -156,9 +156,10 @@ from .state import State, _may_borrow
 # field, else empty; other routes' arguments are unchanged). The body slot, for
 # a JSON body only, answers 415 unless the arguments end with the verdict `"1"`
 # at the expected position (an exact arity check), then 413 when the body is
-# over 1 MiB, after the route value and before `from_body`. Every text body
-# slot then reads the body bytes as UTF-8 (`_body_text`, M3-040): bytes that are not
-# are 400, as a `from_body` raise is. Order on a JSON body route: 404 or 405,
+# over its `max_bytes` (1 MiB unless `Json[T, limit=n]`, M3-089), after the
+# route value and before `from_body`. Every text body slot then reads the
+# body bytes as UTF-8 (`_body_text`, M3-040): bytes that are not are 400, as
+# a `from_body` raise is. Order on a JSON body route: 404 or 405,
 # query or capture 400 (`App.handle`), `Int` 400, 415, 413, UTF-8 400, JSON 400
 # (`from_body`), handler.
 #
@@ -179,9 +180,10 @@ from .state import State, _may_borrow
 # keeps the order above; its arity check allows only name and value pairs after
 # the verdict, and every other JSON body keeps the exact arity. Muntin chooses
 # no status for the fields the handler reads and gives them no meaning; the
-# `Content-Type` verdict for a `Json[T]` body (415), a bytes body's limit
-# (413, M3-043, before the rebuild) and the rebuild failure (500) still
-# answer before the handler.
+# `Content-Type` verdict for a `Json[T]` body (415), the carried body type's
+# limit (413 before the rebuild: a bytes body's, M3-043, a text or JSON
+# body's, M3-089) and the rebuild failure (500) still answer before the
+# handler.
 #
 # Bytes bodies (M3-041): a `FromBytes` type is a body slot too (`_kind`), on
 # every shape that takes a `FromBody`, and `_slot` passes it the request's
@@ -198,6 +200,10 @@ from .state import State, _may_borrow
 # `_HeaderCarrier._max_bytes`) after the JSON steps and before the field
 # rebuild. The length is the body `invoke` passes, after middleware; a
 # negative limit is rejected at registration (`_kind`).
+#
+# Text body limits (M3-089): `FromBody` gives `max_bytes` a default of 1 MiB
+# (`Json[T]`'s is its `limit`); `_slot` answers a longer text body 413 as a
+# bytes one, before the UTF-8 read, bare or carried.
 #
 # Header slots (M3-016): on `get`, `delete` and bodyless handlers, `Headers`
 # is a slot kind by exact type equality (no trait, so no application type is
@@ -709,9 +715,9 @@ def _unsupported_media_type() -> Response:
 
 
 def _content_too_large() -> Response:
-    """A JSON body route's answer to a body over 1 MiB (M3-009), and a
-    `FromBytes` body route's to a body over its type's `max_bytes`, bare or
-    carried (M3-043)."""
+    """A body route's answer to a body over its type's limit, bare or
+    carried: a `FromBytes`'s `max_bytes` (M3-043), a `FromBody`'s, a
+    `Json[T]`'s `limit` included (M3-089)."""
     return Response.text("Content Too Large", status=413)
 
 
@@ -761,18 +767,16 @@ comptime _GUARD_DRIFT = "registration rule check and guard disagree"
 """The guard's `else`: `_admits` rejected a shape `_check` accepted."""
 
 
-def _json_status[
-    B: AnyType
-](args: List[String], body_at: Int, body_length: Int) -> Int:
+def _json_status[B: AnyType](args: List[String], body_at: Int) -> Int:
     """For a JSON body (`_JsonBody`): 0 when the body may be converted,
-    else the status to answer, 415 or 413, without parsing.
+    else 415, without parsing.
 
     The `Content-Type` verdict is at the body's position (`args[body_at]`;
     the body itself travels as bytes, M3-040) and must be `"1"`. For any
     other JSON body the arguments end there (an exact arity check); a
     carrier route (`_HeaderCarrier`) allows only header name and value pairs
-    after it, an even count. Then a body over 1 MiB (`body_length` bytes) is
-    413."""
+    after it, an even count. Its 413 is the generic step after this one in
+    `_slot`, as for any body (M3-089)."""
     var verdict = body_at
     if len(args) <= verdict or args[verdict] != "1":
         return 415
@@ -782,15 +786,14 @@ def _json_status[
     else:
         if len(args) != verdict + 1:
             return 415
-    if body_length > _MAX_BODY_BYTES:
-        return 413
     return 0
 
 
 def _body_rejection_answer(status: Int) -> Response:
     """The response for a body slot's 415 or 413 before conversion: a
-    nonzero `_json_status`, or a `FromBytes` body over its `max_bytes`
-    (M3-043). Named for the body, not JSON, since both use it."""
+    nonzero `_json_status`, or a body over its type's `max_bytes`
+    (`FromBytes`, M3-043; `FromBody`, M3-089). Named for the body, not
+    JSON, since every body uses it."""
     if status == 415:
         return _unsupported_media_type()
     return _content_too_large()
@@ -903,16 +906,17 @@ def _slot[
     `args[at]` on (`_header_slot`; a failure is the fixed 500). A
     `FromBody` body is read as UTF-8 (`_body_text`; 400 if it is not) and converted with
     `A.from_body` (400 if it raises); for a JSON body (`_JsonBody`) the 415
-    and 413 steps run first (`_json_status`); a `WithHeaders` carrier has
+    step runs first (`_json_status`); a `WithHeaders` carrier has
     its header fields rebuilt (the fixed 500 on failure), then is built
     through `A._from_parts` from the borrowed bytes, which converts them as
     a bare body of the carried type (M3-042: a UTF-8 read and `from_body`,
     or `from_bytes` on them unread), a failure being the same 400. A `FromBytes` body (M3-041) is converted with
     `A.from_bytes(body)`, the borrowed bytes unread and uncopied by Muntin
     (400 if it raises); the rules reject a type that is also a `FromBody`.
-    A `FromBytes` body longer than its type's `max_bytes`, bare or carried
+    A body longer than its type's `max_bytes`, bare or carried
     (`A._max_bytes()`, checked before the rebuild), is 413 before any of
-    that (M3-043). A `RouteValues` record (M3-061) is built by
+    that but the JSON 415: a `FromBytes`'s (M3-043) or a `FromBody`'s, a
+    `Json[T]`'s `limit` included (M3-089). A `RouteValues` record (M3-061) is built by
     `_build_record`, never by its own initializers: field `i` is converted
     as a bare slot of its type from `args[at + i]` (`_record_field`), in
     field order, so the first invalid one is 400 and nothing after it is
@@ -978,12 +982,12 @@ def _slot[
             A, _HeaderCarrier
         )
         comptime if conforms_to(A, _JsonBody):
-            var status = _json_status[A](args, at, len(body))
+            var status = _json_status[A](args, at)
             if status != 0:
                 raise _Reject(status)
         comptime if conforms_to(A, _HeaderCarrier):
-            # The carried `FromBytes` type's limit, before the rebuild
-            # (M3-043); `Int.MAX`, no limit, for a text body.
+            # The carried type's limit, before the rebuild: a `FromBytes`'s
+            # (M3-043) or a `FromBody`'s (M3-089).
             if len(body) > A._max_bytes():
                 raise _Reject(413)
             var fields: Headers
@@ -997,6 +1001,10 @@ def _slot[
                 raise _Reject(400, f.step, -1, f.message)
         else:
             comptime assert conforms_to(A, FromBody)
+            # The type's limit (M3-089), before the UTF-8 read; for a JSON
+            # body, after its 415.
+            if len(body) > A.max_bytes:
+                raise _Reject(413)
             try:
                 return _convert_body[A](body)
             except f:
@@ -2673,8 +2681,11 @@ struct _App[
         Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. Every text body's bytes are read as
-        UTF-8 before `from_body` (400 if they are not, M3-040). A type
+        413 when it is over its `limit` (1 MiB unless `Json[T, limit=n]`,
+        M3-089). Every text body is 413 when it is longer than its type's
+        `max_bytes` (1 MiB unless the type declares another, M3-089), then
+        its bytes are read as UTF-8 before `from_body` (400 if they are
+        not, M3-040). A type
         conforming to `FromBytes` instead receives the body's bytes,
         whatever they are and unread, in `from_bytes` (400 if it raises,
         M3-041; 413 first when they are longer than its `max_bytes`,
@@ -2981,8 +2992,11 @@ struct _App[
         Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. Every text body's bytes are read as
-        UTF-8 before `from_body` (400 if they are not, M3-040). A type
+        413 when it is over its `limit` (1 MiB unless `Json[T, limit=n]`,
+        M3-089). Every text body is 413 when it is longer than its type's
+        `max_bytes` (1 MiB unless the type declares another, M3-089), then
+        its bytes are read as UTF-8 before `from_body` (400 if they are
+        not, M3-040). A type
         conforming to `FromBytes` instead receives the body's bytes,
         whatever they are and unread, in `from_bytes` (400 if it raises,
         M3-041; 413 first when they are longer than its `max_bytes`,
@@ -3289,8 +3303,11 @@ struct _App[
         Muntin chooses no status. A
         `Json[T]` body, alone or in a carrier, is first answered 415 unless
         the request has exactly one `application/json` `Content-Type`, then
-        413 when it is over 1 MiB. Every text body's bytes are read as
-        UTF-8 before `from_body` (400 if they are not, M3-040). A type
+        413 when it is over its `limit` (1 MiB unless `Json[T, limit=n]`,
+        M3-089). Every text body is 413 when it is longer than its type's
+        `max_bytes` (1 MiB unless the type declares another, M3-089), then
+        its bytes are read as UTF-8 before `from_body` (400 if they are
+        not, M3-040). A type
         conforming to `FromBytes` instead receives the body's bytes,
         whatever they are and unread, in `from_bytes` (400 if it raises,
         M3-041; 413 first when they are longer than its `max_bytes`,

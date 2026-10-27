@@ -1,6 +1,6 @@
 # Text and JSON body limits decision (M3-089)
 
-> **Current.** Not built yet: its "Next production slice" is M3-090.
+> **Current.** Built by M3-090. Now described in [body size limits reference](../../reference/body-limits.md#body-size-limits), [routing reference, "Order of checks"](../../reference/routing.md#order-of-checks) and [ARCHITECTURE, "JSON"](../../ARCHITECTURE.md#json).
 
 Status: **decision** (M3-089, issue [#143](https://github.com/sano-suguru/muntin/issues/143)). Evidence: its pull request. Changes part of M3-008 and M3-043 (below).
 

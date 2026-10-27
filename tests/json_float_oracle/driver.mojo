@@ -5,7 +5,7 @@
 from std.memory import bitcast
 from std.sys import argv
 
-from muntin.json import _parse_json
+from muntin.json import _MAX_BODY_BYTES, _parse_json
 
 
 def main() raises:
@@ -18,7 +18,7 @@ def main() raises:
     var held = 0
     for line in text.splitlines():
         try:
-            var x = _parse_json(String(line)).float()
+            var x = _parse_json(String(line), _MAX_BODY_BYTES).float()
             out += hex(bitcast[DType.uint64](x)) + "\n"
         except:
             out += "raise\n"
