@@ -31,8 +31,8 @@ from std.reflection import reflect
 
 from .body import FromBody, FromBytes
 from .headers_body import _HeaderCarrier
-from .http import Headers, Request, Response
-from .json import _JsonBody
+from .http import Headers, Request, Response, ToResponse
+from .json import JsonFields, _JsonBody, _bare_json, _refusal
 from .route_value import FromRouteValue, Param, RouteValues, _NamedValue
 from .state import _InjectedState
 
@@ -168,6 +168,7 @@ comptime _APP_VALUE = 12  # a `FromRouteValue` type (M3-055)
 comptime _VALUE_AND_BODY = 13  # a `FromRouteValue` that is also a body
 comptime _RECORD = 14  # a `RouteValues` record (M3-061)
 comptime _AMBIGUOUS_RECORD = 15  # a record that is also a route value or body
+comptime _AMBIGUOUS_JSON = 16  # a bare JSON type that is also another kind
 
 
 def _kind[A: AnyType]() -> Int:
@@ -208,6 +209,16 @@ def _kind[A: AnyType]() -> Int:
         return _OPT_INT
     elif A == Optional[String]:
         return _OPT_TEXT
+    elif _bare_json[A]():
+        comptime if (
+            conforms_to(A, RouteValues)
+            or conforms_to(A, FromRouteValue)
+            or conforms_to(A, FromBody)
+            or conforms_to(A, FromBytes)
+        ):
+            return _AMBIGUOUS_JSON
+        else:
+            return _BODY
     elif conforms_to(A, RouteValues):
         comptime if (
             conforms_to(A, FromRouteValue)
@@ -395,6 +406,9 @@ comptime _RECORD_PLACEHOLDER_TWICE = 49
 comptime _RECORD_NAME = 50
 comptime _RECORD_OPTIONAL_AT_PATH = 51
 comptime _RECORD_FIELD_AMBIGUOUS = 52
+comptime _JSON_AMBIGUOUS = 53
+comptime _RESULT_JSON_AMBIGUOUS = 54
+comptime _RESULT_KIND = 55
 
 
 def _record_fault[path: StaticString, A: AnyType]() -> Tuple[Int, Int]:
@@ -743,6 +757,17 @@ def _rule[
     var k1 = _kind[A]()
     var k2 = _kind[B]()
     var k3 = _kind[C]()
+    if k1 == _AMBIGUOUS_JSON or k2 == _AMBIGUOUS_JSON or k3 == _AMBIGUOUS_JSON:
+        return _JSON_AMBIGUOUS
+    comptime if conforms_to(R, JsonFields) and conforms_to(R, ToResponse):
+        return _RESULT_JSON_AMBIGUOUS
+    comptime if not (
+        R == String
+        or R == StaticString
+        or conforms_to(R, ToResponse)
+        or _bare_json[R]()
+    ):
+        return _RESULT_KIND
     if k1 == _VALUE_AND_BODY or k2 == _VALUE_AND_BODY or k3 == _VALUE_AND_BODY:
         return _VALUE_OR_BODY
     if (
@@ -808,7 +833,9 @@ def _admits[
 
 
 def _json_ok[X: AnyType, reading: Bool]() -> Bool:
-    comptime if conforms_to(X, _JsonBody):
+    comptime if _bare_json[X]() and not conforms_to(X, ToResponse):
+        return _refusal[X, reading]() == ""
+    elif conforms_to(X, _JsonBody):
         comptime if reading:
             return X._read_refusal == ""
         return X._write_refusal == ""
@@ -996,6 +1023,19 @@ def _check[
         "the RouteValues record has no field; a record has one field per"
         " path or query parameter"
     )
+    comptime assert rule != _JSON_AMBIGUOUS, (
+        "a parameter's type is a JsonFields struct and conforms to FromBody,"
+        " FromBytes, FromRouteValue or RouteValues; take it as Json[T] for a"
+        " JSON body"
+    )
+    comptime assert rule != _RESULT_JSON_AMBIGUOUS, (
+        "the result type is a JsonFields struct and conforms to ToResponse;"
+        " return Json[T] for a JSON result"
+    )
+    comptime assert rule != _RESULT_KIND, (
+        "the result type is a collection; a bare collection result is a"
+        " List of a JsonFields struct, any other is returned as Json[T]"
+    )
     comptime assert rule != _RECORD_FIELD_KIND, record_message
     comptime assert rule != _RECORD_FIELD_AMBIGUOUS, record_message
     comptime assert rule != _RECORD_COUNT, record_message
@@ -1012,7 +1052,9 @@ def _check[
 def _check_json[X: AnyType, reading: Bool]():
     """A derived `Json[T]` that cannot be read (a slot)
     or written (the result) is refused here, naming the field."""
-    comptime if conforms_to(X, _JsonBody):
+    comptime if _bare_json[X]() and not conforms_to(X, ToResponse):
+        comptime assert _refusal[X, reading]() == "", _refusal[X, reading]()
+    elif conforms_to(X, _JsonBody):
         comptime if reading:
             comptime assert X._read_refusal == "", X._read_refusal
         else:
