@@ -71,8 +71,8 @@ BUDGETS = [
     # the page before raising this again.
     ("docs/DEVELOPMENT.md", 21 * KB),  # target 10 KB
     # M3-096 named its slice in the remaining candidates 45 bytes past
-    # 14 KB, after M3-094 had filled it; trim the page before raising this
-    # again.
+    # 14 KB, after M3-094 had filled it, and M3-098's link from its
+    # candidate added 114 more; trim the page before raising this again.
     ("docs/SPEC.md", 15 * KB),  # target 10 KB
     ("docs/REFERENCES.md", 3 * KB),
     # M3-082's body was 4,082 bytes when it merged (#187), leaving no room
