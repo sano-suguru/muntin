@@ -5,6 +5,7 @@
 > - [M3-015 amendment](m3-015-registration-structure-amendment-generic-forwarding.md): a fourth accepted-set edge: generic forwarding helpers register.
 > - [M3-052](m3-052-registration-complexity-budget-decision.md): headroom through slot arity 4 became a maintenance ceiling of eight overloads (arity 3) that only a decision raises.
 > - [M3-053](m3-053-route-conflict-decision.md): first-registration-wins, listed as unchanged, gave way to refusing overlapping registrations.
+> - [M3-096](m3-096-bare-json-bodies-and-results-decision.md) (not built yet, M3-097): the result clause admits `JsonFields` and `Iterable` types, which `_rule` narrows to a bare `JsonFields` struct or a `List` of one.
 > Its pointers into documents that were split or renamed since (`docs/DX.md`, old `docs/ARCHITECTURE.md` headings) are mapped in [the list of records](../architecture-decisions.md#documents-older-records-cite).
 
 Status: **decision** (M3-014; `src/muntin` and `adapters/` are unchanged in it). It decides how registration grows past the ceiling M3-007, M3-008 and M3-012 measured. Today `get` and `post` have ten overloads each, Mojo 1.1.0's ten-note cap. Every typed shape costs four overloads: two result policies (`String`, `R: ToResponse`), each stateless and stateful. So typed header access on `get`, non-`Int` and several route values, `POST` without a body and broader raw handlers each push one method past the cap (`docs/SPEC.md`, "Remaining candidates").

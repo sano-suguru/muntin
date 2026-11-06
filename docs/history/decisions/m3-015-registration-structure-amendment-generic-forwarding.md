@@ -1,6 +1,8 @@
 # Registration structure amendment: generic forwarding (M3-015)
 
 > **Current.** Now described in [routing reference, "Typed function values and generic forwarding"](../../reference/routing.md#typed-function-values-and-generic-forwarding) and [ARCHITECTURE, "Registration surface"](../../ARCHITECTURE.md#registration-surface).
+> Changed in part since:
+> - [M3-096](m3-096-bare-json-bodies-and-results-decision.md) (not built yet, M3-097): the result clause gains `conforms_to(R, JsonFields) or conforms_to(R, Iterable)`, so "the whole clause" is its five branches; a helper copying the three-branch clause no longer builds.
 
 Status: **decision amendment** to "Registration structure decision (M3-014)", made in M3-015 after the slice was implemented. M3-014 decided three edges of the accepted set. The slice accepts more than that, and M3-014's revisit condition "M3-015 cannot keep ... the accepted set beyond the three recorded edges: re-decide before merging it" fired. This record is that re-decision. M3-014's three edges stand as written: edge 2 is still the typed `-> StaticString` function value and helper parameter.
 
