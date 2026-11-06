@@ -4,6 +4,7 @@
 > Changed in part since:
 > - [M3-084](m3-084-request-rejection-report-decision.md): a derived decoder's failure message names the member path, which the 400's `Rejection` reports.
 > - [M3-087](m3-087-derived-json-in-hand-written-codecs-decision.md): a hand-written codec reads and writes derived values, which this slice left out.
+> - [M3-096](m3-096-bare-json-bodies-and-results-decision.md) (not built yet, M3-097): a `JsonFields` struct, or a `List` of one, is JSON as a bare body or result, answering this record's revisit condition "a bare DTO body".
 
 Status: **decision** (M3-082, #187, issue [#141](https://github.com/sano-suguru/muntin/issues/141)). Evidence: the pull request.
 
