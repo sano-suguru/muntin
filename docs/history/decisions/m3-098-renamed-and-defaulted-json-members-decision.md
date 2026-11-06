@@ -23,7 +23,7 @@ struct Query(JsonCamelCase, JsonMembers):
 - A member is named by `json_members`, which wins over `JsonCamelCase`'s rule (`created_at` is `createdAt`, `café_name` `caféName`), else after its field; reading, writing, failure paths, `read[T]` and schemas use that name.
 - An absent defaulted member is read from its text, on each read; `null` is not absent (an `Optional` reads it as empty). A read schema does not require it. Required members need no value.
 - No application code runs at compile time: a default is for an `Int`, `Float64`, `Bool`, `String`, or a `List` or `Optional` of one; any other `List`'s is `[]`, `Optional`'s `null`.
-- A misspelt or non-static `json_members` fails conformance; a `JsonMember` takes `name`, `default` or both. Registration refuses, naming the entry: a missing or repeated field, an empty name, two fields with one final name, and a default that breaks the rule above or its field does not read.
+- A misspelt or non-static `json_members` fails conformance; a `JsonMember` takes `name`, `default` or both. Registration refuses, naming the entry: a missing or repeated field, an empty name, two fields with one final name, and, where the struct is read, a default that breaks the rule above or its field does not read.
 
 **Rejected.**
 - `json_default() -> Self` (the first prototype): required members need placeholders, which some types lack.
