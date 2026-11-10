@@ -103,7 +103,7 @@ Then, in priority order, each with its issue:
 
 2. JSON media types ([#193](https://github.com/sano-suguru/muntin/issues/193)): the production slice M3-095 of [M3-094](history/decisions/m3-094-json-media-types-decision.md);
 3. bare JSON bodies and results ([#194](https://github.com/sano-suguru/muntin/issues/194)): M3-097 builds [M3-096](history/decisions/m3-096-bare-json-bodies-and-results-decision.md);
-4. renamed and defaulted members and more field kinds for derived JSON ([#196](https://github.com/sano-suguru/muntin/issues/196));
+4. renamed and defaulted members and more field kinds for derived JSON ([#196](https://github.com/sano-suguru/muntin/issues/196)): the production slice M3-099 of [M3-098](history/decisions/m3-098-renamed-and-defaulted-json-members-decision.md);
 5. compile-time header names and a `FromHeaders` converter ([#144](https://github.com/sano-suguru/muntin/issues/144));
 6. more route values: a default in the literal, more value types, a check of the handler's own parameter names ([#145](https://github.com/sano-suguru/muntin/issues/145));
 7. more HTTP methods: `OPTIONS`, CORS preflight, 501, a registered `HEAD` ([#146](https://github.com/sano-suguru/muntin/issues/146));

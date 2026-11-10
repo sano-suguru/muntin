@@ -71,8 +71,8 @@ BUDGETS = [
     # the page before raising this again.
     ("docs/DEVELOPMENT.md", 21 * KB),  # target 10 KB
     # M3-096 named its slice in the remaining candidates 45 bytes past
-    # 14 KB, after M3-094 had filled it; trim the page before raising this
-    # again.
+    # 14 KB, after M3-094 had filled it, and M3-098's link from its
+    # candidate added 114 more; trim the page before raising this again.
     ("docs/SPEC.md", 15 * KB),  # target 10 KB
     ("docs/REFERENCES.md", 3 * KB),
     # M3-082's body was 4,082 bytes when it merged (#187), leaving no room
@@ -88,6 +88,9 @@ BUDGETS = [
     # rule for a declared type's parameters and the subtype's length limit,
     # both part of the slice's contract.
     ("docs/history/decisions/m3-094-json-media-types-decision.md", 5 * KB),
+    # M3-098 is over 4 KB (#208): the owner's reviews asked its slice to
+    # state where defaults are checked and which costs it measures.
+    ("docs/history/decisions/m3-098-renamed-and-defaulted-json-members-decision.md", 5 * KB),
     # A record is 1-3 KB (docs/DEVELOPMENT.md section 2); the rest is room
     # for its opening lines, which grow as later records change it.
     ("docs/history/decisions/*.md", 4 * KB),
