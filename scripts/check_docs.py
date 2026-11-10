@@ -88,6 +88,9 @@ BUDGETS = [
     # rule for a declared type's parameters and the subtype's length limit,
     # both part of the slice's contract.
     ("docs/history/decisions/m3-094-json-media-types-decision.md", 5 * KB),
+    # M3-098 is over 4 KB (#208): the owner's reviews asked its slice to
+    # state where defaults are checked and which costs it measures.
+    ("docs/history/decisions/m3-098-renamed-and-defaulted-json-members-decision.md", 5 * KB),
     # A record is 1-3 KB (docs/DEVELOPMENT.md section 2); the rest is room
     # for its opening lines, which grow as later records change it.
     ("docs/history/decisions/*.md", 4 * KB),

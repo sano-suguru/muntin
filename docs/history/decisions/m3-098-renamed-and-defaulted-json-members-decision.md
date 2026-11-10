@@ -36,8 +36,9 @@ struct Query(JsonCamelCase, JsonMembers):
 
 **Revisit when** Mojo documents field attributes or overriding a trait's `comptime`; a default must be computed at run time or be of another type; an application needs another case.
 
-**Next production slice (M3-099):** the prototype at `e791c78` (its `prototype-m3-098/README.md`).
+**Next production slice (M3-099):** the prototype at `91f40b9` (its `prototype-m3-098/README.md`).
 - Code: as prototyped, and `json.mojo`'s docstring; three new exports.
-- Tests: the spike's cases (non-ASCII names too) in `tests/test_derived_json.mojo`, under `SANITIZE=address`; the `json_api_fail/members_*` fixtures; the whole-output comparison; `tests/test_openapi.mojo` with a renamed and a defaulted member, validated.
+- Tests: the spike's cases (non-ASCII names, `Float64` and `Bool` defaults at their edges) in `tests/test_derived_json.mojo`, under `SANITIZE=address`; the `json_api_fail/members_*` fixtures; the whole-output comparison; `tests/test_openapi.mojo` with a renamed and a defaulted member, validated.
+- Measured against the base in its pull request (`bench/`): cold build times of DTOs with and without members (100 and 300 fields, nesting, twenty routes), and a read's time and allocations with defaults absent and present.
 - Docs: bodies, responses and OpenAPI references, `docs/ARCHITECTURE.md`, `docs/SPEC.md`.
 - Not in the slice: a schema `default`, the kinds above.
